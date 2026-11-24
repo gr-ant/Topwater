@@ -6,6 +6,8 @@ Everything the simulated machine supports, in one place.
 - [Built-in programs](#built-in-programs)
 - [Your own commands](#your-own-commands)
 - [MCP servers](#mcp-servers)
+- [Microsoft.Extensions.AI](#microsoftextensionsai)
+- [Authenticated API calls](#authenticated-api-calls)
 - [Files and permissions](#files-and-permissions)
 - [Documents](#documents)
 - [Real host programs](#real-host-programs)
@@ -107,6 +109,96 @@ The same mapping is available without MCP for any tools you can describe with a 
 ```csharp
 shell.RegisterTools("crm", specs, async (tool, arguments, ct) => new ToolResult(await Call(tool, arguments)));
 ```
+
+## Microsoft.Extensions.AI
+
+`Topwater.AI` turns a shell into an `AIFunction`, so any `IChatClient` (OpenAI, Azure OpenAI, Ollama, ...) can use it
+through the standard function-invocation middleware. It depends only on `Microsoft.Extensions.AI.Abstractions`;
+`UseFunctionInvocation` comes from the `Microsoft.Extensions.AI` package.
+
+```csharp
+using Microsoft.Extensions.AI;
+using Topwater;
+using Topwater.AI;
+
+var shell = new Shell();
+shell.Fs.WriteAllText("/home/agent/notes.txt", "one\ntwo\n");
+
+IChatClient client = new ChatClientBuilder(innerClient).UseFunctionInvocation().Build();
+var options = new ChatOptions { Tools = [shell.AsAIFunction()] };
+List<ChatMessage> history = [new(ChatRole.User, "How many lines are in notes.txt?")];
+
+var response = await client.GetResponseAsync(history, options);
+history.AddMessages(response);
+Console.WriteLine(response.Text);
+```
+
+The function is named `bash`, takes one string parameter `command` (the schema in `BashTool.InputSchemaJson`) and
+returns the same text as `BashTool.ExecuteAsync`, `[exit code N]` included. `shell.AsAIFunction("...")` replaces the
+description; the wording matters, so measure before you change it. Models may ask for several calls at once: calls
+through functions made from the same shell run one at a time, in arrival order. Calling `shell.RunAsync` yourself
+at the same time is not covered.
+
+## Authenticated API calls
+
+The machine has no network. `RegisterApi` lets the agent call a few real HTTP APIs that you choose, with
+credentials it never sees:
+
+```csharp
+shell.RegisterApi("api", new Dictionary<string, ApiEndpoint>
+{
+    ["jira"] = new("https://acme.atlassian.net/rest/api/3")
+    {
+        Description = "Issue tracker",
+        Auth = () => $"Bearer {secrets.Get("jira")}",   // called by your code, for every request
+        Paths = ["/issue/", "/search"],                  // optional allowed path prefixes
+    },
+    ["crm"] = new("https://crm.example.com/v1")
+    {
+        Auth = () => secrets.Get("crm"), AuthHeader = "X-Api-Key", Methods = ["GET", "POST"],
+    },
+});
+```
+
+| The agent types | What happens |
+|---|---|
+| `api --help` | lists the endpoints with their descriptions, base URLs, methods and paths |
+| `api get jira /issue/PROJ-1 \| jq .fields.summary` | the response body goes to stdout |
+| `api get jira /search --query 'jql=project = X'` | `--query KEY=VALUE` repeats and is URL-encoded |
+| `api post crm /contacts --data '{...}'` | also `--data @file.json` and `--data -` (stdin); JSON by default |
+| `api get crm /contacts -H 'Accept: text/csv' -i` | `-i` prints the status line and response headers first |
+
+A status outside 2xx exits 1 with the status line on stderr; the body is still printed. A usage error, a method
+or path that is not allowed, or a refused header exits 2 without sending anything. A failure (DNS, TLS, refused
+connection, the `Timeout`, 30 s by default) is one line on stderr and exit code 1. Bodies beyond
+`MaxResponseBytes` (1,000,000) are cut with a note and exit code 1; request bodies are limited to 1,000,000 bytes.
+Pass an `HttpMessageHandler` as the last argument to send requests your own way (tests, proxies); it must not
+follow redirects, and one that does is refused at registration.
+
+What this guarantees, even if the agent is hostile (for example after a prompt injection):
+
+- **The credential goes only to the base URL.** The agent picks an alias, never a host. A path must start with
+  one `/` and cannot contain `\`, `@`, `#`, control characters, non-ASCII characters, `%2f`, malformed or double
+  percent-escapes; `.` and `..` (also as `%2e`, and `..;`) are resolved before `Paths` is checked and may not climb
+  above the base path. The final URL is checked again for the same scheme, host and port under the base path.
+- **Redirects are not followed.** A 3xx is reported with its `Location`, and the agent can make a second call if
+  it points back to the same API. Following one would send the credential to wherever it points.
+- **The agent cannot read the credential.** It is not in `--help`, error messages or anything echoed. Its value,
+  and the token after `Bearer ` or another scheme, is replaced with `[REDACTED]` in response bodies, headers and
+  status lines (values shorter than 8 characters are not scrubbed). An exception from `Auth` is reported without
+  its message.
+- **The agent cannot override it.** It may set only `Accept`, `Accept-Language`, `Content-Type`, `If-Match` and
+  `If-None-Match`, so not `Authorization`, `Cookie`, `Host`, `Proxy-*` or your credential header. Header and query
+  values cannot add lines, parameters or fragments. The default handler keeps no cookies between calls.
+- **Only the methods you list.** GET by default. Base URLs must be `https://`; `AllowHttp = true` permits
+  `http://` (local test servers), and then the credential travels in clear.
+
+What it does not guarantee: the agent can do anything the allowed methods, paths and the token itself permit,
+including sending data it has read elsewhere to an allowed write endpoint, or reading everything the token can
+read. Use a read-only token with the narrowest scope the API offers, list `Paths`, and prefer a `[Command]`
+method with typed parameters for anything that writes. Scrubbing catches the credential as sent, not encoded
+copies of it (base64, URL-encoded, split across JSON strings). The base URL is yours: check it for look-alike
+(IDN) host names before you register it.
 
 ## Files and permissions
 
