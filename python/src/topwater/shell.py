@@ -230,7 +230,7 @@ class Shell:
         self.commands[name] = RegisteredCommand(name, description, usage, handler)
         if self._builtin_names is not None:
             self._builtin_names.discard(name)  # an app command replacing a built-in owns its own --help/--version
-        if "/" not in name and name not in (".", "..") and self.fs.is_dir("/usr/bin"):
+        if "/" not in name and name not in (".", "..", ":") and self.fs.is_dir("/usr/bin"):
             with self.fs.as_root():
                 for d in ("/usr/bin/", "/bin/"):
                     if self.fs.is_dir(d):
@@ -431,9 +431,9 @@ class Shell:
     async def _exec_loop(self, c: LoopCommand, io_: _Io) -> int:
         code = n = 0
         while True:
-            n = self._check_iterations(n)
             if (await self._condition(c.cond, io_) == 0) == c.until:
                 break
+            n = self._check_iterations(n)  # counts body runs, so a loop of exactly the limit still finishes
             code, brk = await self._loop_body(c.body, io_)
             if brk:
                 break

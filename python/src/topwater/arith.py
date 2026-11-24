@@ -1,6 +1,7 @@
 """Bash integer arithmetic: $(( )), (( )), let, for (( ; ; ))."""
 from __future__ import annotations
 
+import functools
 import re
 
 from .vfs import ShellError
@@ -14,7 +15,8 @@ _LEVELS = [["||"], ["&&"], ["|"], ["^"], ["&"], ["==", "!="], ["<", "<=", ">", "
 _VAR_REF = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?")
 
 
-def _tokenize(s: str) -> list[str]:
+@functools.lru_cache(maxsize=512)  # loops re-evaluate the same expressions; tokens are never mutated
+def _tokenize(s: str) -> tuple[str, ...]:
     tokens, i = [], 0
     while i < len(s):
         if s[i].isspace():
@@ -32,7 +34,7 @@ def _tokenize(s: str) -> list[str]:
             raise ShellError(f'{s}: syntax error: invalid arithmetic operator (error token is "{s[i:]}")')
         tokens.append(op)
         i += len(op)
-    return tokens
+    return tuple(tokens)
 
 
 def evaluate(shell, expr: str, depth: int = 0) -> int:

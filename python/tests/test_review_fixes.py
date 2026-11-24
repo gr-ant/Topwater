@@ -94,6 +94,9 @@ CASES = [
      "Thu Jan  1 00:00:00 UTC 1970\n2024-03-02 10:30:00 Saturday 2 1709375400\nUTC\n"),
     ("seq -f '%03g' 3; seq 0 0.1 0.3 | tail -1; seq 6 | paste - - -", "001\n002\n003\n0.3\n1\t2\t3\n4\t5\t6\n"),
     ("type cd ls; type -t echo; command -v cd", "cd is a shell builtin\nls is /usr/bin/ls\nbuiltin\ncd\n"),
+    # --- the null command, and tr's fast path ---
+    (": > f.txt; wc -c < f.txt; : ${NEWVAR:=dflt}; echo $NEWVAR; while :; do break; done; type :", "0\ndflt\n: is a shell builtin\n"),
+    ("echo 'hello' | tr a-y b-z; echo 'hello' | tr -d l", "ifmmp\nheo\n"),
     # --- awk: RS, CONVFMT, big integers, POSIX classes, functions, getline ---
     ("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'",
      "1: 3\n2: 1\n1 x\n2 y\n\n"),
@@ -108,6 +111,11 @@ CASES = [
 
 
 class ReviewFixTests(unittest.TestCase):
+    def test_loop_limit_counts_body_runs(self):
+        sh = Shell(max_loop_iterations=3)
+        self.assertEqual("1\n2\n3\n", sh.run("printf '1\\n2\\n3\\n' | while read -r l; do echo $l; done").to_tool_output())
+        self.assertIn("loop aborted after 3 iterations", sh.run("while true; do :; done").stderr)
+
     def test_cases(self):
         for cmd, expected in CASES:
             with self.subTest(cmd=cmd):

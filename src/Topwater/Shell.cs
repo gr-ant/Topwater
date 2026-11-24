@@ -177,7 +177,7 @@ public sealed partial class Shell
     {
         _commands[name] = new RegisteredCommand(name, description, usage, handler);
         _builtinNames?.Remove(name); // an app command replacing a built-in owns its own --help/--version
-        if (!name.Contains('/') && name is not "." and not ".." && Fs.IsDirectory("/usr/bin"))
+        if (!name.Contains('/') && name is not "." and not ".." and not ":" && Fs.IsDirectory("/usr/bin"))
         {
             using var _ = Fs.AsRoot();
             foreach (var dir in new[] { "/usr/bin/", "/bin/" })
@@ -419,8 +419,8 @@ public sealed partial class Shell
         int code = 0, n = 0;
         while (true)
         {
-            CheckIterations(ref n, ct);
             if ((await ConditionAsync(l.Cond, io, ct) == 0) == l.Until) break;
+            CheckIterations(ref n, ct); // counts body runs, so a loop of exactly the limit still finishes
             var (c, brk) = await LoopBodyAsync(l.Body, io, ct);
             code = c;
             if (brk) break;

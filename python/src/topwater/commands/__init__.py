@@ -91,7 +91,7 @@ _VERSIONS = {
     "ps": "ps from procps-ng 4.0.4", "free": "free from procps-ng 4.0.4", "uptime": "uptime from procps-ng 4.0.4",
     "column": "column from util-linux 2.39.3", "rev": "rev from util-linux 2.39.3", "more": "more from util-linux 2.39.3",
 }
-_NO_STANDARD_OPTIONS = {"sudo", "su", "echo", "printf", "test", "[", "true", "false", "awk", "help", "exit", "return", "break", "continue",
+_NO_STANDARD_OPTIONS = {"sudo", "su", "echo", "printf", "test", "[", "true", "false", ":", "awk", "help", "exit", "return", "break", "continue",
                         "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"}
 
 
@@ -271,7 +271,7 @@ def _which(ctx):
 SHELL_BUILTINS = {
     "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
     "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
-    "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt",
+    "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt", ":",
 }
 
 
@@ -590,6 +590,7 @@ def _printf(ctx):
 def _register_shell_commands(shell) -> None:
     r = shell.register_command
     r("true", lambda ctx: 0, "Do nothing, successfully")
+    r(":", lambda ctx: 0, "Do nothing, successfully (the null command)")
     r("false", lambda ctx: 1, "Do nothing, unsuccessfully")
     r("echo", _echo, "Print arguments")
     r("printf", _printf, "Format and print data")

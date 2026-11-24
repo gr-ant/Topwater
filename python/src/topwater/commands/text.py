@@ -536,6 +536,13 @@ def _tr(ctx):
     in_set1 = (lambda ch: ch not in set1) if complement else (lambda ch: ch in set1)
     translate = bool(set2) and not a.has("d")
     squeeze = (lambda ch: ch in set2) if set2 else in_set1  # -s applies to the last set given
+    if not complement and not a.has("s") and (a.has("d") or set2):
+        # fast path: one str.translate pass instead of a Python loop per character
+        table: dict[int, str | None] = {}
+        for i, ch in enumerate(set1):
+            table.setdefault(ord(ch), None if a.has("d") else set2[min(i, len(set2) - 1)])
+        ctx.stdout.write(ctx.stdin.translate(table))
+        return
     out: list[str] = []
     for ch in ctx.stdin:
         hit = in_set1(ch)

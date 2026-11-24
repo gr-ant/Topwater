@@ -89,7 +89,7 @@ internal static partial class Builtins
         ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3",
     };
 
-    static readonly HashSet<string> NoStandardOptions = ["sudo", "su", "echo", "printf", "test", "[", "true", "false", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];
+    static readonly HashSet<string> NoStandardOptions = ["sudo", "su", "echo", "printf", "test", "[", "true", "false", ":", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];
 
     /// <summary>`tool --version` / `tool --help` for built-ins, so probing them looks like a real system.</summary>
     internal static bool StandardOption(CommandContext ctx, RegisteredCommand cmd, string arg)
@@ -177,7 +177,7 @@ internal static partial class Builtins
     [
         "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
         "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
-        "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt",
+        "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt", ":",
     ];
 
     internal static bool IsShellBuiltin(Shell shell, string name) => ShellBuiltins.Contains(name) && shell.IsBuiltin(name);
@@ -185,6 +185,7 @@ internal static partial class Builtins
     static void RegisterShellCommands(Shell shell)
     {
         shell.Register("true", _ => 0, "Do nothing, successfully");
+        shell.Register(":", _ => 0, "Do nothing, successfully (the null command)");
         shell.Register("false", _ => 1, "Do nothing, unsuccessfully");
 
         shell.Register("echo", ctx =>

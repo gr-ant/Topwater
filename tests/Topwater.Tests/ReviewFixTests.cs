@@ -5,6 +5,14 @@ public class ReviewFixTests
 {
     const string Setup = "printf 'apple 3\\nbanana 1\\ncherry 2\\napple 5\\n' > f.txt; printf 'b\\na\\nc\\nb\\n' > g.txt; printf 'x,y,z\\n1,2,3\\n4,5,6\\n' > c.csv; seq 12 > n.txt; printf 'noeol' > ne.txt; mkdir -p d/sub e; echo 'hello world' > d/a.txt; printf 'foo\\nbar\\n' > d/sub/b.log";
 
+    [Fact]
+    public async Task LoopLimitCountsBodyRuns()
+    {
+        var shell = new Shell(new ShellOptions { MaxLoopIterations = 3 });
+        Assert.Equal("1\n2\n3\n", (await shell.RunAsync("printf '1\\n2\\n3\\n' | while read -r l; do echo $l; done")).ToToolOutput());
+        Assert.Contains("loop aborted after 3 iterations", (await shell.RunAsync("while true; do :; done")).Stderr);
+    }
+
     [Theory]
     [InlineData("echo $'a\\tb' $'it\\'s' $'\\x41\\101\\u00e9' $\"q\"", "a\tb it's AA\u00e9 q\n")]
     [InlineData("IFS=,; x='a,b,,c,'; printf '[%s]' $x; echo", "[a][b][][c]\n")]
@@ -68,6 +76,8 @@ public class ReviewFixTests
     [InlineData("date -d @0; date -d '2024-01-31 10:30 1 month' '+%F %T %A %-d %s'; date -d '3 days ago' +%Z", "Thu Jan  1 00:00:00 UTC 1970\n2024-03-02 10:30:00 Saturday 2 1709375400\nUTC\n")]
     [InlineData("seq -f '%03g' 3; seq 0 0.1 0.3 | tail -1; seq 6 | paste - - -", "001\n002\n003\n0.3\n1\t2\t3\n4\t5\t6\n")]
     [InlineData("type cd ls; type -t echo; command -v cd", "cd is a shell builtin\nls is /usr/bin/ls\nbuiltin\ncd\n")]
+    [InlineData(": > f.txt; wc -c < f.txt; : ${NEWVAR:=dflt}; echo $NEWVAR; while :; do break; done; type :", "0\ndflt\n: is a shell builtin\n")]
+    [InlineData("echo 'hello' | tr a-y b-z; echo 'hello' | tr -d l", "ifmmp\nheo\n")]
     [InlineData("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'", "1: 3\n2: 1\n1 x\n2 y\n\n")]
     [InlineData("awk 'BEGIN { CONVFMT = \"%.2f\"; x = 3.14159; print (x \"\"), 2^53, 1e16 }'", "3.14 9007199254740992 10000000000000000\n")]
     [InlineData("awk '/[[:digit:]]$/ { n++ } END { print n }' f.txt; echo 'a.b' | awk '/a[.]b/'", "4\na.b\n")]
