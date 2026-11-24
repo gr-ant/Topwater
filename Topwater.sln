@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{C36603DF-CE35-412B-80ED-EF24F35BC339}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Topwater", "src\Topwater\Topwater.csproj", "{F4ABDBFA-8E15-4F37-A20A-51F70055DAA5}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0DE51D68-D223-42B5-979B-7CF83AA8EFC0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Topwater.Tests", "tests\Topwater.Tests\Topwater.Tests.csproj", "{744669FB-5803-412F-8793-77B7E668260B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F4ABDBFA-8E15-4F37-A20A-51F70055DAA5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F4ABDBFA-8E15-4F37-A20A-51F70055DAA5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F4ABDBFA-8E15-4F37-A20A-51F70055DAA5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F4ABDBFA-8E15-4F37-A20A-51F70055DAA5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{744669FB-5803-412F-8793-77B7E668260B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{744669FB-5803-412F-8793-77B7E668260B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{744669FB-5803-412F-8793-77B7E668260B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{744669FB-5803-412F-8793-77B7E668260B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{F4ABDBFA-8E15-4F37-A20A-51F70055DAA5} = {C36603DF-CE35-412B-80ED-EF24F35BC339}
+		{744669FB-5803-412F-8793-77B7E668260B} = {0DE51D68-D223-42B5-979B-7CF83AA8EFC0}
+	EndGlobalSection
+EndGlobal
