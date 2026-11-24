@@ -8,19 +8,37 @@
 Topwater is a .NET 8 library that gives an LLM agent one `bash` tool backed by a simulated Linux shell running
 inside your process. Your C# methods and MCP servers show up in it as command-line programs.
 
-```console
-agent@topwater:~$ orders --status open | jq length
-2
-agent@topwater:~$ github list-issues --repo acme/api | jq -r '.[].title'
-Timeout on large uploads
-Add retry to webhook sender
-agent@topwater:~$ sudo rm -rf /
-agent is not in the sudoers file.
-[exit code 1]
+You register a method:
+
+```csharp
+public class Tools
+{
+    [Command("orders", Description = "List orders")]
+    public IEnumerable<Order> Orders(string? status = null) => Db.Orders(status);
+}
+
+var shell = new Shell();
+shell.Register(new Tools());
 ```
 
-`orders` is a C# method and `github` is an MCP server. The model finds both with `help` and `--help`, so you
-send it one tool definition instead of one per function.
+The model, with its one `bash` tool, finds it and uses it like any other program:
+
+```console
+agent@topwater:~$ help | grep orders
+  orders       List orders
+agent@topwater:~$ orders --help
+Usage: orders [--status <text>]
+
+List orders
+
+Options:
+  --status <text>
+agent@topwater:~$ orders --status open | jq -r '.[].Customer' | sort | uniq -c
+      2 Acme
+```
+
+You send the model one tool definition instead of one per function, and it can pipe your tools into `jq`,
+`grep` and each other.
 
 ## Install
 
@@ -47,17 +65,7 @@ Files, variables and the working directory persist between calls. Use one `Shell
 
 ## Add your own programs
 
-A C# method:
-
-```csharp
-public class Tools
-{
-    [Command("orders", Description = "List orders")]
-    public List<Order> Orders(string? status = null, int limit = 20) => Db.Orders(status, limit);
-}
-
-shell.Register(new Tools());      // orders --status open --limit 5
-```
+C# methods, as above. Parameters become `--options`, and the return value is printed as JSON.
 
 An MCP server (add `src/Topwater.Mcp`):
 
