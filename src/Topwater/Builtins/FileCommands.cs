@@ -4,7 +4,13 @@ namespace Topwater;
 
 internal static partial class Builtins
 {
-    static string NotFound(string p) => $"cannot access '{p}': No such file or directory";
+    /// <summary>A filesystem error "/abs/dir/x: reason" as ("arg/x", reason): the path shown the way the user typed it.</summary>
+    static (string Path, string Reason) Typed(ShellException e, string arg, string abs)
+    {
+        int i = e.Message.LastIndexOf(": ", StringComparison.Ordinal);
+        var path = i < 0 ? abs : e.Message[..i];
+        return (path == abs ? arg : path.StartsWith(abs.TrimEnd('/') + "/") ? arg.TrimEnd('/') + path[abs.TrimEnd('/').Length..] : path, e.Message[(i + 2)..]);
+    }
 
     static string HumanSize(long n) => n < 1024 ? n.ToString() : n < 1024 * 1024 ? $"{n / 1024.0:0.#}K" : $"{n / (1024.0 * 1024):0.#}M";
 
@@ -30,7 +36,7 @@ internal static partial class Builtins
                 (lng ? LongEntry(ctx, abs, name, human) : name) + (a.Has('F') && ctx.Fs.IsDirectory(abs) && name is not "." and not ".." ? "/" : "");
 
             var files = paths.Where(p => ctx.Fs.Exists(ctx.ResolvePath(p)) && (a.Has('d') || !ctx.Fs.IsDirectory(ctx.ResolvePath(p)))).ToList();
-            foreach (var p in paths.Where(p => !ctx.Fs.Exists(ctx.ResolvePath(p)))) { ctx.Stderr.WriteLine($"ls: {NotFound(p)}"); code = 2; }
+            foreach (var p in paths.Where(p => !ctx.Fs.Exists(ctx.ResolvePath(p)))) { ctx.Stderr.WriteLine($"ls: cannot access '{p}': {ctx.Fs.WhyMissing(ctx.ResolvePath(p))}"); code = 2; }
             foreach (var f in files) ctx.Stdout.WriteLine(Show(ctx.ResolvePath(f), f));
 
             var dirs = paths.Except(files).Where(p => ctx.Fs.IsDirectory(ctx.ResolvePath(p))).ToList();
@@ -39,6 +45,7 @@ internal static partial class Builtins
             {
                 if (paths.Count > 1 || a.Has('R')) ctx.Stdout.WriteLine((first ? "" : "\n") + label + ":");
                 first = false;
+                if (!ctx.Fs.CanRead(abs)) { ctx.Stderr.WriteLine($"ls: cannot open directory '{label}': Permission denied"); code = 2; return; }
                 var entries = ctx.Fs.List(abs).Where(n => a.Has('a') || a.Has('A') || !n.StartsWith('.')).ToList();
                 if (a.Has('t')) entries = entries.OrderByDescending(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Modified).ToList();
                 if (a.Has('S')) entries = entries.OrderByDescending(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Size).ToList();
@@ -88,8 +95,13 @@ internal static partial class Builtins
         {
             var a = Args.Parse(ctx.Args, "pv", longs: "parents=p");
             if (a.Positional.Count == 0) throw new ShellException("missing operand", 1);
-            foreach (var p in a.Positional) ctx.Fs.CreateDirectory(ctx.ResolvePath(p), a.Has('p'));
-            return 0;
+            int code = 0;
+            foreach (var p in a.Positional)
+            {
+                try { ctx.Fs.CreateDirectory(ctx.ResolvePath(p), a.Has('p')); }
+                catch (ShellException e) when (!e.Message.StartsWith("cannot")) { ctx.Stderr.WriteLine($"mkdir: cannot create directory '{p}': {Typed(e, p, "").Reason}"); code = 1; }
+            }
+            return code;
         }, "Create directories");
 
         shell.Register("touch", ctx =>
@@ -97,13 +109,15 @@ internal static partial class Builtins
             // shortcut: -d/-t/-r are accepted but the file just gets the current time; model timestamps if agents rely on them.
             var a = Args.Parse(ctx.Args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h");
             if (a.Positional.Count == 0) throw new ShellException("missing file operand");
+            int code = 0;
             foreach (var p in a.Positional)
             {
                 var path = ctx.ResolvePath(p);
                 if (a.Has('c') && !ctx.Fs.Exists(path)) continue;
-                ctx.Fs.Touch(path);
+                try { ctx.Fs.Touch(path); }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"touch: cannot touch '{p}': {Typed(e, p, path).Reason}"); code = 1; }
             }
-            return 0;
+            return code;
         }, "Create empty files / update timestamps");
 
         shell.Register("rm", ctx =>
@@ -115,9 +129,14 @@ internal static partial class Builtins
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.Exists(abs)) { if (!a.Has('f')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': No such file or directory"); code = 1; } continue; }
+                if (!ctx.Fs.Exists(abs))
+                {
+                    if (!a.Has('f') || ctx.Fs.WhyMissing(abs) != "No such file or directory") { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': {ctx.Fs.WhyMissing(abs)}"); code = 1; }
+                    continue;
+                }
                 if (ctx.Fs.IsDirectory(abs) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Is a directory"); code = 1; continue; }
-                ctx.Fs.Delete(abs, recursive);
+                try { ctx.Fs.Delete(abs, recursive); }
+                catch (ShellException e) { var (path, why) = Typed(e, p, abs); ctx.Stderr.WriteLine($"rm: cannot remove '{path}': {why}"); code = 1; }
             }
             return code;
         }, "Remove files or directories");
@@ -127,8 +146,9 @@ internal static partial class Builtins
             foreach (var p in ctx.Args)
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"failed to remove '{p}': Not a directory");
-                ctx.Fs.Delete(abs);
+                if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"failed to remove '{p}': {(ctx.Fs.Exists(abs) ? "Not a directory" : ctx.Fs.WhyMissing(abs))}");
+                try { ctx.Fs.Delete(abs); }
+                catch (ShellException e) { throw new ShellException($"failed to remove '{p}': {Typed(e, p, abs).Reason}"); }
             }
             return 0;
         }, "Remove empty directories");
@@ -153,13 +173,31 @@ internal static partial class Builtins
             foreach (var s in sources)
             {
                 var src = ctx.ResolvePath(s);
-                if (!ctx.Fs.Exists(src)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot stat '{s}': No such file or directory"); code = 1; continue; }
+                if (!ctx.Fs.Exists(src)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot stat '{s}': {ctx.Fs.WhyMissing(src)}"); code = 1; continue; }
                 if (!move && ctx.Fs.IsDirectory(src) && !(a.Has('r') || a.Has('R') || a.Has('a')))
                 { ctx.Stderr.WriteLine($"cp: -r not specified; omitting directory '{s}'"); code = 1; continue; }
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
                 if (target == src) { ctx.Stderr.WriteLine($"{ctx.Name}: '{s}' and '{destArg}' are the same file"); code = 1; continue; }
                 if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data
-                if (move) ctx.Fs.Move(src, target); else ctx.Fs.Copy(src, target);
+                var shown = destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg;
+                try
+                {
+                    if (move) ctx.Fs.Move(src, target);
+                    else ctx.Fs.Copy(src, target, (abs, dir) =>
+                    {
+                        var p = Typed(new ShellException(abs + ": "), s, src).Path;
+                        ctx.Stderr.WriteLine(dir ? $"cp: cannot access '{p}': Permission denied" : $"cp: cannot open '{p}' for reading: Permission denied");
+                        code = 1;
+                    });
+                }
+                catch (ShellException e) when (e.Message.EndsWith("Permission denied") || e.Message.EndsWith("Operation not permitted"))
+                {
+                    var why = Typed(e, s, src).Reason;
+                    ctx.Stderr.WriteLine(move ? $"mv: cannot move '{s}' to '{shown}': {why}"
+                        : $"cp: cannot create {(ctx.Fs.IsDirectory(src) ? "directory" : "regular file")} '{shown}': {why}");
+                    code = 1;
+                    continue;
+                }
                 if (a.Has('v')) ctx.Stdout.WriteLine($"{(move ? "renamed " : "")}'{s}' -> '{(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)}'");
             }
             return Task.FromResult(code);

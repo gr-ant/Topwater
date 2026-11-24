@@ -67,10 +67,16 @@ public sealed class VirtualFileSystem
 
     readonly Dir _root = new() { Mode = DefaultDirMode };
 
-    /// <summary>User the agent's commands run as, or null for unrestricted access (your app).</summary>
-    public string? RunAs { get; set; }
+    // async-local, so the app's own calls stay unrestricted while an agent command is awaiting (and concurrent shells sharing
+    // this filesystem don't see each other's user); commands the app registers run inside the agent's flow, as the agent
+    readonly AsyncLocal<string?> _runAs = new();
+
+    /// <summary>User the agent's commands run as, or null for unrestricted access (your app). Flows with the async
+    /// call that sets it: <see cref="Shell.RunAsync"/> and the commands it runs see the agent; your other code doesn't.</summary>
+    public string? RunAs { get => _runAs.Value; set => _runAs.Value = value; }
 
     bool Restricted => RunAs is not null and not "root";
+    string? User => RunAs is "root" ? null : RunAs; // null: unrestricted
 
     /// <summary>Temporarily lifts <see cref="RunAs"/> restrictions (for shell internals).</summary>
     public IDisposable AsRoot()
@@ -110,33 +116,51 @@ public sealed class VirtualFileSystem
         return new string(chars);
     }
 
-    Node? Find(string path)
+    Node? Find(string path) => Find(path, out _);
+
+    /// <summary>Walks <paramref name="path"/>; like Linux, each directory passed through needs search (x) permission,
+    /// else the result is null with <paramref name="denied"/> set.</summary>
+    Node? Find(string path, out bool denied)
     {
+        denied = false;
+        var user = User;
         Node cur = _root;
         foreach (var seg in Normalize("/", path).Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (cur is not Dir d || !d.Children.TryGetValue(seg, out var next)) return null;
+            if (cur is not Dir d) return null;
+            if (!Permits(d, user, 1)) { denied = true; return null; }
+            if (!d.Children.TryGetValue(seg, out var next)) return null;
             cur = next;
         }
         return cur;
     }
 
+    static string Missing(bool denied) => denied ? "Permission denied" : "No such file or directory";
+
+    /// <summary>Why <paramref name="path"/> can't be reached: "Permission denied" or "No such file or directory".</summary>
+    internal string WhyMissing(string path) => Missing(Find(path, out var denied) == null && denied);
+
+    /// <summary>The directory an entry is created in, removed from or renamed in; it needs search permission too.</summary>
     Dir ParentDir(string path)
     {
-        var parent = GetParent(path);
-        return Find(parent) switch
-        {
-            Dir d => d,
-            null => throw new ShellException($"{path}: No such file or directory"),
-            _ => throw new ShellException($"{path}: Not a directory"),
-        };
+        var node = Find(GetParent(path), out var denied);
+        if (node is Dir d) { Require(d, 1, path); return d; }
+        throw new ShellException($"{path}: {(node == null ? Missing(denied) : "Not a directory")}");
     }
 
-    bool Allowed(Node n, int bit) => !Restricted || ((n.Mode >> (n.Owner == RunAs ? 6 : 0)) & bit) != 0;
+    static bool Permits(Node n, string? user, int bits) => user == null || ((n.Mode >> (n.Owner == user ? 6 : 0)) & bits) == bits;
+    bool Allowed(Node n, int bit) => Permits(n, User, bit);
 
     void Require(Node n, int bit, string path)
     {
         if (!Allowed(n, bit)) throw new ShellException($"{path}: Permission denied");
+    }
+
+    /// <summary>In a sticky directory (/tmp) only the entry's owner or the directory's may remove or rename the entry.</summary>
+    void RequireNotSticky(Dir dir, Node entry, string path)
+    {
+        if (User is { } u && (dir.Mode & 0x200) != 0 && entry.Owner != u && dir.Owner != u)
+            throw new ShellException($"{path}: Operation not permitted");
     }
 
     public bool Exists(string path) => Find(path) != null;
@@ -146,11 +170,11 @@ public sealed class VirtualFileSystem
     public bool CanWrite(string path) => Find(path) is { } n && Allowed(n, 2);
     public bool CanExecute(string path) => Find(path) is { } n && Allowed(n, 1);
 
-    public FileStat Stat(string path) => Find(path) switch
+    public FileStat Stat(string path) => Find(path, out var denied) switch
     {
         Dir d => new(true, 4096, d.Modified, d.Mode, d.Owner),
         FileNode f => new(false, f.ReportedSize ?? f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
-        _ => throw new ShellException($"{path}: No such file or directory"),
+        _ => throw new ShellException($"{path}: {Missing(denied)}"),
     };
 
     public string ReadAllText(string path) => ReadNode(path) is var f && f.Data == null ? f.Content : System.Text.Encoding.UTF8.GetString(f.Data);
@@ -160,11 +184,11 @@ public sealed class VirtualFileSystem
 
     FileNode ReadNode(string path)
     {
-        switch (Find(path))
+        switch (Find(path, out var denied))
         {
             case FileNode f: Require(f, 4, path); return f;
             case Dir: throw new ShellException($"{path}: Is a directory");
-            default: throw new ShellException($"{path}: No such file or directory");
+            default: throw new ShellException($"{path}: {Missing(denied)}");
         }
     }
 
@@ -226,11 +250,12 @@ public sealed class VirtualFileSystem
 
     public void Touch(string path)
     {
-        if (Find(path) is { } n)
+        if (Find(path, out var denied) is { } n)
         {
             Require(n, 2, path);
             n.Modified = DateTime.Now;
         }
+        else if (denied) throw new ShellException($"{path}: Permission denied");
         else WriteAllText(path, "");
     }
 
@@ -252,11 +277,11 @@ public sealed class VirtualFileSystem
     /// <summary>Entry names in a directory, sorted ordinally.</summary>
     public IReadOnlyList<string> List(string path)
     {
-        switch (Find(path))
+        switch (Find(path, out var denied))
         {
             case Dir d: Require(d, 4, path); return d.Children.Keys.ToList();
             case FileNode: throw new ShellException($"{path}: Not a directory");
-            default: throw new ShellException($"{path}: No such file or directory");
+            default: throw new ShellException($"{path}: {Missing(denied)}");
         }
     }
 
@@ -264,47 +289,79 @@ public sealed class VirtualFileSystem
     {
         path = Normalize("/", path);
         if (path == "/") throw new ShellException("it is dangerous to operate recursively on '/'");
-        var node = Find(path) ?? throw new ShellException($"{path}: No such file or directory");
+        var node = Find(path, out var denied) ?? throw new ShellException($"{path}: {Missing(denied)}");
         if (node is Dir d && d.Children.Count > 0 && !recursive) throw new ShellException($"{path}: Directory not empty");
         var parent = ParentDir(path);
+        if (node is Dir tree) RequireTreeRemovable(tree, path);
         Require(parent, 2, path);
-        if (node is Dir tree) RequireTreeWritable(tree, path);
+        RequireNotSticky(parent, node, path);
         parent.Children.Remove(GetName(path));
     }
 
-    void RequireTreeWritable(Dir d, string path)
+    // shortcut: all or nothing, naming the first entry that can't go; real rm -r removes what it can.
+    void RequireTreeRemovable(Dir d, string path)
     {
         if (d.Children.Count == 0) return;
-        Require(d, 2, path);
+        var (first, _) = d.Children.First();
+        Require(d, 4, path);
+        Require(d, 3, path + "/" + first);
         foreach (var (name, child) in d.Children)
-            if (child is Dir sub) RequireTreeWritable(sub, path + "/" + name);
+        {
+            RequireNotSticky(d, child, path + "/" + name);
+            if (child is Dir sub) RequireTreeRemovable(sub, path + "/" + name);
+        }
     }
 
-    public void Copy(string source, string dest)
+    /// <summary>Copies a file or tree. While restricted, anything unreadable fails the whole copy; see the overload.</summary>
+    public void Copy(string source, string dest) => Copy(source, dest, (p, _) => throw new ShellException($"{p}: Permission denied"));
+
+    /// <summary>Like `cp -r`: entries the user can't read are skipped and passed to <paramref name="denied"/> (path, is directory).</summary>
+    internal void Copy(string source, string dest, Action<string, bool> denied)
     {
-        var node = Find(source) ?? throw new ShellException($"{source}: No such file or directory");
-        Require(node, 4, source);
+        source = Normalize("/", source);
+        var node = Find(source, out var blocked) ?? throw new ShellException($"{source}: {Missing(blocked)}");
         dest = Normalize("/", dest);
-        if (node is Dir && (dest + "/").StartsWith(Normalize("/", source) + "/"))
+        if (node is Dir && (dest + "/").StartsWith(source + "/"))
             throw new ShellException($"cannot copy a directory, '{source}', into itself, '{dest}'");
         var target = Find(dest);
         if (target is Dir && node is FileNode) throw new ShellException($"{dest}: Is a directory");
         var parent = ParentDir(dest);
         if (target != null) Require(target, 2, dest); else Require(parent, 2, dest);
-        parent.Children[GetName(dest)] = Clone(node, RunAs ?? parent.Owner);
+        var user = User;
+        Node? Clone(Node n, string path)
+        {
+            if (!Permits(n, user, n is Dir ? 5 : 4))
+            {
+                denied(path, n is Dir);
+                return null;
+            }
+            if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Owner = RunAs ?? parent.Owner, Mode = f.Mode };
+            var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode };
+            foreach (var (k, v) in ((Dir)n).Children)
+                if (Clone(v, path + "/" + k) is { } c) copy.Children[k] = c;
+            return copy;
+        }
+        if (Clone(node, source) is not { } clone) return;
+        // copying onto an existing file writes into it, keeping its owner and mode, as cp does
+        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false); tf.Modified = DateTime.Now; }
+        else parent.Children[GetName(dest)] = clone;
     }
 
     public void Move(string source, string dest)
     {
         source = Normalize("/", source);
         dest = Normalize("/", dest);
-        var node = Find(source) ?? throw new ShellException($"{source}: No such file or directory");
+        var node = Find(source, out var denied) ?? throw new ShellException($"{source}: {Missing(denied)}");
         if ((dest + "/").StartsWith(source + "/")) throw new ShellException($"cannot move '{source}' to a subdirectory of itself, '{dest}'");
-        if (Find(dest) is Dir) throw new ShellException($"{dest}: Is a directory");
+        var existing = Find(dest);
+        if (existing is Dir) throw new ShellException($"{dest}: Is a directory");
         var target = ParentDir(dest);
         var from = ParentDir(source);
         Require(from, 2, source);
         Require(target, 2, dest);
+        if (node is Dir && from != target) Require(node, 2, source); // its ".." entry changes
+        RequireNotSticky(from, node, source);
+        if (existing != null) RequireNotSticky(target, existing, dest);
         from.Children.Remove(GetName(source));
         target.Children[GetName(dest)] = node;
     }
@@ -312,7 +369,7 @@ public sealed class VirtualFileSystem
     /// <summary>Changes permission bits. While restricted, only the owner may do this.</summary>
     public void Chmod(string path, int mode)
     {
-        var node = Find(path) ?? throw new ShellException($"cannot access '{path}': No such file or directory");
+        var node = Find(path, out var denied) ?? throw new ShellException($"cannot access '{path}': {Missing(denied)}");
         if (Restricted && node.Owner != RunAs) throw new ShellException($"changing permissions of '{path}': Operation not permitted");
         node.Mode = mode & 0xFFF;
     }
@@ -320,7 +377,7 @@ public sealed class VirtualFileSystem
     /// <summary>Changes the owner (and, with <paramref name="recursive"/>, everything below). Unrestricted callers only.</summary>
     public void SetOwner(string path, string owner, bool recursive = false)
     {
-        var node = Find(path) ?? throw new ShellException($"cannot access '{path}': No such file or directory");
+        var node = Find(path, out var denied) ?? throw new ShellException($"cannot access '{path}': {Missing(denied)}");
         if (Restricted) throw new ShellException($"changing ownership of '{path}': Operation not permitted");
         void Apply(Node n)
         {
@@ -328,13 +385,5 @@ public sealed class VirtualFileSystem
             if (recursive && n is Dir d) foreach (var c in d.Children.Values) Apply(c);
         }
         Apply(node);
-    }
-
-    static Node Clone(Node n, string owner)
-    {
-        if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Owner = owner, Mode = f.Mode };
-        var copy = new Dir { Owner = owner, Mode = n.Mode };
-        foreach (var (k, v) in ((Dir)n).Children) copy.Children[k] = Clone(v, owner);
-        return copy;
     }
 }

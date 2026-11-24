@@ -229,8 +229,9 @@ internal static partial class Builtins
             var target = args.Count == 0 ? ctx.Shell.Environment.GetValueOrDefault("HOME", "/")
                 : args[0] == "-" ? ctx.Shell.Environment.GetValueOrDefault("OLDPWD", ctx.Shell.Cwd) : args[0];
             var abs = ctx.ResolvePath(target);
-            if (!ctx.Fs.Exists(abs)) throw new ShellException($"{target}: No such file or directory");
+            if (!ctx.Fs.Exists(abs)) throw new ShellException($"{target}: {ctx.Fs.WhyMissing(abs)}");
             if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{target}: Not a directory");
+            if (!ctx.Fs.CanExecute(abs)) throw new ShellException($"{target}: Permission denied");
             ctx.Shell.Environment["OLDPWD"] = ctx.Shell.Cwd;
             ctx.Shell.Cwd = abs;
             if (args is ["-"]) ctx.Stdout.WriteLine(abs);

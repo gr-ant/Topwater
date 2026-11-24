@@ -183,10 +183,10 @@ public class AgentFeatureTests
         foreach (var (cmd, err) in new[]
         {
             ("echo x > /etc/motd", "bash: /etc/motd: Permission denied\n"),
-            ("rm /usr/bin/grep", "rm: /usr/bin/grep: Permission denied\n"),
+            ("rm /usr/bin/grep", "rm: cannot remove '/usr/bin/grep': Permission denied\n"),
             ("chmod 777 /etc/passwd", "chmod: changing permissions of '/etc/passwd': Operation not permitted\n"),
             ("chown agent /etc/passwd", "chown: changing ownership of '/etc/passwd': Operation not permitted\n"),
-            ("ls /root", "ls: /root: Permission denied\n"),
+            ("ls /root", "ls: cannot open directory '/root': Permission denied\n"),
             ("sudo cat /etc/shadow", "agent is not in the sudoers file.\n"),
         })
         {

@@ -303,7 +303,7 @@ internal static partial class Builtins
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.Exists(abs)) { ctx.Stderr.WriteLine($"stat: cannot statx '{p}': No such file or directory"); code = 1; continue; }
+                if (!ctx.Fs.Exists(abs)) { ctx.Stderr.WriteLine($"stat: cannot statx '{p}': {ctx.Fs.WhyMissing(abs)}"); code = 1; continue; }
                 var st = ctx.Fs.Stat(abs);
                 var type = st.IsDirectory ? "directory" : st.Size == 0 ? "regular empty file" : "regular file";
                 var mode = Convert.ToString(st.Mode, 8).PadLeft(3, '0');
@@ -387,7 +387,7 @@ internal static partial class Builtins
             foreach (var f in files)
             {
                 var path = ctx.ResolvePath(f);
-                if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot access '{f}': No such file or directory"); code = 1; continue; }
+                if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot access '{f}': {ctx.Fs.WhyMissing(path)}"); code = 1; continue; }
                 try { ctx.Fs.SetOwner(path, owner.Length > 0 ? owner : ctx.Fs.Stat(path).Owner, ctx.Args.Contains("-R")); }
                 catch (ShellException) { ctx.Stderr.WriteLine($"{ctx.Name}: changing ownership of '{f}': Operation not permitted"); code = 1; }
             }
@@ -780,7 +780,7 @@ internal static class Chmod
         foreach (var f in files)
         {
             var path = ctx.ResolvePath(f);
-            if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"chmod: cannot access '{f}': No such file or directory"); code = 1; continue; }
+            if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"chmod: cannot access '{f}': {ctx.Fs.WhyMissing(path)}"); code = 1; continue; }
             Apply(f, path);
         }
         return Task.FromResult(code);

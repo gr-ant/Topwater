@@ -124,8 +124,14 @@ The agent is a regular user called `agent`, not root:
 - `/etc`, `/usr`, `/bin`, `/var/log` and `/root` belong to root. Writing there fails with `Permission denied`,
   and `sudo` answers `agent is not in the sudoers file.`
 - `chmod` is real: a script needs `chmod +x` before `./script.sh` runs, and `ls -l` shows the actual modes.
+- Permissions work as on Linux: reaching a path needs search (`x`) permission on every directory above it, so a
+  file you put under `/root` (mode 700) is out of reach whatever its own mode. Listing a directory needs `r`;
+  creating, deleting or renaming in it needs `w`. `cp -r` skips what the agent can't read. In `/tmp` (sticky)
+  the agent can delete or rename only its own entries.
 - Your app is not restricted. Files it creates belong to whoever owns the directory, so data you put in the
-  agent's home is the agent's to edit, and data you put in `/etc` is read-only for it.
+  agent's home is the agent's to edit, and data you put in `/etc` is read-only for it. That holds while an
+  agent command is running, too: only that command, and the commands you registered when it calls them, act
+  as the agent.
 
 The machine looks like a lived-in Ubuntu 24.04 install: the standard folders, `/etc` files such as `os-release`,
 `passwd`, `hosts` and `group`, a `/proc` whose `cpuinfo` and `meminfo` agree with `nproc` and `free`, the usual
