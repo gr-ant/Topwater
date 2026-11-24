@@ -47,6 +47,17 @@ public class ReviewFixTests
     [InlineData("sed 's/[[:space:]]*$//;s/^/>/' f.txt | head -1; sed '/apple/s//PEAR/' f.txt | head -1", ">apple 3\nPEAR 3\n")]
     [InlineData("sed -e 1i\\\\top -e '$a\\' -e end g.txt", "top\nb\na\nc\nb\nend\n")]
     [InlineData("sed 's/x/\\1/' f.txt", "sed: invalid reference \\1 on `s' command's RHS\n[exit code 1]")]
+    [InlineData("echo '[{\"n\":\"a\",\"v\":2},{\"n\":\"b\",\"v\":1}]' | jq -c 'sort_by(.v) | map({name: .n, double: (.v * 2)})'", "[{\"name\":\"b\",\"double\":2},{\"name\":\"a\",\"double\":4}]\n")]
+    [InlineData("echo '{\"a\":null,\"items\":[{\"t\":\"x\"},{\"t\":\"y\"},{\"t\":\"x\"}]}' | jq -r '.a // \"none\", (.items | group_by(.t) | map(\"\\(.[0].t)=\\(length)\") | join(\",\"))'", "none\nx=2,y=1\n")]
+    [InlineData("jq -nc --arg x hi --argjson n 5 '{x: $x, n: ($n + 1)} | .n += 1 | del(.x)'", "{\"n\":7}\n")]
+    [InlineData("jq -nc '[range(5)] | map(select(. % 2 == 0)) | [first, last, length, (add / length)]'", "[0,4,3,2]\n")]
+    [InlineData("jq -nc 'reduce (1,2,3) as $i (0; . + $i), (1 | [limit(3; repeat(. * 2))]), (\"a-b\" | split(\"-\") | to_entries | from_entries)'", "6\n[1,2,4]\n{\"0\":\"a\",\"1\":\"b\"}\n")]
+    [InlineData("jq -nr '\"2024-05\" | capture(\"(?<y>\\\\d+)-(?<m>\\\\d+)\") | \"\\(.m)/\\(.y)\", ([1,\"a\"] | @csv), (\"x y\" | @uri)'", "05/2024\n1,\"a\"\nx%20y\n")]
+    [InlineData("jq -nc '{a:{b:[1,2]}} | [paths], (.a.b[0] |= . + 10), (try error(\"boom\") catch .), (.x.y // 3)'", "[[\"a\"],[\"a\",\"b\"],[\"a\",\"b\",0],[\"a\",\"b\",1]]\n{\"a\":{\"b\":[11,2]}}\n\"boom\"\n3\n")]
+    [InlineData("jq -n '0.1 + 0.2, 1e-5, 3/2, 1e17'", "0.30000000000000004\n1e-05\n1.5\n1e+17\n")]
+    [InlineData("echo '{\"a\":1}' | jq '.a.b'", "jq: error (at <unknown>): Cannot index number with \"b\"\n[exit code 5]")]
+    [InlineData("jq -n 'foo(1)'", "jq: error: foo/1 is not defined\njq: 1 compile error\n[exit code 3]")]
+    [InlineData("echo '{\"a\":1} {\"a\":2}' | jq -e '.a > 1'", "false\ntrue\n")]
     public async Task MatchesBash(string cmd, string expected)
     {
         var shell = new Shell();
