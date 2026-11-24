@@ -265,7 +265,9 @@ def _grep(ctx):
 
 def _head_tail(ctx):
     head = ctx.name == "head"
-    a = Args.parse(Args.numeric_shorthand(ctx.args), "qv", "nc", "lines=n,bytes=c,quiet=q,silent=q,verbose=v")
+    # shortcut: tail -f/-F print what is there and return instead of following (nothing else writes the file)
+    a = Args.parse(Args.numeric_shorthand(ctx.args), "qvfF" if ctx.name == "tail" else "qv", "nc",
+                   "lines=n,bytes=c,quiet=q,silent=q,verbose=v" + (",follow=f,retry=F" if ctx.name == "tail" else ""))
     errors = _Errors()
     items = list(inputs(ctx, a.positional, errors, raw=a.value("c") is not None))
     for k, (name, text) in enumerate(items):

@@ -86,6 +86,7 @@ public class ReviewFixTests
     [InlineData("printf -v v '%03d' 7; echo $v; cd -- d && pwd | sed 's#.*/##'", "007\nd\n")]
     [InlineData("cp -v f.txt d/; mv -v g.txt g2.txt; cp f.txt nodir/", "'f.txt' -> 'd/f.txt'\nrenamed 'g.txt' -> 'g2.txt'\ncp: cannot create regular file 'nodir/': Not a directory\n[exit code 1]")]
     [InlineData("cp f.txt /dev/null; wc -c < /dev/null", "0\n")]
+    [InlineData("tail -f -n 1 f.txt; tail -F g.txt | wc -l", "apple 5\n4\n")]
     [InlineData("echo never; in", "bash: syntax error near unexpected token `in'\n[exit code 2]")]
     [InlineData("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'", "1: 3\n2: 1\n1 x\n2 y\n\n")]
     [InlineData("awk 'BEGIN { CONVFMT = \"%.2f\"; x = 3.14159; print (x \"\"), 2^53, 1e16 }'", "3.14 9007199254740992 10000000000000000\n")]

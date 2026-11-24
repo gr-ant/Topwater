@@ -109,6 +109,7 @@ CASES = [
     ("cp -v f.txt d/; mv -v g.txt g2.txt; cp f.txt nodir/", "'f.txt' -> 'd/f.txt'\nrenamed 'g.txt' -> 'g2.txt'\n"
      "cp: cannot create regular file 'nodir/': Not a directory\n[exit code 1]"),
     ("cp f.txt /dev/null; wc -c < /dev/null", "0\n"),
+    ("tail -f -n 1 f.txt; tail -F g.txt | wc -l", "apple 5\n4\n"),
     ("echo never; in", "bash: syntax error near unexpected token `in'\n[exit code 2]"),
     # --- awk: RS, CONVFMT, big integers, POSIX classes, functions, getline ---
     ("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'",

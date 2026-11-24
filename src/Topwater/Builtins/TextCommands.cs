@@ -258,7 +258,8 @@ internal static partial class Builtins
         CommandHandler headTail = ctx =>
         {
             bool head = ctx.Name == "head";
-            var a = Args.Parse(Args.NumericShorthand(ctx.Args), "qv", "nc", "lines=n,bytes=c,quiet=q,silent=q,verbose=v");
+            // shortcut: tail -f/-F print what is there and return instead of following (nothing else writes the file)
+            var a = Args.Parse(Args.NumericShorthand(ctx.Args), head ? "qv" : "qvfF", "nc", "lines=n,bytes=c,quiet=q,silent=q,verbose=v" + (head ? "" : ",follow=f,retry=F"));
             int code = 0;
             var inputs = InputBytes(ctx, a.Positional, () => code = 1).ToList();
             for (int k = 0; k < inputs.Count; k++)
