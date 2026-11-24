@@ -16,7 +16,7 @@ _CLASSES = {
 }
 
 
-def posix_to_python(pattern: str, extended: bool) -> str:
+def posix_to_python(pattern: str, extended: bool, bracket_escapes: bool = False) -> str:
     r"""POSIX regex (grep/sed; basic unless extended) -> Python: [[:class:]] brackets, \< \> word edges, and in basic
     mode \( \) \{ \} \| \+ \? are the operators while bare ( ) { } | + ? are literals."""
     out: list[str] = []
@@ -45,6 +45,10 @@ def posix_to_python(pattern: str, extended: bool) -> str:
                             body.append(re.escape(name))
                         j = close + 2
                         continue
+                if bracket_escapes and pattern[j] == "\\" and j + 1 < n:  # awk: \/ \] \. are escapes inside brackets too
+                    body.append(pattern[j:j + 2])
+                    j += 2
+                    continue
                 body.append("\\" + pattern[j] if pattern[j] in "\\[" else pattern[j])  # backslash is literal in POSIX brackets
                 j += 1
             if j >= n:

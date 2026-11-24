@@ -6,7 +6,9 @@ namespace Topwater;
 
 /// <summary>
 /// awk: patterns, ranges, BEGIN/END, fields, associative arrays, if/while/do/for/for-in, print/printf (with > / >> files),
-/// and the common built-ins. shortcut: no user-defined functions, getline, or pipes to/from commands.
+/// user-defined functions, getline (from the input or a file), RS (one character, a regex, or "" for paragraph mode)
+/// and the common built-ins. Mirrors python/src/topwater/commands/awk.py.
+/// shortcut: no pipes to/from commands (print | "cmd", "cmd" | getline); add them if agents need them.
 /// </summary>
 internal static class Awk
 {
@@ -46,8 +48,11 @@ internal readonly struct AV
 
 internal static class AwkFormat
 {
-    public static string Number(double v) =>
-        v == Math.Floor(v) && Math.Abs(v) < 1e16 ? ((long)v).ToString(CultureInfo.InvariantCulture) : G(v, 6, false);
+    /// <summary>Like gawk, integral values print as integers however large; others use the given %g-style format.</summary>
+    public static string Number(double v, string? fmt = null) =>
+        double.IsFinite(v) && v == Math.Floor(v)
+            ? (Math.Abs(v) < 9e18 ? ((long)v).ToString(CultureInfo.InvariantCulture) : new System.Numerics.BigInteger(v).ToString(CultureInfo.InvariantCulture))
+            : fmt == null ? G(v, 6, false) : Sprintf(fmt, [AV.Num(v)]);
 
     public static string E(double v, int prec, bool upper)
     {
@@ -163,6 +168,9 @@ internal sealed class AwkRunner
     sealed record InN(List<Node> Keys, string Array) : Node;
     sealed record ConcatN(Node L, Node R) : Node;
     sealed record CallN(string Name, List<Node> Args) : Node;
+    sealed record UserCallN(string Name, List<Node> Args) : Node;
+    /// <summary>getline [var] [&lt; file]; Cmd is set for `cmd | getline`.</summary>
+    sealed record GetlineN(Node? Target, Node? File, Node? Cmd) : Node;
 
     abstract record Stmt;
     sealed record BlockS(List<Stmt> Body) : Stmt;
@@ -174,6 +182,7 @@ internal sealed class AwkRunner
     sealed record ForInS(string Var, string Array, Stmt Body) : Stmt;
     sealed record SimpleS(string Kind, Node? Arg) : Stmt; // next, exit, break, continue
     sealed record DeleteS(string Array, List<Node>? Keys) : Stmt;
+    sealed record ReturnS(Node? Value) : Stmt;
 
     sealed class Rule
     {
@@ -187,6 +196,16 @@ internal sealed class AwkRunner
     sealed class ExitEx : Exception;
     sealed class BreakEx : Exception;
     sealed class ContinueEx : Exception;
+    sealed class ReturnEx(AV value) : Exception { public AV Value { get; } = value; }
+
+    /// <summary>A user function call: parameters are locals; array arguments are passed by reference.</summary>
+    sealed class Frame(IEnumerable<string> parameters)
+    {
+        public readonly HashSet<string> Params = [.. parameters];
+        public readonly Dictionary<string, AV> Scalars = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, Dictionary<string, AV>> Arrays = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, string> Pending = new(StringComparer.Ordinal); // parameter -> unset global passed for it
+    }
 
     readonly CommandContext _ctx;
     readonly Dictionary<string, AV> _vars = new(StringComparer.Ordinal);
@@ -197,6 +216,10 @@ internal sealed class AwkRunner
     List<string> _fields = [""];
     int _exitCode;
     long _iterations;
+    Dictionary<string, (List<string> Params, BlockS Body)> _functions = [];
+    readonly List<Frame> _frames = [];
+    IEnumerator<string> _input = Enumerable.Empty<string>().GetEnumerator(); // the main input's records, shared by the rules and getline
+    readonly Dictionary<string, IEnumerator<string>> _getlineFiles = new(StringComparer.Ordinal);
 
     public AwkRunner(CommandContext ctx) => _ctx = ctx;
 
@@ -226,7 +249,7 @@ internal sealed class AwkRunner
             string Val(string flag) => a.Length > 2 ? a[2..] : ++i < args.Count ? args[i] : throw Err($"option requires an argument -- {flag}");
             if (a.StartsWith("-F")) fs = Val("F");
             else if (a.StartsWith("-v")) assigns.Add(Val("v"));
-            else if (a.StartsWith("-f")) program = _ctx.Fs.ReadAllText(_ctx.ResolvePath(Val("f")));
+            else if (a.StartsWith("-f")) { var source = Val("f"); program = source is "-" or "/dev/stdin" ? _ctx.StdinText : _ctx.Fs.ReadAllText(_ctx.ResolvePath(source)); }
             else throw Err($"unknown option {a}");
         }
         if (program == null)
@@ -236,7 +259,9 @@ internal sealed class AwkRunner
         }
         operands.AddRange(args.Skip(i));
 
-        var rules = new AwkParser(program).Parse();
+        var parser = new AwkParser(program);
+        var rules = parser.Parse();
+        _functions = parser.Functions;
         SetVar("FS", AV.Str(fs == null ? " " : fs == "t" ? "\t" : Builtins.Unescape(fs)));
         SetVar("OFS", AV.Str(" "));
         SetVar("ORS", AV.Str("\n"));
@@ -253,10 +278,11 @@ internal sealed class AwkRunner
         foreach (var (k, v) in _ctx.Shell.Environment) environ[k] = AV.StrNum(v);
         foreach (var a in assigns) Assign(a);
 
+        _input = InputRecords(operands).GetEnumerator();
         try
         {
             foreach (var r in rules.Where(r => r.Kind == "BEGIN")) Exec(r.Action!);
-            if (rules.Any(r => r.Kind != "BEGIN")) ProcessInput(rules, operands);
+            if (rules.Any(r => r.Kind != "BEGIN")) ProcessInput(rules);
         }
         catch (ExitEx) { }
         try
@@ -278,43 +304,64 @@ internal sealed class AwkRunner
         return true;
     }
 
-    void ProcessInput(List<Rule> rules, List<string> operands)
+    /// <summary>The main input: records of each file operand in turn (var=value operands are applied when reached), or stdin.</summary>
+    IEnumerable<string> InputRecords(List<string> operands)
     {
-        var main = rules.Where(r => r.Kind == "main").ToList();
         bool readAny = false;
-        void Feed(string name, string text)
-        {
-            readAny = true;
-            SetVar("FILENAME", AV.Str(name));
-            SetVar("FNR", AV.Num(0));
-            foreach (var line in Builtins.SplitLines(text))
-            {
-                SetVar("NR", AV.Num(GetVar("NR").ToNum() + 1));
-                SetVar("FNR", AV.Num(GetVar("FNR").ToNum() + 1));
-                SetRecord(line);
-                try
-                {
-                    foreach (var r in main)
-                        if (Matches(r)) { if (r.Action != null) Exec(r.Action); else Print(new PrintS(false, [], null, null)); }
-                }
-                catch (NextEx) { }
-            }
-        }
         foreach (var op in operands)
         {
             if (Assign(op)) continue;
-            if (op == "-") { Feed("", _ctx.StdinText); continue; }
-            var path = _ctx.ResolvePath(op);
-            if (!_ctx.Fs.IsFile(path))
+            readAny = true;
+            string name, text;
+            if (op == "-") (name, text) = ("", _ctx.StdinText);
+            else
             {
-                _ctx.Stderr.WriteLine($"awk: cannot open \"{op}\" ({(_ctx.Fs.IsDirectory(path) ? "Is a directory" : "No such file or directory")})");
-                _exitCode = 2;
-                readAny = true;
-                continue;
+                var path = _ctx.ResolvePath(op);
+                if (!_ctx.Fs.IsFile(path))
+                {
+                    _ctx.Stderr.WriteLine($"awk: cannot open \"{op}\" ({(_ctx.Fs.IsDirectory(path) ? "Is a directory" : "No such file or directory")})");
+                    _exitCode = 2;
+                    continue;
+                }
+                (name, text) = (op, _ctx.Fs.ReadAllText(path));
             }
-            Feed(op, _ctx.Fs.ReadAllText(path));
+            _vars["FILENAME"] = AV.Str(name);
+            _vars["FNR"] = AV.Num(0);
+            foreach (var r in Records(text)) yield return r;
         }
-        if (!readAny) Feed("", _ctx.StdinText);
+        if (!readAny)
+        {
+            _vars["FILENAME"] = AV.Str("");
+            foreach (var r in Records(_ctx.StdinText)) yield return r;
+        }
+    }
+
+    void ProcessInput(List<Rule> rules)
+    {
+        var main = rules.Where(r => r.Kind == "main").ToList();
+        while (_input.MoveNext())
+        {
+            _vars["NR"] = AV.Num(_vars["NR"].ToNum() + 1);
+            _vars["FNR"] = AV.Num(_vars["FNR"].ToNum() + 1);
+            SetRecord(_input.Current);
+            try
+            {
+                foreach (var r in main)
+                    if (Matches(r)) { if (r.Action != null) Exec(r.Action); else Print(new PrintS(false, [], null, null)); }
+            }
+            catch (NextEx) { }
+        }
+    }
+
+    /// <summary>Splits input into records on RS: newline, one character, a regex, or "" (blank-line separated paragraphs).</summary>
+    List<string> Records(string text)
+    {
+        var rs = _vars["RS"].ToStr();
+        if (rs == "\n") return Builtins.SplitLines(text);
+        if (rs.Length == 0) return Regex.Split(text.Trim('\n'), @"\n\n+").Where(p => p.Length > 0).ToList();
+        var parts = rs.Length == 1 ? text.Split(rs[0]).ToList() : GetRegex(rs).Split(text).ToList();
+        if (parts.Count > 0 && parts[^1].Length == 0) parts.RemoveAt(parts.Count - 1);
+        return parts;
     }
 
     bool Matches(Rule r)
@@ -333,10 +380,29 @@ internal sealed class AwkRunner
 
     // ---------- variables & fields ----------
 
-    AV GetVar(string name) => name == "NF" ? AV.Num(_fields.Count - 1) : _vars.GetValueOrDefault(name, AV.Uninit);
+    /// <summary>The current function frame when name is one of its parameters, else null.</summary>
+    Frame? Local(string name) => _frames.Count > 0 && _frames[^1].Params.Contains(name) ? _frames[^1] : null;
+
+    bool IsArray(string name) => Local(name) is { } f ? f.Arrays.ContainsKey(name) : _arrays.ContainsKey(name);
+
+    AV GetVar(string name)
+    {
+        if (Local(name) is { } f)
+        {
+            if (f.Arrays.ContainsKey(name)) throw Err($"attempt to use array {name} in a scalar context");
+            return f.Scalars.GetValueOrDefault(name, AV.Uninit);
+        }
+        return name == "NF" ? AV.Num(_fields.Count - 1) : _vars.GetValueOrDefault(name, AV.Uninit);
+    }
 
     void SetVar(string name, AV v)
     {
+        if (Local(name) is { } f)
+        {
+            if (f.Arrays.ContainsKey(name)) throw Err($"can't assign to {name}; it's an array name.");
+            f.Scalars[name] = v;
+            return;
+        }
         if (name == "NF")
         {
             int n = Math.Max(0, (int)v.ToNum());
@@ -351,9 +417,15 @@ internal sealed class AwkRunner
 
     void SetRecord(string line)
     {
+        var fs = _vars["FS"].ToStr();
+        if (_vars["RS"].ToStr().Length == 0 && fs != " ") // paragraph mode: newline always separates fields too
+            fs = fs.Length == 0 ? "\n" : $"(?:{(fs.Length > 1 ? fs : Regex.Escape(fs))})|\n";
         _fields = [line];
-        _fields.AddRange(SplitFields(line, GetVar("FS").ToStr()));
+        _fields.AddRange(SplitFields(line, fs));
     }
+
+    /// <summary>Number to string with CONVFMT (integers stay integers).</summary>
+    string Str(AV v) => v.K == 0 ? AwkFormat.Number(v.N, _vars["CONVFMT"].ToStr() is { Length: > 0 } f ? f : null) : v.ToStr();
 
     List<string> SplitFields(string s, string fs)
     {
@@ -383,17 +455,28 @@ internal sealed class AwkRunner
 
     Dictionary<string, AV> Array(string name)
     {
+        if (Local(name) is { } f)
+        {
+            if (f.Scalars.TryGetValue(name, out var sv) && sv.K != 3) throw Err($"can't use scalar {name} as array");
+            if (f.Pending.Remove(name, out var global))
+            {
+                if (!_arrays.TryGetValue(global, out var shared)) _arrays[global] = shared = new(StringComparer.Ordinal);
+                f.Arrays[name] = shared;
+            }
+            if (!f.Arrays.TryGetValue(name, out var local)) f.Arrays[name] = local = new(StringComparer.Ordinal);
+            return local;
+        }
         if (_vars.ContainsKey(name) && _vars[name].K != 3) throw Err($"can't use scalar {name} as array");
         if (!_arrays.TryGetValue(name, out var arr)) _arrays[name] = arr = new(StringComparer.Ordinal);
         return arr;
     }
 
-    string Key(List<Node> keys) => string.Join(GetVar("SUBSEP").ToStr(), keys.Select(k => Eval(k).ToStr()));
+    string Key(List<Node> keys) => string.Join(GetVar("SUBSEP").ToStr(), keys.Select(k => Str(Eval(k))));
 
     Regex GetRegex(string pattern)
     {
         if (_regexes.TryGetValue(pattern, out var re)) return re;
-        try { re = new Regex(pattern, RegexOptions.CultureInvariant); }
+        try { re = new Regex(Builtins.PosixToNet(pattern, extended: true, bracketEscapes: true), RegexOptions.CultureInvariant); }
         catch (ArgumentException e) { throw Err($"invalid regular expression /{pattern}/: {e.Message}"); }
         return _regexes[pattern] = re;
     }
@@ -457,6 +540,9 @@ internal sealed class AwkRunner
                 throw new ExitEx();
             case SimpleS { Kind: "break" }: throw new BreakEx();
             case SimpleS { Kind: "continue" }: throw new ContinueEx();
+            case ReturnS r:
+                if (_frames.Count == 0) throw Err("return outside function");
+                throw new ReturnEx(r.Value == null ? AV.Uninit : Eval(r.Value));
             case DeleteS d:
                 if (d.Keys == null) Array(d.Array).Clear();
                 else Array(d.Array).Remove(Key(d.Keys));
@@ -474,7 +560,7 @@ internal sealed class AwkRunner
         catch (ContinueEx) { return true; }
     }
 
-    string OutputString(AV v) => v.K == 0 ? (v.N == Math.Floor(v.N) && Math.Abs(v.N) < 1e16 ? ((long)v.N).ToString(CultureInfo.InvariantCulture) : AwkFormat.Sprintf(GetVar("OFMT").ToStr(), [v])) : v.ToStr();
+    string OutputString(AV v) => v.K == 0 ? AwkFormat.Number(v.N, GetVar("OFMT").ToStr()) : v.ToStr();
 
     void Print(PrintS p)
     {
@@ -550,8 +636,10 @@ internal sealed class AwkRunner
             }
             case MatchN m: return AV.Bool(RegexOf(m.Re).IsMatch(Eval(m.S).ToStr()) != m.Negate);
             case InN i: return AV.Bool(Array(i.Array).ContainsKey(Key(i.Keys)));
-            case ConcatN c: return AV.Str(Eval(c.L).ToStr() + Eval(c.R).ToStr());
+            case ConcatN c: return AV.Str(Str(Eval(c.L)) + Str(Eval(c.R)));
             case CallN call: return Call(call);
+            case UserCallN u: return UserCall(u);
+            case GetlineN g: return Getline(g);
         }
         throw Err("unsupported expression");
     }
@@ -568,13 +656,13 @@ internal sealed class AwkRunner
     AV Call(CallN c)
     {
         var a = c.Args;
-        string S(int i) => i < a.Count ? Eval(a[i]).ToStr() : "";
+        string S(int i) => i < a.Count ? Str(Eval(a[i])) : "";
         double N(int i) => i < a.Count ? Eval(a[i]).ToNum() : 0;
         switch (c.Name)
         {
             case "length":
                 if (a.Count == 0) return AV.Num(_fields[0].Length);
-                if (a[0] is VarN v && _arrays.TryGetValue(v.Name, out var arr)) return AV.Num(arr.Count);
+                if (a[0] is VarN v && IsArray(v.Name)) return AV.Num(Array(v.Name).Count);
                 return AV.Num(S(0).Length);
             case "substr":
             {
@@ -638,15 +726,71 @@ internal sealed class AwkRunner
             case "atan2": return AV.Num(Math.Atan2(N(0), N(1)));
             case "rand": return AV.Num(_random.NextDouble());
             case "srand": return AV.Num(0);
-            case "close" or "fflush": return AV.Num(0);
+            case "fflush": return AV.Num(0);
+            case "close":
+            {
+                var name = S(0);
+                return AV.Num(_getlineFiles.Remove(_ctx.ResolvePath(name)) || _outputs.Any(o => o.Path == _ctx.ResolvePath(name)) ? 0 : -1);
+            }
             case "system": throw Err("system() is not supported");
         }
         throw Err($"calling undefined function {c.Name}");
     }
 
+    AV UserCall(UserCallN c)
+    {
+        if (!_functions.TryGetValue(c.Name, out var fn)) throw Err($"function `{c.Name}' not defined");
+        if (c.Args.Count > fn.Params.Count) throw Err($"function `{c.Name}' called with more arguments than declared");
+        if (_frames.Count >= 200) throw Err($"function `{c.Name}': call nesting too deep");
+        var frame = new Frame(fn.Params);
+        for (int i = 0; i < c.Args.Count; i++)
+        {
+            var (param, arg) = (fn.Params[i], c.Args[i]);
+            if (arg is VarN v && IsArray(v.Name)) frame.Arrays[param] = Array(v.Name); // arrays are passed by reference
+            else if (arg is VarN g && Local(g.Name) == null && !_vars.ContainsKey(g.Name) && g.Name != "NF") frame.Pending[param] = g.Name; // may become a global array
+            else frame.Scalars[param] = Eval(arg);
+        }
+        _frames.Add(frame);
+        try
+        {
+            Exec(fn.Body);
+            return AV.Uninit;
+        }
+        catch (ReturnEx r) { return r.Value; }
+        finally { _frames.RemoveAt(_frames.Count - 1); }
+    }
+
+    AV Getline(GetlineN g)
+    {
+        if (g.Cmd != null) throw Err("\"command\" | getline is not supported");
+        string record;
+        if (g.File != null)
+        {
+            var name = Eval(g.File).ToStr();
+            var key = name is "-" or "/dev/stdin" ? "-" : _ctx.ResolvePath(name);
+            if (!_getlineFiles.TryGetValue(key, out var it))
+            {
+                if (key != "-" && !_ctx.Fs.IsFile(key)) return AV.Num(-1);
+                _getlineFiles[key] = it = Records(key == "-" ? _ctx.StdinText : _ctx.Fs.ReadAllText(key)).GetEnumerator();
+            }
+            if (!it.MoveNext()) return AV.Num(0);
+            record = it.Current;
+        }
+        else
+        {
+            if (!_input.MoveNext()) return AV.Num(0);
+            record = _input.Current;
+            _vars["NR"] = AV.Num(_vars["NR"].ToNum() + 1);
+            _vars["FNR"] = AV.Num(_vars["FNR"].ToNum() + 1);
+        }
+        if (g.Target == null) SetRecord(record);
+        else Set(g.Target, AV.StrNum(record));
+        return AV.Num(1);
+    }
+
     // ---------- parser ----------
 
-    enum TK { Num, Str, Regex, Name, Func, Keyword, Op, Newline, EOF }
+    enum TK { Num, Str, Regex, Name, Func, Call, Keyword, Op, Newline, EOF }
     readonly record struct Tok(TK Kind, string Text, double Num = 0);
 
     sealed class AwkParser
@@ -658,6 +802,7 @@ internal sealed class AwkRunner
 
         readonly List<Tok> _t;
         int _p;
+        public readonly Dictionary<string, (List<string> Params, BlockS Body)> Functions = new(StringComparer.Ordinal);
 
         public AwkParser(string src) => _t = Lex(src);
 
@@ -733,7 +878,9 @@ internal sealed class AwkRunner
                     int j = i;
                     while (j < s.Length && (char.IsLetterOrDigit(s[j]) || s[j] == '_')) j++;
                     var w = s[i..j];
-                    toks.Add(new(Keywords.Contains(w) ? TK.Keyword : Funcs.Contains(w) ? TK.Func : TK.Name, w));
+                    var kind = Keywords.Contains(w) ? TK.Keyword : Funcs.Contains(w) ? TK.Func : TK.Name;
+                    if (kind == TK.Name && j < s.Length && s[j] == '(') kind = TK.Call; // a user-defined function call: no space allowed before the (
+                    toks.Add(new(kind, w));
                     i = j;
                     continue;
                 }
@@ -762,7 +909,26 @@ internal sealed class AwkRunner
             {
                 var r = new Rule();
                 if (IsKw("BEGIN") || IsKw("END")) { r.Kind = Peek.Text; _p++; SkipNewlines(); r.Action = Block(); }
-                else if (IsKw("function") || IsKw("func")) throw new AwkError("user-defined functions are not supported");
+                else if (IsKw("function") || IsKw("func"))
+                {
+                    _p++;
+                    var name = Peek.Kind is TK.Name or TK.Call ? Peek.Text : throw Err("function name expected");
+                    _p++;
+                    Expect("(");
+                    var parameters = new List<string>();
+                    while (!IsOp(")"))
+                    {
+                        parameters.Add(Peek.Kind == TK.Name ? Peek.Text : throw Err("function parameter name expected"));
+                        _p++;
+                        if (!Accept(",")) break;
+                        SkipNewlines();
+                    }
+                    Expect(")");
+                    SkipNewlines();
+                    Functions[name] = (parameters, Block());
+                    SkipTerminators();
+                    continue;
+                }
                 else
                 {
                     if (!IsOp("{"))
@@ -906,7 +1072,7 @@ internal sealed class AwkRunner
                             if (Accept(")") && (Peek.Kind is TK.Newline or TK.EOF || IsOp(";") || IsOp("}") || IsOp(">") || IsOp(">>") || IsOp("|"))) args = list;
                             else { _p = save; args = ExprList(true); }
                         }
-                        else if (!(Peek.Kind is TK.Newline or TK.EOF || IsOp(";") || IsOp("}") || IsOp(">") || IsOp(">>"))) args = ExprList(true);
+                        else if (!(Peek.Kind is TK.Newline or TK.EOF || IsOp(";") || IsOp("}") || IsOp(">") || IsOp(">>") || IsOp("|"))) args = ExprList(true);
                         string? redir = null;
                         Node? dest = null;
                         if (IsOp(">") || IsOp(">>")) { redir = Peek.Text; _p++; dest = Concat(true); }
@@ -914,8 +1080,13 @@ internal sealed class AwkRunner
                         EndSimple();
                         return new PrintS(printf, args, redir, dest);
                     }
-                    case "getline": throw new AwkError("getline is not supported");
-                    case "return": throw new AwkError("return outside function");
+                    case "return":
+                    {
+                        _p++;
+                        Node? value = Peek.Kind is TK.Newline or TK.EOF || IsOp(";") || IsOp("}") ? null : Expr(false);
+                        EndSimple();
+                        return new ReturnS(value);
+                    }
                 }
             }
             var e = Expr(false);
@@ -999,6 +1170,11 @@ internal sealed class AwkRunner
         Node Comparison(bool noGt)
         {
             var l = Concat(noGt);
+            while (IsOp("|") && PeekAt(1) is { Kind: TK.Keyword, Text: "getline" })
+            {
+                _p += 2;
+                l = new GetlineN(GetlineTarget(), null, l);
+            }
             if (Peek.Kind == TK.Op && Peek.Text is "<" or "<=" or "==" or "!=" or ">=" || (IsOp(">") && !noGt))
             {
                 var op = Peek.Text;
@@ -1008,7 +1184,15 @@ internal sealed class AwkRunner
             return l;
         }
 
-        bool StartsConcat() => Peek.Kind is TK.Num or TK.Str or TK.Name or TK.Func or TK.Regex || IsOp("$") || IsOp("(");
+        bool StartsConcat() => Peek.Kind is TK.Num or TK.Str or TK.Name or TK.Func or TK.Call or TK.Regex || IsOp("$") || IsOp("(");
+
+        /// <summary>The optional variable after getline.</summary>
+        Node? GetlineTarget()
+        {
+            if (Peek.Kind != TK.Name && !IsOp("$")) return null;
+            var target = Primary();
+            return IsLValue(target) ? target : throw Err("getline: expected a variable");
+        }
 
         Node Concat(bool noGt)
         {
@@ -1112,7 +1296,21 @@ internal sealed class AwkRunner
                     }
                     return new VarN(t.Text);
                 }
-                case TK.Keyword when t.Text == "getline": throw new AwkError("getline is not supported");
+                case TK.Keyword when t.Text == "getline":
+                {
+                    _p++;
+                    var target = GetlineTarget();
+                    Node? file = Accept("<") ? Primary() : null;
+                    return new GetlineN(target, file, null);
+                }
+                case TK.Call:
+                {
+                    _p++;
+                    Expect("(");
+                    var args = IsOp(")") ? [] : ExprList(false);
+                    Expect(")");
+                    return new UserCallN(t.Text, args);
+                }
             }
             throw Err(t.Kind == TK.EOF ? "unexpected end of program" : $"unexpected '{t.Text}'");
         }

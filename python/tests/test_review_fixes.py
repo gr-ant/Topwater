@@ -94,6 +94,16 @@ CASES = [
      "Thu Jan  1 00:00:00 UTC 1970\n2024-03-02 10:30:00 Saturday 2 1709375400\nUTC\n"),
     ("seq -f '%03g' 3; seq 0 0.1 0.3 | tail -1; seq 6 | paste - - -", "001\n002\n003\n0.3\n1\t2\t3\n4\t5\t6\n"),
     ("type cd ls; type -t echo; command -v cd", "cd is a shell builtin\nls is /usr/bin/ls\nbuiltin\ncd\n"),
+    # --- awk: RS, CONVFMT, big integers, POSIX classes, functions, getline ---
+    ("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'",
+     "1: 3\n2: 1\n1 x\n2 y\n\n"),
+    ("awk 'BEGIN { CONVFMT = \"%.2f\"; x = 3.14159; print (x \"\"), 2^53, 1e16 }'", "3.14 9007199254740992 10000000000000000\n"),
+    ("awk '/[[:digit:]]$/ { n++ } END { print n }' f.txt; echo 'a.b' | awk '/a[.]b/'", "4\na.b\n"),
+    ("awk 'function fact(n) { return n <= 1 ? 1 : n * fact(n - 1) } "
+     "function fill(arr, n,   i) { for (i = 1; i <= n; i++) arr[i] = i * i } "
+     "BEGIN { print fact(10); fill(sq, 3); print sq[3], length(sq) }'", "3628800\n9 3\n"),
+    ("awk 'BEGIN { while ((getline line < \"g.txt\") > 0) n++; print n } { getline x; print $1 \"|\" x }' f.txt",
+     "4\napple|banana 1\ncherry|apple 5\n"),
 ]
 
 

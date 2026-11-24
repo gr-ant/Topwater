@@ -17,7 +17,7 @@ internal static partial class Builtins
     /// POSIX regex (grep/sed; basic unless extended) to .NET: [[:class:]] brackets, \&lt; \&gt; word edges, and in basic
     /// mode \( \) \{ \} \| \+ \? are the operators while bare ( ) { } | + ? are literals.
     /// </summary>
-    internal static string PosixToNet(string pattern, bool extended)
+    internal static string PosixToNet(string pattern, bool extended, bool bracketEscapes = false)
     {
         var sb = new StringBuilder();
         int n = pattern.Length;
@@ -46,6 +46,7 @@ internal static partial class Builtins
                             continue;
                         }
                     }
+                    if (bracketEscapes && pattern[j] == '\\' && j + 1 < n) { body.Append(pattern, j, 2); j += 2; continue; } // awk: \/ \] \. are escapes too
                     if (pattern[j] is '\\' or '[') body.Append('\\'); // backslash is literal in POSIX brackets
                     body.Append(pattern[j]);
                     j++;

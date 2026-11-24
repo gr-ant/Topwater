@@ -1,7 +1,8 @@
 """awk: patterns, ranges, BEGIN/END, fields, associative arrays, if/while/do/for/for-in, print/printf (with > / >> files),
-and the common built-ins.
+user-defined functions, getline (from the input or a file), RS (one character, a regex, or "" for paragraph mode) and
+the common built-ins. Mirrored by Awk.cs.
 
-shortcut: no user-defined functions, getline, or pipes to/from commands.
+shortcut: no pipes to/from commands (print | "cmd", "cmd" | getline); add them if agents need them.
 """
 from __future__ import annotations
 
@@ -39,8 +40,8 @@ def to_num(v) -> float:
 
 
 def fmt_number(v: float, fmt: str = "%.6g") -> str:
-    if v == math.floor(v) and abs(v) < 1e16:
-        return str(int(v))
+    if math.isfinite(v) and v == math.floor(v):
+        return str(int(v))  # like gawk, integral values print as integers however large
     return fmt % v
 
 
@@ -202,6 +203,25 @@ class Call:
 
 
 @dataclass
+class UserCall:
+    name: str
+    args: list
+
+
+@dataclass
+class Getline:
+    """getline [var] [< file]; cmd is set for `cmd | getline`."""
+    target: object
+    file: object
+    cmd: object = None
+
+
+@dataclass
+class ReturnS:
+    value: object
+
+
+@dataclass
 class Block:
     body: list
 
@@ -358,7 +378,10 @@ def _lex(s: str) -> list[Tok]:
             while j < len(s) and (s[j].isalnum() or s[j] == "_"):
                 j += 1
             w = s[i:j]
-            toks.append(Tok("kw" if w in _KEYWORDS else "func" if w in _FUNCS else "name", w))
+            kind = "kw" if w in _KEYWORDS else "func" if w in _FUNCS else "name"
+            if kind == "name" and j < len(s) and s[j] == "(":
+                kind = "call"  # a user-defined function call: no space allowed before the (
+            toks.append(Tok(kind, w))
             i = j
         else:
             op = next((o for o in _OPS if s.startswith(o, i)), None)
@@ -378,6 +401,7 @@ class _Parser:
     def __init__(self, src: str):
         self.t = _lex(src)
         self.p = 0
+        self.functions: dict[str, tuple[list[str], Block]] = {}
 
     @staticmethod
     def err(msg: str) -> AwkError:
@@ -428,7 +452,26 @@ class _Parser:
                 self.skip_nl()
                 r.action = self.block()
             elif self.is_kw("function") or self.is_kw("func"):
-                raise AwkError("user-defined functions are not supported")
+                self.p += 1
+                if self.peek.kind not in ("name", "call"):
+                    raise self.err("function name expected")
+                name = self.peek.text
+                self.p += 1
+                self.expect("(")
+                params = []
+                while not self.is_op(")"):
+                    if self.peek.kind != "name":
+                        raise self.err("function parameter name expected")
+                    params.append(self.peek.text)
+                    self.p += 1
+                    if not self.accept(","):
+                        break
+                    self.skip_nl()
+                self.expect(")")
+                self.skip_nl()
+                self.functions[name] = (params, self.block())
+                self.skip_terms()
+                continue
             else:
                 if not self.is_op("{"):
                     r.pattern = self.expr(False)
@@ -556,7 +599,7 @@ class _Parser:
                     else:
                         self.p = save
                         args = self.expr_list(True)
-                elif not (self.at_stmt_end() or self.is_op(">") or self.is_op(">>")):
+                elif not (self.at_stmt_end() or self.is_op(">") or self.is_op(">>") or self.is_op("|")):
                     args = self.expr_list(True)
                 redir = dest = None
                 if self.is_op(">") or self.is_op(">>"):
@@ -567,10 +610,11 @@ class _Parser:
                     raise AwkError('output pipes (print | "cmd") are not supported')
                 self.end_simple()
                 return PrintS(k == "printf", args, redir, dest)
-            if k == "getline":
-                raise AwkError("getline is not supported")
             if k == "return":
-                raise AwkError("return outside function")
+                self.p += 1
+                value = None if self.at_stmt_end() else self.expr(False)
+                self.end_simple()
+                return ReturnS(value)
         e = self.expr(False)
         self.end_simple()
         return ExprS(e)
@@ -636,6 +680,9 @@ class _Parser:
 
     def comparison(self, no_gt: bool):
         left = self.concat(no_gt)
+        while self.is_op("|") and self.at(1).kind == "kw" and self.at(1).text == "getline":
+            self.p += 2
+            left = Getline(self.getline_target(), None, left)
         if (self.peek.kind == "op" and self.peek.text in ("<", "<=", "==", "!=", ">=")) or (self.is_op(">") and not no_gt):
             op = self.peek.text
             self.p += 1
@@ -643,7 +690,7 @@ class _Parser:
         return left
 
     def starts_concat(self) -> bool:
-        return self.peek.kind in ("num", "str", "name", "func", "regex") or self.is_op("$") or self.is_op("(")
+        return self.peek.kind in ("num", "str", "name", "func", "regex", "call") or self.is_op("$") or self.is_op("(")
 
     def concat(self, no_gt: bool):
         left = self.additive()
@@ -699,6 +746,15 @@ class _Parser:
             return Incr(t, inc, True)
         return self.primary()
 
+    def getline_target(self):
+        """The optional variable after getline."""
+        if self.peek.kind == "name" or self.is_op("$"):
+            target = self.primary()
+            if _is_lvalue(target):
+                return target
+            raise self.err("getline: expected a variable")
+        return None
+
     def primary(self):
         t = self.peek
         if t.kind == "num":
@@ -746,7 +802,18 @@ class _Parser:
                 return Index(t.text, keys)
             return Var(t.text)
         if t.kind == "kw" and t.text == "getline":
-            raise AwkError("getline is not supported")
+            self.p += 1
+            target = self.getline_target()
+            file = None
+            if self.accept("<"):
+                file = self.primary()
+            return Getline(target, file)
+        if t.kind == "call":
+            self.p += 1
+            self.expect("(")
+            args = [] if self.is_op(")") else self.expr_list(False)
+            self.expect(")")
+            return UserCall(t.text, args)
         raise self.err("unexpected end of program" if t.kind == "eof" else f"unexpected '{t.text}'")
 
 
@@ -768,6 +835,22 @@ class _Continue(Exception):
     pass
 
 
+class _Return(Exception):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+
+class _Frame:
+    """A user function call: parameters are locals; array arguments are passed by reference."""
+
+    def __init__(self, params: list[str]):
+        self.params = set(params)
+        self.scalars: dict = {}
+        self.arrays: dict[str, dict] = {}
+        self.pending: dict[str, str] = {}  # parameter -> unset global variable passed for it
+
+
 class _Runner:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -779,14 +862,37 @@ class _Runner:
         self.exit_code = 0
         self.iterations = 0
         self.rng = random.Random(0)
+        self.functions: dict[str, tuple[list[str], Block]] = {}
+        self.frames: list[_Frame] = []
+        self.input = iter(())  # the main input's records, shared by the rules and getline
+        self.getline_files: dict[str, object] = {}
 
     # variables & fields
+    def local(self, name: str):
+        """The current function frame when name is one of its parameters, else None."""
+        return self.frames[-1] if self.frames and name in self.frames[-1].params else None
+
+    def is_array(self, name: str) -> bool:
+        f = self.local(name)
+        return name in f.arrays if f else name in self.arrays
+
     def get_var(self, name: str):
+        f = self.local(name)
+        if f:
+            if name in f.arrays:
+                raise AwkError(f"attempt to use array {name} in a scalar context")
+            return f.scalars.get(name)
         if name == "NF":
             return float(len(self.fields) - 1)
         return self.vars.get(name)
 
     def set_var(self, name: str, v) -> None:
+        f = self.local(name)
+        if f:
+            if name in f.arrays:
+                raise AwkError(f"can't assign to {name}; it's an array name.")
+            f.scalars[name] = v
+            return
         if name == "NF":
             n = max(0, int(to_num(v)))
             self.fields = (self.fields + [""] * n)[: n + 1]
@@ -808,7 +914,29 @@ class _Runner:
         return self.regex(fs).split(s)
 
     def set_record(self, line: str) -> None:
-        self.fields = [line] + self.split_fields(line, to_str(self.get_var("FS")))
+        fs = to_str(self.vars.get("FS"))
+        if self.vars.get("RS") == "" and fs != " ":  # paragraph mode: newline always separates fields too
+            fs = "\n" if not fs else f"(?:{fs if len(fs) > 1 else re.escape(fs)})|\n"
+        self.fields = [line] + self.split_fields(line, fs)
+
+    def records(self, text: str):
+        """Splits input into records on RS: newline, one character, a regex, or "" (blank-line separated paragraphs)."""
+        rs = to_str(self.vars.get("RS"))
+        if rs == "\n":
+            return split_lines(text)
+        if rs == "":
+            parts = re.split(r"\n\n+", text.strip("\n"))
+            return [p for p in parts if p]
+        parts = text.split(rs) if len(rs) == 1 else self.regex(rs).split(text)
+        if parts and parts[-1] == "":
+            parts.pop()
+        return parts
+
+    def str(self, v) -> str:
+        """Number to string with CONVFMT (integers stay integers)."""
+        if isinstance(v, float):
+            return fmt_number(v, to_str(self.vars.get("CONVFMT")) or "%.6g")
+        return to_str(v)
 
     def rebuild(self) -> None:
         self.fields[0] = to_str(self.get_var("OFS")).join(self.fields[1:])
@@ -830,18 +958,27 @@ class _Runner:
         self.rebuild()
 
     def array(self, name: str) -> dict:
+        f = self.local(name)
+        if f:
+            if f.scalars.get(name) is not None:
+                raise AwkError(f"can't use scalar {name} as array")
+            if name in f.pending:
+                f.arrays[name] = self.arrays.setdefault(f.pending.pop(name), {})
+            return f.arrays.setdefault(name, {})
         if self.vars.get(name) is not None:
             raise AwkError(f"can't use scalar {name} as array")
         return self.arrays.setdefault(name, {})
 
     def key(self, keys: list) -> str:
-        return to_str(self.get_var("SUBSEP")).join(to_str(self.eval(k)) for k in keys)
+        return to_str(self.get_var("SUBSEP")).join(self.str(self.eval(k)) for k in keys)
 
     def regex(self, pattern: str) -> re.Pattern:
         rx = self.regexes.get(pattern)
         if rx is None:
+            from .text import posix_to_python
+
             try:
-                rx = self.regexes[pattern] = re.compile(pattern)
+                rx = self.regexes[pattern] = re.compile(posix_to_python(pattern, True, bracket_escapes=True))
             except re.error as e:
                 raise AwkError(f"invalid regular expression /{pattern}/: {e}") from None
         return rx
@@ -907,6 +1044,10 @@ class _Runner:
                     self.exit_code = int(to_num(self.eval(s.arg)))
                 raise _Exit()
             raise _Break() if s.kind == "break" else _Continue()
+        elif isinstance(s, ReturnS):
+            if not self.frames:
+                raise AwkError("return outside function")
+            raise _Return(None if s.value is None else self.eval(s.value))
         elif isinstance(s, DeleteS):
             if s.keys is None:
                 self.array(s.array).clear()
@@ -992,9 +1133,13 @@ class _Runner:
         if isinstance(n, In):
             return float(self.key(n.keys) in self.array(n.array))
         if isinstance(n, Concat):
-            return to_str(self.eval(n.l)) + to_str(self.eval(n.r))
+            return self.str(self.eval(n.l)) + self.str(self.eval(n.r))
         if isinstance(n, Call):
             return self.call(n)
+        if isinstance(n, UserCall):
+            return self.user_call(n)
+        if isinstance(n, Getline):
+            return self.getline(n)
         raise AwkError("unsupported expression")
 
     @staticmethod
@@ -1019,7 +1164,7 @@ class _Runner:
         a = c.args
 
         def s(i):
-            return to_str(self.eval(a[i])) if i < len(a) else ""
+            return self.str(self.eval(a[i])) if i < len(a) else ""
 
         def num(i):
             return to_num(self.eval(a[i])) if i < len(a) else 0.0
@@ -1028,8 +1173,8 @@ class _Runner:
         if name == "length":
             if not a:
                 return float(len(self.fields[0]))
-            if isinstance(a[0], Var) and a[0].name in self.arrays:
-                return float(len(self.arrays[a[0].name]))
+            if isinstance(a[0], Var) and self.is_array(a[0].name):
+                return float(len(self.array(a[0].name)))
             return float(len(s(0)))
         if name == "substr":
             text = s(0)
@@ -1089,13 +1234,69 @@ class _Runner:
             "tolower": lambda: s(0).lower(), "toupper": lambda: s(0).upper(), "int": lambda: float(math.trunc(num(0))),
             "sqrt": lambda: math.sqrt(num(0)), "exp": lambda: math.exp(num(0)), "log": lambda: math.log(num(0)),
             "sin": lambda: math.sin(num(0)), "cos": lambda: math.cos(num(0)), "atan2": lambda: math.atan2(num(0), num(1)),
-            "rand": lambda: self.rng.random(), "srand": lambda: 0.0, "close": lambda: 0.0, "fflush": lambda: 0.0,
+            "rand": lambda: self.rng.random(), "srand": lambda: 0.0, "fflush": lambda: 0.0,
         }
+        if name == "close":
+            return 0.0 if self.getline_files.pop(self.ctx.resolve(s(0)), None) is not None or s(0) in self.outputs else -1.0
         if name in simple:
             return simple[name]()
         if name == "system":
             raise AwkError("system() is not supported")
         raise AwkError(f"calling undefined function {name}")
+
+    def user_call(self, c: UserCall):
+        if c.name not in self.functions:
+            raise AwkError(f"function `{c.name}' not defined")
+        params, body = self.functions[c.name]
+        if len(c.args) > len(params):
+            raise AwkError(f"function `{c.name}' called with more arguments than declared")
+        if len(self.frames) >= 200:
+            raise AwkError(f"function `{c.name}': call nesting too deep")
+        frame = _Frame(params)
+        for param, arg in zip(params, c.args):
+            if isinstance(arg, Var) and self.is_array(arg.name):
+                frame.arrays[param] = self.array(arg.name)  # arrays are passed by reference
+            elif isinstance(arg, Var) and self.local(arg.name) is None and arg.name not in self.vars and arg.name != "NF":
+                frame.pending[param] = arg.name  # an unset global becomes a global array if the function uses it as one
+            else:
+                frame.scalars[param] = self.eval(arg)
+        self.frames.append(frame)
+        try:
+            self.exec(body)
+            return None
+        except _Return as r:
+            return r.value
+        finally:
+            self.frames.pop()
+
+    def getline(self, g: Getline):
+        if g.cmd is not None:
+            raise AwkError('"command" | getline is not supported')
+        if g.file is not None:
+            name = to_str(self.eval(g.file))
+            if name in ("-", "/dev/stdin"):
+                it = self.getline_files.setdefault("-", iter(self.records(self.ctx.stdin)))
+            else:
+                path = self.ctx.resolve(name)
+                it = self.getline_files.get(path)
+                if it is None:
+                    if not self.ctx.fs.is_file(path):
+                        return -1.0
+                    it = self.getline_files[path] = iter(self.records(self.ctx.fs.read_text(path)))
+            rec = next(it, None)
+            if rec is None:
+                return 0.0
+        else:
+            rec = next(self.input, None)
+            if rec is None:
+                return 0.0
+            self.vars["NR"] = to_num(self.vars["NR"]) + 1
+            self.vars["FNR"] = to_num(self.vars["FNR"]) + 1
+        if g.target is None:
+            self.set_record(rec)
+        else:
+            self.set(g.target, StrNum(rec))
+        return 1.0
 
     # driver
     def assign(self, text: str) -> bool:
@@ -1150,7 +1351,8 @@ class _Runner:
             elif a.startswith("-v"):
                 assigns.append(val("v"))
             elif a.startswith("-f"):
-                program = ctx.fs.read_text(ctx.resolve(val("f")))
+                source = val("f")
+                program = ctx.stdin if source in ("-", "/dev/stdin") else ctx.fs.read_text(ctx.resolve(source))
             else:
                 raise AwkError(f"unknown option {a}")
             i += 1
@@ -1161,7 +1363,9 @@ class _Runner:
             i += 1
         operands = args[i:]
 
-        rules = _Parser(program).parse()
+        parser = _Parser(program)
+        rules = parser.parse()
+        self.functions = parser.functions
         defaults = {"FS": " " if fs is None else "\t" if fs == "t" else unescape(fs), "OFS": " ", "ORS": "\n", "RS": "\n",
                     "SUBSEP": "\x1c", "CONVFMT": "%.6g", "OFMT": "%.6g", "FILENAME": ""}
         for k, v in defaults.items():
@@ -1173,12 +1377,13 @@ class _Runner:
         for a in assigns:
             self.assign(a)
 
+        self.input = self.input_records(operands)
         try:
             for r in rules:
                 if r.kind == "BEGIN":
                     self.exec(r.action)
             if any(r.kind != "BEGIN" for r in rules):
-                self.process(rules, operands)
+                self.process(rules)
         except _Exit:
             pass
         try:
@@ -1192,46 +1397,49 @@ class _Runner:
             (ctx.fs.append_text if append else ctx.fs.write_text)(path, "".join(chunks))
         return self.exit_code
 
-    def process(self, rules: list[Rule], operands: list[str]) -> None:
+    def input_records(self, operands: list[str]):
+        """The main input: records of each file operand in turn (var=value operands are applied when reached), or stdin."""
         ctx = self.ctx
-        main = [r for r in rules if r.kind == "main"]
         read_any = False
-
-        def feed(name: str, text: str):
-            nonlocal read_any
-            read_any = True
-            self.vars["FILENAME"] = name
-            self.vars["FNR"] = 0.0
-            for line in split_lines(text):
-                self.vars["NR"] = to_num(self.vars["NR"]) + 1
-                self.vars["FNR"] = to_num(self.vars["FNR"]) + 1
-                self.set_record(line)
-                try:
-                    for r in main:
-                        if self.matches(r):
-                            if r.action is not None:
-                                self.exec(r.action)
-                            else:
-                                self.print(PrintS(False, [], None, None))
-                except _Next:
-                    pass
-
         for op in operands:
             if self.assign(op):
                 continue
+            read_any = True
             if op == "-":
-                feed("", ctx.stdin)
-                continue
-            path = ctx.resolve(op)
-            if not ctx.fs.is_file(path):
-                reason = "Is a directory" if ctx.fs.is_dir(path) else "No such file or directory"
-                ctx.error(f'awk: cannot open "{op}" ({reason})')
-                self.exit_code = 2
-                read_any = True
-                continue
-            feed(op, ctx.fs.read_text(path))
+                name, text = "", ctx.stdin
+            else:
+                path = ctx.resolve(op)
+                if not ctx.fs.is_file(path):
+                    reason = "Is a directory" if ctx.fs.is_dir(path) else "No such file or directory"
+                    ctx.error(f'awk: cannot open "{op}" ({reason})')
+                    self.exit_code = 2
+                    continue
+                name, text = op, ctx.fs.read_text(path)
+            self.vars["FILENAME"] = name
+            self.vars["FNR"] = 0.0
+            yield from self.records(text)
         if not read_any:
-            feed("", ctx.stdin)
+            self.vars["FILENAME"] = ""
+            yield from self.records(ctx.stdin)
+
+    def process(self, rules: list[Rule]) -> None:
+        main = [r for r in rules if r.kind == "main"]
+        while True:
+            line = next(self.input, None)
+            if line is None:
+                return
+            self.vars["NR"] = to_num(self.vars["NR"]) + 1
+            self.vars["FNR"] = to_num(self.vars["FNR"]) + 1
+            self.set_record(line)
+            try:
+                for r in main:
+                    if self.matches(r):
+                        if r.action is not None:
+                            self.exec(r.action)
+                        else:
+                            self.print(PrintS(False, [], None, None))
+            except _Next:
+                pass
 
 
 def register(shell) -> None:
