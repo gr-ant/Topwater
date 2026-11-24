@@ -72,8 +72,15 @@ def _ls(ctx):
     return code
 
 
+def _show_nonprinting(line: str) -> str:
+    return "".join(c if c == "\t" or 32 <= ord(c) < 127 or ord(c) > 159 else "^?" if ord(c) == 127
+                   else "^" + chr(ord(c) + 64) if ord(c) < 32 else "M-^" + chr(ord(c) - 64) for c in line)
+
+
 def _cat(ctx):
-    a = Args.parse(ctx.args, "n", longs="number=n")
+    a = Args.parse(ctx.args, "nbsAETveTu", longs="number=n,number-nonblank=b,squeeze-blank=s,show-all=A,show-ends=E,"
+                                                 "show-tabs=T,show-nonprinting=v")
+    ends, tabs, nonprint = a.has("A") or a.has("E") or a.has("e"), a.has("A") or a.has("T"), a.has("A") or a.has("v") or a.has("e")
     code = 0
     line_no = 0
 
@@ -81,13 +88,30 @@ def _cat(ctx):
         nonlocal code
         code = 1
 
+    plain = not (a.has("n") or a.has("b") or a.has("s") or ends or tabs or nonprint)
+    prev_blank = False
     for _, text in inputs(ctx, a.positional, fail):
-        if not a.has("n"):
+        if plain:
             ctx.stdout.write(text)
             continue
+        out = []
         for line in split_lines(text):
-            line_no += 1
-            ctx.stdout.write(f"{line_no:6}\t{line}\n")
+            if a.has("s") and line == "" and prev_blank:
+                continue
+            prev_blank = line == ""
+            if nonprint:
+                line = _show_nonprinting(line)
+            if tabs:
+                line = line.replace("\t", "^I")
+            if a.has("b") and line == "" or not (a.has("n") or a.has("b")):
+                prefix = ""
+            else:
+                line_no += 1
+                prefix = f"{line_no:6}\t"
+            out.append(prefix + line + ("$" if ends else "") + "\n")
+        if out and not text.endswith("\n"):  # an unterminated last line gets neither a newline nor a $
+            out[-1] = out[-1][:-2] if ends else out[-1][:-1]
+        ctx.stdout.write("".join(out))
     return code
 
 
@@ -100,11 +124,15 @@ def _mkdir(ctx):
 
 
 def _touch(ctx):
-    if not ctx.args:
+    # shortcut: -d/-t/-r are accepted but the file just gets the current time; model timestamps if agents rely on them.
+    a = Args.parse(ctx.args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h")
+    if not a.positional:
         raise ShellError("missing file operand")
-    for p in ctx.args:
-        if not p.startswith("-"):
-            ctx.fs.touch(ctx.resolve(p))
+    for p in a.positional:
+        path = ctx.resolve(p)
+        if a.has("c") and not ctx.fs.exists(path):
+            continue
+        ctx.fs.touch(path)
 
 
 def _rm(ctx):

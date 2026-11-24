@@ -80,7 +80,7 @@ class ShellTests(unittest.TestCase):
         self.assertEqual("2\n", out(sh, "grep -ci 'error' log.txt"))
         self.assertEqual("info start\n--\ninfo retry\nerror again\n", out(sh, "grep -B1 -i 'start\\|again' log.txt | grep -v ERROR"))
         self.assertEqual("ERROR disk full\n", out(sh, "grep -E 'disk|nothing' log.txt"))
-        self.assertEqual("log.txt:3\n", out(sh, "grep -rc info ."))
+        self.assertEqual("./log.txt:3\n", out(sh, "grep -rc info ."))
         self.assertEqual("info done\n", out(sh, "tail -1 log.txt"))
         self.assertEqual("info start\nERROR disk full\n", out(sh, "head -n 2 log.txt"))
         self.assertEqual("ERROR disk full\ninfo retry\n", out(sh, "sed -n '2,3p' log.txt"))

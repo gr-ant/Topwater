@@ -110,14 +110,14 @@ internal static partial class Builtins
     internal static void WriteLines(TextWriter w, IEnumerable<string> lines) { foreach (var l in lines) w.Write(l + "\n"); }
 
     /// <summary>Reads each file argument (or stdin when there are none / "-"), reporting missing files to stderr.</summary>
-    internal static IEnumerable<(string Name, string Text)> Inputs(CommandContext ctx, IReadOnlyList<string> files, Action onError) =>
-        Inputs(ctx, files, onError, ctx.Fs.ReadAllText, () => ctx.StdinText);
+    internal static IEnumerable<(string Name, string Text)> Inputs(CommandContext ctx, IReadOnlyList<string> files, Action onError, bool quiet = false) =>
+        Inputs(ctx, files, onError, ctx.Fs.ReadAllText, () => ctx.StdinText, quiet);
 
-    /// <summary>Like <see cref="Inputs(CommandContext, IReadOnlyList{string}, Action)"/>, but the exact bytes (stdin as UTF-8).</summary>
+    /// <summary>Like <see cref="Inputs(CommandContext, IReadOnlyList{string}, Action, bool)"/>, but the exact bytes (stdin as UTF-8).</summary>
     internal static IEnumerable<(string Name, byte[] Text)> InputBytes(CommandContext ctx, IReadOnlyList<string> files, Action onError) =>
-        Inputs(ctx, files, onError, ctx.Fs.ReadAllBytes, () => Encoding.UTF8.GetBytes(ctx.StdinText));
+        Inputs(ctx, files, onError, ctx.Fs.ReadAllBytes, () => Encoding.UTF8.GetBytes(ctx.StdinText), false);
 
-    static IEnumerable<(string Name, T Text)> Inputs<T>(CommandContext ctx, IReadOnlyList<string> files, Action onError, Func<string, T> read, Func<T> stdin)
+    static IEnumerable<(string Name, T Text)> Inputs<T>(CommandContext ctx, IReadOnlyList<string> files, Action onError, Func<string, T> read, Func<T> stdin, bool quiet)
     {
         if (files.Count == 0) { yield return ("(standard input)", stdin()); yield break; }
         foreach (var f in files)
@@ -127,7 +127,7 @@ internal static partial class Builtins
             try { text = read(ctx.ResolvePath(f)); }
             catch (ShellException e)
             {
-                ctx.Stderr.WriteLine($"{ctx.Name}: {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}");
+                if (!quiet) ctx.Stderr.WriteLine($"{ctx.Name}: {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}");
                 onError();
                 continue;
             }

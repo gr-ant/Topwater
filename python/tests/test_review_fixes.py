@@ -30,6 +30,37 @@ CASES = [
     ("printf '%q\\n' 'a b' \"it's\"; printf '%*d|%.*f\\n' 4 7 2 3.14159", "a\\ b\nit\\'s\n   7|3.14\n"),
     ("printf '%d\\n' abc 0x1f 010", "0\n31\n8\nprintf: abc: invalid number\n[exit code 1]"),
     ("echo -e '\\x41\\0102|\\c'; echo", "AB|\n"),
+    # --- grep ---
+    ("grep -e apple -e cherry f.txt", "apple 3\ncherry 2\napple 5\n"),
+    ("grep -x 'apple 3' f.txt; grep -c '[[:digit:]]$' f.txt; grep '\\<ban' f.txt", "apple 3\n4\nbanana 1\n"),
+    ("grep -r hello .; grep -r hello", "./d/a.txt:hello world\nd/a.txt:hello world\n"),
+    ("grep apple f.txt nope", "f.txt:apple 3\nf.txt:apple 5\ngrep: nope: No such file or directory\n[exit code 2]"),
+    ("grep -o 'x*' f.txt; grep --color=never -m1 apple f.txt", "apple 3\n"),
+    # --- head / tail / wc / cut / tr / tee / cat ---
+    ("head -n -10 n.txt; tail -n 1 ne.txt; echo; head -c -18 n.txt", "1\n2\nnoeol\n1\n2\n3\n4\n5"),
+    ("head -n abc n.txt", "head: invalid number of lines: 'abc'\n[exit code 1]"),
+    ("wc f.txt; wc -l f.txt n.txt; wc -l < f.txt", " 4  8 34 f.txt\n 4 f.txt\n12 n.txt\n16 total\n4\n"),
+    ("cut --complement -c1 f.txt | head -1; cut -d' ' -f1,2 --output-delimiter=: f.txt | head -1", "pple 3\napple:3\n"),
+    ("cut -d, -f0 c.csv", "cut: fields and positions are numbered from 1\n[exit code 1]"),
+    ("echo 'hello, world' | tr -cd 'a-z\\n'; echo 'a b' | tr -c 'a-z\\n' _; echo 'aa  b' | tr -s ' '", "helloworld\na_b\naa b\n"),
+    ("echo hi | tee /dev/stderr 2>&1 >/dev/null", "hi\n"),
+    ("printf 'a\\tb\\n\\n\\nc' | cat -sA", "a^Ib$\n$\nc"),
+    # --- sort ---
+    ("sort -k1,1 -k2,2nr f.txt", "apple 5\napple 3\nbanana 1\ncherry 2\n"),
+    ("printf '1K\\n2M\\n512\\n' | sort -h; printf 'a10\\na2\\na1\\n' | sort -V", "512\n1K\n2M\na1\na2\na10\n"),
+    ("printf 'k1 9\\nk2 1\\nk1 3\\n' | sort -k1,1 -u; printf 'b 2\\na 2\\nc 1\\n' | sort -k2,2n -s", "k1 9\nk2 1\nc 1\nb 2\na 2\n"),
+    ("sort -c g.txt", "sort: g.txt:2: disorder: a\n[exit code 1]"),
+    # --- sed ---
+    ("sed -n '/apple/{p;=}' f.txt", "apple 3\n1\napple 5\n4\n"),
+    ("printf 'a\\nb\\nc\\n' | sed ':a;N;$!ba;s/\\n/,/g'; printf 'a\\nb\\nc\\n' | sed -n '1!G;h;$p'", "a,b,c\nc\nb\na\n"),
+    ("echo hello | sed 's/l/L/2'; echo aaa | sed 's/a/b/2g'; echo abc | sed 's/b*/X/g'", "helLo\nabb\nXaXcX\n"),
+    ("sed 'y/abc/xyz/' g.txt | head -2; sed '0~4d' n.txt | wc -l; sed '/banana/,+1d' f.txt", "y\nx\n9\napple 3\napple 5\n"),
+    ("echo 'hello world' | sed -E 's/(\\w+) (\\w+)/\\U\\2\\E \\u\\1/'", "WORLD Hello\n"),
+    ("sed -i.bak 's/a/A/' g.txt; cat g.txt g.txt.bak", "b\nA\nc\nb\nb\na\nc\nb\n"),
+    ("sed '2q' n.txt; sed -n '$=' n.txt; printf 'x' | sed p", "1\n2\n12\nx\nx"),
+    ("sed 's/[[:space:]]*$//;s/^/>/' f.txt | head -1; sed '/apple/s//PEAR/' f.txt | head -1", ">apple 3\nPEAR 3\n"),
+    ("sed -e 1i\\\\top -e '$a\\' -e end g.txt", "top\nb\na\nc\nb\nend\n"),
+    ("sed 's/x/\\1/' f.txt", "sed: invalid reference \\1 on `s' command's RHS\n[exit code 1]"),
 ]
 
 

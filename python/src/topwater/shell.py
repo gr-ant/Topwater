@@ -867,7 +867,7 @@ def split_fields(text: str, ifs: str, max_fields: int = 0) -> list[str]:
         sep = f"[{re.escape(other)}]"
     else:
         sep = f"{ws_rx}*[{re.escape(other)}]{ws_rx}*|{ws_rx}+"
-    fields = re.split(sep, text, maxsplit=max(0, max_fields - 1))
+    fields = [text] if max_fields == 1 else re.split(sep, text, maxsplit=max(0, max_fields - 1))
     if max_fields <= 0 and other and fields and fields[-1] == "":
         fields.pop()  # "a,b," is two fields, not three
     return fields

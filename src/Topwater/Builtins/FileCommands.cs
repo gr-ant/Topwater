@@ -15,6 +15,9 @@ internal static partial class Builtins
         return $"{VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode)} 1 {st.Owner,-5} {st.Owner,-5} {size,6} {st.Modified:MMM dd HH:mm} {name}";
     }
 
+    static string ShowNonprinting(string line) => string.Concat(line.Select(c =>
+        c == '\t' || (c >= 32 && c < 127) || c > 159 ? c.ToString() : c == 127 ? "^?" : c < 32 ? "^" + (char)(c + 64) : "M-^" + (char)(c - 64)));
+
     static void RegisterFileCommands(Shell shell)
     {
         shell.Register("ls", ctx =>
@@ -56,12 +59,27 @@ internal static partial class Builtins
 
         shell.Register("cat", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "n", longs: "number=n");
+            var a = Args.Parse(ctx.Args, "nbsAETveu", longs: "number=n,number-nonblank=b,squeeze-blank=s,show-all=A,show-ends=E,show-tabs=T,show-nonprinting=v");
+            bool ends = a.Has('A') || a.Has('E') || a.Has('e'), tabs = a.Has('A') || a.Has('T'), nonprint = a.Has('A') || a.Has('v') || a.Has('e');
+            bool plain = !(a.Has('n') || a.Has('b') || a.Has('s') || ends || tabs || nonprint);
             int code = 0, lineNo = 0;
+            bool prevBlank = false;
             foreach (var (_, text) in Inputs(ctx, a.Positional, () => code = 1))
             {
-                if (!a.Has('n')) { ctx.Stdout.Write(text); continue; }
-                foreach (var line in SplitLines(text)) ctx.Stdout.Write($"{++lineNo,6}\t{line}\n");
+                if (plain) { ctx.Stdout.Write(text); continue; }
+                var sb = new StringBuilder();
+                foreach (var raw in SplitLines(text))
+                {
+                    var line = raw;
+                    if (a.Has('s') && line.Length == 0 && prevBlank) continue;
+                    prevBlank = line.Length == 0;
+                    if (nonprint) line = ShowNonprinting(line);
+                    if (tabs) line = line.Replace("\t", "^I");
+                    if (!(a.Has('b') && line.Length == 0) && (a.Has('n') || a.Has('b'))) sb.Append($"{++lineNo,6}\t");
+                    sb.Append(line).Append(ends ? "$\n" : "\n");
+                }
+                if (sb.Length > 0 && !text.EndsWith('\n')) sb.Length -= ends ? 2 : 1; // an unterminated last line gets neither a newline nor a $
+                ctx.Stdout.Write(sb.ToString());
             }
             return code;
         }, "Print files");
@@ -76,8 +94,15 @@ internal static partial class Builtins
 
         shell.Register("touch", ctx =>
         {
-            if (ctx.Args.Count == 0) throw new ShellException("missing file operand");
-            foreach (var p in ctx.Args.Where(p => !p.StartsWith('-'))) ctx.Fs.Touch(ctx.ResolvePath(p));
+            // shortcut: -d/-t/-r are accepted but the file just gets the current time; model timestamps if agents rely on them.
+            var a = Args.Parse(ctx.Args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h");
+            if (a.Positional.Count == 0) throw new ShellException("missing file operand");
+            foreach (var p in a.Positional)
+            {
+                var path = ctx.ResolvePath(p);
+                if (a.Has('c') && !ctx.Fs.Exists(path)) continue;
+                ctx.Fs.Touch(path);
+            }
             return 0;
         }, "Create empty files / update timestamps");
 

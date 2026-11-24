@@ -78,7 +78,7 @@ public class ShellTests
         Assert.Equal("2\n", await Out(sh, "grep -ci 'error' log.txt"));
         Assert.Equal("info start\n--\ninfo retry\nerror again\n", await Out(sh, "grep -B1 -i 'start\\|again' log.txt | grep -v ERROR"));
         Assert.Equal("ERROR disk full\n", await Out(sh, "grep -E 'disk|nothing' log.txt"));
-        Assert.Equal("log.txt:3\n", await Out(sh, "grep -rc info ."));
+        Assert.Equal("./log.txt:3\n", await Out(sh, "grep -rc info ."));
         Assert.Equal("info done\n", await Out(sh, "tail -1 log.txt"));
         Assert.Equal("info start\nERROR disk full\n", await Out(sh, "head -n 2 log.txt"));
         Assert.Equal("ERROR disk full\ninfo retry\n", await Out(sh, "sed -n '2,3p' log.txt"));
