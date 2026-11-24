@@ -9,6 +9,7 @@ public static class BashTool
         "Run a command in a sandboxed Linux shell (bash). The working directory, environment variables and files persist between calls. " +
         "Standard command-line tools are available (ls, cat, grep, sed, awk, jq, find, sort, diff, ...); " +
         "Python, network access, git and package installation are not. " +
+        "Read Word, Excel, PowerPoint, PDF and HTML files with `to-markdown FILE`. " +
         "Other programs on this machine are live interfaces to this application's systems, so their actions are real: " +
         "run `help` to list them and `<program> --help` for usage.";
 
