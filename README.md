@@ -63,6 +63,8 @@ string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");
 
 Files, variables and the working directory persist between calls. Use one `Shell` per conversation.
 
+With `Microsoft.Extensions.AI`, add `src/Topwater.AI` and skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
+
 ## Add your own programs
 
 C# methods, as above. Parameters become `--options`, and the return value is printed as JSON.
@@ -71,6 +73,15 @@ An MCP server (add `src/Topwater.Mcp`):
 
 ```csharp
 await using var github = await shell.MountMcpAsync("github", client);   // github list-issues --repo acme/api
+```
+
+An HTTP API, without showing the model the credentials or letting it pick the host:
+
+```csharp
+shell.RegisterApi("api", new Dictionary<string, ApiEndpoint>
+{
+    ["jira"] = new("https://acme.atlassian.net/rest/api/3") { Auth = () => $"Bearer {token}", Paths = ["/issue/"] },
+});                                                      // api get jira /issue/PROJ-123 | jq .fields.status
 ```
 
 A real program from your machine:
@@ -86,7 +97,7 @@ using var git = shell.RegisterHostCommand("git");
 - An in-memory filesystem laid out like Ubuntu, with a regular user who cannot `sudo`.
 - `to-markdown` for reading Word, Excel, PowerPoint, PDF and HTML files.
 
-There is no Python, network or git unless you add them. The [reference](docs/reference.md) has the full list.
+There is no Python, git or open network access unless you add them. The [reference](docs/reference.md) has the full list.
 
 ## Safety
 
