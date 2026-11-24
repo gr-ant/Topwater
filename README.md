@@ -105,7 +105,9 @@ The shell is simulated: commands are interpreted in your process and only touch 
 Runaway loops, slow regular expressions and oversized output are cut off.
 
 MCP calls and host programs are real. A host program runs with your process's permissions, and Topwater does not
-sandbox it; see [Real host programs](docs/reference.md#real-host-programs) before registering one.
+sandbox it unless you ask: `Launcher = HostSandbox.Bubblewrap()` runs it under bubblewrap, where it can see only its
+private copy of the agent's files and has no network. See [Real host programs](docs/reference.md#real-host-programs)
+before registering one.
 
 ## Try it
 
