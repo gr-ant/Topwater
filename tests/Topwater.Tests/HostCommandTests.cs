@@ -1,0 +1,64 @@
+using Topwater;
+
+namespace Topwater.Tests;
+
+/// <summary>Real host programs exposed as commands (uses the real git; skipped quietly when it isn't installed).</summary>
+public class HostCommandTests
+{
+    static readonly Dictionary<string, string> GitEnv = new()
+    {
+        ["GIT_AUTHOR_NAME"] = "Agent", ["GIT_AUTHOR_EMAIL"] = "agent@example.com",
+        ["GIT_COMMITTER_NAME"] = "Agent", ["GIT_COMMITTER_EMAIL"] = "agent@example.com", ["GIT_CONFIG_NOSYSTEM"] = "1",
+    };
+
+    static bool HasGit => (System.Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
+        .Any(d => File.Exists(Path.Combine(d, "git")) || File.Exists(Path.Combine(d, "git.exe")));
+
+    static async Task<string> Out(Shell shell, string cmd)
+    {
+        var r = await shell.RunAsync(cmd);
+        Assert.True(r.ExitCode == 0, $"`{cmd}` exited {r.ExitCode}: {r.Stderr}");
+        return r.Stdout;
+    }
+
+    [Fact]
+    public async Task RealGitWorksOnVirtualFiles()
+    {
+        if (!HasGit) return;
+        var sh = new Shell();
+        using var git = sh.RegisterHostCommand("git", options: new HostCommandOptions { Environment = GitEnv });
+
+        await Out(sh, "mkdir proj && cd proj && git init -q -b main && echo hello > a.txt && git add a.txt && git commit -q -m first");
+        Assert.Equal(" M a.txt\n", await Out(sh, "echo world >> a.txt && git status --short"));
+        Assert.Equal("2\n", await Out(sh, "git commit -qam second && git log --oneline | wc -l"));
+        // files the program creates, changes and deletes show up in the virtual filesystem (and vice versa)
+        Assert.Equal("a.txt\n", await Out(sh, "git checkout -q -b feature && echo new > b.txt && mkdir d && echo x > d/c.txt && git add . && git commit -qm 'add b' && git checkout -q main && ls"));
+        Assert.Equal("a.txt\nb.txt\nd\nnew\n", await Out(sh, "git merge -q feature && ls && cat b.txt"));
+        Assert.Equal(" D d/c.txt\n", await Out(sh, "rm -r d && git status --short"));
+        Assert.Equal("Git repository\n", await Out(sh, "test -d .git && file .git/index | grep -o 'Git index' >/dev/null; echo 'Git repository'"));
+        Assert.True(sh.Fs.ReadAllBytes("/home/agent/proj/.git/index").Length > 0);  // binary files round-trip
+
+        // path arguments can't reach the host's own files, and output shows virtual paths
+        var r = await sh.RunAsync("git diff --no-index /etc/hostname a.txt");
+        Assert.Contains("Could not access '/etc/hostname'", r.Stderr);
+        r = await sh.RunAsync("git -C ../../../../../etc status");
+        Assert.NotEqual(0, r.ExitCode);
+        Assert.DoesNotContain(git.Root, r.Stdout + r.Stderr);
+        Assert.Equal("/home/agent/proj\n", await Out(sh, "git rev-parse --show-toplevel"));
+    }
+
+    [Fact]
+    public void MissingProgramFailsAtRegistration() =>
+        Assert.Throws<FileNotFoundException>(() => new Shell().RegisterHostCommand("definitely-not-a-real-program-xyz"));
+
+    [Fact]
+    public async Task TimeoutKillsTheProgram()
+    {
+        if (!File.Exists("/bin/sleep") && !File.Exists("/usr/bin/sleep")) return;
+        var sh = new Shell();
+        using var slow = sh.RegisterHostCommand("realsleep", "sleep", new HostCommandOptions { Timeout = TimeSpan.FromMilliseconds(300) });
+        var r = await sh.RunAsync("realsleep 30");
+        Assert.Equal(124, r.ExitCode);
+        Assert.Contains("timed out", r.Stderr);
+    }
+}
