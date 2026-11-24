@@ -260,7 +260,7 @@ internal static partial class Builtins
         {
             bool functions = ctx.Args.Contains("-f");
             foreach (var a in ctx.Args.Where(a => !a.StartsWith('-')))
-                if (functions) ctx.Shell.Functions.Remove(a); else ctx.Shell.Environment.Remove(a);
+                if (functions) ctx.Shell.Functions.Remove(a); else ctx.Shell.Unset(a);
             return 0;
         }, "Remove variables or functions (-f)");
 

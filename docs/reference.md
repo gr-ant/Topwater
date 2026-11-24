@@ -22,6 +22,7 @@ Everything the simulated machine supports, in one place.
 | Parameters | `${x:-d}` `${x:=d}` `${x:+a}` `${x:?msg}` `${#x}` `${x%pat}` `${x%%pat}` `${x#pat}` `${x##pat}` `${x/a/b}` `${x//a/b}` `${x:1:3}` `${x^^}` `${x,,}` |
 | Control flow | `if`/`elif`/`else`, `for x in`, `for ((;;))`, `while`, `until`, `case`, `break`, `continue` |
 | Functions | `name() { }`, `function name { }`, `local`, `return`, `$1` `$@` `$#`, `shift` |
+| Arrays | `a=(x y)`, `a+=(z)`, `a[i]=v`, `${a[i]}` `${a[-1]}`, `"${a[@]}"`, `${#a[@]}`, `${!a[@]}`, `${a[@]:1:2}`, `unset 'a[i]'`; associative with `declare -A`; `read -a`, `mapfile -t` |
 | Tests | `[ ]`, `test`, `[[ ]]` with globs, `=~`, `&&`, `\|\|`, `(( ))`, `let` |
 | Lists | `\|` `&&` `\|\|` `;` `!` `{ ...; }` `( ... )`, `VAR=x cmd` |
 | Redirects | `>` `>>` `<` `2>` `2>&1` `&>`, heredocs (`<<EOF`, `<<'EOF'`, `<<-`), `<<<`, redirects on loops |
@@ -36,7 +37,7 @@ State persists between tool calls: working directory, variables, functions, alia
 | Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `less` `more` |
 | Text | `echo` `printf` `grep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `diff` `nl` `tac` `rev` `paste` `column` `seq` |
 | Documents and binary | `to-markdown` `xxd` `hexdump` `od` `strings` `base64` `md5sum` `sha1sum` `sha256sum` `sha512sum` |
-| Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
+| Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
 | System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `sudo` `su` |
 
 `help` lists everything, including your commands. Standard tools answer `--version` and `--help` the way the
@@ -224,6 +225,6 @@ announcing "this is a simulation" (see the README).
 
 ## Not supported
 
-Arrays, `select` menus, background jobs (`&` runs things in order), `>(...)`, running shell commands from
+`select` menus, background jobs (`&` runs things in order), `>(...)`, running shell commands from
 inside `awk` (`print | "cmd"`), symlinks and `ln`, group permissions, and a real `python` or network access.
 `sleep` really waits, so wrap calls in your own timeout if that matters.

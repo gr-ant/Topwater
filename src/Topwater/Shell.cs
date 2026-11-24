@@ -84,6 +84,33 @@ public sealed class CommandContext
         Shell.InvokeAsync(argv, new Shell.Io(new StdinBuffer(stdin), Stdout, Stderr), CancellationToken);
 }
 
+/// <summary>A bash array. Indexed arrays keep their elements in index order; associative ones in insertion order.</summary>
+internal sealed class ShellArray(bool assoc)
+{
+    sealed class ByIndex : IComparer<string> { public int Compare(string? a, string? b) => long.Parse(a!).CompareTo(long.Parse(b!)); }
+
+    public bool Assoc { get; } = assoc;
+    public IDictionary<string, string> Items { get; private init; } = assoc ? new Dictionary<string, string>(StringComparer.Ordinal) : new SortedDictionary<string, string>(new ByIndex());
+    /// <summary>The index `+=(x)` appends at: one past the highest index ever set.</summary>
+    public long Next { get; private set; }
+    /// <summary>Which shell state owns this object; a (sub)shell copies an array before changing one it doesn't own.</summary>
+    public int Epoch;
+
+    public string? Get(string key) => Items.TryGetValue(key, out var v) ? v : null;
+
+    public void Set(string key, string value)
+    {
+        Items[key] = value;
+        if (!Assoc) Next = Math.Max(Next, long.Parse(key) + 1);
+    }
+
+    public ShellArray Clone(int epoch) => new(Assoc)
+    {
+        Items = Assoc ? new Dictionary<string, string>(Items, StringComparer.Ordinal) : new SortedDictionary<string, string>(Items, new ByIndex()),
+        Next = Next, Epoch = epoch,
+    };
+}
+
 internal abstract class ControlFlow : Exception;
 internal sealed class LoopControl(bool isBreak, int levels) : ControlFlow { public bool IsBreak { get; } = isBreak; public int Levels { get; } = levels; }
 internal sealed class ReturnSignal(int code) : ControlFlow { public int Code { get; } = code; }
@@ -104,6 +131,9 @@ public sealed partial class Shell
     readonly Dictionary<string, RegisteredCommand> _commands = new(StringComparer.Ordinal);
     readonly List<string> _history = [];
     readonly Stack<Dictionary<string, string?>> _locals = new();
+    readonly Stack<Dictionary<string, ShellArray?>> _localArrays = new();
+    internal Dictionary<string, ShellArray> Arrays = new(StringComparer.Ordinal);
+    int _epoch;
     string _cwd = "/";
     int _condDepth;
 
@@ -183,7 +213,7 @@ public sealed partial class Shell
 
     // bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
     static readonly HashSet<string> NoProgramFile = ["alias", "break", "cd", "command", "continue", "declare", "eval", "exit", "export", "help",
-        "history", "let", "local", "read", "readonly", "return", "set", "shift", "shopt", "source", "trap", "type", "typeset", "unalias", "unset"];
+        "history", "let", "local", "mapfile", "read", "readarray", "readonly", "return", "set", "shift", "shopt", "source", "trap", "type", "typeset", "unalias", "unset"];
 
     HashSet<string>? _builtinNames;
 
@@ -347,12 +377,20 @@ public sealed partial class Shell
 
     sealed record State(string Cwd, Dictionary<string, string> Env, Dictionary<string, string> Aliases,
         Dictionary<string, Command> Functions, List<string> Positional, bool Errexit, bool Pipefail, bool Nounset,
-        HashSet<string> Shopts, Dictionary<string, string> Traps);
+        HashSet<string> Shopts, Dictionary<string, string> Traps, Dictionary<string, ShellArray> Arrays);
 
-    State SaveState() => new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps));
+    // arrays are shared with the saved state and copied on first write (see Writable), so a subshell or
+    // pipeline stage doesn't copy every element just to start
+    State SaveState()
+    {
+        _epoch++;
+        return new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps), new(Arrays));
+    }
 
     void RestoreState(State s)
     {
+        _epoch++;
+        Arrays = s.Arrays;
         Environment = s.Env;
         Aliases = s.Aliases;
         Functions = s.Functions;
@@ -637,9 +675,25 @@ public sealed partial class Shell
 
     async Task<int> ExecSimpleAsync(SimpleCommand c, Io io, CancellationToken ct)
     {
-        var argv = await ExpandWordsAsync(c.Words, io, ct);
+        var words = c.Words;
+        if (words.Count > 1 && words[0].UnquotedLiteral is "local" or "declare" or "typeset" or "readonly" && await DeclareArraysAsync(words, io, ct) is { } rest)
+        {
+            if (rest.Count == 1) return 0;
+            words = rest;
+        }
+        var argv = await ExpandWordsAsync(words, io, ct);
         var assigned = new List<(string, string)>();
-        foreach (var (name, value) in c.Assignments) assigned.Add((name, await ExpandSingleAsync(value, io, ct)));
+        foreach (var a in c.Assignments)
+        {
+            if (a.Elements != null || a.Index != null) await AssignArrayAsync(a, io, ct);
+            else if (words.Count > 0) assigned.Add((a.Name, await ExpandSingleAsync(a.Value, io, ct)));
+            else
+            {
+                // with no command, assignments apply left to right: IFS=, parts=($csv) splits on the comma
+                var v = await ExpandSingleAsync(a.Value, io, ct);
+                if (Arrays.ContainsKey(a.Name)) SetElement(a.Name, "0", v); else Environment[a.Name] = v;   // a plain assignment to an array sets element 0
+            }
+        }
 
         if (argv.Count == 0)
         {
@@ -738,10 +792,13 @@ public sealed partial class Shell
         var savedPos = Positional;
         Positional = argv.Skip(1).ToList();
         _locals.Push(new Dictionary<string, string?>());
+        _localArrays.Push(new Dictionary<string, ShellArray?>());
         try { return await ExecCommandAsync(body, io, ct); }
         catch (ReturnSignal r) { return r.Code; }
         finally
         {
+            foreach (var (k, v) in _localArrays.Pop())
+                if (v == null) Arrays.Remove(k); else Arrays[k] = v;
             foreach (var (k, v) in _locals.Pop())
                 if (v == null) Environment.Remove(k); else Environment[k] = v;
             Positional = savedPos;
@@ -761,6 +818,167 @@ public sealed partial class Shell
         Environment[name] = value ?? "";
     }
 
+    // ---------- arrays ----------
+
+    /// <summary>The array to change: created if missing, copied first if a saved state still shares it.</summary>
+    internal ShellArray Writable(string name, bool assoc = false)
+    {
+        if (!Arrays.TryGetValue(name, out var a))
+        {
+            a = new ShellArray(assoc) { Epoch = _epoch };
+            if (Environment.Remove(name, out var scalar)) a.Set("0", scalar); // a plain variable becomes element 0
+            return Arrays[name] = a;
+        }
+        return a.Epoch == _epoch ? a : Arrays[name] = a.Clone(_epoch);
+    }
+
+    /// <summary>`local arr` / `declare -A m`: a fresh array, restored to the caller's when the function returns.</summary>
+    internal void DeclareArray(string name, bool assoc, bool local)
+    {
+        if (local && _localArrays.Count > 0) _localArrays.Peek().TryAdd(name, Arrays.GetValueOrDefault(name));
+        else if (Arrays.TryGetValue(name, out var old) && old.Assoc == assoc) return;
+        if (local && _locals.Count > 0) DeclareLocal(name, null);
+        Environment.Remove(name);
+        Arrays[name] = new ShellArray(assoc) { Epoch = _epoch };
+    }
+
+    /// <summary>The storage key for a subscript: the text itself for an associative array, else its arithmetic value.</summary>
+    internal string ArrayKey(ShellArray? array, string subscript)
+    {
+        if (array is { Assoc: true }) return subscript;
+        long i = Arith.Eval(this, subscript);
+        if (i < 0) i += array?.Next ?? 0;
+        return i >= 0 ? i.ToString(CultureInfo.InvariantCulture) : throw new ShellException($"[{subscript}]: bad array subscript");
+    }
+
+    /// <summary>One element, or null if unset. A plain variable answers as element 0.</summary>
+    internal string? GetElement(string name, string subscript)
+    {
+        if (Arrays.TryGetValue(name, out var a)) return a.Get(ArrayKey(a, subscript));
+        return Environment.TryGetValue(name, out var scalar) && ArrayKey(null, subscript) == "0" ? scalar : null;
+    }
+
+    internal void SetElement(string name, string subscript, string value)
+    {
+        var a = Writable(name);
+        a.Set(ArrayKey(a, subscript), value);
+    }
+
+    internal void Unset(string target)
+    {
+        if (ArrayRef(target) is { Keys: false, Tail: "" } r && Arrays.ContainsKey(r.Name) && r.Sub is not ("@" or "*"))
+        {
+            var a = Writable(r.Name);
+            a.Items.Remove(ArrayKey(a, Unquote(r.Sub)));
+            return;
+        }
+        var name = ArrayRef(target)?.Name ?? target;
+        Environment.Remove(name);
+        Arrays.Remove(name);
+    }
+
+    static string Unquote(string s) => s.Length >= 2 && s[0] is '"' or '\'' && s[^1] == s[0] ? s[1..^1] : s;
+
+    /// <summary>Splits name[sub]rest (or !name[sub] for the keys); null when the text is not that shape.</summary>
+    internal static (bool Keys, string Name, string Sub, string Tail)? ArrayRef(string expr)
+    {
+        int start = expr.StartsWith('!') ? 1 : 0, open = expr.IndexOf('[');
+        if (open <= start || !Parser.IsName(expr[start..open])) return null;
+        int depth = 0, k = open;
+        for (; k < expr.Length; k++)
+            if (expr[k] == '[') depth++;
+            else if (expr[k] == ']' && --depth == 0) break;
+        return k < expr.Length ? (start == 1, expr[start..open], expr[(open + 1)..k], expr[(k + 1)..]) : null;
+    }
+
+    /// <summary>The elements ${name[@]...} stands for (keys for ${!name[@]}); null if expr is not a whole-array expansion.</summary>
+    async Task<List<string>?> ArrayElementsAsync(string expr, Io io, CancellationToken ct)
+    {
+        if (ArrayRef(expr) is not { Sub: "@" or "*" } r) return null;
+        List<string> items = !Arrays.TryGetValue(r.Name, out var a) ? (Environment.TryGetValue(r.Name, out var scalar) ? [r.Keys ? "0" : scalar] : [])
+            : r.Keys ? [.. a.Items.Keys] : [.. a.Items.Values];
+        if (r.Keys || r.Tail.Length == 0) return items;
+        if (r.Tail[0] == ':' && r.Tail.Length > 1 && r.Tail[1] is not ('-' or '=' or '+' or '?'))
+        {
+            var spec = r.Tail[1..].Split(':', 2);
+            long from = Arith.Eval(this, spec[0]);
+            from = Math.Clamp(from < 0 ? items.Count + from : from, 0, items.Count);
+            long count = spec.Length == 1 ? items.Count - from : Math.Clamp(Arith.Eval(this, spec[1]), 0, items.Count - from);
+            return items.GetRange((int)from, (int)count);
+        }
+        // any other operator applies to each element: ${files[@]%.txt}, ${names[@]^^}
+        var result = new List<string>();
+        foreach (var item in items) result.Add(await ElementOpAsync(item, r.Tail, io, ct));
+        return result;
+    }
+
+    /// <summary>Applies a ${...} operator to one value by expanding it through a scratch variable.</summary>
+    async Task<string> ElementOpAsync(string? value, string rest, Io io, CancellationToken ct)
+    {
+        if (rest.Length == 0) return value ?? "";
+        const string scratch = "__topwater_element";
+        if (value == null) Environment.Remove(scratch); else Environment[scratch] = value;
+        try { return await ExpandParameterAsync(scratch + rest, io, ct); }
+        finally { Environment.Remove(scratch); }
+    }
+
+    async Task<string> SubscriptAsync(string sub, Io io, CancellationToken ct) =>
+        sub.IndexOfAny(['$', '`', '"', '\'']) < 0 ? sub : await ExpandSingleAsync(new Word(new Lexer(Unquote(sub)).LexQuoted(null)), io, ct);
+
+    async Task AssignArrayAsync(Assignment a, Io io, CancellationToken ct)
+    {
+        if (a.Elements == null)
+        {
+            var key = await ExpandSingleAsync(a.Index!, io, ct);
+            var value = await ExpandSingleAsync(a.Value, io, ct);
+            SetElement(a.Name, key, a.Append ? GetElement(a.Name, key) + value : value);
+            return;
+        }
+        ShellArray target;
+        if (a.Append) target = Writable(a.Name);
+        else
+        {
+            target = new ShellArray(Arrays.TryGetValue(a.Name, out var old) && old.Assoc) { Epoch = _epoch };
+            Environment.Remove(a.Name);
+        }
+        foreach (var w in Parser.ParseWords(a.Elements))
+        {
+            // [key]=value sets that element; anything else is appended, after the usual splitting and globbing
+            if (w.Parts is [LiteralPart { Quoted: false, Text: ['[', ..] }, ..] && Parser.SplitSubscript(w, 1) is var (index, element, _))
+                target.Set(ArrayKey(target, await ExpandSingleAsync(index, io, ct)), await ExpandSingleAsync(element, io, ct));
+            else
+                foreach (var field in await ExpandWordsAsync([w], io, ct)) target.Set(target.Next.ToString(CultureInfo.InvariantCulture), field);
+        }
+        Arrays[a.Name] = target;
+    }
+
+    /// <summary>
+    /// `local a=(x y)`, `declare -A m`, `declare -a list=()`: the array arguments are handled here, because a built-in
+    /// only receives expanded text. Returns the words left for the built-in, or null if none were array declarations.
+    /// </summary>
+    async Task<List<Word>?> DeclareArraysAsync(List<Word> words, Io io, CancellationToken ct)
+    {
+        bool local = words[0].Is("local") || InFunction;
+        var flags = string.Concat(words.Skip(1).Select(w => w.UnquotedLiteral).Where(t => t is ['-', ..]));
+        bool assoc = flags.Contains('A'), any = false;
+        var keep = new List<Word> { words[0] };
+        foreach (var w in words.Skip(1))
+        {
+            if (w.UnquotedLiteral is ['-', ..]) continue;
+            var assignment = Parser.TryAssignment(w);
+            if (assignment is { Elements: not null })
+            {
+                DeclareArray(assignment.Name, assoc, local);
+                await AssignArrayAsync(assignment, io, ct);
+            }
+            else if (assignment == null && (assoc || flags.Contains('a')) && w.UnquotedLiteral is { } name && Parser.IsName(name))
+                DeclareArray(name, assoc, local);
+            else { keep.Add(w); continue; }
+            any = true;
+        }
+        return any ? keep : null;
+    }
+
     // ---------- expansion ----------
 
     internal string GetVariable(string name)
@@ -776,14 +994,14 @@ public sealed partial class Shell
             "@" or "*" => string.Join(' ', Positional),
             "PWD" => _cwd,
             "RANDOM" => Random.Shared.Next(32768).ToString(CultureInfo.InvariantCulture),
-            _ => Environment.GetValueOrDefault(name, ""),
+            _ => Arrays.TryGetValue(name, out var array) ? array.Get("0") ?? "" : Environment.GetValueOrDefault(name, ""),
         };
     }
 
     bool IsSet(string name) =>
         name is "?" or "$" or "#" or "@" or "*" or "PWD" or "RANDOM" or "0"
         || (char.IsDigit(name[0]) && int.TryParse(name, out var n) && n <= Positional.Count)
-        || Environment.ContainsKey(name);
+        || Environment.ContainsKey(name) || Arrays.ContainsKey(name);
 
     internal async Task<string> ExpandPartAsync(WordPart part, Io io, CancellationToken ct) => part switch
     {
@@ -804,6 +1022,17 @@ public sealed partial class Shell
     /// <summary>${name}, ${#name}, ${name:-x}, ${name%pat}, ${name/a/b}, ${name:1:2}, ${name^^} ...</summary>
     async Task<string> ExpandParameterAsync(string expr, Io io, CancellationToken ct)
     {
+        if (expr.Length > 1 && expr[0] == '#' && ArrayRef(expr[1..]) is { Keys: false, Tail: "" } counted)
+        {
+            if (counted.Sub is "@" or "*")
+                return (Arrays.TryGetValue(counted.Name, out var a) ? a.Items.Count : Environment.ContainsKey(counted.Name) ? 1 : 0).ToString(CultureInfo.InvariantCulture);
+            return (GetElement(counted.Name, await SubscriptAsync(counted.Sub, io, ct)) ?? "").Length.ToString(CultureInfo.InvariantCulture);
+        }
+        // as one string, ${a[*]} joins with the first character of IFS and ${a[@]} with a space
+        if (await ArrayElementsAsync(expr, io, ct) is { } all)
+            return string.Join(ArrayRef(expr)!.Value.Sub == "*" && Environment.TryGetValue("IFS", out var ifs) ? ifs.Length > 0 ? ifs[..1] : "" : " ", all);
+        if (ArrayRef(expr) is { Keys: false } one)
+            return await ElementOpAsync(GetElement(one.Name, await SubscriptAsync(one.Sub, io, ct)), one.Tail, io, ct);
         if (expr.Length > 1 && expr[0] == '#')
         {
             if (expr[1..] is "@" or "*") return Positional.Count.ToString(CultureInfo.InvariantCulture);
@@ -872,7 +1101,8 @@ public sealed partial class Shell
             for (int i = 0; i < body.Length; i++) { if (body[i] == '\\') { i++; continue; } if (body[i] == '/') { slash = i; break; } }
             var pat = Glob.ToRegexBody(await Pattern(slash < 0 ? body : body[..slash]), slashes: true);
             var rep = slash < 0 ? "" : await Arg(body[(slash + 1)..]);
-            if (pat.Length == 0) return value;
+            // an empty pattern matches nothing, except at an anchor: ${x/#/pre-} and ${x/%/-post} add to the ends
+            if (pat.Length == 0) return mode == '#' ? rep + value : mode == '%' ? value + rep : value;
             var re = new Regex(mode == '#' ? "^" + pat : mode == '%' ? pat + "$" : pat, RegexOptions.Singleline);
             return re.Replace(value, rep.Replace("$", "$$"), mode == '/' ? -1 : 1);
         }
@@ -1027,6 +1257,16 @@ public sealed partial class Shell
                     {
                         if (k > 0) End();
                         AddText(Positional[k], true);
+                    }
+                    continue;
+                }
+                if (part is VariablePart { Quoted: true } ap && ArrayRef(ap.Name) is { Sub: "@" } && await ArrayElementsAsync(ap.Name, io, ct) is { } elements)
+                {
+                    // "${arr[@]}": one field per element, and none at all for an empty array
+                    for (int k = 0; k < elements.Count; k++)
+                    {
+                        if (k > 0) End();
+                        AddText(elements[k], true);
                     }
                     continue;
                 }

@@ -73,7 +73,7 @@ using var git = shell.RegisterHostCommand("git");
 
 ## What is in the machine
 
-- A shell language: pipes, redirects, loops, functions, heredocs, scripts.
+- A shell language: pipes, redirects, loops, functions, arrays, heredocs, scripts.
 - About 100 standard commands, including `grep`, `sed`, `awk`, `jq` and `find`.
 - An in-memory filesystem laid out like Ubuntu, with a regular user who cannot `sudo`.
 - `to-markdown` for reading Word, Excel, PowerPoint, PDF and HTML files.

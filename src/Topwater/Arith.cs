@@ -28,6 +28,25 @@ internal sealed class Arith
     {
         if (depth > 20) throw new ShellException($"{expr}: expression recursion level exceeded");
         expr = Regex.Replace(expr, @"\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?", m => sh.GetVariable(m.Groups[1].Value));
+        if (expr.Contains('['))
+        {
+            // arr[i]++, arr[i] += n, arr[key] = n as the whole expression (counting with an associative array)
+            if (ElementAssign.Match(expr) is { Success: true } m)
+            {
+                string name = m.Groups[1].Value, sub = m.Groups[2].Value, op = m.Groups[3].Value;
+                long old = Eval(sh, sh.GetElement(name, sub) ?? "0", depth + 1);
+                long operand = op is "++" or "--" ? 1 : Eval(sh, m.Groups[4].Value, depth + 1);
+                long updated = op switch
+                {
+                    "=" => operand, "++" or "+=" => old + operand, "--" or "-=" => old - operand, "*=" => old * operand,
+                    _ => operand == 0 ? throw new ShellException($"{expr}: division by 0") : op == "/=" ? old / operand : old % operand,
+                };
+                sh.SetElement(name, sub, updated.ToString(CultureInfo.InvariantCulture));
+                return op is "++" or "--" ? old : updated;
+            }
+            // elsewhere an element is read: its value, or 0 when unset
+            expr = ElementRead.Replace(expr, e => sh.GetElement(e.Groups[1].Value, e.Groups[2].Value) is { Length: > 0 } v ? $"({v})" : "0");
+        }
         var tokens = Tokenize(expr);
         if (tokens.Count == 0) return 0;
         var a = new Arith(sh, expr, tokens) { _depth = depth };
@@ -37,6 +56,9 @@ internal sealed class Arith
     }
 
     int _depth;
+
+    static readonly Regex ElementRead = new(@"([A-Za-z_][A-Za-z0-9_]*)\[([^\[\]]+)\]");
+    static readonly Regex ElementAssign = new(@"^\s*([A-Za-z_][A-Za-z0-9_]*)\[([^\[\]]+)\]\s*(\+\+|--|[-+*/%]?=(?!=))\s*(.*)$", RegexOptions.Singleline);
 
     static List<string> Tokenize(string s)
     {

@@ -149,7 +149,14 @@ internal static partial class Builtins
             var env = ctx.Shell.Environment;
             if (line == null) { foreach (var n in names) env[n] = ""; return 1; }
             if (!a.Has('r')) line = System.Text.RegularExpressions.Regex.Replace(line, @"\\(.)", "$1");
-            if (a.Positional.Count == 0) env["REPLY"] = line;
+            if (a.Has('a'))
+            {
+                // read -a NAME: every field becomes an element
+                ctx.Shell.Unset(names[0]);
+                var array = ctx.Shell.Writable(names[0]);
+                foreach (var field in Shell.SplitFields(line, env.GetValueOrDefault("IFS", " \t\n"))) array.Set(array.Next.ToString(), field);
+            }
+            else if (a.Positional.Count == 0) env["REPLY"] = line;
             else
             {
                 var fields = Shell.SplitFields(line, env.GetValueOrDefault("IFS", " \t\n"), names.Count);
@@ -158,6 +165,19 @@ internal static partial class Builtins
             // like bash, a final line with no trailing newline is still assigned, but read reports end of input
             return ctx.LastLineTerminated ? 0 : 1;
         }, "Read a line from stdin into variables");
+
+        CommandHandler mapfile = ctx =>
+        {
+            var a = Args.Parse(ctx.Args, "t", "dnsuCc");
+            var name = a.Positional.Count > 0 ? a.Positional[0] : "MAPFILE";
+            ctx.Shell.Unset(name);
+            var array = ctx.Shell.Writable(name);
+            while (ctx.ReadLine() is { } line)
+                array.Set(array.Next.ToString(), a.Has('t') || !ctx.LastLineTerminated ? line : line + "\n");
+            return Task.FromResult(0);
+        };
+        shell.Register("mapfile", mapfile, "Read lines from stdin into an array (-t drops the newlines)");
+        shell.Register("readarray", mapfile, "Read lines from stdin into an array (-t drops the newlines)");
 
         shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken), "Run arguments as a shell command");
 

@@ -12,6 +12,16 @@ internal sealed record CommandSubPart(string Source, bool Quoted) : WordPart(Quo
 internal sealed record ArithPart(string Expr, bool Quoted) : WordPart(Quoted);
 /// <summary>&lt;(cmd): replaced by the path of a file holding cmd's output.</summary>
 internal sealed record ProcSubPart(string Source) : WordPart(true);
+/// <summary>The (a b c) of name=(a b c): its source text, expanded when the assignment runs.</summary>
+internal sealed record ArrayLiteralPart(string Source) : WordPart(false);
+
+/// <summary>name=value, name[Index]=value or name=(Elements); Append is += on an array or an element.</summary>
+internal sealed record Assignment(string Name, Word Value)
+{
+    public Word? Index { get; init; }
+    public string? Elements { get; init; }
+    public bool Append { get; init; }
+}
 
 internal sealed record Word(IReadOnlyList<WordPart> Parts)
 {
@@ -25,6 +35,7 @@ internal sealed record Word(IReadOnlyList<WordPart> Parts)
         CommandSubPart c => "$(" + c.Source + ")",
         ArithPart a => "$((" + a.Expr + "))",
         ProcSubPart ps => "<(" + ps.Source + ")",
+        ArrayLiteralPart al => "(" + al.Source + ")",
         _ => ""
     }));
 }
@@ -43,7 +54,7 @@ internal abstract record Command
 {
     public List<Redirect> Redirects { get; init; } = [];
 }
-internal sealed record SimpleCommand(List<(string Name, Word Value)> Assignments, List<Word> Words) : Command;
+internal sealed record SimpleCommand(List<Assignment> Assignments, List<Word> Words) : Command;
 internal sealed record GroupCommand(Script Body, bool Subshell) : Command;
 internal sealed record IfCommand(List<(Script Cond, Script Body)> Branches, Script? Else) : Command;
 internal sealed record LoopCommand(Script Cond, Script Body, bool Until) : Command;
@@ -214,6 +225,16 @@ internal sealed class Lexer(string s)
                 int close = FindClose(_i + 2);
                 parts.Add(new ProcSubPart(s[(_i + 2)..close]));
                 _i = close + 1;
+                continue;
+            }
+            // name=( ... ) and name+=( ... ): an array literal, kept as text until the assignment runs
+            if (c == '(' && !regex && parts.Count == 0 && lit.Length > 1 && lit[^1] == '='
+                && Parser.IsName(lit.ToString(0, lit.Length - 1).TrimEnd('+')))
+            {
+                Flush();
+                int end = FindClose(_i + 1);
+                parts.Add(new ArrayLiteralPart(s[(_i + 1)..end]));
+                _i = end + 1;
                 continue;
             }
             if (regex && c is '(' or ')')
@@ -564,7 +585,7 @@ internal sealed class Parser
             if (At(1) is { Kind: TokenKind.Op, Op: "(" } && At(2) is { Kind: TokenKind.Op, Op: ")" }) return ParseFunction(false);
         }
 
-        var assignments = new List<(string, Word)>();
+        var assignments = new List<Assignment>();
         var words = new List<Word>();
         var redirects = new List<Redirect>();
         while (Cur != null)
@@ -734,21 +755,51 @@ internal sealed class Parser
         return into;
     }
 
-    static bool IsName(string s) => s.Length > 0 && (char.IsLetter(s[0]) || s[0] == '_') && s.All(c => char.IsLetterOrDigit(c) || c == '_');
+    internal static bool IsName(string s) => s.Length > 0 && (char.IsLetter(s[0]) || s[0] == '_') && s.All(c => char.IsLetterOrDigit(c) || c == '_');
 
-    static (string, Word)? TryAssignment(Word w)
+    /// <summary>
+    /// Splits the "sub]=value" that follows an opening bracket. The subscript may span several parts
+    /// (arr[$i]=x, m["a b"]=x), so this looks for the first unquoted "]=" or "]+=".
+    /// </summary>
+    internal static (Word Index, Word Value, bool Append)? SplitSubscript(Word w, int offset)
+    {
+        var index = new List<WordPart>();
+        for (int i = 0; i < w.Parts.Count; i++)
+        {
+            if (w.Parts[i] is not LiteralPart { Quoted: false } l) { index.Add(w.Parts[i]); continue; }
+            var text = i == 0 ? l.Text[offset..] : l.Text;
+            int plain = text.IndexOf("]=", StringComparison.Ordinal), plus = text.IndexOf("]+=", StringComparison.Ordinal);
+            bool append = plus >= 0 && (plain < 0 || plus < plain);
+            int at = append ? plus : plain;
+            if (at < 0) { if (text.Length > 0) index.Add(new LiteralPart(text, false)); continue; }
+            if (at > 0) index.Add(new LiteralPart(text[..at], false));
+            var value = new List<WordPart>();
+            var tail = text[(at + (append ? 3 : 2))..];
+            if (tail.Length > 0) value.Add(new LiteralPart(tail, false));
+            value.AddRange(w.Parts.Skip(i + 1));
+            return (new Word(index), new Word(value), append);
+        }
+        return null;
+    }
+
+    internal static Assignment? TryAssignment(Word w)
     {
         if (w.Parts is not [LiteralPart { Quoted: false } first, ..]) return null;
         int eq = first.Text.IndexOf('=');
+        int open = first.Text.IndexOf('[');
+        if (open > 0 && (eq < 0 || open < eq) && IsName(first.Text[..open]))
+            return SplitSubscript(w, open + 1) is var (index, element, plus) ? new Assignment(first.Text[..open], element) { Index = index, Append = plus } : null;
         if (eq <= 0) return null;
         var name = first.Text[..eq];
         bool append = name.EndsWith('+');
         if (append) name = name[..^1];
         if (!IsName(name)) return null;
+        if (w.Parts is [_, ArrayLiteralPart literal] && eq == first.Text.Length - 1)
+            return new Assignment(name, new Word([])) { Elements = literal.Source, Append = append };
         var rest = new List<WordPart>();
         if (append) rest.Add(new VariablePart(name, true)); // VAR+=x  ==  VAR="$VAR"x
         if (eq + 1 < first.Text.Length) rest.Add(new LiteralPart(first.Text[(eq + 1)..], false));
         rest.AddRange(w.Parts.Skip(1));
-        return (name, new Word(rest));
+        return new Assignment(name, new Word(rest));
     }
 }
