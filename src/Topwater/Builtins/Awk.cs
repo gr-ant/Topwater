@@ -476,7 +476,7 @@ internal sealed class AwkRunner
     Regex GetRegex(string pattern)
     {
         if (_regexes.TryGetValue(pattern, out var re)) return re;
-        try { re = new Regex(Builtins.PosixToNet(pattern, extended: true, bracketEscapes: true), RegexOptions.CultureInvariant); }
+        try { re = new Regex(Builtins.PosixToNet(pattern, extended: true, bracketEscapes: true), RegexOptions.CultureInvariant, Shell.RegexTimeout); }
         catch (ArgumentException e) { throw Err($"invalid regular expression /{pattern}/: {e.Message}"); }
         return _regexes[pattern] = re;
     }

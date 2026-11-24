@@ -19,10 +19,11 @@ public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
     /// <summary>Formats the result as the text returned to the model from the bash tool.</summary>
     public string ToToolOutput(int maxChars = 30_000)
     {
-        var text = Stdout + Stderr;
+        // each stream is cut on its own, so a long stdout can't push the error message and exit code out of view
+        static string Clip(string s, int max) => s.Length <= max ? s : s[..max] + $"\n... [output truncated, {s.Length - max} more characters]\n";
+        var text = Clip(Stdout, maxChars) + Clip(Stderr, Math.Max(1, maxChars / 6));
         if (ExitCode != 0) text += (text.Length == 0 || text.EndsWith('\n') ? "" : "\n") + $"[exit code {ExitCode}]";
-        if (text.Length == 0) return "(no output)";
-        return text.Length <= maxChars ? text : text[..maxChars] + $"\n... [output truncated, {text.Length - maxChars} more characters]";
+        return text.Length == 0 ? "(no output)" : text;
     }
 }
 
@@ -87,6 +88,8 @@ internal abstract class ControlFlow : Exception;
 internal sealed class LoopControl(bool isBreak, int levels) : ControlFlow { public bool IsBreak { get; } = isBreak; public int Levels { get; } = levels; }
 internal sealed class ReturnSignal(int code) : ControlFlow { public int Code { get; } = code; }
 internal sealed class ExitSignal(int code) : ControlFlow { public int Code { get; } = code; }
+/// <summary>A safety limit was hit; ends the whole tool call so an outer loop or caller can't carry on.</summary>
+internal sealed class LimitExceeded(string message) : ControlFlow { public override string Message { get; } = message; }
 
 /// <summary>
 /// A simulated bash session. Give the model a single "bash" tool and pass its command to <see cref="RunAsync"/>.
@@ -270,6 +273,7 @@ public sealed partial class Shell
         var stderr = new StringWriter();
         int code;
         var previousUser = Fs.RunAs;
+        _totalIterations = _scriptDepth = 0;
         Fs.RunAs = Options.User; // the agent's commands run as a regular user
         var io = new Io(new StdinBuffer(""), stdout, stderr);
         try
@@ -282,6 +286,7 @@ public sealed partial class Shell
         catch (ExitSignal e) { code = e.Code; }
         catch (ReturnSignal e) { code = e.Code; }
         catch (LoopControl) { code = 0; }
+        catch (LimitExceeded e) { stderr.WriteLine($"bash: {e.Message}"); code = 1; }
         catch (OperationCanceledException) { throw; }
         catch (Exception e) // an interpreter bug must not take down the host's agent loop
         {
@@ -307,23 +312,28 @@ public sealed partial class Shell
         Script script;
         try { script = Parser.Parse(text); }
         catch (ParseException e) { io.Err.WriteLine($"bash: {e.Message}"); return 2; }
-        if (!subshell)
-        {
-            var savedPos = Positional;
-            if (positional != null) Positional = positional;
-            try { return await ExecScriptAsync(script, io, ct); }
-            finally { if (positional != null) Positional = savedPos; }
-        }
-        var saved = SaveState();
-        Traps = [];
-        if (positional != null) Positional = positional;
+        if (++_scriptDepth > 100) throw new LimitExceeded("maximum script nesting level exceeded (100)");
         try
         {
-            try { return await ExecScriptAsync(script, io, ct); }
-            finally { await RunExitTrapAsync(io, ct); }
+            if (!subshell)
+            {
+                var savedPos = Positional;
+                if (positional != null) Positional = positional;
+                try { return await ExecScriptAsync(script, io, ct); }
+                finally { if (positional != null) Positional = savedPos; }
+            }
+            var saved = SaveState();
+            Traps = [];
+            if (positional != null) Positional = positional;
+            try
+            {
+                try { return await ExecScriptAsync(script, io, ct); }
+                finally { await RunExitTrapAsync(io, ct); }
+            }
+            catch (ExitSignal e) { return e.Code; }
+            finally { RestoreState(saved); }
         }
-        catch (ExitSignal e) { return e.Code; }
-        finally { RestoreState(saved); }
+        finally { _scriptDepth--; }
     }
 
     async Task RunExitTrapAsync(Io io, CancellationToken ct)
@@ -387,7 +397,22 @@ public sealed partial class Shell
             bool last = k == p.Commands.Count - 1;
             // shortcut: pipeline stages run one after another with buffered text; stream if huge outputs or infinite producers matter.
             var output = last ? io.Out : new StringWriter();
-            code = await ExecCommandAsync(p.Commands[k], io with { Stdin = input, Out = output }, ct);
+            var stage = io with { Stdin = input, Out = output };
+            if (p.Commands.Count == 1) code = await ExecCommandAsync(p.Commands[k], stage, ct);
+            else if (last)
+            {
+                // shortcut: the last stage keeps its variables (bash's lastpipe), so `cmd | while read` loops can count; only `exit` is contained
+                try { code = await ExecCommandAsync(p.Commands[k], stage, ct); }
+                catch (ExitSignal e) { code = e.Code; }
+            }
+            else
+            {
+                // every stage but the last is a subshell: `exit`, `cd` and assignments stay inside it
+                var saved = SaveState();
+                try { code = await ExecCommandAsync(p.Commands[k], stage, ct); }
+                catch (ExitSignal e) { code = e.Code; }
+                finally { RestoreState(saved); }
+            }
             if (code != 0) failed = code;
             if (!last) input = new StdinBuffer(output.ToString()!);
         }
@@ -404,6 +429,9 @@ public sealed partial class Shell
 
     async Task<int> ExecCommandAsync(Command cmd, Io io, CancellationToken ct)
     {
+        // a stack overflow can't be caught in .NET and would take the host process down
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new LimitExceeded("maximum nesting level exceeded");
         var sinks = new List<FileSink>();
         var redirected = await ApplyRedirectsAsync(cmd.Redirects, io, sinks, ct);
         if (redirected is not { } rio) return 1;
@@ -474,18 +502,31 @@ public sealed partial class Shell
     /// <summary>Runs a loop body; returns (exit code, true if `break`).</summary>
     async Task<(int Code, bool Break)> LoopBodyAsync(Script body, Io io, CancellationToken ct)
     {
+        LoopDepth++;
         try { return (await ExecScriptAsync(body, io, ct), false); }
         catch (LoopControl lc)
         {
-            if (lc.Levels > 1) throw new LoopControl(lc.IsBreak, lc.Levels - 1);
+            if (lc.Levels > 1 && LoopDepth > 1) throw new LoopControl(lc.IsBreak, lc.Levels - 1);
             return (0, lc.IsBreak);
         }
+        finally { LoopDepth--; }
     }
+
+    /// <summary>How many loops are running; `break` outside any loop is a warning, not an error.</summary>
+    internal int LoopDepth { get; private set; }
+
+    long _totalIterations;
+    int _scriptDepth;
+
+    /// <summary>User-supplied patterns can backtrack exponentially, and a regex match ignores cancellation.</summary>
+    internal static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(5);
 
     void CheckIterations(ref int n, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        if (++n > Options.MaxLoopIterations) throw new ShellException($"loop aborted after {Options.MaxLoopIterations} iterations");
+        // nested loops multiply, so one tool call also has a total budget (10x the single-loop cap)
+        if (++n > Options.MaxLoopIterations || ++_totalIterations > Options.MaxLoopIterations * 10L)
+            throw new LimitExceeded($"loop aborted after {Options.MaxLoopIterations} iterations");
     }
 
     async Task<int> ExecLoopAsync(LoopCommand l, Io io, CancellationToken ct)
@@ -581,7 +622,7 @@ public sealed partial class Shell
                         }
                         if (r.Op.StartsWith('&')) io = io with { Out = w, Err = w };
                         else if (r.Fd == 2) io = io with { Err = w };
-                        else io = io with { Out = w };
+                        else if (r.Fd <= 1) io = io with { Out = w };   // fd 3+ is opened (the file is created) but nothing writes to it
                         break;
                 }
             }
@@ -603,11 +644,18 @@ public sealed partial class Shell
         if (argv.Count == 0)
         {
             foreach (var (k, v) in assigned) Environment[k] = v;
-            return c.Words.Count > 0 || c.Assignments.Any(a => a.Value.Parts.Any(p => p is CommandSubPart)) ? LastExitCode : 0;
+            // only a command substitution leaves its exit code behind; `$empty` alone is a successful no-op
+            return c.Words.Concat(c.Assignments.Select(a => a.Value)).Any(w => w.Parts.Any(p => p is CommandSubPart)) ? LastExitCode : 0;
         }
 
         if (Aliases.TryGetValue(argv[0], out var alias))
+        {
+            // an alias holding a pipeline or list is shell text, not just words
+            if (assigned.Count == 0 && alias.IndexOfAny(['|', ';', '&', '<', '>']) >= 0 && Aliases.Remove(argv[0]))
+                try { return await RunScriptTextAsync(alias + " " + string.Join(' ', argv.Skip(1).Select(Printf.ShellQuote)), io, subshell: false, ct); }
+                finally { Aliases[argv[0]] = alias; }   // removed while it runs so it can't expand itself
             argv = [.. await ExpandWordsAsync(Parser.ParseWords(alias), io, ct), .. argv.Skip(1)];
+        }
 
         if (assigned.Count == 0) return await InvokeAsync(argv, io, ct);
 
@@ -686,7 +734,7 @@ public sealed partial class Shell
 
     async Task<int> CallFunctionAsync(Command body, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
-        if (_locals.Count >= 200) throw new ShellException($"{argv[0]}: maximum function nesting level exceeded (200)");
+        if (_locals.Count >= 200) throw new LimitExceeded($"{argv[0]}: maximum function nesting level exceeded (200)");
         var savedPos = Positional;
         Positional = argv.Skip(1).ToList();
         _locals.Push(new Dictionary<string, string?>());
@@ -710,7 +758,7 @@ public sealed partial class Shell
     {
         if (_locals.Count == 0) throw new ShellException("can only be used in a function");
         _locals.Peek().TryAdd(name, Environment.TryGetValue(name, out var old) ? old : null);
-        Environment[name] = value ?? Environment.GetValueOrDefault(name, "");
+        Environment[name] = value ?? "";
     }
 
     // ---------- expansion ----------
@@ -982,6 +1030,20 @@ public sealed partial class Shell
                     }
                     continue;
                 }
+                if (part is VariablePart { Name: ['@' or '*', ':', .. var slice] })
+                {
+                    // ${@:2} and ${@:2:3} slice the parameters, not the characters; ${@:0} starts at $0
+                    var spec = slice.Split(':', 2);
+                    List<string> all = ["bash", .. Positional];
+                    int from = (int)Math.Clamp(Arith.Eval(this, spec[0]), 0, all.Count);
+                    int count = spec.Length == 1 ? all.Count - from : (int)Math.Clamp(Arith.Eval(this, spec[1]), 0, all.Count - from);
+                    for (int k = 0; k < count; k++)
+                    {
+                        if (k > 0) End();
+                        AddText(all[from + k], part.Quoted);
+                    }
+                    continue;
+                }
                 var text = await ExpandPartAsync(part, io, ct);
                 if (part is LiteralPart)
                 {
@@ -1098,13 +1160,15 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
                     var re = reText.ToString();
                     try
                     {
-                        var m = Regex.Match(l, re);
+                        var m = Regex.Match(l, re, RegexOptions.None, Shell.RegexTimeout);
                         if (m.Success) shell.Environment["BASH_REMATCH"] = m.Value;
                         return m.Success;
                     }
                     catch (ArgumentException) { throw new ShellException($"invalid regular expression `{re}'", 2); }
                 case "<": return string.CompareOrdinal(l, await shell.ExpandSingleAsync(right, io, ct)) < 0;
                 case ">": return string.CompareOrdinal(l, await shell.ExpandSingleAsync(right, io, ct)) > 0;
+                case "-nt": return Test.Newer(shell, l, await shell.ExpandSingleAsync(right, io, ct));
+                case "-ot": return Test.Newer(shell, await shell.ExpandSingleAsync(right, io, ct), l);
                 default:
                     var a = Arith.Eval(shell, l);
                     var b = Arith.Eval(shell, await shell.ExpandSingleAsync(right, io, ct));

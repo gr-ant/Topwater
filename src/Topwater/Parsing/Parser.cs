@@ -417,9 +417,34 @@ internal sealed class Lexer(string s)
                     break;
                 case '(': depth++; break;
                 case ')': if (--depth == 0) return k; break;
+                case '<' when k + 2 < s.Length && s[k + 1] == '<' && s[k + 2] != '<' && (k == 0 || s[k - 1] != '<'):
+                    k = SkipHereDoc(k + 2) - 1; // its body is text: quotes and parentheses in it mean nothing
+                    break;
             }
         }
         throw new ParseException("unexpected EOF while looking for matching `)'");
+    }
+
+    /// <summary>From just after a `&lt;&lt;`, returns the index after the heredoc's closing delimiter line.</summary>
+    int SkipHereDoc(int k)
+    {
+        bool stripTabs = k < s.Length && s[k] == '-';
+        if (stripTabs) k++;
+        while (k < s.Length && s[k] is ' ' or '\t') k++;
+        int start = k;
+        while (k < s.Length && !char.IsWhiteSpace(s[k]) && s[k] is not (')' or ';' or '|' or '&')) k++;
+        var delimiter = s[start..k].Replace("'", "").Replace("\"", "").Replace("\\", "");
+        int line = s.IndexOf('\n', k);
+        if (delimiter.Length == 0 || line < 0) return k;
+        for (int from = line + 1; from <= s.Length;)
+        {
+            int end = s.IndexOf('\n', from);
+            if (end < 0) end = s.Length;
+            var text = s[from..end];
+            if ((stripTabs ? text.TrimStart('\t') : text) == delimiter) return end;
+            from = end + 1;
+        }
+        return s.Length;
     }
 }
 

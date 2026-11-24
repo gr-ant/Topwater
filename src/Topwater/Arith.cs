@@ -54,6 +54,9 @@ internal sealed class Arith
             }
             var op = Ops.FirstOrDefault(o => string.CompareOrdinal(s, i, o, 0, o.Length) == 0)
                      ?? throw new ShellException($"{s}: syntax error: invalid arithmetic operator (error token is \"{s[i..]}\")");
+            // `5--3` (after $a-$b is substituted) is two minus signs; `--` is one operator only next to a name
+            bool nextIsName = i + 2 < s.Length && (char.IsLetter(s[i + 2]) || s[i + 2] == '_');
+            if (op is "++" or "--" && !nextIsName && !(tokens.Count > 0 && IsIdent(tokens[^1]))) op = op[..1];
             tokens.Add(op);
             i += op.Length;
         }
@@ -109,7 +112,7 @@ internal sealed class Arith
 
     long Binary(int level, bool ev)
     {
-        if (level == Levels.Length) return Unary(ev);
+        if (level == Levels.Length) return Power(ev);
         var l = Binary(level + 1, ev);
         while (Peek is { } op && Levels[level].Contains(op))
         {
@@ -181,9 +184,14 @@ internal sealed class Arith
             Set(name, v);
             return v;
         }
-        var b = Postfix(ev);
-        if (Accept("**")) return Pow(b, Unary(ev)); // right-associative
-        return b;
+        return Postfix(ev);
+    }
+
+    /// <summary>`**` binds looser than unary minus in bash: -2**2 is 4.</summary>
+    long Power(bool ev)
+    {
+        var b = Unary(ev);
+        return Accept("**") ? Pow(b, Power(ev)) : b; // right-associative
     }
 
     long Postfix(bool ev)

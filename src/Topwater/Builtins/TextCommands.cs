@@ -113,18 +113,21 @@ internal static partial class Builtins
 
     static Regex BuildRegex(List<string> patterns, bool extended, bool fixedString, bool ignoreCase, bool word = false, bool line = false, bool perl = false)
     {
-        var parts = patterns.Select(p => fixedString ? Regex.Escape(p) : perl ? p : PosixToNet(p, extended)).ToList();
+        // .NET has no \K ("keep"): a leading X\KY means the same as (?<=X)Y
+        static string Keep(string p) => p.IndexOf(@"\K", StringComparison.Ordinal) is var k and > 0 ? $"(?<={p[..k]}){p[(k + 2)..]}" : p;
+        var parts = patterns.Select(p => fixedString ? Regex.Escape(p) : perl ? Keep(p) : PosixToNet(p, extended)).ToList();
         var re = parts.Count == 1 ? parts[0] : string.Join("|", parts.Select(p => $"(?:{p})"));
         if (word) re = $@"\b(?:{re})\b";
         if (line) re = $"^(?:{re})$";
-        try { return new Regex(re, ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None); }
+        try { return new Regex(re, ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None, Shell.RegexTimeout); }
         catch (ArgumentException e) { throw new ShellException($"invalid regular expression: {e.Message}", 2); }
     }
 
-    static List<int> ParseList(string spec)
+    static (HashSet<int> Wanted, int OpenFrom) ParseList(string spec)
     {
-        // "1,3-5,7-" -> sorted 1-based indexes (open ranges capped at 10000)
-        var result = new SortedSet<int>();
+        // "1,3-5,7-" -> 1-based indexes {1,3,4,5} plus "everything from 7"
+        var result = new HashSet<int>();
+        int openFrom = int.MaxValue;
         foreach (var part in spec.Split(','))
         {
             int dash = part.IndexOf('-');
@@ -132,9 +135,10 @@ internal static partial class Builtins
             if (!a.All(char.IsAsciiDigit) || !b.All(char.IsAsciiDigit) || (a.Length == 0 && b.Length == 0) || (a.Length > 0 && int.Parse(a) == 0))
                 throw new ShellException(a == "0" ? "fields and positions are numbered from 1" : $"invalid field value '{part}'");
             if (dash < 0) result.Add(int.Parse(a));
-            else for (int k = a.Length > 0 ? int.Parse(a) : 1, to = b.Length > 0 ? int.Parse(b) : 10000; k <= to; k++) result.Add(k);
+            else if (b.Length == 0) openFrom = Math.Min(openFrom, int.Parse(a));
+            else for (int k = a.Length > 0 ? int.Parse(a) : 1, to = int.Parse(b); k <= to; k++) result.Add(k);
         }
-        return result.ToList();
+        return (result, openFrom);
     }
 
     static void RegisterTextCommands(Shell shell)
@@ -149,6 +153,7 @@ internal static partial class Builtins
             for (int i = 0; i < args.Count;)
             {
                 var arg = args[i++];
+                if (arg is "--include" or "--exclude" or "--exclude-dir" && i < args.Count) arg += "=" + args[i++];
                 if (arg.StartsWith("--include=")) { include.Add(Glob.ToRegex(arg[10..])); continue; }
                 if (arg.StartsWith("--exclude=")) { exclude.Add(Glob.ToRegex(arg[10..])); continue; }
                 if (arg.StartsWith("--exclude-dir=")) { excludeDir.Add(Glob.ToRegex(arg[14..])); continue; }
@@ -196,11 +201,12 @@ internal static partial class Builtins
             // expand directories for -r
             var files = new List<string>();
             int code = 1;
-            bool error = false;
+            bool error = false, walked = false;
             foreach (var f in positional)
             {
                 var abs = ctx.ResolvePath(f);
                 if (!ctx.Fs.IsDirectory(abs)) { files.Add(f); continue; }
+                walked = true;
                 if (!recursive) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {f}: Is a directory"); error = true; continue; }
                 void Walk(string dirAbs, string display)
                 {
@@ -219,7 +225,7 @@ internal static partial class Builtins
             }
             if (positional.Count > 0 && files.Count == 0) return error ? 2 : 1;
 
-            bool showName = !a.Has('h') && (a.Has('H') || files.Count > 1 || recursive);
+            bool showName = !a.Has('h') && (a.Has('H') || files.Count > 1 || walked);
             foreach (var (name, text) in Inputs(ctx, files, () => error = true, quiet: a.Has('s')))
             {
                 bool binary = text.Contains('\0') && !a.Has('a'); // GNU grep's test: a NUL byte
@@ -350,12 +356,11 @@ internal static partial class Builtins
             if (delim.Length != 1) throw new ShellException("the delimiter must be a single character");
             var chars = a.Value('c') ?? a.Value('b');
             var spec = chars ?? a.Value('f') ?? throw new ShellException("you must specify a list of bytes, characters, or fields");
-            var wanted = ParseList(spec);
-            var wantedSet = wanted.ToHashSet();
+            var (wantedSet, openFrom) = ParseList(spec);
             bool complement = a.Has('z');
             var outDelim = a.Value('O');
             IEnumerable<string> Pick(IReadOnlyList<string> items) =>
-                complement ? items.Where((_, i) => !wantedSet.Contains(i + 1)) : wanted.Where(i => i <= items.Count).Select(i => items[i - 1]);
+                items.Where((_, i) => (i + 1 >= openFrom || wantedSet.Contains(i + 1)) != complement);
             int code = 0;
             var sb = new StringBuilder();
             foreach (var (_, text) in Inputs(ctx, a.Positional, () => code = 1))
@@ -804,7 +809,7 @@ internal static class Sed
         Regex CompileRegex(string text, RegexOptions options)
         {
             if (text.Length == 0) return lastRe ?? throw new ShellException("no previous regular expression");
-            try { return lastRe = new Regex(Builtins.PosixToNet(text, extended), options); }
+            try { return lastRe = new Regex(Builtins.PosixToNet(text, extended), options, Shell.RegexTimeout); }
             catch (ArgumentException e) { throw new ShellException($"invalid regular expression: {e.Message}"); }
         }
 
@@ -1094,6 +1099,7 @@ internal static class Sed
         }
 
         int? exitCode = null;
+        long steps = 0;
         var ps = "";
         bool reread = true;
         while (exitCode == null)
@@ -1109,6 +1115,7 @@ internal static class Sed
             bool tflag = false, autoprint = !quiet;
             for (int pc = 0; pc < cmds.Count;)
             {
+                if (++steps > 10_000_000) throw new ShellException("too many steps (a branch loops forever?)");
                 var c = cmds[pc++];
                 if (!Matches(c, ps, n, idx >= lines.Count))
                 {

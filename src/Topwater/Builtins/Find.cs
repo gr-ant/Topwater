@@ -196,7 +196,7 @@ internal sealed class Find
             }
             case "-regex":
             {
-                var re = new Regex("^(?:" + Arg() + ")$");
+                var re = new Regex("^(?:" + Arg() + ")$", RegexOptions.None, Shell.RegexTimeout);
                 return e => T(re.IsMatch(e.Display));
             }
             case "-type":

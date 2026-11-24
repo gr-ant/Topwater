@@ -19,12 +19,19 @@ internal static partial class Builtins
         return m.Groups[2].Value switch { "m" => TimeSpan.FromMinutes(n), "h" => TimeSpan.FromHours(n), "d" => TimeSpan.FromDays(n), _ => TimeSpan.FromSeconds(n) };
     }
 
+    static int LoopJump(CommandContext ctx, bool isBreak)
+    {
+        if (ctx.Shell.LoopDepth > 0) throw new LoopControl(isBreak, Math.Max(1, ParseCount(ctx, 1)));
+        ctx.Stderr.WriteLine($"bash: {ctx.Name}: only meaningful in a `for', `while', or `until' loop");
+        return 0;
+    }
+
     static void RegisterScriptingCommands(Shell shell)
     {
         shell.Register("exit", (Func<CommandContext, int>)(ctx => throw new ExitSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255)), "Exit the shell");
         shell.Register("return", (Func<CommandContext, int>)(ctx => throw new ReturnSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255)), "Return from a function");
-        shell.Register("break", (Func<CommandContext, int>)(ctx => throw new LoopControl(true, Math.Max(1, ParseCount(ctx, 1)))), "Exit a loop");
-        shell.Register("continue", (Func<CommandContext, int>)(ctx => throw new LoopControl(false, Math.Max(1, ParseCount(ctx, 1)))), "Next loop iteration");
+        shell.Register("break", (Func<CommandContext, int>)(ctx => LoopJump(ctx, true)), "Exit a loop");
+        shell.Register("continue", (Func<CommandContext, int>)(ctx => LoopJump(ctx, false)), "Next loop iteration");
 
         shell.Register("shift", ctx =>
         {

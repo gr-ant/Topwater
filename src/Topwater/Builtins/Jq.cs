@@ -470,6 +470,7 @@ internal static class Jq
 
         Node Pipe()
         {
+            System.Runtime.CompilerServices.RuntimeHelpers.EnsureSufficientExecutionStack();
             if (IsOp("def")) throw new CompileError("`def` is not supported");
             var left = Comma();
             if (IsOp("as"))
@@ -925,7 +926,7 @@ internal static class Jq
             else if (c == 's') opts |= RegexOptions.Singleline;
             else if (!"gnlp".Contains(c)) throw new JqError($"{f} is not a valid modifier string");
         }
-        try { return (new Regex(p, opts), f.Contains('g')); }
+        try { return (new Regex(p, opts, Shell.RegexTimeout), f.Contains('g')); }
         catch (ArgumentException e) { throw new JqError($"{p} (at offset 0) is not a valid regex: {e.Message}"); }
     }
 
@@ -1297,8 +1298,18 @@ internal static class Jq
         Dictionary<string, object?> EnvObject() => env.ToDictionary(p => p.Key, p => (object?)p.Value);
 
         /// <summary>Yields every output of node applied to input v; vs holds the bound $variables.</summary>
+        long _steps;
+
+        /// <summary>Stops endless generators (range(1e10), recurse without a base case) and runaway nesting.</summary>
+        void Step()
+        {
+            if (++_steps > 20_000_000) throw new JqError("too many steps (possible infinite loop)");
+            System.Runtime.CompilerServices.RuntimeHelpers.EnsureSufficientExecutionStack();
+        }
+
         public IEnumerable<object?> Ev(Node node, object? v, Dictionary<string, object?> vs)
         {
+            Step();
             switch (node)
             {
                 case Identity: yield return v; break;
@@ -1756,7 +1767,7 @@ internal static class Jq
                     {
                         if (bounds.Any(b => b is not double)) throw new JqError("Range bounds must be numeric");
                         double lo = n == 1 ? 0 : (double)bounds[0]!, hi = n == 1 ? (double)bounds[0]! : (double)bounds[1]!, step = n == 3 ? (double)bounds[2]! : 1;
-                        for (long count = 0; (step > 0 && lo + count * step < hi) || (step < 0 && lo + count * step > hi); count++) yield return lo + count * step;
+                        for (long count = 0; (step > 0 && lo + count * step < hi) || (step < 0 && lo + count * step > hi); count++) { Step(); yield return lo + count * step; }
                     }
                     yield break;
                 case "first/1":
@@ -1813,6 +1824,7 @@ internal static class Jq
                     IEnumerable<object?> Walk(object? x, int depth)
                     {
                         if (depth > 10_000) throw new JqError("recurse: too deep");
+                        Step();
                         yield return x;
                         foreach (var y in Ev(a[0], x, vs))
                         {

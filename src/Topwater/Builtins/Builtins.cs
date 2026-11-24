@@ -348,7 +348,8 @@ internal static partial class Builtins
                 return await ctx.Shell.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken);
             }
             var text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0]));
-            return await ctx.Shell.RunScriptTextAsync(text, io, subshell: isBash, ctx.CancellationToken, args.Count > 1 || isBash ? args.Skip(1).ToList() : null);
+            try { return await ctx.Shell.RunScriptTextAsync(text, io, subshell: isBash, ctx.CancellationToken, args.Count > 1 || isBash ? args.Skip(1).ToList() : null); }
+            catch (ReturnSignal r) when (!isBash) { return r.Code; }   // `return` in a sourced file ends that file only
         };
         shell.Register("bash", runScript, "Run a command string (-c) or script file");
         shell.Register("sh", runScript, "Run a command string (-c) or script file");
@@ -523,7 +524,14 @@ internal static class Test
 
     static readonly HashSet<string> BinaryOps = ["=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"];
 
-    static bool Binary(string left, string op, string right)
+    /// <summary>-nt / -ot: a missing file is older than any existing one, as in bash.</summary>
+    internal static bool Newer(Shell sh, string left, string right)
+    {
+        DateTime? Time(string p) => sh.Fs.Exists(sh.ResolvePath(p)) ? sh.Fs.Stat(sh.ResolvePath(p)).Modified : null;
+        return Time(left) is { } l && (Time(right) is not { } r || l > r);
+    }
+
+    static bool Binary(Shell sh, string left, string op, string right)
     {
         switch (op)
         {
@@ -531,7 +539,8 @@ internal static class Test
             case "!=": return left != right;
             case "<": return string.CompareOrdinal(left, right) < 0;
             case ">": return string.CompareOrdinal(left, right) > 0;
-            case "-nt" or "-ot": return false;
+            case "-nt": return Newer(sh, left, right);
+            case "-ot": return Newer(sh, right, left);
         }
         bool okL = long.TryParse(left.Trim(), out var l), okR = long.TryParse(right.Trim(), out var r);
         if (!okL || !okR) throw new ShellException($"{(okL ? right : left)}: integer expression expected", 2);
@@ -548,7 +557,7 @@ internal static class Test
             case 1: return a[0].Length > 0;
             case 2: return a[0] == "!" ? a[1].Length == 0 : Unary(ctx.Shell, a[0], a[1]);
             case 3:
-                if (BinaryOps.Contains(a[1])) return Binary(a[0], a[1], a[2]);
+                if (BinaryOps.Contains(a[1])) return Binary(ctx.Shell, a[0], a[1], a[2]);
                 if (a[1] is "-a" or "-o") return a[1] == "-a" ? a[0].Length > 0 && a[2].Length > 0 : a[0].Length > 0 || a[2].Length > 0;
                 if (a[0] == "!") return !Evaluate(ctx, a.Skip(1).ToList());
                 if (a[0] == "(" && a[2] == ")") return a[1].Length > 0;
@@ -585,7 +594,7 @@ internal static class Test
                 pos++;
                 return v;
             }
-            if (pos + 2 < n && BinaryOps.Contains(a[pos + 1])) { pos += 3; return Binary(t, a[pos - 2], a[pos - 1]); }
+            if (pos + 2 < n && BinaryOps.Contains(a[pos + 1])) { pos += 3; return Binary(ctx.Shell, t, a[pos - 2], a[pos - 1]); }
             if (t.Length == 2 && t[0] == '-' && pos + 1 < n) { pos += 2; return Unary(ctx.Shell, t, a[pos - 1]); }
             pos++;
             return t.Length > 0;
