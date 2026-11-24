@@ -76,6 +76,9 @@ dotnet run --project examples/McpShell -- everything npx -y @modelcontextprotoco
 
 The second form mounts an MCP server as the command `everything`.
 
+`dotnet run --project examples/WebShell` serves the same terminal as a web page on port 8765 for other machines
+on your network. It registers no host programs or MCP servers, so visitors only reach the in-memory machine.
+
 ## Adding programs
 
 ### C# methods

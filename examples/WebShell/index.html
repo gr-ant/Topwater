@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Topwater shell</title>
+<style>
+  :root { --bg: #0f1216; --fg: #d7dde5; --dim: #7d8794; --accent: #6cc7a8; --err: #e0787a; }
+  @media (prefers-color-scheme: light) { :root { --bg: #fbfbf9; --fg: #1d232b; --dim: #6a737f; --accent: #1f7a5c; --err: #b3383b; } }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+  main { box-sizing: border-box; min-height: 100%; padding: 16px; max-width: 1000px; margin: 0 auto; cursor: text; }
+  header { color: var(--dim); margin-bottom: 12px; }
+  header b { color: var(--fg); font-weight: 600; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
+  .prompt { color: var(--accent); }
+  .note { color: var(--err); }
+  form { display: flex; }
+  label { color: var(--accent); white-space: pre; }
+  input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: inherit; font: inherit; padding: 0; }
+</style>
+</head>
+<body>
+<main id="main">
+  <header><b>Topwater</b> &middot; a simulated Linux machine. Nothing you type here runs on a real computer. Try <code>help</code>.</header>
+  <pre id="log" aria-live="polite"></pre>
+  <form id="form" autocomplete="off">
+    <label id="prompt" for="cmd">agent@topwater:~$ </label>
+    <input id="cmd" autofocus autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Command">
+  </form>
+</main>
+<script>
+  const log = document.getElementById('log'), form = document.getElementById('form');
+  const cmd = document.getElementById('cmd'), prompt = document.getElementById('prompt');
+  // one machine per tab: a reload starts a fresh one
+  const session = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  const history = []; let at = 0;
+
+  function print(text, cls) {
+    const span = document.createElement('span');
+    if (cls) span.className = cls;
+    span.textContent = text;      // textContent: command output is never treated as HTML
+    log.appendChild(span);
+  }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const command = cmd.value;
+    cmd.value = '';
+    print(prompt.textContent, 'prompt'); print(command + '\n');
+    if (command.trim() === 'clear') { log.textContent = ''; return; }
+    if (command.trim()) { history.push(command); at = history.length; }
+    cmd.disabled = true;
+    try {
+      const r = await fetch('run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session, command }) });
+      if (!r.ok) throw new Error('server answered ' + r.status);
+      const data = await r.json();
+      if (data.output && data.output !== '(no output)') print(data.output.endsWith('\n') ? data.output : data.output + '\n');
+      prompt.textContent = data.prompt;
+    } catch (err) {
+      print('could not reach the server: ' + err.message + '\n', 'note');
+    }
+    cmd.disabled = false;
+    cmd.focus();
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+
+  cmd.addEventListener('keydown', e => {
+    if (e.key === 'ArrowUp' && at > 0) { cmd.value = history[--at]; e.preventDefault(); }
+    else if (e.key === 'ArrowDown') { cmd.value = ++at < history.length ? history[at] : (at = history.length, ''); e.preventDefault(); }
+    else if (e.key === 'l' && e.ctrlKey) { log.textContent = ''; e.preventDefault(); }
+  });
+  document.getElementById('main').addEventListener('click', () => { if (!getSelection().toString()) cmd.focus(); });
+</script>
+</body>
+</html>
