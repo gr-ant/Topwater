@@ -13,6 +13,8 @@ public sealed class HostCommandOptions
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(120);
     /// <summary>File or directory names kept out of the sync in both directions.</summary>
     public ICollection<string> Exclude { get; init; } = [];
+    /// <summary>Other virtual directories the program can see besides the workspace. Agents put scratch files in /tmp.</summary>
+    public ICollection<string> SharedDirectories { get; init; } = ["/tmp"];
     /// <summary>Rewrites the command line, e.g. to prefix a real sandbox: (argv, mirrorRoot) => argv.</summary>
     public Func<IReadOnlyList<string>, string, IReadOnlyList<string>>? Launcher { get; init; }
     /// <summary>Redirect path-like arguments into the mirror (on by default).</summary>
@@ -39,6 +41,9 @@ public sealed class HostCommand : IDisposable
     readonly Shell _shell;
     readonly string _name, _program, _workspace;
     readonly HostCommandOptions _o;
+    readonly List<string> _shared; // every directory mirrored to disk: the workspace first, then the extras
+
+    readonly string _privateTmp;
 
     /// <summary>The mirror of "/" on disk for this program.</summary>
     public string Root { get; }
@@ -50,12 +55,17 @@ public sealed class HostCommand : IDisposable
         _o = options;
         _program = FindOnPath(program) ?? throw new FileNotFoundException($"host program not found: {program}");
         _workspace = VirtualFileSystem.Normalize("/", options.Workspace ?? shell.Environment.GetValueOrDefault("HOME", "/home/agent"));
+        _shared = [_workspace];
+        foreach (var dir in options.SharedDirectories.Select(d => VirtualFileSystem.Normalize("/", d)))
+            if (!_shared.Any(s => dir == s || dir.StartsWith(s.TrimEnd('/') + "/"))) _shared.Add(dir);
         Root = Directory.CreateTempSubdirectory($"topwater-{name}-").FullName;
+        _privateTmp = Directory.CreateTempSubdirectory($"topwater-{name}-tmp-").FullName;
     }
 
     public void Dispose()
     {
-        try { Directory.Delete(Root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        foreach (var dir in new[] { Root, _privateTmp })
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
     static string? FindOnPath(string program)
@@ -75,7 +85,7 @@ public sealed class HostCommand : IDisposable
     // ---------- mirror ----------
 
     /// <summary>Copies the workspace out to the mirror; returns {relative path: bytes} as exported.</summary>
-    Dictionary<string, byte[]> Export()
+    Dictionary<string, byte[]> Export(string ws)
     {
         var fs = _shell.Fs;
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -92,9 +102,9 @@ public sealed class HostCommand : IDisposable
                 else if (fs.CanRead(child)) files[crel] = fs.ReadAllBytes(child);
             }
         }
-        if (fs.IsDirectory(_workspace)) Walk(_workspace, "");
+        if (fs.IsDirectory(ws)) Walk(ws, "");
 
-        var root = Real(_workspace);
+        var root = Real(ws);
         Directory.CreateDirectory(root);
         // remove what no longer exists in the virtual filesystem, then write what changed
         void Prune(string real, string rel)
@@ -123,14 +133,14 @@ public sealed class HostCommand : IDisposable
     }
 
     /// <summary>Copies changes made by the program back into the virtual filesystem.</summary>
-    void Import(Dictionary<string, byte[]> before, TextWriter err)
+    void Import(string ws, Dictionary<string, byte[]> before, TextWriter err)
     {
         var fs = _shell.Fs;
-        var root = Real(_workspace);
+        var root = Real(ws);
         var after = new HashSet<string>(StringComparer.Ordinal);
         void Walk(string real, string rel)
         {
-            var vdir = rel.Length == 0 ? _workspace : VirtualFileSystem.Normalize(_workspace, rel);
+            var vdir = rel.Length == 0 ? ws : VirtualFileSystem.Normalize(ws, rel);
             try { if (!fs.Exists(vdir)) fs.CreateDirectory(vdir, parents: true); }
             catch (ShellException e) { err.WriteLine($"{_name}: {e.Message}"); return; }
             foreach (var f in Directory.GetFiles(real))
@@ -139,7 +149,9 @@ public sealed class HostCommand : IDisposable
                 if (Skip(name) || new FileInfo(f).LinkTarget != null) continue;
                 var crel = Rel(rel, name);
                 after.Add(crel);
-                var data = File.ReadAllBytes(f);
+                byte[] data;
+                // sockets, pipes and files a still-running helper holds open can't be copied; leave them out
+                try { data = File.ReadAllBytes(f); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
                 if (before.TryGetValue(crel, out var old) && old.AsSpan().SequenceEqual(data)) continue;
                 try { WriteFile(fs, VirtualFileSystem.Normalize(vdir, name), data); }
                 catch (ShellException e) { err.WriteLine($"{_name}: {e.Message}"); }
@@ -153,7 +165,7 @@ public sealed class HostCommand : IDisposable
         Walk(root, "");
         foreach (var rel in before.Keys.Where(k => !after.Contains(k)))
         {
-            try { fs.Delete(VirtualFileSystem.Normalize(_workspace, rel)); } catch (ShellException) { }
+            try { fs.Delete(VirtualFileSystem.Normalize(ws, rel)); } catch (ShellException) { }
         }
         // directories the program removed
         void PruneVfs(string vpath, string rel)
@@ -171,7 +183,7 @@ public sealed class HostCommand : IDisposable
                 else PruneVfs(child, crel);
             }
         }
-        if (fs.IsDirectory(_workspace)) PruneVfs(_workspace, "");
+        if (fs.IsDirectory(ws)) PruneVfs(ws, "");
     }
 
     static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
@@ -193,7 +205,8 @@ public sealed class HostCommand : IDisposable
     {
         if (!_o.RewritePaths) return arg;
         string prefix = "", value = arg;
-        if (arg.StartsWith('-') && arg.IndexOf('=') is var eq and > 0) { prefix = arg[..(eq + 1)]; value = arg[(eq + 1)..]; }
+        // --out=/path and key=/path (e.g. `--prop src=/tmp/a.md`) carry a path after the first '='
+        if (arg.IndexOf('=') is var eq and > 0 && !arg[..eq].Contains('/')) { prefix = arg[..(eq + 1)]; value = arg[(eq + 1)..]; }
         if (value.StartsWith('/') && value != "/")
         {
             var top = "/" + value.Trim('/').Split('/')[0];
@@ -211,9 +224,9 @@ public sealed class HostCommand : IDisposable
 
     internal async Task<int> RunAsync(CommandContext ctx)
     {
-        var before = Export();
+        var before = _shared.ToDictionary(ws => ws, Export);
         var cwd = _shell.Cwd;
-        bool inside = cwd == _workspace || cwd.StartsWith(_workspace.TrimEnd('/') + "/");
+        bool inside = _shared.Any(s => cwd == s || cwd.StartsWith(s.TrimEnd('/') + "/"));
         var realCwd = Real(inside ? cwd : _workspace);
         Directory.CreateDirectory(realCwd);
         IReadOnlyList<string> argv = [_program, .. ctx.Args.Select(MapArg)];
@@ -234,7 +247,8 @@ public sealed class HostCommand : IDisposable
         psi.Environment["LANG"] = "C.UTF-8";
         psi.Environment["TERM"] = "dumb";
         psi.Environment["USER"] = psi.Environment["LOGNAME"] = _shell.Options.User;
-        psi.Environment["TMPDIR"] = Real("/tmp");
+        // the program's own temp files (runtime sockets, scratch files) stay out of the agent's /tmp
+        psi.Environment["TMPDIR"] = _privateTmp;
         foreach (var (k, v) in _o.Environment) psi.Environment[k] = v;
 
         Process proc;
@@ -266,7 +280,7 @@ public sealed class HostCommand : IDisposable
                 timedOut = true;
             }
             var (outText, errText) = (Clean(await stdout), Clean(await stderr));
-            Import(before, ctx.Stderr);
+            foreach (var ws in _shared) Import(ws, before[ws], ctx.Stderr);
             ctx.CancellationToken.ThrowIfCancellationRequested();
             ctx.Stdout.Write(outText);
             ctx.Stderr.Write(errText);

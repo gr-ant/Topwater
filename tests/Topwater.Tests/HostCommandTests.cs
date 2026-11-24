@@ -61,4 +61,34 @@ public class HostCommandTests
         Assert.Equal(124, r.ExitCode);
         Assert.Contains("timed out", r.Stderr);
     }
+
+    [Fact]
+    public async Task TmpIsSharedAndKeyValuePathsAreRedirected()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var sh = new Shell();
+        using var cp = sh.RegisterHostCommand("realcp", "cp");
+        using var sht = sh.RegisterHostCommand("realsh", "sh");
+        await sh.RunAsync("echo scratch > /tmp/in.txt");
+        Assert.Equal("scratch\n", await Out(sh, "realcp /tmp/in.txt /tmp/out.txt && cat /tmp/out.txt"));
+        Assert.Equal("scratch\n", await Out(sh, "cd /tmp && realcp in.txt ~/home-copy.txt && cat ~/home-copy.txt"));
+        // a path after key= is redirected too, so it can't reach the host's real /tmp
+        Assert.Equal("scratch\n", await Out(sh, "echo scratch > /tmp/only-virtual-$$.txt; realsh -c 'cat \"${0#src=}\"' src=/tmp/only-virtual-$$.txt"));
+    }
+}
+public class OfficeCliSmoke
+{
+    [Fact]
+    public async Task CreatesADocxWhenOfficeCliIsInstalled()
+    {
+        var path = (System.Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator).Select(d => Path.Combine(d, "officecli")).FirstOrDefault(File.Exists);
+        if (path is null) return; // optional: only runs on machines that have OfficeCLI
+        var sh = new Shell();
+        // no background process: each call writes the file before it returns, so the copy the agent sees is current
+        using var office = sh.RegisterHostCommand("officecli", path, new HostCommandOptions { Environment = { ["OFFICECLI_NO_AUTO_RESIDENT"] = "1", ["OFFICECLI_SKIP_UPDATE"] = "1" } });
+        var r = await sh.RunAsync("officecli create /tmp/a.docx && officecli add /tmp/a.docx /body --type paragraph --prop text='Hello from Topwater' && cp /tmp/a.docx ~/a.docx && to-markdown ~/a.docx");
+        Assert.True(r.ExitCode == 0, r.Stderr + r.Stdout);
+        Assert.Contains("Hello from Topwater", r.Stdout);
+        Assert.DoesNotContain("topwater-officecli", r.Stdout + r.Stderr);
+    }
 }

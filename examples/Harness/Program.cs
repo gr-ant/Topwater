@@ -35,13 +35,13 @@ static bool InOrder(string text, params string[] words)
 var tasks = new (string prompt, Func<string, Shell, bool> check)[]
 {
     ("Find every TODO comment in ~/project and report how many there are per file.",
-        (a, _) => a.Contains("app.py") && a.Contains("util.py") && Regex.IsMatch(a, @"\b2\b") && Regex.IsMatch(a, @"\b1\b")),
+        (a, _) => a.Contains("deploy.sh") && a.Contains("lib.sh") && Regex.IsMatch(a, @"\b2\b") && Regex.IsMatch(a, @"\b1\b")),
     ("Using ~/data/sales.csv, compute total sales amount per region, sorted by total descending, and save the result to ~/report.txt. Show me the file.",
         (_, sh) => InOrder(Read(sh, "/home/agent/report.txt"), "north", "south", "east") && Read(sh, "/home/agent/report.txt").Contains("220")),
     ("Use the `orders` program on this machine to list the customer names of open orders with a total over 100.",
         (a, _) => a.Contains("Acme") && a.Contains("Umbrella") && !a.Contains("Initech") && !a.Contains("Globex")),
-    ("Write a bash script ~/backup.sh that copies every .py file under ~/project into ~/backup/ (creating it if needed) and prints how many files it copied. Make it executable and run it.",
-        (_, sh) => sh.Fs.IsFile("/home/agent/backup.sh") && sh.Fs.IsFile("/home/agent/backup/app.py") && sh.Fs.IsFile("/home/agent/backup/util.py")),
+    ("Write a bash script ~/backup.sh that copies every .sh file under ~/project into ~/backup/ (creating it if needed) and prints how many files it copied. Make it executable and run it.",
+        (_, sh) => sh.Fs.IsFile("/home/agent/backup.sh") && sh.Fs.IsFile("/home/agent/backup/deploy.sh") && sh.Fs.IsFile("/home/agent/backup/lib.sh")),
     ("How many ERROR lines are in /var/log/app.log, and what's the request number of the last one?",
         (a, _) => Regex.IsMatch(a, @"\b8\b") && a.Contains("35")),
     ("What OS and version is this machine running, who am I, and how much disk space is free?",
@@ -59,9 +59,10 @@ Shell MakeShell()
     var fs = sh.Fs;
     fs.CreateDirectory("/home/agent/project/src", parents: true);
     fs.CreateDirectory("/home/agent/data", parents: true);
-    fs.WriteAllText("/home/agent/project/src/app.py", "import os\n\n# TODO: read config from env\ndef main():\n    print('hi')  # TODO: real output\n");
-    fs.WriteAllText("/home/agent/project/src/util.py", "def add(a, b):\n    return a + b\n\n# TODO: add tests\n");
-    fs.WriteAllText("/home/agent/project/README.md", "# Demo project\n\nRun `python src/app.py`.\n");
+    // a project in the one language this machine has, so nothing invites a hunt for a missing interpreter
+    fs.WriteAllText("/home/agent/project/src/deploy.sh", "#!/bin/bash\nset -e\nsource \"$(dirname \"$0\")/lib.sh\"\n\n# TODO: read target from config\nlog \"deploying\"\necho done  # TODO: real upload\n");
+    fs.WriteAllText("/home/agent/project/src/lib.sh", "log() {\n    echo \"[$(date +%H:%M:%S)] $*\"\n}\n\n# TODO: add tests\n");
+    fs.WriteAllText("/home/agent/project/README.md", "# Deploy scripts\n\nRun `bash src/deploy.sh`.\n");
     fs.WriteAllText("/home/agent/data/sales.csv", "date,region,amount\n2026-01-03,north,120.50\n2026-01-04,south,80\n2026-01-04,north,99.50\n2026-01-05,east,42\n2026-01-06,south,20\n");
     fs.WriteAllText("/var/log/app.log", string.Concat(Enumerable.Range(0, 40).Select(i => $"2026-11-2{i % 4} 10:0{i % 10}:00 {(i % 5 == 0 ? "ERROR" : "INFO")} request {i}\n")));
     fs.SetOwner("/home/agent", "agent", recursive: true);
