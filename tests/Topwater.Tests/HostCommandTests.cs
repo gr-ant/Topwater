@@ -40,7 +40,7 @@ public class HostCommandTests
 
         // path arguments can't reach the host's own files, and output shows virtual paths
         var r = await sh.RunAsync("git diff --no-index /etc/hostname a.txt");
-        Assert.Contains("Could not access '/etc/hostname'", r.Stderr);
+        Assert.Contains("can only use files under /home/agent and /tmp", r.Stderr);
         r = await sh.RunAsync("git -C ../../../../../etc status");
         Assert.NotEqual(0, r.ExitCode);
         Assert.DoesNotContain(git.Root, r.Stdout + r.Stderr);

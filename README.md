@@ -118,6 +118,10 @@ so read them as "it works", not as benchmarks.
 mounted as `tracker`. It found the tools with `tracker --help` and passed 6 / 6 checks in 12 commands, none
 failing. One run, five tools: `examples/McpAgent`.
 
+**A real program through the shell.** With the real [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)
+registered as a host command, the model turned a text file of notes into a Word document with a heading, a
+summary, a table and two sections: 5 / 5 checks in 30 commands. One run: `examples/OfficeAgent`.
+
 **Six everyday tasks, three ways of describing the tool** (two runs each, `examples/Harness`):
 
 | How the tool was described | Tasks solved |
@@ -133,7 +137,9 @@ files. The default description did best, but a two-task gap on twelve runs is no
 
 **A system prompt line helps a little.** Adding "Go straight to the task: run only the commands it needs,
 and do not explore the machine first" took those two tasks from 6 / 8 to 8 / 8 in one batch, but a later run
-with the same line still explored for 21 turns and failed. Expect this model to wander; give it turns to spare.
+with the same line still explored for 21 turns and failed. Removing every Python file from the sample project
+did not help either: 7 of 8 runs still checked for Python, and 5 of 8 passed. Expect this model to wander; give
+it turns to spare.
 
 Every example saves its full transcript under `runs/`, so you can see exactly what the model did.
 
@@ -150,7 +156,8 @@ the real `git` (10 / 10). Those scripts are on the [`python` branch](../../tree/
 - **No Python or network inside the machine.** Agents reach for both. The default tool description tells them
   up front.
 - **PDFs need `pdftotext`** on your machine.
-- **A real host program you register is real.** See the [reference](docs/reference.md#real-host-programs).
+- **A real host program you register is real.** It runs with your process's permissions; path redirection is a
+  convenience, not a sandbox. See the [reference](docs/reference.md#real-host-programs).
 
 ## Development
 

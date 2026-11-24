@@ -31,7 +31,17 @@ public static class ToolCommandExtensions
 
 sealed class ToolGroup(string program, string? description, List<ToolSpec> tools, ToolInvoker invoke)
 {
-    sealed record Param(string Name, string Flag, string Type, string? ItemType, bool Required, JsonElement Schema);
+    /// <param name="Schema">The property as declared (description, default).</param>
+    /// <param name="Shape">The same after following $ref and unwrapping Optional[T] (type, items, enum).</param>
+    sealed record Param(string Name, string Flag, string Type, string? ItemType, bool Required, JsonElement Schema, JsonElement Shape);
+
+    sealed class HelpRequested : Exception;
+
+    static bool Prop(JsonElement e, string name, out JsonElement value)
+    {
+        value = default;
+        return e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out value);
+    }
 
     static string Kebab(string s) => s.Replace('_', '-').Replace('.', '-').Replace('/', '-').Replace(' ', '-');
     static string FirstLine(string? s) => (s ?? "").Trim().Split('\n')[0].Trim();
@@ -51,14 +61,13 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
             return 2;
         }
         var parameters = Params(tool);
-        if (args.Skip(1).Any(a => a is "--help" or "-h"))
+        JsonObject call;
+        try { call = Parse(tool, parameters, args.Skip(1).ToList(), ctx); }
+        catch (HelpRequested)
         {
             ctx.Stdout.Write(ToolHelp(tool, parameters));
             return 0;
         }
-
-        JsonObject call;
-        try { call = Parse(tool, parameters, args.Skip(1).ToList(), ctx); }
         catch (FormatException e)
         {
             ctx.Stderr.WriteLine($"{program} {Kebab(tool.Name)}: {e.Message}");
@@ -90,17 +99,38 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
         if (tool.InputSchema.ValueKind != JsonValueKind.Object || !tool.InputSchema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object)
             return result;
         var required = tool.InputSchema.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.Array
-            ? req.EnumerateArray().Select(r => r.GetString()).ToHashSet() : [];
+            ? req.EnumerateArray().Where(r => r.ValueKind == JsonValueKind.String).Select(r => r.GetString()).ToHashSet() : [];
         foreach (var p in props.EnumerateObject())
         {
-            string type = TypeOf(p.Value);
-            string? item = type == "array" && p.Value.TryGetProperty("items", out var items) ? TypeOf(items) : null;
-            result.Add(new Param(p.Name, "--" + Kebab(p.Name), type, item, required.Contains(p.Name), p.Value));
+            var shape = Resolve(p.Value, tool.InputSchema);
+            string type = TypeOf(shape);
+            string? item = type == "array" && Prop(shape, "items", out var items) ? TypeOf(Resolve(items, tool.InputSchema)) : null;
+            result.Add(new Param(p.Name, "--" + Kebab(p.Name), type, item, required.Contains(p.Name), p.Value, shape));
         }
         return result;
     }
 
-    /// <summary>The JSON Schema type of a property, looking through nullable unions; "" when it is not stated.</summary>
+    /// <summary>Follows a local $ref and unwraps "T or null" (how Pydantic writes Optional[T]) to T's schema.</summary>
+    static JsonElement Resolve(JsonElement schema, JsonElement root, int depth = 0)
+    {
+        if (schema.ValueKind != JsonValueKind.Object || depth > 8) return schema;
+        if (Prop(schema, "$ref", out var r) && r.ValueKind == JsonValueKind.String && r.GetString()!.StartsWith("#/"))
+        {
+            var target = root;
+            foreach (var segment in r.GetString()![2..].Split('/'))
+                if (!Prop(target, segment.Replace("~1", "/").Replace("~0", "~"), out target)) return schema;
+            return Resolve(target, root, depth + 1);
+        }
+        foreach (var key in new[] { "anyOf", "oneOf" })
+            if (Prop(schema, key, out var options) && options.ValueKind == JsonValueKind.Array)
+            {
+                var real = options.EnumerateArray().Select(o => Resolve(o, root, depth + 1)).Where(o => TypeOf(o) != "null").ToList();
+                if (real.Count == 1) return real[0];
+            }
+        return schema;
+    }
+
+    /// <summary>The JSON Schema type of a resolved property; "" when it is not stated or is a union of several types.</summary>
     static string TypeOf(JsonElement schema)
     {
         if (schema.ValueKind != JsonValueKind.Object) return "";
@@ -108,13 +138,13 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
         {
             if (t.ValueKind == JsonValueKind.String) return t.GetString()!;
             if (t.ValueKind == JsonValueKind.Array)
-                return t.EnumerateArray().Select(x => x.GetString()).FirstOrDefault(x => x != "null") ?? "";
+            {
+                // ["string","null"] is a string; ["integer","string"] accepts either, so the value is not type-checked here
+                var real = t.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Where(x => x != "null").Distinct().ToList();
+                return real.Count == 1 ? real[0] : "";
+            }
         }
-        foreach (var key in new[] { "anyOf", "oneOf" })
-            if (schema.TryGetProperty(key, out var options) && options.ValueKind == JsonValueKind.Array)
-                foreach (var o in options.EnumerateArray())
-                    if (TypeOf(o) is { Length: > 0 } and not "null" and var found) return found;
-        return schema.TryGetProperty("enum", out _) ? "string" : "";
+        return schema.TryGetProperty("enum", out var e) && e.ValueKind == JsonValueKind.Array && e.EnumerateArray().All(x => x.ValueKind == JsonValueKind.String) ? "string" : "";
     }
 
     string ToolHelp(ToolSpec tool, List<Param> parameters)
@@ -132,12 +162,12 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
             {
                 var p = parameters[i];
                 var notes = new List<string>();
-                if (p.Schema.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String) notes.Add(d.GetString()!.Trim().ReplaceLineEndings(" "));
+                if ((Prop(p.Schema, "description", out var d) || Prop(p.Shape, "description", out d)) && d.ValueKind == JsonValueKind.String) notes.Add(d.GetString()!.Trim().ReplaceLineEndings(" "));
                 if (p.Required) notes.Add("(required)");
                 if (p.Type == "array") notes.Add("(repeatable)");
-                if (p.Schema.TryGetProperty("enum", out var e) && e.ValueKind == JsonValueKind.Array)
+                if (Prop(p.Shape, "enum", out var e) && e.ValueKind == JsonValueKind.Array)
                     notes.Add("(one of: " + string.Join(", ", e.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : x.GetRawText())) + ")");
-                if (p.Schema.TryGetProperty("default", out var def)) notes.Add($"(default: {(def.ValueKind == JsonValueKind.String ? def.GetString() : def.GetRawText())})");
+                if (Prop(p.Schema, "default", out var def)) notes.Add($"(default: {(def.ValueKind == JsonValueKind.String ? def.GetString() : def.GetRawText())})");
                 sb.Append("  ").Append(left[i].PadRight(width)).Append("  ").Append(string.Join(" ", notes)).Append('\n');
             }
         }
@@ -152,10 +182,13 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
 
     JsonObject Parse(ToolSpec tool, List<Param> parameters, List<string> args, CommandContext ctx)
     {
-        var call = new JsonObject();
+        // --json gives the base object and named options override it, whichever comes first on the command line
+        JsonObject call = new(), fromJson = new();
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
+            // only in option position, so `--title -h` passes "-h" as the title
+            if (arg is "--help" or "-h" && !parameters.Any(x => x.Flag == "--help")) throw new HelpRequested();
             if (!arg.StartsWith("--") || arg.Length == 2)
                 throw new FormatException($"unexpected argument '{arg}'; arguments are passed as --name value");
             string flag = arg, inline = "";
@@ -165,14 +198,14 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
 
             string Next() => hasInline ? inline : ++i < args.Count ? args[i] : throw new FormatException($"option {flag} needs a value");
 
-            if (flag == "--json")
+            if (flag == "--json" && !parameters.Any(x => x.Flag == "--json"))
             {
                 string raw = Next();
                 if (raw == "-") raw = ctx.StdinText;
                 JsonNode? node;
                 try { node = JsonNode.Parse(raw); } catch (JsonException e) { throw new FormatException($"--json is not valid JSON: {e.Message}"); }
                 if (node is not JsonObject obj) throw new FormatException("--json must be a JSON object");
-                foreach (var kv in obj.ToList()) { obj.Remove(kv.Key); call[kv.Key] = kv.Value; }
+                foreach (var kv in obj.ToList()) { obj.Remove(kv.Key); fromJson[kv.Key] = kv.Value; }
                 continue;
             }
 
@@ -190,7 +223,7 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
             {
                 bool value = !negated;
                 // a following true/false is taken as the value, so `--flag false` works as well as `--no-flag`
-                if (hasInline) value = ParseBool(inline, flag);
+                if (hasInline) value = ParseBool(inline, flag) ^ negated;
                 else if (!negated && i + 1 < args.Count && args[i + 1] is "true" or "false") value = args[++i] == "true";
                 call[p.Name] = value;
             }
@@ -206,6 +239,8 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
             else call[p.Name] = Convert(Next(), p.Type, flag);
         }
 
+        foreach (var kv in call.ToList()) { call.Remove(kv.Key); fromJson[kv.Key] = kv.Value; }
+        call = fromJson;
         var missing = parameters.Where(p => p.Required && !call.ContainsKey(p.Name)).Select(p => p.Flag).ToList();
         if (missing.Count > 0) throw new FormatException("missing required option" + (missing.Count > 1 ? "s " : " ") + string.Join(", ", missing));
         return call;
@@ -232,7 +267,7 @@ sealed class ToolGroup(string program, string? description, List<ToolSpec> tools
                 return long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out long l) ? l
                     : throw new FormatException($"option {flag} expects a whole number, got '{raw}'");
             case "number":
-                return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) ? d
+                return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && double.IsFinite(d) ? d
                     : throw new FormatException($"option {flag} expects a number, got '{raw}'");
             case "boolean": return ParseBool(raw, flag);
             case "object":

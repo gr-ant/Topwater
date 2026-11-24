@@ -91,12 +91,15 @@ How arguments map:
 - `boolean` is a flag: `--draft`, `--no-draft`, or `--draft false`.
 - `array` options repeat (`--label a --label b`) or take a JSON array.
 - `object` options take JSON. `--json '{...}'` passes the whole argument object, and `--json -` reads it from
-  stdin; individual options override it.
+  stdin; individual options override it, wherever they appear.
+- `Optional[T]` (`anyOf` with `null`) and local `$ref`s are followed. A property that accepts several types is
+  passed as JSON when it parses as JSON and as text otherwise.
 - A tool error goes to stderr with exit code 1, so `||` and `set -e` work as usual.
 
 `McpMountOptions.Include` hides tools by name, and `Description` sets the text shown in `help`. The calls are
 real and reach the server, so expose only what you would let the agent do. Tools only: resources and prompts
-are not mounted, images come back as a placeholder, and the tool list is read once at mount time.
+are not mounted, images come back as a placeholder, resource links as their URI, and the tool list is read once
+at mount time. A server that times out or dies makes the command fail; it does not end the agent's run.
 
 The same mapping is available without MCP for any tools you can describe with a JSON Schema:
 
@@ -159,13 +162,42 @@ program from your machine as a command:
 using var git = shell.RegisterHostCommand("git");
 ```
 
-Before each call the agent's workspace (its home directory by default) is copied to a private folder on disk;
-the program runs there, and its changes are copied back. `HostCommandOptions` has `Workspace`, `Environment`,
-`Timeout`, `Exclude` and `Launcher` (wrap the command line, for example to run it inside a sandbox).
+Before each call the agent's workspace (its home directory by default) and `/tmp` are copied to a private folder
+on disk; the program runs there, and its changes are copied back.
+
+| Option | Default | What it does |
+|---|---|---|
+| `Workspace` | the agent's home | the folder mirrored to disk and used as the program's `HOME` |
+| `SharedDirectories` | `["/tmp"]` | other folders the program can see |
+| `Environment` | empty | extra variables, e.g. `OFFICECLI_NO_AUTO_RESIDENT=1` |
+| `Timeout` | 120 s | the program is killed and the command exits 124 |
+| `Exclude` | empty | file or folder names left out of the copy in both directions |
+| `MaxOutputBytes` | 1,000,000 | output beyond this is dropped |
+| `RewritePaths` | on | redirect path arguments into the private folder |
+| `Launcher` | none | wrap the command line, for example to run it inside a sandbox |
+
+What the program sees:
+
+- **Paths.** `/home/agent/a.txt`, `--out=/tmp/x`, `src=/tmp/a.md` and `-o/tmp/x` are redirected into the private
+  folder, and `/` is that folder's root. A path in a folder that isn't shared (`/etc/hosts`, `/data/x`) is refused
+  with a message telling the agent to copy the file to its home first. Paths in its output are shown as the
+  agent's paths.
+- **Environment.** The agent's own variables (`export GIT_AUTHOR_NAME=...`), then `PATH` from your process,
+  `HOME`, `USER`, a private `TMPDIR`, and your `Environment` on top. Nothing else from your process is passed.
+- **File modes.** The execute bit travels both ways. Other permission bits and timestamps do not.
+- **Symlinks.** A link the program creates stays on disk for later calls but is not visible in the agent's
+  filesystem, and is never written through.
+- **Exit codes.** The program's own, or 124 on timeout and 126 if it cannot be started.
+
+Programs that keep running in the background do not fit well: the call returns once the main process exits, and
+whatever the helper writes later is not copied back. Turn that behaviour off if the program allows it (OfficeCLI:
+`OFFICECLI_NO_AUTO_RESIDENT=1`). Every call copies the whole workspace, so keep large files out of it or list
+them in `Exclude`.
 
 **This is not sandboxed.** The program is real and runs with your process's permissions. Topwater points
 it at the private folder and redirects path arguments there, which stops casual wandering but is not a security
-boundary. Wrap only tools you would let the agent use directly, and use `Launcher` with a real sandbox
+boundary: a path whose top-level folder exists nowhere (`-o /report.pdf`) is passed through as typed, and the
+program can open any file your process can. Wrap only tools you would let the agent use directly, and use `Launcher` with a real sandbox
 (bubblewrap, firejail, a container) when the stakes call for it.
 
 ## The tool description
@@ -180,8 +212,11 @@ announcing "this is a simulation" (see the README).
 ## Limits and safety
 
 - Nothing the agent runs touches your machine, unless you register a real host program or mount an MCP server.
-- Loops stop after 100,000 iterations (`MaxLoopIterations`).
-- Tool output is cut at 30,000 characters with a note saying how much was dropped.
+- Loops stop after 100,000 iterations (`MaxLoopIterations`), and one tool call gets ten times that in total.
+  Hitting a limit ends the whole tool call: runaway loops, functions or scripts that call themselves, `sed`
+  branches and `jq` generators that never finish, and regular expressions that take more than 5 seconds.
+- Tool output is cut at 30,000 characters with a note saying how much was dropped. Error output is cut
+  separately, so the error message and exit code are always shown.
 - `set -e` and `pipefail` reset after every tool call, so one stray `set -e` can't affect later calls.
 - A command that throws becomes an error message and exit code, not a crash.
 - One shell is one session. Use a separate `Shell` per conversation; a shell is not safe to share between

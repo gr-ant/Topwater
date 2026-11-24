@@ -80,6 +80,7 @@ public sealed class HostCommand : IDisposable
 
     string Real(string vfsPath) => Path.Combine(Root, vfsPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
     bool Skip(string name) => _o.Exclude.Contains(name);
+    static bool IsLink(string path) => new FileInfo(path).LinkTarget != null;
     static string Rel(string dir, string name) => dir.Length == 0 ? name : dir + "/" + name;
 
     // ---------- mirror ----------
@@ -114,12 +115,18 @@ public sealed class HostCommand : IDisposable
                 var name = Path.GetFileName(d);
                 if (Skip(name)) continue;
                 var crel = Rel(rel, name);
-                if (!dirs.Contains(crel)) Directory.Delete(d, recursive: true); else Prune(d, crel);
+                // a link the program made (git checkout, npm) stays, unless the agent now has a real entry of that
+                // name. It is never followed: writing or pruning through it would touch files outside the mirror.
+                if (IsLink(d)) { if (dirs.Contains(crel) || files.ContainsKey(crel)) Directory.Delete(d); }
+                else if (!dirs.Contains(crel)) Directory.Delete(d, recursive: true);
+                else Prune(d, crel);
             }
             foreach (var f in Directory.GetFiles(real))
             {
                 var name = Path.GetFileName(f);
-                if (!Skip(name) && !files.ContainsKey(Rel(rel, name))) File.Delete(f);
+                if (Skip(name)) continue;
+                var crel = Rel(rel, name);
+                if (IsLink(f) ? files.ContainsKey(crel) || dirs.Contains(crel) : !files.ContainsKey(crel) || dirs.Contains(crel)) File.Delete(f);
             }
         }
         Prune(root, "");
@@ -128,6 +135,9 @@ public sealed class HostCommand : IDisposable
         {
             var target = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(target) || !File.ReadAllBytes(target).AsSpan().SequenceEqual(data)) File.WriteAllBytes(target, data);
+            // scripts the agent made executable must be executable for the program too
+            if (!OperatingSystem.IsWindows() && (fs.Stat(VirtualFileSystem.Normalize(ws, rel)).Mode & 0b001_000_000) != 0)
+                File.SetUnixFileMode(target, File.GetUnixFileMode(target) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         }
         return files;
     }
@@ -153,7 +163,13 @@ public sealed class HostCommand : IDisposable
                 // sockets, pipes and files a still-running helper holds open can't be copied; leave them out
                 try { data = File.ReadAllBytes(f); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
                 if (before.TryGetValue(crel, out var old) && old.AsSpan().SequenceEqual(data)) continue;
-                try { WriteFile(fs, VirtualFileSystem.Normalize(vdir, name), data); }
+                try
+                {
+                    var vfile = VirtualFileSystem.Normalize(vdir, name);
+                    WriteFile(fs, vfile, data);
+                    if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(f) & UnixFileMode.UserExecute) != 0)
+                        fs.Chmod(vfile, fs.Stat(vfile).Mode | 0b001_001_001);
+                }
                 catch (ShellException e) { err.WriteLine($"{_name}: {e.Message}"); }
             }
             foreach (var d in Directory.GetDirectories(real))
@@ -207,13 +223,24 @@ public sealed class HostCommand : IDisposable
         string prefix = "", value = arg;
         // --out=/path and key=/path (e.g. `--prop src=/tmp/a.md`) carry a path after the first '='
         if (arg.IndexOf('=') is var eq and > 0 && !arg[..eq].Contains('/')) { prefix = arg[..(eq + 1)]; value = arg[(eq + 1)..]; }
-        if (value.StartsWith('/') && value != "/")
+        // -o/path and -C/path: a short option with the path attached
+        if (prefix.Length == 0 && arg.Length > 3 && arg[0] == '-' && arg[1] != '-' && arg[2] == '/') { prefix = arg[..2]; value = arg[2..]; }
+        if (value == "/") return prefix + Root;
+        if (value.StartsWith('/'))
         {
             var top = "/" + value.Trim('/').Split('/')[0];
             // a real location (in the simulation or on the host) is redirected; other things that merely start
-            // with "/" (XPath-like selectors such as /slide[1], regexes) are left alone
+            // with "/" (XPath-like selectors such as /slide[1], regexes) are left alone.
+            // shortcut: a path whose top folder exists nowhere (-o /report.pdf) is therefore passed through as typed;
+            // use Launcher with a real sandbox if the program must not be able to write outside the mirror.
             if (_shell.Fs.Exists(top) || Directory.Exists(top) || File.Exists(top))
-                return prefix + Real(VirtualFileSystem.Normalize("/", value));
+            {
+                var path = VirtualFileSystem.Normalize("/", value);
+                // only the shared folders are copied to disk; say so instead of running on a file that isn't there
+                if (_shell.Fs.Exists(top) && !_shared.Any(s => path == s || path.StartsWith(s.TrimEnd('/') + "/") || s.StartsWith(path.TrimEnd('/') + "/")))
+                    throw new ShellException($"{value}: {_name} can only use files under {string.Join(" and ", _shared)}; copy it there first");
+                return prefix + Real(path);
+            }
         }
         else if (value.Split('/').Contains(".."))
             return prefix + Real(_shell.ResolvePath(value));
@@ -242,6 +269,9 @@ public sealed class HostCommand : IDisposable
         };
         foreach (var a in argv.Skip(1)) psi.ArgumentList.Add(a);
         psi.Environment.Clear();
+        // the agent's own variables (GIT_AUTHOR_NAME=x git commit) come first; the fixed ones below win
+        foreach (var (k, v) in _shell.Environment) psi.Environment[k] = v;
+        foreach (var k in new[] { "PWD", "OLDPWD", "SHELL" }) psi.Environment.Remove(k);
         psi.Environment["PATH"] = System.Environment.GetEnvironmentVariable("PATH") ?? "/usr/bin:/bin";
         psi.Environment["HOME"] = home;
         psi.Environment["LANG"] = "C.UTF-8";
@@ -262,8 +292,9 @@ public sealed class HostCommand : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
             cts.CancelAfter(_o.Timeout);
-            var stdout = ReadCappedAsync(proc.StandardOutput.BaseStream);
-            var stderr = ReadCappedAsync(proc.StandardError.BaseStream);
+            using var readCts = new CancellationTokenSource();
+            MemoryStream outBuf = new(), errBuf = new();
+            var readers = Task.WhenAll(PumpAsync(proc.StandardOutput.BaseStream, outBuf, readCts.Token), PumpAsync(proc.StandardError.BaseStream, errBuf, readCts.Token));
             try
             {
                 var input = Encoding.UTF8.GetBytes(ctx.StdinText);
@@ -279,7 +310,14 @@ public sealed class HostCommand : IDisposable
                 try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
                 timedOut = true;
             }
-            var (outText, errText) = (Clean(await stdout), Clean(await stderr));
+            // a child the program left running may hold the pipes open for good; take what has arrived and move on
+            if (await Task.WhenAny(readers, Task.Delay(2000)) != readers)
+            {
+                readCts.Cancel();
+                await Task.WhenAny(readers, Task.Delay(500));
+            }
+            byte[] Snapshot(MemoryStream ms) { lock (ms) return ms.ToArray(); }
+            var (outText, errText) = (Clean(Snapshot(outBuf)), Clean(Snapshot(errBuf)));
             foreach (var ws in _shared) Import(ws, before[ws], ctx.Stderr);
             ctx.CancellationToken.ThrowIfCancellationRequested();
             ctx.Stdout.Write(outText);
@@ -293,14 +331,17 @@ public sealed class HostCommand : IDisposable
         }
     }
 
-    async Task<byte[]> ReadCappedAsync(Stream stream)
+    async Task PumpAsync(Stream stream, MemoryStream into, CancellationToken ct)
     {
-        using var ms = new MemoryStream();
         var buffer = new byte[16384];
-        int n;
-        while ((n = await stream.ReadAsync(buffer)) > 0)
-            if (ms.Length < _o.MaxOutputBytes) ms.Write(buffer, 0, (int)Math.Min(n, _o.MaxOutputBytes - ms.Length));
-        return ms.ToArray();
+        try
+        {
+            int n;
+            while ((n = await stream.ReadAsync(buffer, ct)) > 0)
+                lock (into)
+                    if (into.Length < _o.MaxOutputBytes) into.Write(buffer, 0, (int)Math.Min(n, _o.MaxOutputBytes - into.Length));
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException) { }
     }
 
     // show virtual paths, not mirror paths

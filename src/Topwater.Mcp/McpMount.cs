@@ -63,6 +63,9 @@ public static class McpExtensions
             CallToolResult result;
             try { result = await client.CallToolAsync(tool, arguments, cancellationToken: token); }
             catch (ModelContextProtocol.McpException e) { return new ToolResult(e.Message, IsError: true); }
+            // a server that timed out or died is a failed command, not a reason to end the agent's run
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { return new ToolResult("the server did not answer in time", IsError: true); }
+            catch (Exception e) when (e is IOException or ObjectDisposedException) { return new ToolResult($"the server is not reachable: {e.Message}", IsError: true); }
             return new ToolResult(Render(result), result.IsError == true);
         }, description);
         return new McpMount(client, tools.Select(t => t.Name).ToList(), ownsClient);
@@ -77,6 +80,8 @@ public static class McpExtensions
                 TextContentBlock t => t.Text,
                 EmbeddedResourceBlock { Resource: TextResourceContents r } => r.Text,
                 ImageContentBlock i => $"[image, {i.MimeType}]",
+                ResourceLinkBlock l => $"[resource {l.Uri}{(l.MimeType is { } mime ? ", " + mime : "")}]",
+                EmbeddedResourceBlock { Resource: { } other } => $"[resource {other.Uri}{(other.MimeType is { } mime ? ", " + mime : "")}]",
                 _ => $"[{block.Type} content]",
             });
         if (parts.Count == 0 && result.StructuredContent is { } structured) parts.Add(structured.ToString() ?? "");
