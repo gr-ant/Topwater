@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Topwater\Topwater.csproj" />
+    <ProjectReference Include="..\..\src\Topwater.Mcp\Topwater.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

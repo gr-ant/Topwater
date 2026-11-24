@@ -1,10 +1,11 @@
 # Topwater reference
 
-Everything the simulated machine supports, in one place. The C# and Python libraries behave the same.
+Everything the simulated machine supports, in one place.
 
 - [Shell language](#shell-language)
 - [Built-in programs](#built-in-programs)
 - [Your own commands](#your-own-commands)
+- [MCP servers](#mcp-servers)
 - [Files and permissions](#files-and-permissions)
 - [Documents](#documents)
 - [Real host programs](#real-host-programs)
@@ -48,28 +49,6 @@ construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_
 
 ## Your own commands
 
-**Python**
-
-```python
-from typing import Annotated
-from topwater import Shell, command, CommandContext
-
-class Tools:
-    @command("orders", description="List orders")
-    async def orders(self, status: Annotated[str | None, "Filter by status"] = None, limit: int = 20):
-        return await db.fetch_orders(status, limit)      # lists, dicts and dataclasses print as JSON
-
-    @command("count-lines")
-    def count_lines(self, ctx: CommandContext) -> int:   # ctx gives stdin, stdout, the filesystem
-        ctx.print(len(ctx.stdin.splitlines()))
-        return 0                                         # an int is the exit code
-
-shell = Shell().register(Tools())
-shell.register_command("deploy", handler)                # or a plain handler(ctx)
-```
-
-**C#**
-
 ```csharp
 public class Tools
 {
@@ -86,13 +65,52 @@ lists collect the remaining arguments. `--help` is generated. Return a string (p
 nothing, or any other value (printed as JSON). Errors you raise become `command: message` on stderr with a
 non-zero exit code; they never crash the agent loop.
 
+## MCP servers
+
+`Topwater.Mcp` mounts an MCP server as one program with a subcommand per tool. It uses the official
+`ModelContextProtocol` SDK; the core `Topwater` package has no dependencies.
+
+```csharp
+using Topwater.Mcp;
+
+await using var mount = await shell.MountMcpAsync("github", client);                       // an McpClient you created
+await using var files = await shell.MountMcpAsync("files", "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/data"]);
+```
+
+| The agent types | What happens |
+|---|---|
+| `github` or `github --help` | lists the tools with the first line of each description |
+| `github list-issues --help` | usage, description and options built from the tool's JSON Schema |
+| `github list-issues --repo acme/api --limit 5` | calls the tool; the text result goes to stdout |
+
+How arguments map:
+
+- Property `include_drafts` becomes `--include-drafts` (the original spelling also works). Tool names work
+  both ways too: `list-issues` and `list_issues`.
+- `integer` and `number` are checked before the call; a bad value is a usage error (exit 2), not a tool call.
+- `boolean` is a flag: `--draft`, `--no-draft`, or `--draft false`.
+- `array` options repeat (`--label a --label b`) or take a JSON array.
+- `object` options take JSON. `--json '{...}'` passes the whole argument object, and `--json -` reads it from
+  stdin; individual options override it.
+- A tool error goes to stderr with exit code 1, so `||` and `set -e` work as usual.
+
+`McpMountOptions.Include` hides tools by name, and `Description` sets the text shown in `help`. The calls are
+real and reach the server, so expose only what you would let the agent do. Tools only: resources and prompts
+are not mounted, images come back as a placeholder, and the tool list is read once at mount time.
+
+The same mapping is available without MCP for any tools you can describe with a JSON Schema:
+
+```csharp
+shell.RegisterTools("crm", specs, async (tool, arguments, ct) => new ToolResult(await Call(tool, arguments)));
+```
+
 ## Files and permissions
 
-The filesystem is in memory. Put data anywhere through `shell.fs` (Python) or `shell.Fs` (C#):
+The filesystem is in memory. Put data anywhere through `shell.Fs`:
 
-```python
-shell.fs.write_text("/home/agent/data/config.json", text)
-shell.fs.write_bytes("/home/agent/logo.png", data)
+```csharp
+shell.Fs.WriteAllText("/home/agent/data/config.json", text);
+shell.Fs.WriteAllBytes("/home/agent/logo.png", data);
 ```
 
 The agent is a regular user called `agent`, not root:
@@ -112,16 +130,8 @@ command (yours included), and `/dev/null`.
 `to-markdown FILE...` turns Word, Excel, PowerPoint, PDF, HTML, CSV and JSON files into Markdown, so the agent
 can search them with `grep` like any text. From your app:
 
-```python
-shell.fs.add_document("/home/agent/docs/policy.docx", "/real/path/policy.docx")   # or bytes
-shell.fs.add_document("/home/agent/docs/policy.docx", data, also_markdown=True)   # also writes policy.docx.md
-
-from topwater.convert import to_markdown
-text = to_markdown(data, "report.xlsx")
-```
-
 ```csharp
-shell.Fs.AddDocument("/home/agent/docs/policy.docx", "/real/path/policy.docx");
+shell.Fs.AddDocument("/home/agent/docs/policy.docx", "/real/path/policy.docx");   // or bytes; alsoMarkdown: true adds policy.docx.md
 string text = MarkdownConverter.ToMarkdown(bytes, "report.xlsx");
 ```
 
@@ -142,28 +152,22 @@ out as serial numbers. Only files are byte-exact; data sent through a pipe is tr
 Some tools are too big to re-implement: git, OfficeCLI, ffmpeg, your own binaries. You can expose a real
 program from your machine as a command:
 
-```python
-from topwater.host import register_host_command
-register_host_command(shell, "git", env={"GIT_AUTHOR_NAME": "Bot", "GIT_AUTHOR_EMAIL": "bot@example.com"})
-```
-
 ```csharp
 using var git = shell.RegisterHostCommand("git");
 ```
 
 Before each call the agent's workspace (its home directory by default) is copied to a private folder on disk;
-the program runs there, and its changes are copied back. Options: `workspace`, `env`, `timeout`, `exclude`,
-and `launcher` (wrap the command line, for example to run it inside a sandbox).
+the program runs there, and its changes are copied back. `HostCommandOptions` has `Workspace`, `Environment`,
+`Timeout`, `Exclude` and `Launcher` (wrap the command line, for example to run it inside a sandbox).
 
 **This is not sandboxed.** The program is real and runs with your process's permissions. Topwater points
 it at the private folder and redirects path arguments there, which stops casual wandering but is not a security
-boundary. Wrap only tools you would let the agent use directly, and use `launcher` with a real sandbox
+boundary. Wrap only tools you would let the agent use directly, and use `Launcher` with a real sandbox
 (bubblewrap, firejail, a container) when the stakes call for it.
 
 ## The tool description
 
-Give the model one tool. In Python: `topwater.TOOL_NAME`, `TOOL_DESCRIPTION`, `TOOL_INPUT_SCHEMA`, and
-`await topwater.execute_tool(shell, command)`. In C#: `BashTool.Name`, `BashTool.Description`,
+Give the model one tool: `BashTool.Name`, `BashTool.Description`,
 `BashTool.InputSchemaJson` and `BashTool.ExecuteAsync(shell, command)`.
 
 The default description tells the model the truth: it is in a sandboxed shell, Python, git and the network are
@@ -172,8 +176,8 @@ announcing "this is a simulation" (see the README).
 
 ## Limits and safety
 
-- Nothing the agent runs touches your machine, unless you register a real host program.
-- Loops stop after 100,000 iterations (`max_loop_iterations` / `MaxLoopIterations`).
+- Nothing the agent runs touches your machine, unless you register a real host program or mount an MCP server.
+- Loops stop after 100,000 iterations (`MaxLoopIterations`).
 - Tool output is cut at 30,000 characters with a note saying how much was dropped.
 - `set -e` and `pipefail` reset after every tool call, so one stray `set -e` can't affect later calls.
 - A command that throws becomes an error message and exit code, not a crash.

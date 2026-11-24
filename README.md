@@ -5,169 +5,142 @@
   </picture>
 </p>
 
-<h3 align="center">A simulated Linux shell for LLM agents</h3>
+<h3 align="center">A simulated Linux shell for LLM agents, in C#</h3>
 
 <p align="center">
-  Your app's functions become command-line programs in an in-memory Linux machine.<br>
-  The model gets one tool, <code>bash</code>, and uses them with pipes, files and <code>--help</code>.
+  Your methods and your MCP servers become command-line programs in an in-memory Linux machine.<br>
+  The model gets one tool, <code>bash</code>, and finds the rest with <code>--help</code>.
 </p>
 
 <p align="center">
-  <b>Python</b> and <b>C#</b> · runs inside your process · no containers · no dependencies
+  <b>.NET 8</b> · runs inside your process · no containers
 </p>
 
 ---
 
 ```console
-agent@topwater:~$ orders --status open | jq -r '.[].customer'
-Acme Corp
-Umbrella
-agent@topwater:~$ to-markdown policies/travel.docx | grep "Tier 1"
-| Tier 1 | London, New York, Tokyo, Zurich | 95 |
+agent@topwater:~$ github --help
+Usage: github TOOL [--option value]...
+
+Tools:
+  create-issue   Create a new issue in a repository
+  list-issues    List issues in a repository
+  ...
+agent@topwater:~$ github list-issues --repo acme/api --state open | jq -r '.[].title' | head -3
+Timeout on large uploads
+Add retry to webhook sender
+Docs: fix auth example
 agent@topwater:~$ sudo rm -rf /
 agent is not in the sudoers file.
 ```
 
 ## Why
 
-Every tool you hand a model is something new it has to learn from a description. The shell is different:
-models have seen millions of terminal sessions, and they are very good at `grep`, pipes and `--help`.
+Every tool definition you hand a model costs context, and a few MCP servers can add up to hundreds of them.
+The shell is the one interface models already know well: they are good at `grep`, pipes and `--help`.
 
-Topwater puts your tools where the model is already fluent:
-
-- **One tool instead of twenty.** Your functions become programs. The model combines them with pipes, loops and
-  files instead of juggling JSON calls.
-- **A believable machine.** Files, permissions, about 100 standard commands, even `/etc/os-release`. The model
-  explores it the way it would explore any server.
+- **One tool instead of hundreds.** The model sees `bash`. It lists programs with `help` and reads a tool's
+  options only when it needs that tool.
+- **Tools compose.** Output from one tool pipes into `jq`, a file, or the next tool, without a round trip
+  through the model.
 - **No real shell.** Commands are interpreted inside your process, and the agent's files live in memory.
 
 ## Quick start
 
-**Python** (3.10+)
-
-```bash
-pip install ./python
-```
-
-```python
-import topwater
-from topwater import Shell, command
-
-class Tools:
-    @command("orders", description="List orders")
-    def orders(self, status: str | None = None, limit: int = 20):
-        return db.orders(status, limit)              # returned objects print as JSON
-
-shell = Shell().register(Tools())
-shell.fs.write_text("/home/agent/notes.txt", "hi")   # give the agent some files
-
-# Hand the model one tool...
-tool = {"name": topwater.TOOL_NAME, "description": topwater.TOOL_DESCRIPTION, "input_schema": topwater.TOOL_INPUT_SCHEMA}
-
-# ...and run whatever it asks for.
-output = await topwater.execute_tool(shell, 'orders --status open | jq length')
-```
-
-<details>
-<summary><b>C#</b> (.NET 8)</summary>
+Add a project reference to `src/Topwater/Topwater.csproj` (and `src/Topwater.Mcp/Topwater.Mcp.csproj` for MCP).
 
 ```csharp
 using Topwater;
 
+var shell = new Shell();
+shell.Fs.WriteAllText("/home/agent/notes.txt", "hi");     // give the agent some files
+
+// Hand the model one tool: BashTool.Name, BashTool.Description, BashTool.InputSchemaJson
+// ...and run whatever it asks for.
+string output = await BashTool.ExecuteAsync(shell, "grep -c hi notes.txt");
+```
+
+### Mount an MCP server
+
+```csharp
+using Topwater.Mcp;
+
+// a local server over stdio
+await using var fs = await shell.MountMcpAsync("files", "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/data"]);
+
+// or any McpClient you already have (HTTP, auth, your own transport)
+await using var gh = await shell.MountMcpAsync("github", client, new McpMountOptions { Include = name => !name.StartsWith("delete") });
+```
+
+Each server becomes one program. `github` lists its tools, `github list-issues --help` shows the options
+(built from the tool's JSON Schema), and `github list-issues --repo acme/api` calls it. Nothing about the
+server's tools is sent to the model up front.
+
+### Turn your own methods into commands
+
+```csharp
 public class Tools
 {
     [Command("orders", Description = "List orders")]
-    public List<Order> Orders(string? status = null, int limit = 20) => Db.Orders(status, limit);
+    public List<Order> Orders(string? status = null, int limit = 20) => Db.Orders(status, limit);   // prints as JSON
 }
 
-var shell = new Shell().Register(new Tools());
-shell.Fs.WriteAllText("/home/agent/notes.txt", "hi");
-
-// Tool definition: BashTool.Name, BashTool.Description, BashTool.InputSchemaJson
-string output = await BashTool.ExecuteAsync(shell, "orders --status open | jq length");
+shell.Register(new Tools());      // orders --status open | jq length
 ```
 
-Add a project reference to `src/Topwater/Topwater.csproj`.
-
-</details>
-
-`orders --help` is written for you, and the agent finds your commands with `help`.
-
-## Web terminal
+## Try it
 
 ```bash
-cd python && PYTHONPATH=src python -m topwater.web --demo      # open http://127.0.0.1:8000
+dotnet run --project examples/McpShell                                   # a terminal on the simulated machine
+dotnet run --project examples/McpShell -- everything npx -y @modelcontextprotocol/server-everything
 ```
 
-A small web terminal for typing commands into the same machine your agent gets.
-
-<p align="center"><img alt="Topwater web terminal" src="assets/screenshots/web-terminal.png" width="720"></p>
-
-## Examples
-
-Three examples, each run end to end by a real model (Gemini Flash) and checked automatically.
-
-| | What the agent did | Result |
-|---|---|---|
-| **[Answer from your documents](python/examples/usecase_document_helpdesk.py)** | Searched a Word policy, an Excel sheet, a web page and a 57-page PDF with `to-markdown`, then answered five employee questions with sources | 6 / 6 checks |
-| **[Analyse your database](python/examples/usecase_sql_analyst.py)** | Explored a SQLite database through a read-only `sqlite3`, wrote a revenue report to CSV, answered two follow-ups | 7 / 7 checks |
-| **[Drive a real program](python/examples/usecase_real_cli.py)** | Cut a release with the real `git`: branch, version bump, changelog, commit, tag | 10 / 10 checks |
-
-The third one uses a bridge that exposes any real program on your machine as a command
-(git, [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI), ffmpeg, your own binaries) while the agent keeps
-working on its virtual files. It is one line, `register_host_command(shell, "git")`, and it comes with a
-[warning worth reading](docs/reference.md#real-host-programs).
+The second form mounts an MCP server as a command, so you can type what an agent would.
 
 ## Features
 
+- **MCP servers as programs.** Tools become subcommands with generated `--help`, typed options and exit codes.
 - **A real shell language.** Pipes, redirects, loops, functions, heredocs, `$(...)`, `set -e`, scripts.
 - **About 100 standard commands.** `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff`, `xargs` and friends.
-- **Document reading.** Word, Excel, PowerPoint, PDF and HTML become searchable Markdown.
+- **Document reading.** Word, Excel, PowerPoint, PDF and HTML become searchable Markdown with `to-markdown`.
 - **A regular user account.** The agent owns its home folder. System files are read-only and `sudo` says no.
-- **Guard rails.** Runaway loops stop, long output is trimmed, and a crashing tool returns an error instead of
+- **Guard rails.** Runaway loops stop, long output is trimmed, and a failing tool returns an error instead of
   taking down your agent.
 
 The full list is in the [reference](docs/reference.md).
 
 ## Test results
 
-We gave Gemini Flash six everyday tasks with nothing but the `bash` tool, and tried three ways of describing
-the machine to it:
+The shell has been run end to end by a real model (Gemini Flash) on three tasks: answering questions from
+Word, Excel and HTML documents (6 / 6 checks), analysing a SQLite database (7 / 7), and cutting a release
+with the real `git` (10 / 10). Those runs used the Python version of the same shell, which now lives on the
+[`python` branch](../../tree/python) together with the scripts.
 
-| How the tool was described | Tasks solved | Wasted commands per task |
-|---|---|---|
-| "An ordinary Linux machine" | 9 / 12 | 2.9 |
-| **"A sandboxed shell. No Python, network or git." (the default)** | **11 / 12** | **1.7** |
-| "A simulated environment" | 9 / 12 | 2.8 |
+In the same setup, telling the model plainly that it is in a sandboxed shell without Python, network or git
+solved more tasks (11 of 12) than pretending to be an ordinary machine or calling it a simulation (9 of 12 each).
+That wording is the default tool description.
 
-Being honest about the limits worked best. Pretending to be a normal machine sent the model looking for Python
-and git, and it gave no benefit to tell it the machine was fake.
-
-Small details matter more than you would expect. In one run the model stopped trusting the machine because a
-database file was 16 bytes long. In another it spent its turns re-running `chmod` because `ls -l` did not
-change. Both are fixed, and each problem a real model found in the shell is now a test.
-
-Run it yourself: `python/examples/gemini_harness.py`.
+The MCP mount is covered by automated tests against an in-process MCP server. It has not yet been run by a
+model end to end.
 
 ## Limitations
 
-- **Python and C# behave the same**, and share the same test cases. The web terminal and the examples are
-  Python only.
-- **Not on PyPI or NuGet yet.** Install from this repository.
+- **Not on NuGet yet.** Reference the projects from this repository.
+- **MCP calls are real.** The shell is simulated; the servers you mount are not. Use `Include` to expose only
+  the tools you want the agent to have.
+- **MCP tools only.** Resources and prompts are not exposed, and the tool list is read once when mounting.
 - **No Python or network inside the machine.** Agents reach for both. The default tool description tells them
   up front.
-- **PDFs need `pdftotext`** on your machine. Everything else has no dependencies.
-- **A real program you register is real.** The simulation does not contain it. See the
-  [reference](docs/reference.md#real-host-programs).
+- **PDFs need `pdftotext`** on your machine.
+- **A real host program you register is real.** See the [reference](docs/reference.md#real-host-programs).
 
 ## Development
 
 ```bash
-dotnet test                                           # C#
-cd python && python -m unittest discover -s tests     # Python
+dotnet test
 ```
 
-The two versions do not share code. A behaviour change goes into both, with a test in both.
+The earlier Python port is on the [`python` branch](../../tree/python) and is not kept in step with `main`.
 
 ## License
 
