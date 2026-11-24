@@ -122,7 +122,7 @@ internal static partial class Builtins
             foreach (var n in args.Skip(1))
             {
                 if (ctx.Shell.Aliases.TryGetValue(n, out var al)) ctx.Stdout.WriteLine($"alias {n}='{al}'");
-                else if (ctx.Shell.Functions.ContainsKey(n)) ctx.Stdout.WriteLine(n);
+                else if (ctx.Shell.Functions.ContainsKey(n) || IsShellBuiltin(ctx.Shell, n)) ctx.Stdout.WriteLine(n);
                 else if (ctx.Shell.Commands.ContainsKey(n)) ctx.Stdout.WriteLine($"/usr/bin/{n}");
                 else code = 1;
             }
@@ -406,7 +406,21 @@ internal static partial class Builtins
             char D(int i) => delims[i % delims.Length];
             string Join(IList<string> cells) { var sb = new StringBuilder(); for (int i = 0; i < cells.Count; i++) { if (i > 0 && D(i - 1) != '\0') sb.Append(D(i - 1)); sb.Append(cells[i]); } return sb.ToString(); }
             int code = 0;
-            var columns = Inputs(ctx, a.Positional, () => code = 1).Select(i => SplitLines(i.Text)).ToList();
+            List<List<string>> columns;
+            int dashes = a.Positional.Count(f => f == "-");
+            if (dashes > 1 && !a.Has('s'))
+            {
+                // several "-" operands take turns reading lines from stdin (seq 6 | paste - - -)
+                var stdinLines = SplitLines(ctx.StdinText);
+                columns = [];
+                int k = 0;
+                foreach (var f in a.Positional)
+                {
+                    if (f == "-") { int start = k++; columns.Add(stdinLines.Where((_, idx) => idx % dashes == start).ToList()); }
+                    else columns.AddRange(Inputs(ctx, [f], () => code = 1).Select(i => SplitLines(i.Text)));
+                }
+            }
+            else columns = Inputs(ctx, a.Positional, () => code = 1).Select(i => SplitLines(i.Text)).ToList();
             if (a.Has('s')) foreach (var col in columns) ctx.Stdout.WriteLine(Join(col));
             else
             {
@@ -481,6 +495,7 @@ internal static partial class Builtins
             var nums = new List<string>();
             string sep = "\n";
             bool equalWidth = false;
+            string? fmt = null;
             for (int i = 0; i < args.Count; i++)
             {
                 var x = args[i];
@@ -489,6 +504,9 @@ internal static partial class Builtins
                 else if (x == "-s") sep = i + 1 < args.Count ? args[++i] : throw new ShellException("option requires an argument -- 's'");
                 else if (x.StartsWith("-s")) sep = x[2..];
                 else if (x.StartsWith("--separator=")) sep = x[12..];
+                else if (x is "-f" or "--format") fmt = i + 1 < args.Count ? args[++i] : throw new ShellException("option requires an argument -- 'f'");
+                else if (x.StartsWith("-f")) fmt = x[2..];
+                else if (x.StartsWith("--format=")) fmt = x[9..];
                 else throw new ShellException($"invalid option -- '{x.TrimStart('-')}'");
             }
             if (nums.Count is 0 or > 3) throw new ShellException(nums.Count == 0 ? "missing operand" : $"extra operand '{nums[3]}'");
@@ -497,9 +515,11 @@ internal static partial class Builtins
             if (step == 0) throw new ShellException("invalid Zero increment value: '0'");
             int decimals = nums.Max(x => x.Contains('.') ? x.Length - x.IndexOf('.') - 1 : 0);
             var items = new List<string>();
-            for (double x = first; step > 0 ? x <= last + 1e-9 : x >= last - 1e-9; x += step)
+            for (long k = 0; ; k++)
             {
-                items.Add(x.ToString("F" + decimals, CultureInfo.InvariantCulture));
+                double x = first + k * step; // not a running sum, so 0.1 steps don't drift
+                if (!(step > 0 ? x <= last + 1e-9 : x >= last - 1e-9)) break;
+                items.Add(fmt != null ? Printf.Format(fmt, [x.ToString("R", CultureInfo.InvariantCulture)]) : x.ToString("F" + decimals, CultureInfo.InvariantCulture));
                 if (items.Count > 1_000_000) throw new ShellException("too many numbers");
             }
             if (equalWidth && items.Count > 0) { int w = items.Max(s => s.Length); items = items.Select(s => s.PadLeft(w, '0')).ToList(); }

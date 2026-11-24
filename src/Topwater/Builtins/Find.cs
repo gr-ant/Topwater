@@ -6,13 +6,14 @@ namespace Topwater;
 /// <summary>find with real expressions: ( ) ! -not -a -o, tests, and actions (-print -print0 -exec -delete).</summary>
 internal sealed class Find
 {
-    sealed record Entry(string Abs, string Name, string Display);
+    sealed record Entry(string Abs, string Name, string Display, int Depth, string Start);
+    sealed class QuitSignal : Exception;
     delegate Task<bool> Pred(Entry e);
 
     readonly CommandContext _ctx;
     List<string> _args = [];
     int _p, _maxDepth = int.MaxValue, _minDepth;
-    bool _hasAction;
+    bool _hasAction, _prune;
     readonly List<string> _deletes = [];
     readonly List<(List<string> Cmd, List<string> Paths)> _batches = [];
 
@@ -29,23 +30,28 @@ internal sealed class Find
         if (_p < _args.Count) throw new ShellException($"unexpected `{_args[_p]}'");
 
         int code = 0;
-        async Task Walk(string abs, string display, int depth)
+        async Task Walk(string abs, string display, int depth, string start)
         {
-            if (depth >= _minDepth && await expr(new Entry(abs, VirtualFileSystem.GetName(abs), display)) && !_hasAction)
+            _prune = false;
+            if (depth >= _minDepth && await expr(new Entry(abs, VirtualFileSystem.GetName(abs), display, depth, start)) && !_hasAction)
                 _ctx.Stdout.WriteLine(display);
-            if (depth >= _maxDepth || !_ctx.Fs.IsDirectory(abs)) return;
+            if (_prune || depth >= _maxDepth || !_ctx.Fs.IsDirectory(abs)) return;
             IReadOnlyList<string> names;
             try { names = _ctx.Fs.List(abs); }
             catch (ShellException) { _ctx.Stderr.WriteLine($"find: '{display}': Permission denied"); code = 1; return; }
             foreach (var name in names)
-                await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1);
+                await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1, start);
         }
-        foreach (var s in starts)
+        try
         {
-            var abs = _ctx.ResolvePath(s);
-            if (!_ctx.Fs.Exists(abs)) { _ctx.Stderr.WriteLine($"find: '{s}': No such file or directory"); code = 1; continue; }
-            await Walk(abs, s, 0);
+            foreach (var s in starts)
+            {
+                var abs = _ctx.ResolvePath(s);
+                if (!_ctx.Fs.Exists(abs)) { _ctx.Stderr.WriteLine($"find: '{s}': No such file or directory"); code = 1; continue; }
+                await Walk(abs, s, 0, s);
+            }
         }
+        catch (QuitSignal) { }
         foreach (var (cmd, paths) in _batches)
             if (paths.Count > 0 && await _ctx.InvokeAsync(cmd.SelectMany(x => x == "{}" ? paths : [x]).ToList()) != 0) code = 1;
         foreach (var path in _deletes.OrderByDescending(p => p.Length))
@@ -101,6 +107,75 @@ internal sealed class Find
     }
 
     static Task<bool> T(bool b) => Task.FromResult(b);
+
+    static readonly Dictionary<char, string> TimeFormats = new()
+    {
+        ['Y'] = "yyyy", ['m'] = "MM", ['d'] = "dd", ['H'] = "HH", ['M'] = "mm", ['S'] = "ss'.0000000000'", ['T'] = "HH:mm:ss'.0000000000'",
+        ['F'] = "yyyy-MM-dd", ['+'] = "yyyy-MM-dd'+'HH:mm:ss'.0000000000'", ['a'] = "ddd", ['b'] = "MMM", ['y'] = "yy", ['D'] = "MM/dd/yy", ['R'] = "HH:mm",
+    };
+
+    static readonly Regex PrintfSpec = new(@"\G%([-+ #0]*)(\d*)(?:\.(\d+))?");
+
+    /// <summary>find -printf: %p %f %h %P %s %d %y %m %M %u %g %k %t %T@ %Tk ... with optional width, plus \n \t \0 escapes.</summary>
+    string Printf(string fmt, Entry e)
+    {
+        var st = _ctx.Fs.Stat(e.Abs);
+        var inv = CultureInfo.InvariantCulture;
+        var sb = new System.Text.StringBuilder();
+        int i = 0, n = fmt.Length;
+        while (i < n)
+        {
+            char c = fmt[i];
+            if (c == '\\' && i + 1 < n)
+            {
+                sb.Append(fmt[i + 1] switch { 'n' => "\n", 't' => "\t", '0' => "\0", '\\' => "\\", 'r' => "\r", var o => "\\" + o });
+                i += 2;
+                continue;
+            }
+            if (c != '%' || i + 1 >= n) { sb.Append(c); i++; continue; }
+            var m = PrintfSpec.Match(fmt, i);
+            int j = i + m.Length;
+            if (j >= n) { sb.Append(fmt[i..]); break; }
+            char d = fmt[j++];
+            if (d == '%') { sb.Append('%'); i = j; continue; }
+            string value;
+            if (d is 'T' or 'A' or 'C')
+            {
+                char k = j < n ? fmt[j] : '\0';
+                j++;
+                value = k == '@' ? (new DateTimeOffset(st.Modified).ToUnixTimeMilliseconds() / 1000.0).ToString("F10", inv)
+                    : TimeFormats.TryGetValue(k, out var tf) ? st.Modified.ToString(tf, inv) : "%" + d + k;
+            }
+            else if (d == 't') value = st.Modified.ToString("ddd MMM dd HH:mm:ss'.0000000000' yyyy", inv);
+            else
+            {
+                var trimmed = e.Display.TrimEnd('/');
+                var baseName = trimmed.Length == 0 ? "/" : trimmed[(trimmed.LastIndexOf('/') + 1)..];
+                value = d switch
+                {
+                    'p' => e.Display,
+                    'f' => e.Depth == 0 ? baseName : e.Name,
+                    'h' => trimmed.Contains('/') ? (e.Display[..e.Display.LastIndexOf('/')] is var h && h.Length > 0 ? h : "/") : ".",
+                    'P' => e.Depth > 0 ? e.Display[e.Start.Length..].TrimStart('/') : "",
+                    'H' => e.Start,
+                    's' => st.Size.ToString(inv),
+                    'd' => e.Depth.ToString(inv),
+                    'y' or 'Y' => st.IsDirectory ? "d" : "f",
+                    'm' => Convert.ToString(st.Mode & 0xFFF, 8),
+                    'M' => VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode),
+                    'u' or 'g' => st.Owner,
+                    'n' => "1",
+                    'k' => ((st.Size + 4095) / 4096 * 4).ToString(inv),
+                    'b' => ((st.Size + 4095) / 4096 * 8).ToString(inv),
+                    _ => "%" + d,
+                };
+            }
+            int width = m.Groups[2].Length > 0 ? int.Parse(m.Groups[2].Value, inv) : 0;
+            sb.Append(m.Groups[1].Value.Contains('-') ? value.PadRight(width) : value.PadLeft(width));
+            i = j;
+        }
+        return sb.ToString();
+    }
 
     Pred Primary()
     {
@@ -169,6 +244,14 @@ internal sealed class Find
             case "-print0":
                 _hasAction = true;
                 return e => { _ctx.Stdout.Write(e.Display + "\0"); return T(true); };
+            case "-printf":
+            {
+                _hasAction = true;
+                var fmt = Arg();
+                return e => { _ctx.Stdout.Write(Printf(fmt, e)); return T(true); };
+            }
+            case "-quit": return _ => throw new QuitSignal();
+            case "-prune": return _ => { _prune = true; return T(true); };
             case "-delete":
                 _hasAction = true;
                 return e => { _deletes.Add(e.Abs); return T(true); };
@@ -189,7 +272,7 @@ internal sealed class Find
             }
             default:
                 throw new ShellException($"unknown predicate `{tok}' (supported: -name -iname -path -regex -type -size -mmin -mtime -newer -empty " +
-                                         "-maxdepth -mindepth -print -print0 -exec -delete ! -not -a -o ( ))");
+                                         "-maxdepth -mindepth -prune -print -print0 -printf -exec -delete -quit ! -not -a -o ( ))");
         }
     }
 }

@@ -172,6 +172,16 @@ internal static partial class Builtins
         return sb.ToString();
     }
 
+    /// <summary>Commands that are part of bash itself rather than programs in /usr/bin (for `type` and `command -v`).</summary>
+    static readonly HashSet<string> ShellBuiltins =
+    [
+        "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
+        "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
+        "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt",
+    ];
+
+    internal static bool IsShellBuiltin(Shell shell, string name) => ShellBuiltins.Contains(name) && shell.IsBuiltin(name);
+
     static void RegisterShellCommands(Shell shell)
     {
         shell.Register("true", _ => 0, "Do nothing, successfully");
@@ -293,13 +303,16 @@ internal static partial class Builtins
             {
                 if (opts.Has('t') || opts.Has('p') || opts.Has('P'))
                 {
-                    var kind = ctx.Shell.Aliases.ContainsKey(a) ? "alias" : ctx.Shell.Functions.ContainsKey(a) ? "function" : ctx.Shell.Commands.ContainsKey(a) ? "file" : null;
+                    var kind = ctx.Shell.Aliases.ContainsKey(a) ? "alias" : ctx.Shell.Functions.ContainsKey(a) ? "function"
+                        : IsShellBuiltin(ctx.Shell, a) ? "builtin" : ctx.Shell.Commands.ContainsKey(a) ? "file" : null;
                     if (kind == null) { code = 1; continue; }
-                    ctx.Stdout.WriteLine(opts.Has('t') ? kind : kind == "file" ? $"/usr/bin/{a}" : "");
+                    if (opts.Has('t')) ctx.Stdout.WriteLine(kind);
+                    else if (kind == "file" || (opts.Has('P') && ctx.Shell.Commands.ContainsKey(a))) ctx.Stdout.WriteLine($"/usr/bin/{a}");
                     continue;
                 }
                 if (ctx.Shell.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"{a} is aliased to `{v}'");
                 else if (ctx.Shell.Functions.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is a function");
+                else if (IsShellBuiltin(ctx.Shell, a)) ctx.Stdout.WriteLine($"{a} is a shell builtin");
                 else if (ctx.Shell.Commands.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is /usr/bin/{a}");
                 else { ctx.Stderr.WriteLine($"type: {a}: not found"); code = 1; }
             }
@@ -373,10 +386,13 @@ internal static partial class Builtins
 
         shell.Register("date", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "uI", longs: "utc=u,iso-8601=I");
-            var now = a.Has('u') ? DateTime.UtcNow : DateTime.Now;
+            // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
+            var a = Args.Parse(ctx.Args, "uIR", "dr", "utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R");
+            var now = DateTime.UtcNow;
+            if (a.Value('d') is { } d) now = ParseDate(d, now);
+            else if (a.Value('r') is { } r) now = ctx.Fs.Stat(ctx.ResolvePath(r)).Modified.ToUniversalTime();
             var fmt = a.Positional.FirstOrDefault(p => p.StartsWith('+'));
-            ctx.Stdout.WriteLine(a.Has('I') ? now.ToString("yyyy-MM-dd") : fmt != null ? Strftime(now, fmt[1..]) : now.ToString("ddd MMM d HH:mm:ss yyyy"));
+            ctx.Stdout.WriteLine(Strftime(now, a.Has('I') ? "%Y-%m-%d" : a.Has('R') ? "%a, %d %b %Y %H:%M:%S +0000" : fmt != null ? fmt[1..] : "%a %b %e %H:%M:%S %Z %Y"));
             return 0;
         }, "Print the date and time");
 
@@ -387,23 +403,91 @@ internal static partial class Builtins
         }, "List processes");
     }
 
-    static string Strftime(DateTime t, string fmt)
+    static readonly string[] DayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    static readonly string[] MonthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+    /// <summary>GNU date's format directives (the common ones, with the - flag for no padding). t is UTC.</summary>
+    internal static string Strftime(DateTime t, string fmt)
     {
         var sb = new StringBuilder();
-        for (int i = 0; i < fmt.Length; i++)
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        for (int i = 0; i < fmt.Length;)
         {
-            if (fmt[i] != '%' || i + 1 >= fmt.Length) { sb.Append(fmt[i]); continue; }
-            sb.Append(fmt[++i] switch
+            if (fmt[i] != '%' || i + 1 >= fmt.Length) { sb.Append(fmt[i++]); continue; }
+            bool noPad = fmt[i + 1] == '-' && i + 2 < fmt.Length;
+            char d = noPad ? fmt[i + 2] : fmt[i + 1];
+            i += noPad ? 3 : 2;
+            int hour12 = t.Hour % 12 == 0 ? 12 : t.Hour % 12;
+            (int Value, int Width)? num = d switch
             {
-                'Y' => t.ToString("yyyy"), 'm' => t.ToString("MM"), 'd' => t.ToString("dd"), 'H' => t.ToString("HH"),
-                'M' => t.ToString("mm"), 'S' => t.ToString("ss"), 'F' => t.ToString("yyyy-MM-dd"), 'T' => t.ToString("HH:mm:ss"),
-                'a' => t.ToString("ddd"), 'A' => t.ToString("dddd"), 'b' => t.ToString("MMM"), 'B' => t.ToString("MMMM"),
-                'y' => t.ToString("yy"), 'j' => t.DayOfYear.ToString("000"), 'Z' => "UTC", 'z' => "+0000",
-                's' => new DateTimeOffset(t).ToUnixTimeSeconds().ToString(), 'n' => "\n", '%' => "%",
-                var c => "%" + c,
+                'Y' => (t.Year, 4), 'm' => (t.Month, 2), 'd' => (t.Day, 2), 'e' => (t.Day, -2), 'H' => (t.Hour, 2), 'k' => (t.Hour, -2),
+                'I' => (hour12, 2), 'l' => (hour12, -2), 'M' => (t.Minute, 2), 'S' => (t.Second, 2), 'y' => (t.Year % 100, 2),
+                'j' => (t.DayOfYear, 3), 'u' => (t.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)t.DayOfWeek, 1), 'w' => ((int)t.DayOfWeek, 1),
+                _ => null,
+            };
+            if (num is var (value, width))
+            {
+                var text = value.ToString(inv);
+                sb.Append(noPad ? text : text.PadLeft(Math.Abs(width), width > 0 ? '0' : ' '));
+                continue;
+            }
+            sb.Append(d switch
+            {
+                'F' => t.ToString("yyyy-MM-dd", inv), 'T' => t.ToString("HH:mm:ss", inv), 'D' => t.ToString("MM/dd/yy", inv), 'R' => t.ToString("HH:mm", inv),
+                'a' => DayNames[(int)t.DayOfWeek][..3], 'A' => DayNames[(int)t.DayOfWeek], 'b' or 'h' => MonthNames[t.Month - 1][..3],
+                'B' => MonthNames[t.Month - 1], 'p' => t.Hour < 12 ? "AM" : "PM",
+                's' => new DateTimeOffset(DateTime.SpecifyKind(t, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString(inv),
+                'N' => ((t.Ticks % TimeSpan.TicksPerSecond) * 100).ToString("000000000", inv), 'Z' => "UTC", 'z' => "+0000",
+                'n' => "\n", 't' => "\t", '%' => "%", 'c' => Strftime(t, "%a %b %e %H:%M:%S %Y"),
+                _ => "%" + (noPad ? "-" : "") + d,
             });
         }
         return sb.ToString();
+    }
+
+    static readonly Dictionary<string, int> DateUnits = new()
+    {
+        ["second"] = 1, ["sec"] = 1, ["minute"] = 60, ["min"] = 60, ["hour"] = 3600, ["day"] = 86400, ["week"] = 604800, ["fortnight"] = 1209600,
+    };
+
+    /// <summary>date -d: @EPOCH, YYYY-MM-DD[ HH:MM[:SS]], now/today/yesterday/tomorrow, and "[+-]N unit[s] [ago]" offsets (UTC).</summary>
+    internal static DateTime ParseDate(string text, DateTime now)
+    {
+        var s = text.Trim().ToLowerInvariant();
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var m = System.Text.RegularExpressions.Regex.Match(s, @"^@(-?\d+(?:\.\d+)?)$");
+        if (m.Success) return DateTime.UnixEpoch.AddSeconds(double.Parse(m.Groups[1].Value, inv));
+        var bad = new ShellException($"invalid date '{text}'");
+        var t = now;
+        m = System.Text.RegularExpressions.Regex.Match(s, @"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[t ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?(z|utc|[+-]00:?00)?");
+        if (m.Success)
+        {
+            int G(int g) => m.Groups[g].Success ? int.Parse(m.Groups[g].Value, inv) : 0;
+            try { t = new DateTime(G(1), G(2), G(3), G(4), G(5), G(6), DateTimeKind.Utc); }
+            catch (ArgumentOutOfRangeException) { throw bad; }
+            s = s[m.Length..].Trim();
+        }
+        else
+            foreach (var (word, days) in new[] { ("yesterday", -1), ("tomorrow", 1), ("today", 0), ("now", 0) })
+                if (s.StartsWith(word, StringComparison.Ordinal)) { t = now.AddDays(days); s = s[word.Length..].Trim(); break; }
+        foreach (System.Text.RegularExpressions.Match r in System.Text.RegularExpressions.Regex.Matches(s,
+                     @"(next|last|[+-]?\s*\d+)?\s*(second|sec|minute|min|hour|day|week|fortnight|month|year)s?(\s+ago)?|(\S+)"))
+        {
+            if (r.Groups[4].Success || !r.Groups[2].Success) throw bad;
+            var word = (r.Groups[1].Success ? r.Groups[1].Value : "1").Replace(" ", "");
+            int n = word == "next" ? 1 : word == "last" ? -1 : int.Parse(word, inv);
+            if (r.Groups[3].Success) n = -n;
+            var unit = r.Groups[2].Value;
+            if (unit is "month" or "year")
+            {
+                // like GNU date, a day past the end of the month rolls over (Jan 31 + 1 month = Mar 2 or 3)
+                int months = t.Month - 1 + n * (unit == "year" ? 12 : 1);
+                int year = t.Year + (int)Math.Floor(months / 12.0), month = ((months % 12) + 12) % 12 + 1;
+                t = new DateTime(year, month, 1, t.Hour, t.Minute, t.Second, DateTimeKind.Utc).AddTicks(t.Ticks % TimeSpan.TicksPerSecond).AddDays(t.Day - 1);
+            }
+            else t = t.AddSeconds((double)n * DateUnits[unit]);
+        }
+        return t;
     }
 }
 

@@ -73,6 +73,36 @@ internal static partial class Builtins
         return sb.ToString();
     }
 
+    /// <summary>Splits xargs input like GNU xargs: blanks separate items; quotes and backslashes protect them.</summary>
+    static List<string> XargsWords(string text)
+    {
+        var items = new List<string>();
+        var cur = new StringBuilder();
+        bool inWord = false;
+        for (int i = 0; i < text.Length;)
+        {
+            char c = text[i];
+            if (c is ' ' or '\t' or '\n')
+            {
+                if (inWord) { items.Add(cur.ToString()); cur.Clear(); inWord = false; }
+                i++;
+            }
+            else if (c is '\'' or '"')
+            {
+                int j = text.IndexOf(c, i + 1);
+                if (j < 0 || text.IndexOf('\n', i + 1, j - i - 1) >= 0)
+                    throw new ShellException($"unmatched {(c == '\'' ? "single" : "double")} quote; by default quotes are special to xargs unless you use the -0 option");
+                cur.Append(text, i + 1, j - i - 1);
+                inWord = true;
+                i = j + 1;
+            }
+            else if (c == '\\' && i + 1 < text.Length) { cur.Append(text[i + 1]); inWord = true; i += 2; }
+            else { cur.Append(c); inWord = true; i++; }
+        }
+        if (inWord) items.Add(cur.ToString());
+        return items;
+    }
+
     static int CountArg(string spec, string what)
     {
         var digits = spec.TrimStart('+', '-');
@@ -385,37 +415,62 @@ internal static partial class Builtins
 
         shell.Register("xargs", async ctx =>
         {
-            // -I and -n take a value that may be a separate argument
+            // -I, -n, ... take a value that may be a separate argument
             var opts = new List<string>();
             int i = 0;
-            for (; i < ctx.Args.Count && ctx.Args[i].StartsWith('-'); i++)
+            for (; i < ctx.Args.Count && ctx.Args[i].StartsWith('-') && ctx.Args[i] != "-"; i++)
             {
                 opts.Add(ctx.Args[i]);
-                if (ctx.Args[i] is "-I" or "-n" or "-d" && i + 1 < ctx.Args.Count) opts.Add(ctx.Args[++i]);
+                if (ctx.Args[i] is "-I" or "-n" or "-d" or "-L" or "-P" or "-s" or "-E" or "-a" && i + 1 < ctx.Args.Count) opts.Add(ctx.Args[++i]);
             }
-            var a = Args.Parse(opts, "0rt", "Ind");
+            var a = Args.Parse(opts, "0rtpx", "InLdPsEa", "null=0,no-run-if-empty=r,verbose=t,max-args=n,max-lines=L,delimiter=d,"
+                + "max-procs=P,replace=I,arg-file=a,interactive=p,exit=x,max-chars=s");
             var command = ctx.Args.Skip(i).ToList();
             if (command.Count == 0) command.Add("echo");
-            var input = ctx.StdinText;
-            if (a.Has('r') && input.Trim().Length == 0) return 0;
-
-            int code = 0;
-            if (a.Value('I') is { } replace)
+            var input = a.Value('a') is { } file ? ctx.Fs.ReadAllText(ctx.ResolvePath(file)) : ctx.StdinText;
+            // shortcut: -P is accepted but commands run one after another (output order stays deterministic).
+            var replace = a.Value('I');
+            List<List<string>> groups;
+            if (replace != null || a.Value('L') != null)
             {
-                foreach (var line in SplitLines(input).Where(l => l.Length > 0))
+                var lines = SplitLines(input).Select(l => replace != null ? l.TrimStart(' ', '\t') : l).ToList();
+                if (replace != null) groups = lines.Where(l => l.Length > 0).Select(l => new List<string> { l }).ToList();
+                else
                 {
-                    var rc = await ctx.InvokeAsync(command.Select(c => c.Replace(replace, line)).ToList());
-                    if (rc != 0) code = 123;
+                    int per = int.Parse(a.Value('L')!);
+                    if (per < 1) throw new ShellException($"value {a.Value('L')} for -L option should be >= 1");
+                    var words = lines.Select(XargsWords).Where(w => w.Count > 0).ToList();
+                    groups = words.Chunk(per).Select(c => c.SelectMany(w => w).ToList()).ToList();
                 }
-                return code;
             }
-            var items = a.Has('0') ? input.Split('\0', StringSplitOptions.RemoveEmptyEntries)
-                : a.Value('d') is { } d ? input.Split(Unescape(d)[0], StringSplitOptions.RemoveEmptyEntries)
-                : input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            int batch = a.Value('n') is { } n ? int.Parse(n) : Math.Max(1, items.Length);
-            for (int k = 0; k < Math.Max(1, items.Length); k += batch)
+            else
             {
-                var rc = await ctx.InvokeAsync([.. command, .. items.Skip(k).Take(batch)]);
+                List<string> items;
+                if (a.Has('0')) items = input.Split('\0', StringSplitOptions.RemoveEmptyEntries).ToList();
+                else if (a.Value('d') is { } d)
+                {
+                    var delim = Unescape(d);
+                    items = input.Split(delim.Length > 0 ? delim[0] : '\n').ToList();
+                    if (items.Count > 0 && items[^1] is "" or "\n") items.RemoveAt(items.Count - 1);
+                }
+                else items = XargsWords(input);
+                int per = a.Value('n') is { } n ? int.Parse(n) : Math.Max(1, items.Count);
+                if (per < 1) throw new ShellException($"value {a.Value('n')} for -n option should be >= 1");
+                groups = items.Chunk(per).Select(c => c.ToList()).ToList();
+            }
+            if (groups.Count == 0)
+            {
+                if (a.Has('r') || replace != null) return 0;
+                groups.Add([]); // like GNU xargs, run the command once even with no input
+            }
+            int code = 0;
+            foreach (var group in groups)
+            {
+                var argv = replace != null ? command.Select(c => c.Replace(replace, group[0])).ToList() : [.. command, .. group];
+                if (a.Has('t')) ctx.Stderr.WriteLine(string.Join(' ', argv));
+                var rc = await ctx.InvokeAsync(argv);
+                if (rc == 127) return 127;
+                if (rc == 255) { ctx.Stderr.WriteLine($"xargs: {argv[0]}: exited with status 255; aborting"); return 124; }
                 if (rc != 0) code = 123;
             }
             return code;

@@ -49,6 +49,26 @@ def evaluate(shell, expr: str, depth: int = 0) -> int:
     return v
 
 
+def _wrap(x: int) -> int:
+    """Bash arithmetic is signed 64-bit and wraps around."""
+    x &= 0xFFFFFFFFFFFFFFFF
+    return x - (1 << 64) if x >= 1 << 63 else x
+
+
+def _literal(digits: str, radix: int, tok: str) -> int:
+    """A literal in the given base (2-64: 0-9 a-z A-Z @ _); values past 64 bits wrap around like bash."""
+    if not digits or not 2 <= radix <= 64:
+        raise ShellError(f'{tok}: invalid arithmetic base (error token is "{tok}")')
+    v = 0
+    for c in digits:
+        d = (ord(c) - 48 if c.isdigit() and c.isascii() else ord(c) - 87 if "a" <= c <= "z"
+             else (ord(c) - 55 if radix <= 36 else ord(c) - 29) if "A" <= c <= "Z" else 62 if c == "@" else 63 if c == "_" else 99)
+        if d >= radix:
+            raise ShellError(f'{tok}: value too great for base (error token is "{tok}")')
+        v = v * radix + d
+    return _wrap(v)
+
+
 def _cdiv(a: int, b: int) -> int:
     q = abs(a) // abs(b)
     return q if (a >= 0) == (b >= 0) else -q
@@ -143,19 +163,24 @@ class _Arith:
             return 0
         ops = {
             "+": lambda: l + r, "-": lambda: l - r, "*": lambda: l * r, "/": lambda: _cdiv(l, r), "%": lambda: _cmod(l, r),
-            "**": lambda: l ** r if r >= 0 else 0, "<<": lambda: l << r, ">>": lambda: l >> r, "&": lambda: l & r,
+            "**": lambda: self.power(l, r), "<<": lambda: l << (r & 63), ">>": lambda: l >> (r & 63), "&": lambda: l & r,
             "|": lambda: l | r, "^": lambda: l ^ r, "<": lambda: int(l < r), "<=": lambda: int(l <= r), ">": lambda: int(l > r),
             ">=": lambda: int(l >= r), "==": lambda: int(l == r), "!=": lambda: int(l != r),
         }
         if op not in ops:
             raise self.syntax(op)
-        return ops[op]()
+        return _wrap(ops[op]())
+
+    def power(self, b: int, e: int) -> int:
+        if e < 0:
+            raise ShellError(f'{self.src.strip()}: exponent less than 0 (error token is "{e}")')
+        return _wrap(pow(b, e, 1 << 64))
 
     def unary(self, ev: bool) -> int:
         if self.accept("+"):
             return self.unary(ev)
         if self.accept("-"):
-            return -self.unary(ev)
+            return _wrap(-self.unary(ev))
         if self.accept("!"):
             return int(self.unary(ev) == 0)
         if self.accept("~"):
@@ -174,8 +199,7 @@ class _Arith:
             return v
         b = self.postfix(ev)
         if self.accept("**"):
-            e = self.unary(ev)
-            return b ** e if e >= 0 else 0
+            return self.power(b, self.unary(ev))
         return b
 
     def postfix(self, ev: bool) -> int:
@@ -189,17 +213,12 @@ class _Arith:
             raise self.syntax("end of expression (operand expected)")
         self.p += 1
         if tok[0].isdigit():
-            try:
-                if tok.lower().startswith("0x"):
-                    return int(tok[2:], 16)
-                if "#" in tok:
-                    base, digits = tok.split("#", 1)
-                    return int(digits, int(base))
-                if len(tok) > 1 and tok[0] == "0":
-                    return int(tok, 8)
-                return int(tok)
-            except ValueError:
-                raise ShellError(f'{tok}: value too great for base (error token is "{tok}")') from None
+            if tok.lower().startswith("0x"):
+                return _literal(tok[2:] or "0", 16, tok)
+            if "#" in tok:
+                base, digits = tok.split("#", 1)
+                return _literal(digits, int(base) if base.isdigit() else 0, tok)
+            return _literal(tok, 8 if len(tok) > 1 and tok[0] == "0" else 10, tok)
         if not self.is_ident(tok):
             raise self.syntax(tok)
         if self.peek in ("++", "--"):

@@ -563,37 +563,95 @@ def _tee(ctx):
     return code
 
 
+def _xargs_words(text: str) -> list[str]:
+    """Splits xargs input like GNU xargs: blanks separate items; quotes and backslashes protect them."""
+    items: list[str] = []
+    cur: list[str] = []
+    in_word = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\n":
+            if in_word:
+                items.append("".join(cur))
+                cur, in_word = [], False
+            i += 1
+        elif c in "'\"":
+            j = text.find(c, i + 1)
+            if j < 0 or "\n" in text[i + 1:j]:
+                kind = "single" if c == "'" else "double"
+                raise ShellError(f"unmatched {kind} quote; by default quotes are special to xargs unless you use the -0 option")
+            cur.append(text[i + 1:j])
+            in_word, i = True, j + 1
+        elif c == "\\" and i + 1 < n:
+            cur.append(text[i + 1])
+            in_word, i = True, i + 2
+        else:
+            cur.append(c)
+            in_word, i = True, i + 1
+    if in_word:
+        items.append("".join(cur))
+    return items
+
+
 async def _xargs(ctx):
     opts = []
     i = 0
     args = ctx.args
-    while i < len(args) and args[i].startswith("-"):
+    while i < len(args) and args[i].startswith("-") and args[i] != "-":
         opts.append(args[i])
-        if args[i] in ("-I", "-n", "-d") and i + 1 < len(args):
+        if args[i] in ("-I", "-n", "-d", "-L", "-P", "-s", "-E", "-a") and i + 1 < len(args):
             i += 1
             opts.append(args[i])
         i += 1
-    a = Args.parse(opts, "0rt", "Ind")
+    a = Args.parse(opts, "0rtpx", "InLdPsEa", "null=0,no-run-if-empty=r,verbose=t,max-args=n,max-lines=L,delimiter=d,"
+                                            "max-procs=P,replace=I,arg-file=a,interactive=p,exit=x,max-chars=s")
     command = list(args[i:]) or ["echo"]
-    data = ctx.stdin
-    if a.has("r") and not data.strip():
-        return 0
-    code = 0
-    if a.value("I") is not None:
-        rep = a.value("I")
-        for line in split_lines(data):
-            if line and await ctx.invoke([c.replace(rep, line) for c in command]) != 0:
-                code = 123
-        return code
-    if a.has("0"):
-        items = [x for x in data.split("\0") if x]
-    elif a.value("d") is not None:
-        items = [x for x in data.split(unescape(a.value("d"))[0]) if x]
+    data = ctx.fs.read_text(ctx.resolve(a.value("a"))) if a.value("a") else ctx.stdin
+    # shortcut: -P is accepted but commands run one after another (output order stays deterministic).
+    if a.value("I") is not None or a.value("L") is not None:
+        lines = [line.lstrip(" \t") if a.value("I") is not None else line for line in split_lines(data)]
+        if a.value("I") is not None:
+            groups = [[line] for line in lines if line]
+        else:
+            per = int(a.value("L"))
+            if per < 1:
+                raise ShellError(f"value {a.value('L')} for -L option should be >= 1")
+            words = [_xargs_words(line) for line in lines]
+            words = [w for w in words if w]
+            groups = [[x for w in words[k:k + per] for x in w] for k in range(0, len(words), per)]
     else:
-        items = data.split()
-    batch = int(a.value("n")) if a.value("n") else max(1, len(items))
-    for k in range(0, max(1, len(items)), batch):
-        if await ctx.invoke(command + items[k:k + batch]) != 0:
+        if a.has("0"):
+            items = [x for x in data.split("\0") if x]
+        elif a.value("d") is not None:
+            items = data.split(unescape(a.value("d"))[:1] or "\n")
+            if items and items[-1] in ("", "\n"):
+                items.pop()
+        else:
+            items = _xargs_words(data)
+        per = int(a.value("n")) if a.value("n") else max(1, len(items))
+        if per < 1:
+            raise ShellError(f"value {a.value('n')} for -n option should be >= 1")
+        groups = [items[k:k + per] for k in range(0, len(items), per)]
+    if not groups:
+        if a.has("r") or a.value("I") is not None:
+            return 0
+        groups = [[]]  # like GNU xargs, run the command once even with no input
+    code = 0
+    for group in groups:
+        if a.value("I") is not None:
+            argv = [c.replace(a.value("I"), group[0]) for c in command]
+        else:
+            argv = command + group
+        if a.has("t"):
+            ctx.stderr.write(" ".join(argv) + "\n")
+        rc = await ctx.invoke(argv)
+        if rc == 127:
+            return 127
+        if rc == 255:
+            ctx.error(f"xargs: {argv[0]}: exited with status 255; aborting")
+            return 124
+        if rc != 0:
             code = 123
     return code
 

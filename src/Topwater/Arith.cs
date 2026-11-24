@@ -126,7 +126,7 @@ internal sealed class Arith
         if (op is "/" or "%" && r == 0) return ev ? throw new ShellException($"{_src.Trim()}: division by 0") : 0;
         return op switch
         {
-            "+" => l + r, "-" => l - r, "*" => l * r, "/" => l / r, "%" => l % r, "**" => Pow(l, r),
+            "+" => l + r, "-" => l - r, "*" => l * r, "/" => r == -1 ? -l : l / r, "%" => r == -1 ? 0 : l % r, "**" => Pow(l, r),
             "<<" => l << (int)r, ">>" => l >> (int)r, "&" => l & r, "|" => l | r, "^" => l ^ r,
             "<" => l < r ? 1 : 0, "<=" => l <= r ? 1 : 0, ">" => l > r ? 1 : 0, ">=" => l >= r ? 1 : 0,
             "==" => l == r ? 1 : 0, "!=" => l != r ? 1 : 0,
@@ -134,11 +134,35 @@ internal sealed class Arith
         };
     }
 
-    static long Pow(long b, long e)
+    /// <summary>Exponentiation by squaring, wrapping around like bash's 64-bit arithmetic.</summary>
+    long Pow(long b, long e)
     {
+        if (e < 0) throw new ShellException($"{_src.Trim()}: exponent less than 0 (error token is \"{e}\")");
         long r = 1;
-        for (; e > 0; e--) r *= b;
+        for (; e > 0; e >>= 1, b *= b) if ((e & 1) != 0) r *= b;
         return r;
+    }
+
+    /// <summary>A literal in the given base; values past 64 bits wrap around like bash.</summary>
+    static long ParseLiteral(string digits, int radix, string tok)
+    {
+        if (digits.Length == 0 || radix < 2 || radix > 64) throw new ShellException($"{tok}: invalid arithmetic base (error token is \"{tok}\")");
+        ulong v = 0;
+        foreach (var c in digits)
+        {
+            int d = c switch
+            {
+                >= '0' and <= '9' => c - '0',
+                >= 'a' and <= 'z' => c - 'a' + 10,
+                >= 'A' and <= 'Z' => radix <= 36 ? c - 'A' + 10 : c - 'A' + 36,
+                '@' => 62,
+                '_' => 63,
+                _ => 99,
+            };
+            if (d >= radix) throw new ShellException($"{tok}: value too great for base (error token is \"{tok}\")");
+            v = unchecked(v * (ulong)radix + (ulong)d);
+        }
+        return unchecked((long)v);
     }
 
     long Unary(bool ev)
@@ -176,10 +200,10 @@ internal sealed class Arith
         {
             try
             {
-                if (tok.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return Convert.ToInt64(tok[2..], 16);
-                if (tok.Contains('#')) { var parts = tok.Split('#'); return Convert.ToInt64(parts[1], int.Parse(parts[0])); }
-                if (tok.Length > 1 && tok[0] == '0') return Convert.ToInt64(tok, 8);
-                return long.Parse(tok, CultureInfo.InvariantCulture);
+                if (tok.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return ParseLiteral(tok.Length > 2 ? tok[2..] : "0", 16, tok);
+                if (tok.Contains('#')) { var parts = tok.Split('#', 2); return ParseLiteral(parts[1], int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var radix) ? radix : 0, tok); }
+                if (tok.Length > 1 && tok[0] == '0') return ParseLiteral(tok, 8, tok);
+                return ParseLiteral(tok, 10, tok);
             }
             catch (Exception e) when (e is FormatException or ArgumentException or OverflowException)
             {

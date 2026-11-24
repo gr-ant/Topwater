@@ -628,6 +628,9 @@ public sealed partial class Shell
 
     internal bool InFunction => _locals.Count > 0;
 
+    /// <summary>True for a built-in command (not one the app registered or replaced).</summary>
+    internal bool IsBuiltin(string name) => _builtinNames?.Contains(name) == true;
+
     /// <summary>`local NAME[=VALUE]`: remembers the outer value so it is restored when the function returns.</summary>
     internal void DeclareLocal(string name, string? value)
     {
@@ -775,9 +778,36 @@ public sealed partial class Shell
 
     async Task<string> CaptureAsync(string source, Io io, CancellationToken ct)
     {
+        if (ReadFileWord(source) is { } fileWord) // $(< file) is the file's contents
+        {
+            var target = await ExpandSingleAsync(fileWord, io, ct);
+            try
+            {
+                var text = Fs.ReadAllText(ResolvePath(target));
+                LastExitCode = 0;
+                return text.TrimEnd('\n');
+            }
+            catch (ShellException e)
+            {
+                io.Err.WriteLine($"bash: {target}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
+                LastExitCode = 1;
+                return "";
+            }
+        }
         var output = new StringWriter();
         LastExitCode = await RunScriptTextAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, subshell: true, ct);
         return output.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>The file word of `$(&lt; file)`, or null when the substitution is anything else.</summary>
+    static Word? ReadFileWord(string source)
+    {
+        if (!source.Contains('<')) return null;
+        Script script;
+        try { script = Parser.Parse(source); }
+        catch (ParseException) { return null; }
+        return script.Items is [{ Rest.Count: 0, First: { Negate: false, Commands: [SimpleCommand { Words.Count: 0, Assignments.Count: 0 } cmd] } }]
+               && cmd.Redirects is [{ Op: "<" } r] ? r.Target : null;
     }
 
     /// <summary>Expands a word without field splitting or globbing (redirect targets, assignments, heredocs).</summary>

@@ -657,6 +657,16 @@ class Shell:
                 self.fs.write_text(path, out.getvalue())
             return path
         out = io.StringIO()
+        file_word = _read_file_word(part.source)
+        if file_word is not None:  # $(< file) is the file's contents
+            target = await self._expand_single(file_word, io_)
+            try:
+                text = self.fs.read_text(self.resolve(target))
+                self.last_exit_code = 0
+            except ShellError as e:
+                io_.err.write(f"bash: {target}: {str(e).rsplit(': ', 1)[-1]}\n")
+                text, self.last_exit_code = "", 1
+            return text.rstrip("\n")
         self.last_exit_code = await self._run_script_text(part.source, replace(io_, stdin=StdinBuffer(), out=out), subshell=True)
         return out.getvalue().rstrip("\n")
 
@@ -871,6 +881,23 @@ def split_fields(text: str, ifs: str, max_fields: int = 0) -> list[str]:
     if max_fields <= 0 and other and fields and fields[-1] == "":
         fields.pop()  # "a,b," is two fields, not three
     return fields
+
+
+def _read_file_word(source: str):
+    """The file word of `$(< file)`, or None when the substitution is anything else."""
+    if "<" not in source:
+        return None
+    try:
+        script = Parser.parse(source)
+    except ParseError:
+        return None
+    if len(script.items) != 1 or script.items[0].rest or len(script.items[0].first.commands) != 1:
+        return None
+    cmd = script.items[0].first.commands[0]
+    if isinstance(cmd, SimpleCommand) and not cmd.words and not cmd.assignments and len(cmd.redirects) == 1 \
+            and cmd.redirects[0].op == "<" and not script.items[0].first.negate:
+        return cmd.redirects[0].target
+    return None
 
 
 class _Field:

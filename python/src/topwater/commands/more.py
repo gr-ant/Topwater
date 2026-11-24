@@ -16,7 +16,7 @@ from .. import arith
 from ..convert import file_type
 from ..shell import ExitSignal, LoopControl, ReturnSignal
 from ..vfs import ShellError, format_mode, get_parent, normalize
-from . import Args, inputs, split_lines, unescape, write_lines
+from . import Args, inputs, is_shell_builtin, printf_format, split_lines, unescape, write_lines
 
 
 class _Errors:
@@ -153,7 +153,7 @@ async def _command(ctx):
     for n in args[1:]:
         if n in ctx.shell.aliases:
             ctx.print(f"alias {n}='{ctx.shell.aliases[n]}'")
-        elif n in ctx.shell.functions:
+        elif n in ctx.shell.functions or is_shell_builtin(ctx.shell, n):
             ctx.print(n)
         elif n in ctx.shell.commands:
             ctx.print(f"/usr/bin/{n}")
@@ -540,7 +540,19 @@ def _paste(ctx):
         return "".join(out)
 
     errors = _Errors()
-    columns = [split_lines(t) for _, t in inputs(ctx, a.positional, errors)]
+    if a.positional.count("-") > 1 and not a.has("s"):
+        # several "-" operands take turns reading lines from stdin (seq 6 | paste - - -)
+        stdin_lines = split_lines(ctx.stdin)
+        n = a.positional.count("-")
+        columns, k = [], 0
+        for f in a.positional:
+            if f == "-":
+                columns.append(stdin_lines[k::n])
+                k += 1
+            else:
+                columns.extend(split_lines(t) for _, t in inputs(ctx, [f], errors))
+    else:
+        columns = [split_lines(t) for _, t in inputs(ctx, a.positional, errors)]
     if a.has("s"):
         for col in columns:
             ctx.print(join(col))
@@ -612,7 +624,7 @@ def _mktemp(ctx):
 
 
 def _seq(ctx):
-    nums, sep, equal_width = [], "\n", False
+    nums, sep, equal_width, fmt = [], "\n", False, None
     args = ctx.args
     i = 0
     while i < len(args):
@@ -630,6 +642,14 @@ def _seq(ctx):
             sep = x[2:]
         elif x.startswith("--separator="):
             sep = x[12:]
+        elif x in ("-f", "--format") or x.startswith(("-f", "--format=")):
+            if x in ("-f", "--format"):
+                if i + 1 >= len(args):
+                    raise ShellError("option requires an argument -- 'f'")
+                i += 1
+                fmt = args[i]
+            else:
+                fmt = x[2:] if x.startswith("-f") else x[9:]
         else:
             raise ShellError(f"invalid option -- '{x.lstrip('-')}'")
         i += 1
@@ -642,12 +662,15 @@ def _seq(ctx):
     if step == 0:
         raise ShellError("invalid Zero increment value: '0'")
     decimals = max((len(x) - x.index(".") - 1 if "." in x else 0) for x in nums)
-    items, x = [], first
-    while (x <= last + 1e-9) if step > 0 else (x >= last - 1e-9):
-        items.append(f"{x:.{decimals}f}")
+    items, k = [], 0
+    while True:
+        x = first + k * step  # not a running sum, so 0.1 steps don't drift
+        if not ((x <= last + 1e-9) if step > 0 else (x >= last - 1e-9)):
+            break
+        items.append(printf_format(fmt, [repr(x)]) if fmt else f"{x:.{decimals}f}")
         if len(items) > 1_000_000:
             raise ShellError("too many numbers")
-        x += step
+        k += 1
     if equal_width and items:
         w = max(len(s) for s in items)
         items = [s.zfill(w) for s in items]

@@ -206,6 +206,7 @@ class _Find:
         self.denied = False
         self.deletes: list[str] = []
         self.batches: list[tuple[list[str], list[str]]] = []
+        self.prune = False
 
     def is_(self, s: str) -> bool:
         return self.p < len(self.args) and self.args[self.p] == s
@@ -226,10 +227,11 @@ class _Find:
         if self.p < len(args):
             raise ShellError(f"unexpected `{args[self.p]}'")
 
-        async def walk(path, display, depth):
-            if depth >= self.min_depth and await expr((path, get_name(path), display)) and not self.has_action:
+        async def walk(path, display, depth, start):
+            self.prune = False
+            if depth >= self.min_depth and await expr((path, get_name(path), display, depth, start)) and not self.has_action:
                 ctx.print(display)
-            if depth >= self.max_depth or not ctx.fs.is_dir(path):
+            if self.prune or depth >= self.max_depth or not ctx.fs.is_dir(path):
                 return
             try:
                 names = ctx.fs.listdir(path)
@@ -238,16 +240,19 @@ class _Find:
                 self.denied = True
                 return
             for name in names:
-                await walk(normalize(path, name), display + name if display.endswith("/") else display + "/" + name, depth + 1)
+                await walk(normalize(path, name), display + name if display.endswith("/") else display + "/" + name, depth + 1, start)
 
         code = 0
-        for s in starts:
-            path = ctx.resolve(s)
-            if not ctx.fs.exists(path):
-                ctx.error(f"find: '{s}': No such file or directory")
-                code = 1
-                continue
-            await walk(path, s, 0)
+        try:
+            for s in starts:
+                path = ctx.resolve(s)
+                if not ctx.fs.exists(path):
+                    ctx.error(f"find: '{s}': No such file or directory")
+                    code = 1
+                    continue
+                await walk(path, s, 0, s)
+        except _FindQuit:
+            pass
         for cmd, paths in self.batches:
             if paths and await ctx.invoke([y for x in cmd for y in (paths if x == "{}" else [x])]) != 0:
                 code = 1
@@ -311,7 +316,7 @@ class _Find:
 
         def pred(fn):
             async def run(e):
-                return fn(*e)
+                return fn(e[0], e[1], e[2])
             return run
 
         if tok in ("-name", "-iname"):
@@ -367,6 +372,23 @@ class _Find:
             self.has_action = True
             end = "\n" if tok == "-print" else "\0"
             return pred(lambda p, n, d: ctx.stdout.write(d + end) is not None)
+        if tok == "-printf":
+            self.has_action = True
+            fmt = arg()
+
+            async def run_printf(e):
+                ctx.stdout.write(_find_printf(fmt, e, fs))
+                return True
+            return run_printf
+        if tok == "-quit":
+            async def quit_(e):
+                raise _FindQuit()
+            return quit_
+        if tok == "-prune":
+            def prune(p, n, d):
+                self.prune = True
+                return True
+            return pred(prune)
         if tok == "-delete":
             self.has_action = True
             return pred(lambda p, n, d: self.deletes.append(p) is None)
@@ -391,7 +413,66 @@ class _Find:
                 return await ctx.invoke([x.replace("{}", e[2]) for x in cmd]) == 0
             return run_exec
         raise ShellError(f"unknown predicate `{tok}' (supported: -name -iname -path -regex -type -size -mmin -mtime -newer "
-                         "-empty -maxdepth -mindepth -print -print0 -exec -delete ! -not -a -o ( ))")
+                         "-empty -maxdepth -mindepth -prune -print -print0 -printf -exec -delete -quit ! -not -a -o ( ))")
+
+
+class _FindQuit(Exception):
+    pass
+
+
+_FIND_TIME = {"Y": "%Y", "m": "%m", "d": "%d", "H": "%H", "M": "%M", "S": "%S.0000000000", "T": "%H:%M:%S.0000000000",
+              "F": "%Y-%m-%d", "+": "%Y-%m-%d+%H:%M:%S.0000000000", "a": "%a", "b": "%b", "y": "%y", "D": "%m/%d/%y", "R": "%H:%M"}
+
+
+def _find_printf(fmt: str, e, fs) -> str:
+    """find -printf: %p %f %h %P %s %d %y %m %M %u %g %k %t %T@ %Tk ... with optional width, plus \\n \\t \\0 escapes."""
+    path, name, display, depth, start = e
+    st = fs.stat(path)
+    out: list[str] = []
+    i, n = 0, len(fmt)
+    while i < n:
+        c = fmt[i]
+        if c == "\\" and i + 1 < n:
+            out.append({"n": "\n", "t": "\t", "0": "\0", "\\": "\\", "r": "\r"}.get(fmt[i + 1], "\\" + fmt[i + 1]))
+            i += 2
+            continue
+        if c != "%" or i + 1 >= n:
+            out.append(c)
+            i += 1
+            continue
+        m = re.match(r"%([-+ #0]*)(\d*)(?:\.(\d+))?", fmt[i:])
+        j = i + m.end()
+        if j >= n:
+            out.append(fmt[i:])
+            break
+        d = fmt[j]
+        j += 1
+        if d == "%":
+            out.append("%")
+            i = j
+            continue
+        if d in "TAC":
+            k = fmt[j] if j < n else ""
+            j += 1
+            value = (f"{st.modified.timestamp():.10f}" if k == "@" else st.modified.strftime(_FIND_TIME[k]) if k in _FIND_TIME
+                     else "%" + d + k)
+        elif d == "t":
+            value = st.modified.strftime("%a %b %d %H:%M:%S.0000000000 %Y")
+        else:
+            base = display.rstrip("/").rsplit("/", 1)[-1] or "/"
+            values = {
+                "p": display, "f": base if depth == 0 else name,
+                "h": (display.rsplit("/", 1)[0] or "/") if "/" in display.rstrip("/") else ".",
+                "P": display[len(start):].lstrip("/") if depth else "", "H": start, "s": str(st.size), "d": str(depth),
+                "y": "d" if st.is_dir else "f", "Y": "d" if st.is_dir else "f", "m": format(st.mode & 0o7777, "o"),
+                "M": format_mode(st.is_dir, st.mode), "u": st.owner, "g": st.owner, "n": "1",
+                "k": str((st.size + 4095) // 4096 * 4), "b": str((st.size + 4095) // 4096 * 8),
+            }
+            value = values.get(d, "%" + d)
+        width = int(m.group(2)) if m.group(2) else 0
+        out.append(value.ljust(width) if "-" in m.group(1) else value.rjust(width))
+        i = j
+    return "".join(out)
 
 
 async def _find(ctx):

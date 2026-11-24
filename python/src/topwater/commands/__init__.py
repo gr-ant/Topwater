@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..vfs import ShellError
 
@@ -267,22 +267,39 @@ def _which(ctx):
     return code
 
 
+# commands that are part of bash itself rather than programs in /usr/bin (for `type` and `command -v`)
+SHELL_BUILTINS = {
+    "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
+    "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
+    "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt",
+}
+
+
+def is_shell_builtin(shell, name: str) -> bool:
+    return name in SHELL_BUILTINS and name in shell.commands and shell._builtin_names is not None and name in shell._builtin_names
+
+
 def _type(ctx):
     code = 0
     opts = Args.parse(ctx.args, "atpPf")
     for a in opts.positional:
+        sh = ctx.shell
         if opts.has("t") or opts.has("p") or opts.has("P"):
-            sh = ctx.shell
-            kind = "alias" if a in sh.aliases else "function" if a in sh.functions else "file" if a in sh.commands else None
+            kind = ("alias" if a in sh.aliases else "function" if a in sh.functions else "builtin" if is_shell_builtin(sh, a)
+                    else "file" if a in sh.commands else None)
             if kind is None:
                 code = 1
-            else:
-                ctx.print(kind if opts.has("t") else f"/usr/bin/{a}" if kind == "file" else "")
+            elif opts.has("t"):
+                ctx.print(kind)
+            elif kind == "file" or (opts.has("P") and a in sh.commands):
+                ctx.print(f"/usr/bin/{a}")
             continue
         if a in ctx.shell.aliases:
             ctx.print(f"{a} is aliased to `{ctx.shell.aliases[a]}'")
         elif a in ctx.shell.functions:
             ctx.print(f"{a} is a function")
+        elif is_shell_builtin(sh, a):
+            ctx.print(f"{a} is a shell builtin")
         elif a in ctx.shell.commands:
             ctx.print(f"{a} is /usr/bin/{a}")
         else:
@@ -616,16 +633,101 @@ def _uname(ctx):
     ctx.print(" ".join(parts))
 
 
+_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
+           "December"]
+
+
+def strftime(t: datetime, fmt: str) -> str:
+    """GNU date's format directives (the common ones, with the - flag for no padding). Mirrored in C#."""
+    out = []
+    i = 0
+    while i < len(fmt):
+        c = fmt[i]
+        if c != "%" or i + 1 >= len(fmt):
+            out.append(c)
+            i += 1
+            continue
+        no_pad = fmt[i + 1] == "-" and i + 2 < len(fmt)
+        d = fmt[i + 2] if no_pad else fmt[i + 1]
+        i += 3 if no_pad else 2
+        hour12 = t.hour % 12 or 12
+        num = {"Y": (t.year, 4), "m": (t.month, 2), "d": (t.day, 2), "e": (t.day, -2), "H": (t.hour, 2), "k": (t.hour, -2),
+               "I": (hour12, 2), "l": (hour12, -2), "M": (t.minute, 2), "S": (t.second, 2), "y": (t.year % 100, 2),
+               "j": (t.timetuple().tm_yday, 3), "u": (t.isoweekday(), 1), "w": (t.isoweekday() % 7, 1)}
+        if d == "c":
+            out.append(strftime(t, "%a %b %e %H:%M:%S %Y"))
+            continue
+        if d in num:
+            v, width = num[d]
+            out.append(str(v) if no_pad else str(v).rjust(abs(width), "0" if width > 0 else " "))
+            continue
+        out.append({
+            "F": f"{t.year:04}-{t.month:02}-{t.day:02}", "T": f"{t.hour:02}:{t.minute:02}:{t.second:02}",
+            "D": f"{t.month:02}/{t.day:02}/{t.year % 100:02}", "R": f"{t.hour:02}:{t.minute:02}",
+            "a": _DAYS[t.weekday()][:3], "A": _DAYS[t.weekday()], "b": _MONTHS[t.month - 1][:3], "h": _MONTHS[t.month - 1][:3],
+            "B": _MONTHS[t.month - 1], "p": "AM" if t.hour < 12 else "PM", "s": str(int(t.timestamp())),
+            "N": f"{t.microsecond * 1000:09}", "Z": "UTC", "z": "+0000", "n": "\n", "t": "\t", "%": "%",
+        }.get(d, "%" + ("-" if no_pad else "") + d))
+    return "".join(out)
+
+
+_UNITS = {"second": 1, "sec": 1, "minute": 60, "min": 60, "hour": 3600, "day": 86400, "week": 604800, "fortnight": 1209600}
+
+
+def parse_date(text: str, now: datetime) -> datetime:
+    """date -d: @EPOCH, YYYY-MM-DD[ HH:MM[:SS]], now/today/yesterday/tomorrow, and "[+-]N unit[s] [ago]" offsets."""
+    s = text.strip().lower()
+    m = re.fullmatch(r"@(-?\d+(?:\.\d+)?)", s)
+    if m:
+        return datetime.fromtimestamp(float(m.group(1)), timezone.utc)
+    base = now
+    m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})(?:[t ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?(z|utc|[+-]00:?00)?", s)
+    if m:
+        try:
+            base = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), int(m.group(5) or 0),
+                            int(m.group(6) or 0), tzinfo=timezone.utc)
+        except ValueError:
+            raise ShellError(f"invalid date '{text}'") from None
+        s = s[m.end():].strip()
+    else:
+        for word, days in (("yesterday", -1), ("tomorrow", 1), ("today", 0), ("now", 0)):
+            if s.startswith(word):
+                base = now + timedelta(days=days)
+                s = s[len(word):].strip()
+                break
+    for m in re.finditer(r"(next|last|[+-]?\s*\d+)?\s*(second|sec|minute|min|hour|day|week|fortnight|month|year)s?(\s+ago)?|(\S+)", s):
+        if m.group(4) or not m.group(2):
+            raise ShellError(f"invalid date '{text}'")
+        word = (m.group(1) or "1").replace(" ", "")
+        n = 1 if word == "next" else -1 if word == "last" else int(word)
+        if m.group(3):
+            n = -n
+        unit = m.group(2)
+        if unit in ("month", "year"):
+            months = base.month - 1 + n * (12 if unit == "year" else 1)
+            # like GNU date, a day past the end of the month rolls over (Jan 31 + 1 month = Mar 2 or 3)
+            base = base.replace(year=base.year + months // 12, month=months % 12 + 1, day=1) + timedelta(days=base.day - 1)
+        else:
+            base = base + timedelta(seconds=n * _UNITS[unit])
+    return base
+
+
 def _date(ctx):
-    a = Args.parse(ctx.args, "uI", longs="utc=u,iso-8601=I")
-    now = datetime.now(timezone.utc) if a.has("u") else datetime.now()
+    # the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
+    a = Args.parse(ctx.args, "uIR", "dr", "utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R")
+    now = datetime.now(timezone.utc)
+    if a.value("d") is not None:
+        now = parse_date(a.value("d"), now)
+    elif a.value("r") is not None:
+        now = ctx.fs.stat(ctx.resolve(a.value("r"))).modified.astimezone(timezone.utc)
     fmt = next((p for p in a.positional if p.startswith("+")), None)
     if a.has("I"):
-        ctx.print(now.strftime("%Y-%m-%d"))
-    elif fmt:
-        ctx.print(now.strftime(fmt[1:].replace("%s", str(int(now.timestamp())))))
+        ctx.print(strftime(now, "%Y-%m-%d"))
+    elif a.has("R"):
+        ctx.print(strftime(now, "%a, %d %b %Y %H:%M:%S +0000"))
     else:
-        ctx.print(now.strftime("%a %b %-d %H:%M:%S %Y"))
+        ctx.print(strftime(now, fmt[1:] if fmt else "%a %b %e %H:%M:%S %Z %Y"))
 
 
 def _register_system_commands(shell) -> None:

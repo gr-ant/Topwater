@@ -58,6 +58,16 @@ public class ReviewFixTests
     [InlineData("echo '{\"a\":1}' | jq '.a.b'", "jq: error (at <unknown>): Cannot index number with \"b\"\n[exit code 5]")]
     [InlineData("jq -n 'foo(1)'", "jq: error: foo/1 is not defined\njq: 1 compile error\n[exit code 3]")]
     [InlineData("echo '{\"a\":1} {\"a\":2}' | jq -e '.a > 1'", "false\ntrue\n")]
+    [InlineData("echo $((2**64)) $((3**40)) $((1<<70)) $((99999999999999999999)) $((2**1000000000000))", "0 -6289078614652622815 64 7766279631452241919 0\n")]
+    [InlineData("echo $(( (-9223372036854775807-1) / -1 ))", "-9223372036854775808\n")]
+    [InlineData("x=$(< f.txt); echo \"$x\" | wc -l", "4\n")]
+    [InlineData("echo \"'a b' c\" | xargs -n1 echo; printf 'a b\\nc\\n' | xargs -L1 echo; echo a b | xargs -t echo 2>&1", "a b\nc\na b\nc\necho a b\na b\n")]
+    [InlineData("echo a | xargs nope; echo $?", "127\nnope: command not found (run 'help' to list available commands)\n")]
+    [InlineData("find d -printf '%p %s %y %f %P\\n' | sort", "d 4096 d d \nd/a.txt 12 f a.txt a.txt\nd/sub 4096 d sub sub\nd/sub/b.log 8 f b.log sub/b.log\n")]
+    [InlineData("find . -path ./d -prune -o -name '*.txt' -print | sort; find . -name '*.txt' -print -quit | wc -l", "./f.txt\n./g.txt\n./n.txt\n./ne.txt\n1\n")]
+    [InlineData("date -d @0; date -d '2024-01-31 10:30 1 month' '+%F %T %A %-d %s'; date -d '3 days ago' +%Z", "Thu Jan  1 00:00:00 UTC 1970\n2024-03-02 10:30:00 Saturday 2 1709375400\nUTC\n")]
+    [InlineData("seq -f '%03g' 3; seq 0 0.1 0.3 | tail -1; seq 6 | paste - - -", "001\n002\n003\n0.3\n1\t2\t3\n4\t5\t6\n")]
+    [InlineData("type cd ls; type -t echo; command -v cd", "cd is a shell builtin\nls is /usr/bin/ls\nbuiltin\ncd\n")]
     public async Task MatchesBash(string cmd, string expected)
     {
         var shell = new Shell();
