@@ -199,7 +199,7 @@ class BinaryFileTests(unittest.TestCase):
         self.assertIn("\ufffd", fs.read_text("/home/agent/all.bin"))  # lossy, no exception
         fs.write_text("/home/agent/t.txt", "héllo")
         self.assertEqual(fs.read_bytes("/home/agent/t.txt"), "héllo".encode())
-        self.assertEqual(out(self.sh, "wc -c all.bin t.txt"), "256 all.bin\n6 t.txt\n262 total\n")
+        self.assertEqual(out(self.sh, "wc -c all.bin t.txt"), "256 all.bin\n  6 t.txt\n262 total\n")
         self.assertEqual(out(self.sh, "stat -c %s all.bin"), "256\n")
         self.assertIn(" 256 ", out(self.sh, "ls -l all.bin"))
         out(self.sh, "cp all.bin copy.bin && mv copy.bin moved.bin")

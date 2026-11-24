@@ -186,7 +186,7 @@ public class DocumentTests
         Assert.Contains("\uFFFD", fs.ReadAllText("/home/agent/all.bin")); // lossy, no exception
         fs.WriteAllText("/home/agent/t.txt", "héllo");
         Assert.Equal(Encoding.UTF8.GetBytes("héllo"), fs.ReadAllBytes("/home/agent/t.txt"));
-        Assert.Equal("256 all.bin\n6 t.txt\n262 total\n", await Out(sh, "wc -c all.bin t.txt"));
+        Assert.Equal("256 all.bin\n  6 t.txt\n262 total\n", await Out(sh, "wc -c all.bin t.txt"));
         Assert.Equal("256\n", await Out(sh, "stat -c %s all.bin"));
         Assert.Contains(" 256 ", await Out(sh, "ls -l all.bin"));
         await Out(sh, "cp all.bin copy.bin && mv copy.bin moved.bin");
