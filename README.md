@@ -1,189 +1,175 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/topwater_lockup_dark.png">
-    <img alt="Topwater" src="assets/brand/topwater_lockup.png" width="420">
+    <img alt="Topwater" src="assets/brand/topwater_lockup.png" width="400">
   </picture>
 </p>
 
+<h3 align="center">Your agent already knows how to use a computer. Give it one.</h3>
+
 <p align="center">
-  <b>Give your agent one tool, <code>bash</code>, and let it drive your app through a Linux shell it already knows.</b><br>
-  C# (.NET 8) and Python (3.10+, no dependencies) · in-process · nothing touches the real OS
+  Topwater turns your app's tools into commands on a simulated Linux machine,<br>
+  so your agent needs just one tool: <code>bash</code>.
+</p>
+
+<p align="center">
+  <b>Python</b> and <b>C#</b> · runs inside your process · no containers · no dependencies
 </p>
 
 ---
 
-Models have seen far more shell sessions than they have seen your bespoke JSON tools. Topwater turns your application's
-tools into **programs on a sandboxed Linux machine**, so the model can do this:
-
 ```console
-$ orders --status open --min-total 100 | jq -r '.[].customer'
+agent@topwater:~$ orders --status open | jq -r '.[].customer'
 Acme Corp
 Umbrella
-$ grep -rn TODO ~/project | awk -F: '{print $1}' | sort | uniq -c
-      2 /home/agent/project/src/app.py
-      1 /home/agent/project/src/util.py
+agent@topwater:~$ to-markdown policies/travel.docx | grep "Tier 1"
+| Tier 1 | London, New York, Tokyo, Zurich | 95 |
+agent@topwater:~$ sudo rm -rf /
+agent is not in the sudoers file.
 ```
 
-Everything is emulated in-process: a clean-room bash parser and interpreter, an in-memory filesystem, and C#/Python
-implementations of ~100 standard utilities (`grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff`, ...). Your registered
-commands sit next to them in `/usr/bin` and get `--help` for free.
+## Why
 
-## How it works
+Every tool you hand a model is something new it has to learn from a description. The shell is different:
+models have seen millions of terminal sessions, and they are very good at `grep`, pipes and `--help`.
 
-```
- LLM ──tool call: bash {"command": "orders --status open | jq length"}──▶ Shell.RunAsync / shell.run_async
-                                                                           │
-          parse (pipes, redirects, $(...), loops, functions, heredocs...)  │
-                                                                           ▼
-             built-ins (grep, awk, jq...)   ◀── pipe ──▶   your [Command] / @command methods
-                                    │                               │
-                                    └──── in-memory filesystem ─────┘
- LLM ◀──── stdout + stderr + "[exit code N]" (truncated at 30k chars) ────────────────┘
-```
+Topwater puts your tools where the model is already fluent:
+
+- **One tool instead of twenty.** Your functions become programs. The model combines them with pipes, loops and
+  files instead of juggling JSON calls.
+- **A real-feeling machine.** Files, permissions, about 100 standard commands, even `/etc/os-release`. The model
+  explores it the way it would explore any server.
+- **Nothing escapes.** It is a simulation inside your process. There is no real shell, and the agent's files
+  live in memory.
 
 ## Quick start
 
-### C#
+**Python** (3.10+)
+
+```bash
+pip install ./python
+```
+
+```python
+import topwater
+from topwater import Shell, command
+
+class Tools:
+    @command("orders", description="List orders")
+    def orders(self, status: str | None = None, limit: int = 20):
+        return db.orders(status, limit)              # returned objects print as JSON
+
+shell = Shell().register(Tools())
+shell.fs.write_text("/home/agent/notes.txt", "hi")   # give the agent some files
+
+# Hand the model one tool...
+tool = {"name": topwater.TOOL_NAME, "description": topwater.TOOL_DESCRIPTION, "input_schema": topwater.TOOL_INPUT_SCHEMA}
+
+# ...and run whatever it asks for.
+output = await topwater.execute_tool(shell, 'orders --status open | jq length')
+```
+
+<details>
+<summary><b>C#</b> (.NET 8)</summary>
 
 ```csharp
 using Topwater;
 
-var shell = new Shell();                            // user "agent", cwd /home/agent
-shell.Register(new OrderTools());                   // [Command] methods become programs
-shell.Register("deploy", async ctx => { ... });     // or register a handler directly
-shell.Fs.WriteAllText("/data/config.json", json);   // mount data for the agent to explore
-
-// Tool definition for your LLM SDK:
-//   name: BashTool.Name ("bash")   description: BashTool.Description   schema: BashTool.InputSchemaJson
-string result = await BashTool.ExecuteAsync(shell, command);   // when the model calls the tool
-
-public class OrderTools
+public class Tools
 {
     [Command("orders", Description = "List orders")]
-    public async Task<List<Order>> List(
-        [Description("Filter by status")] string? status = null,
-        int limit = 20,
-        bool includeArchived = false) => ...;       // objects are printed as JSON
+    public List<Order> Orders(string? status = null, int limit = 20) => Db.Orders(status, limit);
 }
+
+var shell = new Shell().Register(new Tools());
+shell.Fs.WriteAllText("/home/agent/notes.txt", "hi");
+
+// Tool definition: BashTool.Name, BashTool.Description, BashTool.InputSchemaJson
+string output = await BashTool.ExecuteAsync(shell, "orders --status open | jq length");
 ```
 
-### Python
+Add a project reference to `src/Topwater/Topwater.csproj`.
 
-```python
-from typing import Annotated
-import topwater
-from topwater import Shell, command
+</details>
 
-class OrderTools:
-    @command("orders", description="List orders")
-    async def list_orders(self, status: Annotated[str | None, "Filter by status"] = None,
-                          limit: int = 20, include_archived: bool = False):
-        return [...]                                # lists/dicts/dataclasses are printed as JSON
+That's the whole integration. `orders --help` is written for you, and the agent finds your commands with `help`.
 
-shell = Shell().register(OrderTools())
-shell.fs.write_text("/data/config.json", data)
-
-# Tool definition: topwater.TOOL_NAME, topwater.TOOL_DESCRIPTION, topwater.TOOL_INPUT_SCHEMA
-result = await topwater.execute_tool(shell, command)   # or shell.run(command).to_tool_output()
-```
-
-Either way, `orders --status open --limit 5 --include-archived`, `orders open` (positional) and `orders --help`
-all work. Parameters become `--kebab-case` options or positionals, `bool` becomes a flag, and enums, arrays,
-stdin and cancellation are supported. Return a string (stdout), an int (exit code), or any object (JSON).
-
-## Try it in your browser
+## Try it yourself
 
 ```bash
-cd python && PYTHONPATH=src python -m topwater.web --demo     # then open http://127.0.0.1:8000
+cd python && PYTHONPATH=src python -m topwater.web --demo      # open http://127.0.0.1:8000
 ```
 
-A small web terminal (standard library only) runs your commands in one session, exactly as an agent's tool call
-would. It has history, Tab completion and shareable `?run=` links. `--demo` preloads sample files and an `orders`
-command. From code, `topwater.web.serve(factory=make_my_shell)` serves your own configured shell. It listens on
-localhost and has no authentication.
+A small web terminal for typing commands into the same machine your agent gets.
 
-<p align="center"><img alt="Topwater web terminal" src="assets/screenshots/web-terminal.png" width="760"></p>
+<p align="center"><img alt="Topwater web terminal" src="assets/screenshots/web-terminal.png" width="720"></p>
 
-## The tool description
+## What agents do with it
 
-The default description is honest about the sandbox and keeps the stakes real:
+Three examples, each run end to end by a real model (Gemini Flash) and checked automatically.
 
-> Run a command in a sandboxed Linux shell (bash). The working directory, environment variables and files persist
-> between calls. Standard command-line tools are available (ls, cat, grep, sed, awk, jq, find, sort, diff, ...);
-> Python, network access, git and package installation are not. Other programs on this machine are live interfaces
-> to this application's systems, so their actions are real: run `help` to list them and `<program> --help` for usage.
+| | What the agent did | Result |
+|---|---|---|
+| **[Answer from your documents](python/examples/usecase_document_helpdesk.py)** | Searched a Word policy, an Excel sheet, a web page and a 57-page PDF with `to-markdown`, then answered five employee questions with sources | 6 / 6 checks |
+| **[Analyse your database](python/examples/usecase_sql_analyst.py)** | Explored a SQLite database through a read-only `sqlite3`, wrote a revenue report to CSV, answered two follow-ups | 7 / 7 checks |
+| **[Drive a real program](python/examples/usecase_real_cli.py)** | Cut a release with the real `git`: branch, version bump, changelog, commit, tag | 10 / 10 checks |
 
-We tested it against two alternatives (see [Results](#results-with-a-real-model)). Pretending to be an ordinary
-machine made the model spend turns probing for Python, git and graders. Saying "this is a simulation" didn't help
-either. Being upfront about the limits did best.
+The third one uses a bridge that exposes any real program on your machine as a command
+(git, [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI), ffmpeg, your own binaries) while the agent keeps
+working on its virtual files. It is one line, `register_host_command(shell, "git")`, and it comes with a
+[warning worth reading](docs/reference.md#real-host-programs).
 
-## What the shell supports
+## What's in the box
 
-- **Syntax:** quoting and escapes, `$VAR`, `$(...)`, backticks, `~`, globs, brace expansion (`{a,b}`, `{1..10}`, `{01..05}`), process substitution `<(...)`
-- **Parameter expansion:** `${x:-d}` `${x:=d}` `${x:+a}` `${x:?msg}` `${#x}` `${x%pat}` `${x%%pat}` `${x#pat}` `${x##pat}` `${x/a/b}` `${x//a/b}` `${x:1:3}` `${x^^}` `${x,,}`
-- **Control flow:** `if/elif/else`, `for`, `for ((;;))`, `while`/`until`, `case`, `break`/`continue`, functions with `local`/`return`, `$1`/`$@`/`$#`, `[[ ]]` (globs, `=~`), `$(( ))`/`(( ))`/`let`
-- **Lists and redirects:** `|` `&&` `||` `;` `!` `{ }` `( )`, `VAR=x cmd`, `>` `>>` `<` `2>` `2>&1` `&>`, heredocs, `<<<`, redirects on loops (`while read -r -d '' f; do ...; done < <(find . -print0)`)
-- **Scripts:** `./script.sh args`, `bash -c`, `source`, `set -e`, `set -o pipefail`, `exit`, `eval`
-- **Built-in programs:**
-  - files: `ls cd pwd cat mkdir rmdir rm cp mv touch find tree stat du df file realpath readlink basename dirname mktemp chmod less`
-  - text: `echo printf grep head tail wc sort uniq cut sed tr tee xargs awk jq diff nl tac rev paste column seq base64 sha256sum`
-  - shell: `export env set shift local read alias history which type command test [ bash source eval let sleep timeout time help`
-  - system: `uname whoami hostname date ps id uptime free nproc`, with `--version`/`--help` that look like the real GNU tools
-- **Realism:** `/etc/os-release` (Ubuntu 24.04), `/etc/passwd`, `/bin` and `/usr/bin` listing every command (yours included), `/dev/null`
-- **A regular user account:** the agent runs as `agent`, not root. It owns its home directory and can use `/tmp`,
-  while `/etc`, `/usr`, `/bin`, `/var/log` and `/root` belong to root. Writes there fail with `Permission denied`,
-  `chmod`/`chown` on them fail with `Operation not permitted`, and `sudo` says `agent is not in the sudoers file`.
-  `chmod` on the agent's own files is real: scripts need `chmod +x` before `./script.sh` runs, and `ls -l`/`stat`
-  show the actual modes. Your app is unrestricted when it uses `shell.Fs` / `shell.fs` directly, and files it creates
-  belong to whoever owns the directory, so data you put in the agent's home is the agent's to edit.
-- **Safety:** loops stop after 100,000 iterations (configurable). `set -e` and `pipefail` reset after every tool call.
+- **A real shell language.** Pipes, redirects, loops, functions, heredocs, `$(...)`, `set -e`, scripts.
+- **About 100 standard commands.** `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff`, `xargs` and friends.
+- **Document reading.** Word, Excel, PowerPoint, PDF and HTML become searchable Markdown.
+- **A regular user account.** The agent owns its home folder. System files are read-only and `sudo` says no.
+- **Guard rails.** Runaway loops stop, long output is trimmed, and a crashing tool returns an error instead of
+  taking down your agent.
 
-**Not supported:** arrays, `select`, background jobs (`&` runs in sequence), `>(...)`, `awk` user functions and
-`getline`, `jq` object construction, and group permissions.
+The full list is in the [reference](docs/reference.md).
 
-## Results with a real model
+## Does it actually work?
 
-`python/examples/gemini_harness.py` gives Gemini (`gemini-flash-latest`) only the `bash` tool and six everyday tasks,
-then checks the results itself. It looks at the answer and at files left on the virtual machine. Two runs per task
-per description:
+We gave Gemini Flash six everyday tasks with nothing but the `bash` tool, and tried three ways of describing
+the machine to it:
 
-| Tool description | Tasks solved | Avg commands | Avg off-task probes |
-|---|---|---|---|
-| "an ordinary Linux machine" | 9 / 12 | 10.8 | 2.9 |
-| **"a sandboxed shell; no Python, network or git" (default)** | **11 / 12** | **9.4** | **1.7** |
-| "a simulated environment" | 9 / 12 | 11.4 | 2.8 |
+| How the tool was described | Tasks solved | Wasted commands per task |
+|---|---|---|
+| "An ordinary Linux machine" | 9 / 12 | 2.9 |
+| **"A sandboxed shell. No Python, network or git." (the default)** | **11 / 12** | **1.7** |
+| "A simulated environment" | 9 / 12 | 2.8 |
 
-`python/examples/handbook_quiz.py` loads a 205 KB university student handbook into the filesystem and asks five
-questions only the document can answer. Gemini scored **5/5** in two out of two runs, with exact quotes. It worked
-the way a person at a terminal would: `find` to locate the file, `grep -n -C 5` per topic, `sed -n` to read
-around each hit. When `grep fish` found nothing for "can I keep a fish tank?", it tried `pet`, then `aquarium`.
+Being honest about the limits worked best. Pretending to be a normal machine sent the model looking for Python
+and git, and it gave no benefit to tell it the machine was fake.
 
-Every gap these runs exposed became a regression test. That includes the exact backup script Gemini wrote, which
-needed `read -d ''`, `find -print0` and `<(...)`.
+Small details matter more than you would expect. In one run the model stopped trusting the machine because a
+database file was 16 bytes long. In another it spent its turns re-running `chmod` because `ls -l` did not
+change. Both are fixed, and each problem a real model found in the shell is now a test.
 
-## Project layout
+Run it yourself: `python/examples/gemini_harness.py`.
 
-```
-src/Topwater/              C# library (Shell, parser, filesystem, built-ins, [Command] binding)
-tests/Topwater.Tests/      xUnit tests
-python/src/topwater/       Python port (same behaviour, same test cases)
-python/tests/              unittest tests
-python/src/topwater/web.py web terminal (python -m topwater.web)
-python/examples/           real-model harness and the handbook quiz
-assets/                   logo, icon and wordmark (SVG + PNG), screenshots
-```
+## Good to know
+
+- **Python and C# behave the same**, and share the same test cases. The web terminal and the examples are
+  Python only.
+- **Not on PyPI or NuGet yet.** Install from this repository.
+- **No Python or network inside the machine.** Agents reach for both. The default tool description tells them
+  up front.
+- **PDFs need `pdftotext`** on your machine. Everything else has no dependencies.
+- **A real program you register is real.** The simulation does not contain it. See the
+  [reference](docs/reference.md#real-host-programs).
 
 ## Development
 
 ```bash
-dotnet test                                          # C#: 69 tests
-cd python && python -m unittest discover -s tests    # Python: 17 tests (80+ cases)
-GEMINI_API_KEY=... VARIANTS=plain,restricted,fake REPEAT=2 python examples/gemini_harness.py
+dotnet test                                           # C#
+cd python && python -m unittest discover -s tests     # Python
 ```
 
-The two implementations don't share code. Keep them in step by adding each behaviour change as a test case in both
-suites.
+The two versions do not share code. A behaviour change goes into both, with a test in both.
 
 ## License
 
-Not yet chosen. The bash parser is a clean-room implementation, so any license is available.
+Not chosen yet. The shell was written from scratch, so any license is possible.
