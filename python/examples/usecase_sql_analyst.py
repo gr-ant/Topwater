@@ -190,7 +190,8 @@ def build_database(path: str) -> None:
     """)
     regions = ["north", "south", "east", "west"]
     names = ["Acme Corp", "Globex", "Initech", "Umbrella", "Hooli", "Stark Industries", "Wayne Enterprises", "Wonka",
-             "Cyberdyne", "Soylent", "Tyrell", "Massive Dynamic", "Vandelay", "Dunder Mifflin", "Pied Piper", "Oscorp"]
+             "Cyberdyne", "Soylent", "Tyrell", "Massive Dynamic", "Vandelay", "Dunder Mifflin", "Pied Piper", "Oscorp",
+             "Bluth Company", "Sterling Cooper"]  # the last two stopped ordering after 2025
     for i, n in enumerate(names, 1):
         conn.execute("INSERT INTO customers VALUES (?,?,?,?)", (i, n, regions[i % 4], f"2025-{1 + i % 12:02d}-{1 + (i * 3) % 27:02d}"))
     products = [("Widget", "hardware", 19.5), ("Gadget", "hardware", 42.0), ("Gizmo", "hardware", 8.25), ("Pro Plan", "software", 99.0),
@@ -199,9 +200,9 @@ def build_database(path: str) -> None:
     for i, (n, c, p) in enumerate(products, 1):
         conn.execute("INSERT INTO products VALUES (?,?,?,?)", (i, n, c, p))
     for oid in range(1, 401):
-        cust = rng.randint(1, len(names))
-        month = rng.randint(1, 12)
         year = 2025 if oid <= 160 else 2026
+        cust = rng.randint(1, len(names) if year == 2025 else len(names) - 2)
+        month = rng.randint(1, 12)
         items = [(rng.randint(1, len(products)), rng.randint(1, 5)) for _ in range(rng.randint(1, 4))]
         refund_bias = 0.22 if any(products[p - 1][1] == "accessories" for p, _ in items) else 0.06
         roll = rng.random()
@@ -217,7 +218,7 @@ TASK = """The company database is at ~/shop.db (SQLite). Please:
    them to ~/top_customers.csv with the header `customer,revenue`, highest first, revenue rounded to 2 decimals.
 2. Tell me which product category has the highest share of refunded orders (an order counts for a category if it
    contains at least one product from it), and what that share is as a percentage.
-3. Tell me how many customers placed no paid orders in 2026."""
+3. Tell me how many customers placed no paid orders in 2026, and who they are."""
 
 
 def main() -> None:
@@ -233,8 +234,8 @@ def main() -> None:
         cat, share = conn.execute("""SELECT category, 100.0 * SUM(status = 'refunded') / COUNT(*) share FROM
                                      (SELECT DISTINCT o.id, o.status, p.category FROM orders o JOIN order_items i ON i.order_id = o.id
                                       JOIN products p ON p.id = i.product_id) GROUP BY category ORDER BY share DESC LIMIT 1""").fetchone()
-        idle = conn.execute("""SELECT COUNT(*) FROM customers WHERE id NOT IN
-                               (SELECT customer_id FROM orders WHERE status = 'paid' AND ordered_at >= '2026-01-01')""").fetchone()[0]
+        idle = [r[0] for r in conn.execute("""SELECT name FROM customers WHERE id NOT IN
+                    (SELECT customer_id FROM orders WHERE status = 'paid' AND ordered_at >= '2026-01-01')""")]
         before = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
         conn.close()
 
@@ -259,8 +260,8 @@ def main() -> None:
             ("CSV lists the right top 3 customers in order", [r[0] for r in rows[1:4]] == [n for n, _ in top]),
             ("CSV revenues are correct", len(rows) == 4 and all(close(r[1], v) for r, (_, v) in zip(rows[1:], top))),
             (f"answer names the category ({cat})", cat in result.answer.lower()),
-            (f"answer gives the refund share (~{share:.1f}%)", bool(re.search(rf"\b{share:.0f}(\.\d+)?\s*%|\b{share:.1f}", result.answer))),
-            (f"answer gives the idle customer count ({idle})", bool(re.search(rf"\b{idle}\b", result.answer))),
+            (f"answer gives the refund share (~{share:.1f}%)", any(abs(float(n) - share) < 0.1 for n in re.findall(r"\d+\.\d+", result.answer))),
+            (f"answer names the idle customers ({', '.join(idle)})", all(n in result.answer for n in idle)),
             ("database was not modified", before == after),
         ]
         ok = report("SQL analyst", checks, result)

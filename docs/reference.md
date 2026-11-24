@@ -40,9 +40,11 @@ State persists between tool calls: working directory, variables, functions, alia
 
 `help` lists everything, including your commands. Standard tools answer `--version` and `--help` the way the
 real ones do. `find` supports `-name -iname -path -regex -type -size -mmin -mtime -newer -empty -maxdepth
--mindepth -print -print0 -exec -delete` with `!`, `-o` and parentheses. `awk` covers patterns, ranges,
-`BEGIN`/`END`, fields, arrays, `if`/`for`/`while`, `printf`, `split`, `sub`/`gsub`, `substr`, `-F` and `-v`.
-`jq` covers paths, pipes, `select`, `map`, `has`, `keys`, `length`, `add` and comparisons.
+-mindepth -print -print0 -exec -delete` with `!`, `-o` and parentheses. `sed` is a full engine: addresses, `{}` blocks, hold space, labels and branches, `-i`, `-E`.
+`awk` covers patterns, ranges, `BEGIN`/`END`, fields, arrays, control flow, user-defined functions, `getline`
+from files, `printf`, and the string functions. `jq` is a real parser with about 90 builtins: object
+construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_entries`, `reduce`, `@csv`,
+`--arg`, `-r`, `-e`, `-s`.
 
 ## Your own commands
 
@@ -180,5 +182,6 @@ announcing "this is a simulation" (see the README).
 
 ## Not supported
 
-Arrays, `select`, background jobs (`&` runs things in order), `>(...)`, user-defined functions and `getline`
-in `awk`, object construction in `jq`, group permissions, symlinks, and a real `python` or network access.
+Arrays, `select` menus, background jobs (`&` runs things in order), `>(...)`, running shell commands from
+inside `awk` (`print | "cmd"`), symlinks and `ln`, group permissions, and a real `python` or network access.
+`sleep` really waits, so wrap calls in your own timeout if that matters.
