@@ -5,11 +5,11 @@
   </picture>
 </p>
 
-<h3 align="center">Your agent already knows how to use a computer. Give it one.</h3>
+<h3 align="center">A simulated Linux shell for LLM agents</h3>
 
 <p align="center">
-  Topwater turns your app's tools into commands on a simulated Linux machine,<br>
-  so your agent needs just one tool: <code>bash</code>.
+  Your app's functions become command-line programs in an in-memory Linux machine.<br>
+  The model gets one tool, <code>bash</code>, and uses them with pipes, files and <code>--help</code>.
 </p>
 
 <p align="center">
@@ -37,10 +37,9 @@ Topwater puts your tools where the model is already fluent:
 
 - **One tool instead of twenty.** Your functions become programs. The model combines them with pipes, loops and
   files instead of juggling JSON calls.
-- **A real-feeling machine.** Files, permissions, about 100 standard commands, even `/etc/os-release`. The model
+- **A believable machine.** Files, permissions, about 100 standard commands, even `/etc/os-release`. The model
   explores it the way it would explore any server.
-- **Nothing escapes.** It is a simulation inside your process. There is no real shell, and the agent's files
-  live in memory.
+- **No real shell.** Commands are interpreted inside your process, and the agent's files live in memory.
 
 ## Quick start
 
@@ -92,9 +91,9 @@ Add a project reference to `src/Topwater/Topwater.csproj`.
 
 </details>
 
-That's the whole integration. `orders --help` is written for you, and the agent finds your commands with `help`.
+`orders --help` is written for you, and the agent finds your commands with `help`.
 
-## Try it yourself
+## Web terminal
 
 ```bash
 cd python && PYTHONPATH=src python -m topwater.web --demo      # open http://127.0.0.1:8000
@@ -104,7 +103,7 @@ A small web terminal for typing commands into the same machine your agent gets.
 
 <p align="center"><img alt="Topwater web terminal" src="assets/screenshots/web-terminal.png" width="720"></p>
 
-## What agents do with it
+## Examples
 
 Three examples, each run end to end by a real model (Gemini Flash) and checked automatically.
 
@@ -119,7 +118,7 @@ The third one uses a bridge that exposes any real program on your machine as a c
 working on its virtual files. It is one line, `register_host_command(shell, "git")`, and it comes with a
 [warning worth reading](docs/reference.md#real-host-programs).
 
-## What's in the box
+## Features
 
 - **A real shell language.** Pipes, redirects, loops, functions, heredocs, `$(...)`, `set -e`, scripts.
 - **About 100 standard commands.** `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff`, `xargs` and friends.
@@ -130,7 +129,7 @@ working on its virtual files. It is one line, `register_host_command(shell, "git
 
 The full list is in the [reference](docs/reference.md).
 
-## Does it actually work?
+## Test results
 
 We gave Gemini Flash six everyday tasks with nothing but the `bash` tool, and tried three ways of describing
 the machine to it:
@@ -150,7 +149,7 @@ change. Both are fixed, and each problem a real model found in the shell is now 
 
 Run it yourself: `python/examples/gemini_harness.py`.
 
-## Good to know
+## Limitations
 
 - **Python and C# behave the same**, and share the same test cases. The web terminal and the examples are
   Python only.

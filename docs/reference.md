@@ -155,7 +155,7 @@ Before each call the agent's workspace (its home directory by default) is copied
 the program runs there, and its changes are copied back. Options: `workspace`, `env`, `timeout`, `exclude`,
 and `launcher` (wrap the command line, for example to run it inside a sandbox).
 
-**This opens a door in the box.** The program is real and runs with your process's permissions. Topwater points
+**This is not sandboxed.** The program is real and runs with your process's permissions. Topwater points
 it at the private folder and redirects path arguments there, which stops casual wandering but is not a security
 boundary. Wrap only tools you would let the agent use directly, and use `launcher` with a real sandbox
 (bubblewrap, firejail, a container) when the stakes call for it.
