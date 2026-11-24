@@ -9,6 +9,29 @@ description = "Give your agent one `bash` tool backed by a simulated Linux shell
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["agents", "llm", "tool-use", "bash", "shell", "sandbox", "simulation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/gr-ant/Topwater"
+Repository = "https://github.com/gr-ant/Topwater"
+Issues = "https://github.com/gr-ant/Topwater/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+topwater = ["py.typed"]

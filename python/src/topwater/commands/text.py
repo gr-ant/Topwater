@@ -6,7 +6,7 @@ import re
 
 from ..shell import glob_to_regex
 from ..vfs import ShellError, normalize
-from . import Args, inputs, split_lines, unescape, write_lines
+from . import Args, inputs, split_lines, unescape
 
 
 _CLASSES = {

@@ -4,6 +4,22 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata (no license is set: the owner hasn't chosen one yet) -->
+    <PackageId>Topwater</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Give your agent one `bash` tool backed by an in-process simulated Linux shell: a bash interpreter, an in-memory filesystem, ~100 standard utilities, and your own methods as commands.</Description>
+    <PackageTags>agents;llm;tool-use;bash;shell;sandbox;simulation</PackageTags>
+    <PackageProjectUrl>https://github.com/gr-ant/Topwater</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/gr-ant/Topwater</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>
