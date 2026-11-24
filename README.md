@@ -5,159 +5,198 @@
   </picture>
 </p>
 
-<h3 align="center">A simulated Linux shell for LLM agents, in C#</h3>
+Topwater is a .NET 8 library that gives an LLM agent a single `bash` tool backed by a simulated Linux shell
+running inside your process.
 
-<p align="center">
-  Your methods and your MCP servers become command-line programs in an in-memory Linux machine.<br>
-  The model gets one tool, <code>bash</code>, and finds the rest with <code>--help</code>.
-</p>
-
-<p align="center">
-  <b>.NET 8</b> · runs inside your process · no containers
-</p>
-
----
+The shell has an in-memory filesystem, a real shell language (pipes, loops, functions, heredocs), about 100
+standard commands (`grep`, `sed`, `awk`, `jq`, `find`, ...) and a regular non-root user. Your C# methods, MCP
+servers and selected real host programs appear in it as command-line programs, so the model discovers them with
+`--help` instead of receiving every tool definition up front. No containers are involved.
 
 ```console
 agent@topwater:~$ github --help
+GitHub issues
+
 Usage: github TOOL [--option value]...
+       github TOOL --help
 
 Tools:
-  create-issue   Create a new issue in a repository
-  list-issues    List issues in a repository
-  ...
-agent@topwater:~$ github list-issues --repo acme/api --state open | jq -r '.[].title' | head -3
+  create-issue  Create a new issue in a repository
+  list-issues   List issues in a repository
+agent@topwater:~$ github list-issues --repo acme/api --state open | jq -r '.[].title'
 Timeout on large uploads
 Add retry to webhook sender
 Docs: fix auth example
+agent@topwater:~$ orders --status open | jq length
+2
 agent@topwater:~$ sudo rm -rf /
 agent is not in the sudoers file.
+[exit code 1]
 ```
 
-## Why
+Here `github` is an MCP server and `orders` is a C# method. The model sees neither until it runs them.
 
-Every tool definition you hand a model costs context, and a few MCP servers can add up to hundreds of them.
-The shell is the one interface models already know well: they are good at `grep`, pipes and `--help`.
+## Installation
 
-- **One tool instead of hundreds.** The model sees `bash`. It lists programs with `help` and reads a tool's
-  options only when it needs that tool.
-- **Tools compose.** Output from one tool pipes into `jq`, a file, or the next tool, without a round trip
-  through the model.
-- **No real shell.** Commands are interpreted inside your process, and the agent's files live in memory.
+Topwater is not on NuGet yet. Reference the projects from this repository:
 
-## Quick start
+```bash
+dotnet add reference path/to/Topwater/src/Topwater/Topwater.csproj
+dotnet add reference path/to/Topwater/src/Topwater.Mcp/Topwater.Mcp.csproj   # only for MCP servers
+```
 
-Add a project reference to `src/Topwater/Topwater.csproj` (and `src/Topwater.Mcp/Topwater.Mcp.csproj` for MCP).
+The core project has no dependencies. `Topwater.Mcp` uses the official `ModelContextProtocol` SDK.
+
+## Usage
+
+Create a shell, give the model the `bash` tool, and pass each command it sends to `BashTool.ExecuteAsync`:
 
 ```csharp
 using Topwater;
 
 var shell = new Shell();
-shell.Fs.WriteAllText("/home/agent/notes.txt", "hi");     // give the agent some files
+shell.Fs.WriteAllText("/home/agent/notes.txt", "hello");
 
-// Hand the model one tool: BashTool.Name, BashTool.Description, BashTool.InputSchemaJson
-// ...and run whatever it asks for.
-string output = await BashTool.ExecuteAsync(shell, "grep -c hi notes.txt");
+// Tool definition for your model API: BashTool.Name, BashTool.Description, BashTool.InputSchemaJson.
+// When the model calls it with {"command": "..."}:
+string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");
+// Send `output` back as the tool result.
 ```
 
-### Mount an MCP server
+`ExecuteAsync` returns stdout, then stderr, then `[exit code N]` if the command failed. The working directory,
+variables, functions and files persist between calls, so use one `Shell` per conversation. A complete agent loop
+against the Gemini API is in [`examples/Shared/GeminiAgent.cs`](examples/Shared/GeminiAgent.cs).
+
+To use the shell yourself:
+
+```bash
+dotnet run --project examples/McpShell
+dotnet run --project examples/McpShell -- everything npx -y @modelcontextprotocol/server-everything
+```
+
+The second form mounts an MCP server as the command `everything`.
+
+## Adding programs
+
+### C# methods
+
+```csharp
+using System.ComponentModel;
+using Topwater;
+
+public class Tools
+{
+    [Command("orders", Description = "List orders")]
+    public List<Order> Orders([Description("Filter by status")] string? status = null, int limit = 20) => Db.Orders(status, limit);
+}
+
+shell.Register(new Tools());
+```
+
+```console
+agent@topwater:~$ orders --help
+Usage: orders [--status <text>] [--limit <int>]
+
+List orders
+
+Options:
+  --status <text>  Filter by status
+  --limit <int>    [default: 20]
+```
+
+Parameters become `--kebab-case` options, `bool` becomes a flag and enums become choices. A returned string is
+printed, an `int` is the exit code, and any other value is printed as JSON. An exception becomes an error
+message and a non-zero exit code. For full control over arguments and streams, register a handler:
+`shell.Register("deploy", async ctx => { ...; return 0; })`.
+
+### MCP servers
 
 ```csharp
 using Topwater.Mcp;
 
-// a local server over stdio
-await using var fs = await shell.MountMcpAsync("files", "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/data"]);
+// a server started over stdio
+await using var files = await shell.MountMcpAsync("files", "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/data"]);
 
-// or any McpClient you already have (HTTP, auth, your own transport)
-await using var gh = await shell.MountMcpAsync("github", client, new McpMountOptions { Include = name => !name.StartsWith("delete") });
+// or an McpClient you already created (HTTP, auth, custom transport)
+await using var github = await shell.MountMcpAsync("github", client, new McpMountOptions
+{
+    Include = name => !name.StartsWith("delete"),
+});
 ```
 
-Each server becomes one program. `github` lists its tools, `github list-issues --help` shows the options
-(built from the tool's JSON Schema), and `github list-issues --repo acme/api` calls it. Nothing about the
-server's tools is sent to the model up front.
+Each server becomes one program with a subcommand per tool. Options are generated from each tool's JSON Schema
+and checked before the call; a tool error goes to stderr with exit code 1. Only tools are mounted, not resources
+or prompts, and the tool list is read once at mount time. `shell.RegisterTools(...)` applies the same mapping to
+any tools described by a JSON Schema, without MCP.
 
-### Turn your own methods into commands
+### Host programs
 
 ```csharp
-public class Tools
+using var office = shell.RegisterHostCommand("officecli", options: new HostCommandOptions
 {
-    [Command("orders", Description = "List orders")]
-    public List<Order> Orders(string? status = null, int limit = 20) => Db.Orders(status, limit);   // prints as JSON
-}
-
-shell.Register(new Tools());      // orders --status open | jq length
+    Environment = { ["OFFICECLI_NO_AUTO_RESIDENT"] = "1" },
+});
 ```
 
-## Try it
+A registered program is a real executable from your `PATH`. Before each call, the agent's home directory and
+`/tmp` are copied to a private folder on disk; the program runs there with path arguments redirected into it, and
+its changes are copied back. `HostCommandOptions` sets the workspace, shared folders, environment, timeout,
+exclusions and an optional `Launcher` that wraps the command line.
 
-```bash
-dotnet run --project examples/McpShell                                   # a terminal on the simulated machine
-dotnet run --project examples/McpShell -- everything npx -y @modelcontextprotocol/server-everything
-```
+## The simulated machine
 
-The second form mounts an MCP server as a command, so you can type what an agent would.
-
-## Features
-
-- **MCP servers as programs.** Tools become subcommands with generated `--help`, typed options and exit codes.
-- **A real shell language.** Pipes, redirects, loops, functions, heredocs, `$(...)`, `set -e`, scripts.
-- **About 100 standard commands.** `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff`, `xargs` and friends.
-- **Document reading.** Word, Excel, PowerPoint, PDF and HTML become searchable Markdown with `to-markdown`.
-- **A regular user account.** The agent owns its home folder. System files are read-only and `sudo` says no.
-- **Guard rails.** Runaway loops stop, long output is trimmed, and a failing tool returns an error instead of
-  taking down your agent.
-
-The full list is in the [reference](docs/reference.md).
-
-## Test results
-
-All of these were run by a real model, Gemini Flash, with nothing but the `bash` tool. The samples are small,
-so read them as "it works", not as benchmarks.
-
-**MCP server as a command.** The model triaged an issue tracker that it could reach only through an MCP server
-mounted as `tracker`. It found the tools with `tracker --help` and passed 6 / 6 checks in 12 commands, none
-failing. One run, five tools: `examples/McpAgent`.
-
-**A real program through the shell.** With the real [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)
-registered as a host command, the model turned a text file of notes into a Word document with a heading, a
-summary, a table and two sections: 5 / 5 checks in 30 commands. One run: `examples/OfficeAgent`.
-
-**Six everyday tasks, three ways of describing the tool** (two runs each, `examples/Harness`):
-
-| How the tool was described | Tasks solved |
+| Area | What it has |
 |---|---|
-| "An ordinary Linux machine" | 9 / 12 |
-| **"A sandboxed shell. No Python, network or git." (the default)** | **11 / 12** |
-| "A simulated environment" | 9 / 12 |
+| Shell language | pipes, redirects, `$(...)`, `if`/`for`/`while`/`case`, functions, heredocs, parameter expansion, `set -e`, scripts |
+| Programs | about 100, including `grep` `sed` `awk` `jq` `find` `sort` `diff` `xargs`; `help` lists them all, yours included |
+| Documents | `to-markdown` converts Word, Excel, PowerPoint, HTML, CSV and JSON to Markdown; PDF needs `pdftotext` on the host |
+| User | `agent`, a regular user who owns its home directory and can write to `/tmp`; system folders are read-only and `sudo` refuses |
+| Filesystem | in memory, laid out like Ubuntu 24.04; populate it from your code through `shell.Fs` |
 
-Every failure was the model running out of its 25 turns, never a wrong answer. Four of the six tasks passed
-every time. On the other two (sum a CSV, write a backup script) the model often explored the machine for 20
-turns before doing a one-line job: reading unrelated files, looking for Python, searching for hidden test
-files. The default description did best, but a two-task gap on twelve runs is not strong evidence.
+The [reference](docs/reference.md) lists every supported feature, command and option.
 
-**A system prompt line helps a little.** Adding "Go straight to the task: run only the commands it needs,
-and do not explore the machine first" took those two tasks from 6 / 8 to 8 / 8 in one batch, but a later run
-with the same line still explored for 21 turns and failed. Removing every Python file from the sample project
-did not help either: 7 of 8 runs still checked for Python, and 5 of 8 passed. Expect this model to wander; give
-it turns to spare.
+## Safety and limits
 
-Every example saves its full transcript under `runs/`, so you can see exactly what the model did.
-
-**Earlier runs.** The Python version of the same shell passed three longer tasks: answering questions from
-Word, Excel and HTML documents (6 / 6 checks), analysing a SQLite database (7 / 7), and cutting a release with
-the real `git` (10 / 10). Those scripts are on the [`python` branch](../../tree/python).
+- The shell is simulated: commands are interpreted in your process and touch only the in-memory filesystem.
+  MCP calls and registered host programs are real. Use `McpMountOptions.Include` to expose only the tools you
+  want the agent to have.
+- A host program runs with your process's permissions. Path redirection keeps it pointed at its private folder
+  but is not a sandbox; set `HostCommandOptions.Launcher` to run it inside a real one (bubblewrap, firejail, a
+  container). See [Real host programs](docs/reference.md#real-host-programs).
+- Loops stop after 100,000 iterations, a regular expression that runs longer than 5 seconds is stopped, and tool
+  output is cut at 30,000 characters with a note saying how much was dropped.
+- A command that throws becomes an error message and exit code, not an exception in your agent loop.
+- A `Shell` is not safe to share between threads.
 
 ## Limitations
 
-- **Not on NuGet yet.** Reference the projects from this repository.
-- **MCP calls are real.** The shell is simulated; the servers you mount are not. Use `Include` to expose only
-  the tools you want the agent to have.
-- **MCP tools only.** Resources and prompts are not exposed, and the tool list is read once when mounting.
-- **No Python or network inside the machine.** Agents reach for both. The default tool description tells them
-  up front.
-- **PDFs need `pdftotext`** on your machine.
-- **A real host program you register is real.** It runs with your process's permissions; path redirection is a
-  convenience, not a sandbox. See the [reference](docs/reference.md#real-host-programs).
+- No Python, network access or git inside the machine unless you register them. The default tool description
+  tells the model so.
+- Not supported: arrays, background jobs, symlinks. The full list is under
+  [Not supported](docs/reference.md#not-supported).
+- MCP resources and prompts are not exposed.
+
+## Test results
+
+These runs used Gemini Flash with only the `bash` tool. The samples are small: they show that it works and are
+not benchmarks. Each example saves its full transcript under `runs/`.
+
+| Example | Task | Result |
+|---|---|---|
+| `examples/McpAgent` | Triage an issue tracker reachable only through an MCP server | 6 / 6 checks in 12 commands |
+| `examples/OfficeAgent` | Turn text notes into a Word document with the real OfficeCLI | 5 / 5 checks in 30 commands |
+
+`examples/Harness` runs six everyday tasks, twice each, under three tool descriptions:
+
+| Tool description | Tasks solved |
+|---|---|
+| "An ordinary Linux machine" | 9 / 12 |
+| "A sandboxed shell. No Python, network or git." (the default) | 11 / 12 |
+| "A simulated environment" | 9 / 12 |
+
+Every failure was the model running out of its 25 turns, usually after exploring the machine instead of doing
+the task; none was a wrong answer. A system prompt line telling it to go straight to the task helped in one
+batch and not in another. Removing the Python files from the sample project did not stop it checking for Python.
 
 ## Development
 
@@ -165,8 +204,8 @@ the real `git` (10 / 10). Those scripts are on the [`python` branch](../../tree/
 dotnet test
 ```
 
-The earlier Python port is on the [`python` branch](../../tree/python) and is not kept in step with `main`.
+An earlier Python port is on the [`python` branch](../../tree/python) and is not kept in step with `main`.
 
 ## License
 
-Not chosen yet. The shell was written from scratch, so any license is possible.
+No license has been chosen yet.
