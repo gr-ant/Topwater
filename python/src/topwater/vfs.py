@@ -42,6 +42,17 @@ class _File:
     modified: datetime = field(default_factory=datetime.now)
     owner: str = "root"
     mode: int = DEFAULT_FILE_MODE
+    data: bytes | None = None  # set for binary files (written with write_bytes); content is then unused
+
+    def raw(self) -> bytes:
+        return self.content.encode() if self.data is None else self.data
+
+    def store(self, content: str | bytes, append: bool) -> None:
+        if isinstance(content, bytes) or (append and self.data is not None):
+            new = content if isinstance(content, bytes) else content.encode()
+            self.content, self.data = "", (self.raw() + new if append else new)
+        else:
+            self.content, self.data = (self.content + content if append else content), None
 
 
 def normalize(cwd: str, path: str) -> str:
@@ -84,7 +95,8 @@ class VirtualFileSystem:
     Apps can "mount" data for the agent with fs.write_text("/data/orders.json", json); new files belong to the
     owner of the directory they're created in.
 
-    shortcut: text-only files, no groups, no locking; add them if binary data, group permissions or threaded shells are needed.
+    Binary files (write_bytes / read_bytes / add_document) keep their exact bytes; the text API reads them as lossy UTF-8.
+    shortcut: no groups, no locking; add them if group permissions or threaded shells are needed.
     """
 
     def __init__(self):
@@ -155,17 +167,42 @@ class VirtualFileSystem:
         if isinstance(n, _Dir):
             return FileStat(True, 4096, n.modified, n.mode, n.owner)
         if isinstance(n, _File):
-            return FileStat(False, len(n.content.encode()), n.modified, n.mode, n.owner)
+            return FileStat(False, len(n.raw()), n.modified, n.mode, n.owner)
         raise ShellError(f"{path}: No such file or directory")
 
     def read_text(self, path: str) -> str:
+        n = self._read(path)
+        return n.content if n.data is None else n.data.decode("utf-8", "replace")
+
+    def read_bytes(self, path: str) -> bytes:
+        """The file's exact bytes (UTF-8 for files written as text)."""
+        return self._read(path).raw()
+
+    def _read(self, path: str) -> _File:
         n = self._find(path)
         if isinstance(n, _File):
             self._require(n, 4, path)
-            return n.content
+            return n
         if isinstance(n, _Dir):
             raise ShellError(f"{path}: Is a directory")
         raise ShellError(f"{path}: No such file or directory")
+
+    def write_bytes(self, path: str, data: bytes) -> None:
+        self._write(path, bytes(data), append=False)
+
+    def add_document(self, path: str, source, also_markdown: bool = False) -> None:
+        """Mounts a real document for the agent: source is a host path (str/PathLike) or bytes.
+        Parent directories are created; with also_markdown, the converted text is written to "<path>.md" too."""
+        if isinstance(source, (bytes, bytearray, memoryview)):
+            data = bytes(source)
+        else:
+            with open(source, "rb") as f:
+                data = f.read()
+        self.mkdir(get_parent(path), parents=True)
+        self.write_bytes(path, data)
+        if also_markdown:
+            from .convert import to_markdown
+            self.write_text(path + ".md", to_markdown(data, get_name(path)))
 
     def write_text(self, path: str, content: str) -> None:
         self._write(path, content, append=False)
@@ -173,7 +210,7 @@ class VirtualFileSystem:
     def append_text(self, path: str, content: str) -> None:
         self._write(path, content, append=True)
 
-    def _write(self, path: str, content: str, append: bool) -> None:
+    def _write(self, path: str, content: str | bytes, append: bool) -> None:
         path = normalize("/", path)
         if path == "/dev/null" and self._find(path) is not None:
             return
@@ -184,11 +221,12 @@ class VirtualFileSystem:
             if not isinstance(existing, _File):
                 raise ShellError(f"{path}: Is a directory")
             self._require(existing, 2, path)
-            existing.content = existing.content + content if append else content
+            existing.store(content, append)
             existing.modified = datetime.now()
         else:
             self._require(d, 2, path)
-            d.children[name] = _File(content, owner=self.run_as or d.owner)
+            d.children[name] = f = _File(owner=self.run_as or d.owner)
+            f.store(content, False)
         d.modified = datetime.now()
 
     def touch(self, path: str) -> None:
@@ -303,5 +341,5 @@ class VirtualFileSystem:
 
 def _clone(n, owner: str):
     if isinstance(n, _File):
-        return _File(n.content, owner=owner, mode=n.mode)
+        return _File(n.content, owner=owner, mode=n.mode, data=n.data)
     return _Dir({k: _clone(v, owner) for k, v in n.children.items()}, owner=owner, mode=n.mode)

@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 from .. import arith
+from ..convert import file_type
 from ..shell import ExitSignal, LoopControl, ReturnSignal
 from ..vfs import ShellError, format_mode, get_parent, normalize
 from . import Args, inputs, split_lines, unescape, write_lines
@@ -491,15 +492,20 @@ def _file(ctx):
         elif ctx.fs.is_dir(path):
             desc = "directory"
         else:
-            t = ctx.fs.read_text(path)
+            data = ctx.fs.read_bytes(path)
+            t = data.decode("utf-8", "replace")
             if not t:
                 desc = "empty"
+            elif file_type(data):
+                desc = file_type(data)
             elif t.startswith("\x7fELF"):
                 desc = "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, stripped"
             elif t.startswith("#!"):
                 desc = ("Python script" if "python" in t.split("\n", 1)[0] else "Bourne-Again shell script") + ", ASCII text executable"
             elif _looks_json(t):
                 desc = "JSON text data"
+            elif "\0" in t or t.encode() != data:  # NUL bytes or invalid UTF-8
+                desc = "data"
             elif any(ord(c) > 127 for c in t):
                 desc = "Unicode text, UTF-8 text"
             else:
@@ -569,14 +575,14 @@ def _column(ctx):
 def _base64(ctx):
     a = Args.parse(ctx.args, "di", "w", "decode=d,ignore-garbage=i,wrap=w")
     errors = _Errors()
-    text = "".join(t for _, t in inputs(ctx, a.positional, errors))
+    data = b"".join(t for _, t in inputs(ctx, a.positional, errors, raw=True))
     if a.has("d"):
         try:
-            ctx.stdout.write(base64.b64decode("".join(text.split()), validate=True).decode("utf-8", "replace"))
+            ctx.stdout.write(base64.b64decode(b"".join(data.split()), validate=True).decode("utf-8", "replace"))
         except ValueError:
             raise ShellError("invalid input") from None
         return 1 if errors.hit else 0
-    enc = base64.b64encode(text.encode()).decode()
+    enc = base64.b64encode(data).decode()
     wrap = int(a.value("w") or 76)
     if wrap > 0:
         enc = "\n".join(enc[i:i + wrap] for i in range(0, len(enc), wrap))
@@ -588,8 +594,8 @@ def _hasher(algo):
     def run(ctx):
         files = [x for x in ctx.args if not x.startswith("-") or x == "-"]
         errors = _Errors()
-        for name, text in inputs(ctx, files, errors):
-            ctx.print(f"{hashlib.new(algo, text.encode()).hexdigest()}  {name if files else '-'}")
+        for name, data in inputs(ctx, files, errors, raw=True):
+            ctx.print(f"{hashlib.new(algo, data).hexdigest()}  {name if files else '-'}")
         return 1 if errors.hit else 0
     return run
 

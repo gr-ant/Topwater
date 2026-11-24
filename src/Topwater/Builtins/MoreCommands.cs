@@ -368,11 +368,14 @@ internal static partial class Builtins
                 else if (ctx.Fs.IsDirectory(abs)) desc = "directory";
                 else
                 {
-                    var t = ctx.Fs.ReadAllText(abs);
+                    var data = ctx.Fs.ReadAllBytes(abs);
+                    var t = Encoding.UTF8.GetString(data);
                     desc = t.Length == 0 ? "empty"
+                        : MarkdownConverter.FileType(data) is { } magic ? magic
                         : t.StartsWith("\u007fELF") ? "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, stripped"
                         : t.StartsWith("#!") ? (t.Contains("python") ? "Python script" : "Bourne-Again shell script") + ", ASCII text executable"
                         : LooksJson(t) ? "JSON text data"
+                        : t.Contains('\0') || !Encoding.UTF8.GetBytes(t).AsSpan().SequenceEqual(data) ? "data" // NUL bytes or invalid UTF-8
                         : t.Any(c => c > 127) ? "Unicode text, UTF-8 text" : "ASCII text";
                 }
                 ctx.Stdout.WriteLine($"{p}: {desc}");
@@ -434,14 +437,14 @@ internal static partial class Builtins
         {
             var a = Args.Parse(ctx.Args, "di", "w", "decode=d,ignore-garbage=i,wrap=w");
             int code = 0;
-            var text = string.Concat(Inputs(ctx, a.Positional, () => code = 1).Select(i => i.Text));
+            var data = InputBytes(ctx, a.Positional, () => code = 1).SelectMany(i => i.Text).ToArray();
             if (a.Has('d'))
             {
-                try { ctx.Stdout.Write(Encoding.UTF8.GetString(Convert.FromBase64String(string.Concat(text.Where(c => !char.IsWhiteSpace(c)))))); }
+                try { ctx.Stdout.Write(Encoding.UTF8.GetString(Convert.FromBase64String(string.Concat(Encoding.UTF8.GetString(data).Where(c => !char.IsWhiteSpace(c)))))); }
                 catch (FormatException) { throw new ShellException("invalid input"); }
                 return code;
             }
-            var enc = Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+            var enc = Convert.ToBase64String(data);
             int wrap = int.Parse(a.Value('w') ?? "76");
             if (wrap > 0) enc = string.Join('\n', enc.Chunk(wrap).Select(c => new string(c)));
             ctx.Stdout.WriteLine(enc);
@@ -454,8 +457,8 @@ internal static partial class Builtins
             {
                 int code = 0;
                 var files = ctx.Args.Where(x => !x.StartsWith('-') || x == "-").ToList();
-                foreach (var (n, text) in Inputs(ctx, files, () => code = 1))
-                    ctx.Stdout.WriteLine($"{Hex(hash(Encoding.UTF8.GetBytes(text)))}  {(files.Count == 0 ? "-" : n)}");
+                foreach (var (n, data) in InputBytes(ctx, files, () => code = 1))
+                    ctx.Stdout.WriteLine($"{Hex(hash(data))}  {(files.Count == 0 ? "-" : n)}");
                 return code;
             }, $"Compute {name[..^3].ToUpperInvariant()} checksums");
         }

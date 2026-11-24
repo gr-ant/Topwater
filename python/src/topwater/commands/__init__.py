@@ -118,17 +118,19 @@ def write_lines(w, lines) -> None:
         w.write(line + "\n")
 
 
-def inputs(ctx, files, on_error):
-    """Yields (name, text) for each file argument (or stdin when there are none / "-"), reporting missing files."""
+def inputs(ctx, files, on_error, raw: bool = False):
+    """Yields (name, text) for each file argument (or stdin when there are none / "-"), reporting missing files.
+    With raw, yields the bytes instead (exact for binary files)."""
+    stdin = ctx.stdin.encode() if raw else ctx.stdin
     if not files:
-        yield "(standard input)", ctx.stdin
+        yield "(standard input)", stdin
         return
     for f in files:
         if f == "-":
-            yield "(standard input)", ctx.stdin
+            yield "(standard input)", stdin
             continue
         try:
-            text = ctx.fs.read_text(ctx.resolve(f))
+            text = (ctx.fs.read_bytes if raw else ctx.fs.read_text)(ctx.resolve(f))
         except ShellError as e:
             ctx.stderr.write(f"{ctx.name}: {f}: {str(e).rsplit(': ', 1)[-1]}\n")
             on_error()
@@ -154,7 +156,7 @@ def unescape(s: str, keep_unknown: bool = False) -> str:
 
 
 def register_all(shell) -> None:
-    from . import awk, files, jq, more, text
+    from . import awk, binary, documents, files, jq, more, text
 
     files.register(shell)
     text.register(shell)
@@ -163,6 +165,8 @@ def register_all(shell) -> None:
     jq.register(shell)
     more.register(shell)
     awk.register(shell)
+    documents.register(shell)
+    binary.register(shell)
 
 
 # ---------- shell builtins ----------

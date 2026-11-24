@@ -120,10 +120,8 @@ def _grep(ctx):
     code = 1
     show_name = not a.has("h") and (a.has("H") or len(files) > 1 or recursive)
     for name, text in inputs(ctx, files, errors):
-        if text.startswith("\x7fELF") and not a.has("a"):
-            if not a.has("I") and rx.search(text):
-                ctx.print(f"grep: {name}: binary file matches")
-                code = 0
+        binary = "\0" in text and not a.has("a")  # GNU grep's test: a NUL byte
+        if binary and a.has("I"):
             continue
         lines = split_lines(text)
         hits = []
@@ -150,6 +148,10 @@ def _grep(ctx):
         if a.has("c"):
             ctx.print(f"{prefix}:{len(hits)}" if prefix is not None else len(hits))
             continue
+        if binary:
+            if hits:
+                ctx.print(f"grep: {name}: binary file matches")
+            continue
         hit_set = set(hits)
         last_printed = -1
         for h in hits:
@@ -174,13 +176,13 @@ def _head_tail(ctx):
     head = ctx.name == "head"
     a = Args.parse(Args.numeric_shorthand(ctx.args), "qv", "nc", "lines=n,bytes=c,quiet=q")
     errors = _Errors()
-    items = list(inputs(ctx, a.positional, errors))
+    items = list(inputs(ctx, a.positional, errors, raw=a.value("c") is not None))
     for k, (name, text) in enumerate(items):
         if len(items) > 1 and not a.has("q"):
             ctx.print(("\n" if k else "") + f"==> {name} <==")
-        if a.value("c") is not None:
+        if a.value("c") is not None:  # byte counts; text is bytes here
             n = int(a.value("c"))
-            ctx.stdout.write(text[:n] if head else text[max(0, len(text) - n):])
+            ctx.stdout.write((text[:n] if head else text[max(0, len(text) - n):]).decode("utf-8", "replace"))
             continue
         spec = a.value("n") or "10"
         lines = split_lines(text)
@@ -199,7 +201,7 @@ def _wc(ctx):
     a = Args.parse(ctx.args, "lwcm", longs="lines=l,words=w,bytes=c,chars=m")
     every = not (a.flags & set("lwcm"))
     errors = _Errors()
-    items = list(inputs(ctx, a.positional, errors))
+    items = list(inputs(ctx, a.positional, errors, raw=True))
     totals = [0, 0, 0]
 
     def row(l, w, c, name):
@@ -214,9 +216,10 @@ def _wc(ctx):
             parts.append(name)
         return " ".join(parts)
 
-    for name, text in items:
+    for name, data in items:
+        text = data.decode("utf-8", "replace")
         l, w = text.count("\n"), len(text.split())
-        c = len(text) if a.has("m") else len(text.encode())
+        c = len(text) if a.has("m") else len(data)
         totals = [totals[0] + l, totals[1] + w, totals[2] + c]
         ctx.print(row(l, w, c, name if a.positional else None))
     if len(items) > 1:

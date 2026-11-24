@@ -15,7 +15,8 @@ public readonly record struct FileStat(bool IsDirectory, long Size, DateTime Mod
 /// so the agent is an ordinary user: it can't write to root-owned places such as /etc or /usr/bin.
 /// Apps can "mount" data for the agent by writing files, e.g. <c>fs.WriteAllText("/data/orders.json", json)</c>;
 /// new files belong to the owner of the directory they're created in.
-/// shortcut: text-only files, no groups, no locking; add them if binary data, group permissions or concurrent shells are needed.
+/// Binary files (<see cref="WriteAllBytes"/>, <see cref="AddDocument(string, byte[], bool)"/>) keep their exact bytes; the text API reads them as lossy UTF-8.
+/// shortcut: no groups, no locking; add them if group permissions or concurrent shells are needed.
 /// </summary>
 public sealed class VirtualFileSystem
 {
@@ -26,7 +27,27 @@ public sealed class VirtualFileSystem
         public int Mode;
     }
     sealed class Dir : Node { public readonly SortedDictionary<string, Node> Children = new(StringComparer.Ordinal); }
-    sealed class FileNode : Node { public string Content = ""; }
+    sealed class FileNode : Node
+    {
+        public string Content = "";
+        public byte[]? Data; // set for binary files; Content is then unused
+        public byte[] Raw => Data ?? System.Text.Encoding.UTF8.GetBytes(Content);
+
+        public void Store(string? text, byte[]? bytes, bool append)
+        {
+            if (bytes != null || (append && Data != null))
+            {
+                bytes ??= System.Text.Encoding.UTF8.GetBytes(text!);
+                Data = append ? [.. Raw, .. bytes] : bytes;
+                Content = "";
+            }
+            else
+            {
+                Content = append ? Content + text : text!;
+                Data = null;
+            }
+        }
+    }
 
     public const int DefaultFileMode = 0b110_100_100; // 0644
     public const int DefaultDirMode = 0b111_101_101;  // 0755
@@ -115,24 +136,42 @@ public sealed class VirtualFileSystem
     public FileStat Stat(string path) => Find(path) switch
     {
         Dir d => new(true, 4096, d.Modified, d.Mode, d.Owner),
-        FileNode f => new(false, System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
+        FileNode f => new(false, f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
         _ => throw new ShellException($"{path}: No such file or directory"),
     };
 
-    public string ReadAllText(string path)
+    public string ReadAllText(string path) => ReadNode(path) is var f && f.Data == null ? f.Content : System.Text.Encoding.UTF8.GetString(f.Data);
+
+    /// <summary>The file's exact bytes (UTF-8 for files written as text).</summary>
+    public byte[] ReadAllBytes(string path) => ReadNode(path) is var f && f.Data != null ? (byte[])f.Data.Clone() : f.Raw;
+
+    FileNode ReadNode(string path)
     {
         switch (Find(path))
         {
-            case FileNode f: Require(f, 4, path); return f.Content;
+            case FileNode f: Require(f, 4, path); return f;
             case Dir: throw new ShellException($"{path}: Is a directory");
             default: throw new ShellException($"{path}: No such file or directory");
         }
     }
 
-    public void WriteAllText(string path, string content) => Write(path, content, append: false);
-    public void AppendAllText(string path, string content) => Write(path, content, append: true);
+    public void WriteAllText(string path, string content) => Write(path, content, null, append: false);
+    public void AppendAllText(string path, string content) => Write(path, content, null, append: true);
+    public void WriteAllBytes(string path, byte[] data) => Write(path, null, (byte[])data.Clone(), append: false);
 
-    void Write(string path, string content, bool append)
+    /// <summary>Mounts a real document from the host for the agent; see <see cref="AddDocument(string, byte[], bool)"/>.</summary>
+    public void AddDocument(string vfsPath, string hostPath, bool alsoMarkdown = false) => AddDocument(vfsPath, File.ReadAllBytes(hostPath), alsoMarkdown);
+
+    /// <summary>Stores a document's bytes at <paramref name="vfsPath"/> (creating parent directories); with
+    /// <paramref name="alsoMarkdown"/>, also writes its Markdown conversion to "&lt;vfsPath&gt;.md".</summary>
+    public void AddDocument(string vfsPath, byte[] data, bool alsoMarkdown = false)
+    {
+        CreateDirectory(GetParent(vfsPath), parents: true);
+        WriteAllBytes(vfsPath, data);
+        if (alsoMarkdown) WriteAllText(vfsPath + ".md", MarkdownConverter.ToMarkdown(data, GetName(vfsPath)));
+    }
+
+    void Write(string path, string? content, byte[]? data, bool append)
     {
         path = Normalize("/", path);
         if (path == "/dev/null" && Find(path) != null) return;
@@ -142,13 +181,15 @@ public sealed class VirtualFileSystem
         {
             if (existing is not FileNode f) throw new ShellException($"{path}: Is a directory");
             Require(f, 2, path);
-            f.Content = append ? f.Content + content : content;
+            f.Store(content, data, append);
             f.Modified = DateTime.Now;
         }
         else
         {
             Require(dir, 2, path);
-            dir.Children[name] = new FileNode { Content = content, Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode };
+            var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode };
+            file.Store(content, data, false);
+            dir.Children[name] = file;
         }
         dir.Modified = DateTime.Now;
     }
@@ -261,7 +302,7 @@ public sealed class VirtualFileSystem
 
     static Node Clone(Node n, string owner)
     {
-        if (n is FileNode f) return new FileNode { Content = f.Content, Owner = owner, Mode = f.Mode };
+        if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Owner = owner, Mode = f.Mode };
         var copy = new Dir { Owner = owner, Mode = n.Mode };
         foreach (var (k, v) in ((Dir)n).Children) copy.Children[k] = Clone(v, owner);
         return copy;

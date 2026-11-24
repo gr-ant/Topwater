@@ -105,11 +105,8 @@ internal static partial class Builtins
             bool showName = !a.Has('h') && (a.Has('H') || files.Count > 1 || recursive);
             foreach (var (name, text) in Inputs(ctx, files, () => error = true))
             {
-                if (text.StartsWith("\u007fELF") && !a.Has('a'))
-                {
-                    if (!a.Has('I') && re.IsMatch(text)) { ctx.Stdout.WriteLine($"grep: {name}: binary file matches"); code = 0; }
-                    continue;
-                }
+                bool binary = text.Contains('\0') && !a.Has('a'); // GNU grep's test: a NUL byte
+                if (binary && a.Has('I')) continue;
                 var lines = SplitLines(text);
                 var hits = new List<int>();
                 for (int i = 0; i < lines.Count && hits.Count < maxCount; i++)
@@ -120,6 +117,7 @@ internal static partial class Builtins
                 if (a.Has('l')) { if (hits.Count > 0) ctx.Stdout.WriteLine(name); continue; }
                 if (a.Has('L')) { if (hits.Count == 0) ctx.Stdout.WriteLine(name); continue; }
                 if (a.Has('c')) { ctx.Stdout.WriteLine(prefix != null ? $"{prefix}:{hits.Count}" : hits.Count.ToString()); continue; }
+                if (binary) { if (hits.Count > 0) ctx.Stdout.WriteLine($"grep: {name}: binary file matches"); continue; }
 
                 int lastPrinted = -1;
                 var hitSet = hits.ToHashSet();
@@ -145,17 +143,18 @@ internal static partial class Builtins
             bool head = ctx.Name == "head";
             var a = Args.Parse(Args.NumericShorthand(ctx.Args), "qv", "nc", "lines=n,bytes=c,quiet=q");
             int code = 0;
-            var inputs = Inputs(ctx, a.Positional, () => code = 1).ToList();
+            var inputs = InputBytes(ctx, a.Positional, () => code = 1).ToList();
             for (int k = 0; k < inputs.Count; k++)
             {
-                var (name, text) = inputs[k];
+                var (name, data) = inputs[k];
                 if (inputs.Count > 1 && !a.Has('q')) ctx.Stdout.WriteLine((k > 0 ? "\n" : "") + $"==> {name} <==");
                 if (a.Value('c') is { } bytes)
                 {
                     int n = int.Parse(bytes);
-                    ctx.Stdout.Write(head ? text[..Math.Min(n, text.Length)] : text[Math.Max(0, text.Length - n)..]);
+                    ctx.Stdout.Write(Encoding.UTF8.GetString(head ? data[..Math.Min(n, data.Length)] : data[Math.Max(0, data.Length - n)..]));
                     continue;
                 }
+                var text = Encoding.UTF8.GetString(data);
                 var spec = a.Value('n') ?? "10";
                 var lines = SplitLines(text);
                 IEnumerable<string> pick;
@@ -174,7 +173,7 @@ internal static partial class Builtins
             bool all = !a.Has('l') && !a.Has('w') && !a.Has('c') && !a.Has('m');
             int code = 0;
             long tl = 0, tw = 0, tc = 0;
-            var inputs = Inputs(ctx, a.Positional, () => code = 1).ToList();
+            var inputs = InputBytes(ctx, a.Positional, () => code = 1).ToList();
             string Row(long l, long w, long c, string? name)
             {
                 var parts = new List<string>();
@@ -184,10 +183,11 @@ internal static partial class Builtins
                 if (name != null) parts.Add(name);
                 return string.Join(' ', parts);
             }
-            foreach (var (name, text) in inputs)
+            foreach (var (name, data) in inputs)
             {
+                var text = Encoding.UTF8.GetString(data);
                 long l = text.Count(ch => ch == '\n'), w = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
-                long c = a.Has('m') ? text.Length : Encoding.UTF8.GetByteCount(text);
+                long c = a.Has('m') ? text.Length : data.Length;
                 tl += l; tw += w; tc += c;
                 ctx.Stdout.WriteLine(Row(l, w, c, a.Positional.Count > 0 ? name : null));
             }

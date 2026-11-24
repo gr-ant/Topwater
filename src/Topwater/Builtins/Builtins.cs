@@ -66,6 +66,8 @@ internal static partial class Builtins
         RegisterUtilityCommands(shell);
         Awk.Register(shell);
         Jq.Register(shell);
+        RegisterDocumentCommands(shell);
+        RegisterBinaryCommands(shell);
     }
 
     static readonly Dictionary<string, string> Versions = new()
@@ -99,14 +101,21 @@ internal static partial class Builtins
     internal static void WriteLines(TextWriter w, IEnumerable<string> lines) { foreach (var l in lines) w.Write(l + "\n"); }
 
     /// <summary>Reads each file argument (or stdin when there are none / "-"), reporting missing files to stderr.</summary>
-    internal static IEnumerable<(string Name, string Text)> Inputs(CommandContext ctx, IReadOnlyList<string> files, Action onError)
+    internal static IEnumerable<(string Name, string Text)> Inputs(CommandContext ctx, IReadOnlyList<string> files, Action onError) =>
+        Inputs(ctx, files, onError, ctx.Fs.ReadAllText, () => ctx.StdinText);
+
+    /// <summary>Like <see cref="Inputs(CommandContext, IReadOnlyList{string}, Action)"/>, but the exact bytes (stdin as UTF-8).</summary>
+    internal static IEnumerable<(string Name, byte[] Text)> InputBytes(CommandContext ctx, IReadOnlyList<string> files, Action onError) =>
+        Inputs(ctx, files, onError, ctx.Fs.ReadAllBytes, () => Encoding.UTF8.GetBytes(ctx.StdinText));
+
+    static IEnumerable<(string Name, T Text)> Inputs<T>(CommandContext ctx, IReadOnlyList<string> files, Action onError, Func<string, T> read, Func<T> stdin)
     {
-        if (files.Count == 0) { yield return ("(standard input)", ctx.StdinText); yield break; }
+        if (files.Count == 0) { yield return ("(standard input)", stdin()); yield break; }
         foreach (var f in files)
         {
-            if (f == "-") { yield return ("(standard input)", ctx.StdinText); continue; }
-            string text;
-            try { text = ctx.Fs.ReadAllText(ctx.ResolvePath(f)); }
+            if (f == "-") { yield return ("(standard input)", stdin()); continue; }
+            T text;
+            try { text = read(ctx.ResolvePath(f)); }
             catch (ShellException e)
             {
                 ctx.Stderr.WriteLine($"{ctx.Name}: {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}");
