@@ -172,8 +172,14 @@ def _copy_or_move(ctx):
     *sources, dest_arg = a.positional
     dest = ctx.resolve(dest_arg)
     dest_is_dir = ctx.fs.is_dir(dest)
-    if len(sources) > 1 and not dest_is_dir:
-        raise ShellError(f"target '{dest_arg}' is not a directory")
+    if (len(sources) > 1 or dest_arg.endswith("/")) and not dest_is_dir:
+        if len(sources) == 1 and not ctx.fs.exists(ctx.resolve(sources[0])):
+            raise ShellError(f"cannot stat '{sources[0]}': No such file or directory")
+        if len(sources) > 1:
+            raise ShellError(f"target '{dest_arg}': No such file or directory" if not ctx.fs.exists(dest)
+                             else f"target '{dest_arg}' is not a directory")
+        raise ShellError(f"cannot move '{sources[0]}' to '{dest_arg}': Not a directory" if move
+                         else f"cannot create regular file '{dest_arg}': Not a directory")
     code = 0
     for s in sources:
         src = ctx.resolve(s)
@@ -191,6 +197,9 @@ def _copy_or_move(ctx):
             code = 1
             continue
         (ctx.fs.move if move else ctx.fs.copy)(src, target)
+        if a.has("v"):
+            shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
+            ctx.print(f"{'renamed ' if move else ''}'{s}' -> '{shown}'")
     return code
 
 

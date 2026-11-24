@@ -209,24 +209,31 @@ internal static partial class Builtins
         shell.Register("printf", ctx =>
         {
             var args = ctx.Args.ToList();
+            string? variable = null;
+            if (args.Count >= 2 && args[0] == "-v") { variable = args[1]; args.RemoveRange(0, 2); }
             if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
-            if (args.Count == 0) throw new ShellException("usage: printf format [arguments]", 2);
+            if (args.Count == 0) throw new ShellException("usage: printf [-v var] format [arguments]", 2);
             var errors = new List<string>();
-            ctx.Stdout.Write(Printf.Format(args[0], args.Skip(1).ToList(), errors));
+            var text = Printf.Format(args[0], args.Skip(1).ToList(), errors);
+            if (variable == null) ctx.Stdout.Write(text);
+            else ctx.Shell.Environment[variable] = text;
             foreach (var e in errors) ctx.Stderr.WriteLine(e);
             return errors.Count > 0 ? 1 : 0;
         }, "Format and print data");
 
         shell.Register("cd", ctx =>
         {
-            var target = ctx.Args.Count == 0 ? ctx.Shell.Environment.GetValueOrDefault("HOME", "/")
-                : ctx.Args[0] == "-" ? ctx.Shell.Environment.GetValueOrDefault("OLDPWD", ctx.Shell.Cwd) : ctx.Args[0];
+            var args = ctx.Args.SkipWhile(x => x is "-L" or "-P" or "-e" or "-@").ToList();
+            if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
+            if (args.Count > 1) throw new ShellException("too many arguments");
+            var target = args.Count == 0 ? ctx.Shell.Environment.GetValueOrDefault("HOME", "/")
+                : args[0] == "-" ? ctx.Shell.Environment.GetValueOrDefault("OLDPWD", ctx.Shell.Cwd) : args[0];
             var abs = ctx.ResolvePath(target);
             if (!ctx.Fs.Exists(abs)) throw new ShellException($"{target}: No such file or directory");
             if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{target}: Not a directory");
             ctx.Shell.Environment["OLDPWD"] = ctx.Shell.Cwd;
             ctx.Shell.Cwd = abs;
-            if (ctx.Args is ["-"]) ctx.Stdout.WriteLine(abs);
+            if (args is ["-"]) ctx.Stdout.WriteLine(abs);
             return 0;
         }, "Change the working directory");
 

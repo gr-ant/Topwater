@@ -206,12 +206,19 @@ def _echo(ctx):
 
 def _cd(ctx):
     env = ctx.shell.env
-    if not ctx.args:
+    args = list(ctx.args)
+    while args and args[0] in ("-L", "-P", "-e", "-@"):
+        args.pop(0)
+    if args and args[0] == "--":
+        args.pop(0)
+    if len(args) > 1:
+        raise ShellError("too many arguments")
+    if not args:
         target = env.get("HOME", "/")
-    elif ctx.args[0] == "-":
+    elif args[0] == "-":
         target = env.get("OLDPWD", ctx.shell.cwd)
     else:
-        target = ctx.args[0]
+        target = args[0]
     path = ctx.resolve(target)
     if not ctx.fs.exists(path):
         raise ShellError(f"{target}: No such file or directory")
@@ -219,7 +226,7 @@ def _cd(ctx):
         raise ShellError(f"{target}: Not a directory")
     env["OLDPWD"] = ctx.shell.cwd
     ctx.shell.cwd = path
-    if ctx.args == ["-"]:
+    if args == ["-"]:
         ctx.print(path)
 
 
@@ -576,12 +583,19 @@ def printf_format(fmt: str, args: list[str], errors: list[str] | None = None) ->
 
 def _printf(ctx):
     args = list(ctx.args)
+    var = None
+    if len(args) >= 2 and args[0] == "-v":
+        var, args = args[1], args[2:]
     if args and args[0] == "--":
         args.pop(0)
     if not args:
-        raise ShellError("usage: printf format [arguments]", 2)
+        raise ShellError("usage: printf [-v var] format [arguments]", 2)
     errors: list[str] = []
-    ctx.stdout.write(printf_format(args[0], args[1:], errors))
+    text = printf_format(args[0], args[1:], errors)
+    if var is None:
+        ctx.stdout.write(text)
+    else:
+        ctx.shell.env[var] = text
     for e in errors:
         ctx.error(e)
     return 1 if errors else 0

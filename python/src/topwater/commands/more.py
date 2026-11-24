@@ -82,6 +82,8 @@ def _set(ctx):
         for c in a[1:]:
             if c == "e":
                 ctx.shell.errexit = on
+            elif c == "u":
+                ctx.shell.nounset = on
             elif c == "o":
                 if i + 1 >= len(args):
                     raise ShellError("-o: option name required", 2)
@@ -90,10 +92,55 @@ def _set(ctx):
                     ctx.shell.pipefail = on
                 elif args[i] == "errexit":
                     ctx.shell.errexit = on
-                # nounset, xtrace, noclobber...: accepted, not enforced (bash-like, simplified)
+                elif args[i] == "nounset":
+                    ctx.shell.nounset = on
+                # xtrace, noclobber...: accepted, not enforced (bash-like, simplified)
         i += 1
     if i < len(args):
         ctx.shell.positional = args[i:]
+
+
+def _trap(ctx):
+    """trap ACTION SIGNAL...: EXIT actions run when the tool call or script ends; other signals never arrive here."""
+    args = [a for a in ctx.args if a != "--"]
+    traps = ctx.shell.traps
+    if not args or args == ["-p"]:
+        for sig, action in traps.items():
+            ctx.print(f"trap -- '{action}' {sig}")
+        return 0
+    if args[0] == "-l":
+        ctx.print(" 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 9) SIGKILL\t15) SIGTERM")
+        return 0
+    action, signals = (None, args) if len(args) == 1 else (args[0], args[1:])
+    for sig in signals:
+        name = sig.upper().removeprefix("SIG")
+        name = "EXIT" if name == "0" else name
+        if action in (None, "-"):
+            traps.pop(name, None)
+        else:
+            traps[name] = action
+    return 0
+
+
+_SHOPTS = {"nullglob", "dotglob", "globstar", "extglob", "nocaseglob", "failglob", "expand_aliases", "lastpipe", "inherit_errexit"}
+
+
+def _shopt(ctx):
+    a = Args.parse(ctx.args, "supqo")
+    names = a.positional or sorted(_SHOPTS)
+    if a.has("s") or a.has("u"):
+        for n in names:
+            if n not in _SHOPTS:
+                raise ShellError(f"{n}: invalid shell option name")
+            (ctx.shell.shopts.add if a.has("s") else ctx.shell.shopts.discard)(n)
+        return 0
+    code = 0
+    for n in names:
+        on = n in ctx.shell.shopts
+        code = code or (0 if on else 1)
+        if not a.has("q"):
+            ctx.print(f"{n:<15}\t{'on' if on else 'off'}")
+    return code
 
 
 def _declare(ctx):
@@ -777,6 +824,8 @@ def register(shell) -> None:
     r("break", _break, "Exit a loop")
     r("continue", _break, "Next loop iteration")
     r("shift", _shift, "Shift positional parameters")
+    r("trap", _trap, "Run a command when the shell exits (EXIT)")
+    r("shopt", _shopt, "Set shell options (nullglob, dotglob, globstar)")
     r("set", _set, "Set shell options (-e, -o pipefail) or positional parameters")
     r("local", _declare, "Declare function-local variables")
     r("declare", _declare, "Declare variables")

@@ -142,7 +142,13 @@ internal static partial class Builtins
             var destArg = a.Positional[^1];
             var dest = ctx.ResolvePath(destArg);
             bool destIsDir = ctx.Fs.IsDirectory(dest);
-            if (sources.Count > 1 && !destIsDir) throw new ShellException($"target '{destArg}' is not a directory");
+            if ((sources.Count > 1 || destArg.EndsWith('/')) && !destIsDir)
+            {
+                if (sources.Count == 1 && !ctx.Fs.Exists(ctx.ResolvePath(sources[0]))) throw new ShellException($"cannot stat '{sources[0]}': No such file or directory");
+                if (sources.Count > 1)
+                    throw new ShellException(ctx.Fs.Exists(dest) ? $"target '{destArg}' is not a directory" : $"target '{destArg}': No such file or directory");
+                throw new ShellException(move ? $"cannot move '{sources[0]}' to '{destArg}': Not a directory" : $"cannot create regular file '{destArg}': Not a directory");
+            }
             int code = 0;
             foreach (var s in sources)
             {
@@ -153,6 +159,7 @@ internal static partial class Builtins
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
                 if (target == src) { ctx.Stderr.WriteLine($"{ctx.Name}: '{s}' and '{destArg}' are the same file"); code = 1; continue; }
                 if (move) ctx.Fs.Move(src, target); else ctx.Fs.Copy(src, target);
+                if (a.Has('v')) ctx.Stdout.WriteLine($"{(move ? "renamed " : "")}'{s}' -> '{(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)}'");
             }
             return Task.FromResult(code);
         };

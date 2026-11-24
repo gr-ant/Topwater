@@ -35,6 +35,53 @@ internal static partial class Builtins
             return 0;
         }, "Shift positional parameters");
 
+        shell.Register("trap", ctx =>
+        {
+            // EXIT actions run when the tool call or script ends; other signals never arrive here
+            var args = ctx.Args.Where(a => a != "--").ToList();
+            var traps = ctx.Shell.Traps;
+            if (args.Count == 0 || args is ["-p"])
+            {
+                foreach (var (sig, action) in traps) ctx.Stdout.WriteLine($"trap -- '{action}' {sig}");
+                return 0;
+            }
+            if (args[0] == "-l") { ctx.Stdout.WriteLine(" 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 9) SIGKILL\t15) SIGTERM"); return 0; }
+            var (act, signals) = args.Count == 1 ? (null, args) : (args[0], args.Skip(1).ToList());
+            foreach (var sig in signals)
+            {
+                var name = sig.ToUpperInvariant();
+                if (name.StartsWith("SIG")) name = name[3..];
+                if (name == "0") name = "EXIT";
+                if (act is null or "-") traps.Remove(name);
+                else traps[name] = act;
+            }
+            return 0;
+        }, "Run a command when the shell exits (EXIT)");
+
+        shell.Register("shopt", ctx =>
+        {
+            string[] known = ["dotglob", "expand_aliases", "extglob", "failglob", "globstar", "inherit_errexit", "lastpipe", "nocaseglob", "nullglob"];
+            var a = Args.Parse(ctx.Args, "supqo");
+            var names = a.Positional.Count > 0 ? a.Positional.ToList() : known.ToList();
+            if (a.Has('s') || a.Has('u'))
+            {
+                foreach (var n in names)
+                {
+                    if (!known.Contains(n)) throw new ShellException($"{n}: invalid shell option name");
+                    if (a.Has('s')) ctx.Shell.Shopts.Add(n); else ctx.Shell.Shopts.Remove(n);
+                }
+                return 0;
+            }
+            int code = 0;
+            foreach (var n in names)
+            {
+                bool on = ctx.Shell.Shopts.Contains(n);
+                if (code == 0 && !on) code = 1;
+                if (!a.Has('q')) ctx.Stdout.WriteLine($"{n,-15}\t{(on ? "on" : "off")}");
+            }
+            return code;
+        }, "Set shell options (nullglob, dotglob, globstar)");
+
         shell.Register("set", ctx =>
         {
             var args = ctx.Args.ToList();
@@ -53,12 +100,14 @@ internal static partial class Builtins
                 foreach (var c in a[1..])
                 {
                     if (c == 'e') ctx.Shell.Errexit = on;
+                    else if (c == 'u') ctx.Shell.Nounset = on;
                     else if (c == 'o')
                     {
                         var opt = i + 1 < args.Count ? args[++i] : throw new ShellException("-o: option name required", 2);
                         if (opt == "pipefail") ctx.Shell.Pipefail = on;
                         else if (opt == "errexit") ctx.Shell.Errexit = on;
-                        // nounset, xtrace, noclobber...: accepted, not enforced (bash-like, simplified)
+                        else if (opt == "nounset") ctx.Shell.Nounset = on;
+                        // xtrace, noclobber...: accepted, not enforced (bash-like, simplified)
                     }
                 }
             }

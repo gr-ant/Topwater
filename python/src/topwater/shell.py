@@ -171,6 +171,9 @@ class Shell:
         self.positional: list[str] = []
         self.errexit = False
         self.pipefail = False
+        self.nounset = False
+        self.shopts: set[str] = set()  # shopt -s names: nullglob, dotglob, globstar
+        self.traps: dict[str, str] = {}  # only EXIT runs; it fires when the tool call (or script) ends
         self.last_exit_code = 0
         self._locals: list[dict[str, str | None]] = []
         self._cond_depth = 0
@@ -262,8 +265,13 @@ class Shell:
         self.history.append(command_line)
         out, err = io.StringIO(), io.StringIO()
         previous_user, self.fs.run_as = self.fs.run_as, self.user  # the agent's commands run as a regular user
+        io_ = _Io(StdinBuffer(), out, err)
         try:
-            code = await self._exec_script(Parser.parse(command_line), _Io(StdinBuffer(), out, err))
+            try:
+                code = await self._exec_script(Parser.parse(command_line), io_)
+            finally:
+                # shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
+                await self._run_exit_trap(io_)
         except ParseError as e:
             err.write(f"bash: {e}\n")
             code = 2
@@ -278,7 +286,7 @@ class Shell:
             code = 1
         finally:
             # shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
-            self.errexit = self.pipefail = False
+            self.errexit = self.pipefail = self.nounset = False
             self.fs.run_as = previous_user
             if self._proc_sub_count and self.fs.is_dir("/dev/fd"):
                 with self.fs.as_root():
@@ -304,20 +312,36 @@ class Shell:
                 if positional is not None:
                     self.positional = saved_pos
         saved = self._save_state()
+        self.traps = {}
         if positional is not None:
             self.positional = positional
         try:
-            return await self._exec_script(script, io_)
+            try:
+                return await self._exec_script(script, io_)
+            finally:
+                await self._run_exit_trap(io_)
         except ExitSignal as e:
             return e.code
         finally:
             self._restore_state(saved)
 
+    async def _run_exit_trap(self, io_: _Io) -> None:
+        action = self.traps.pop("EXIT", None)
+        if action:
+            saved_code = self.last_exit_code
+            try:
+                await self._run_script_text(action, io_, subshell=False)
+            except _ControlFlow:
+                pass
+            self.last_exit_code = saved_code
+
     def _save_state(self):
-        return (self._cwd, dict(self.env), dict(self.aliases), dict(self.functions), self.positional, self.errexit, self.pipefail)
+        return (self._cwd, dict(self.env), dict(self.aliases), dict(self.functions), self.positional, self.errexit, self.pipefail,
+                self.nounset, set(self.shopts), dict(self.traps))
 
     def _restore_state(self, saved) -> None:
-        cwd, self.env, self.aliases, self.functions, self.positional, self.errexit, self.pipefail = saved
+        (cwd, self.env, self.aliases, self.functions, self.positional, self.errexit, self.pipefail, self.nounset, self.shopts,
+         self.traps) = saved
         self._cwd = cwd if self.fs.is_dir(cwd) else "/"
 
     async def _exec_script(self, script: Script, io_: _Io) -> int:
@@ -681,12 +705,17 @@ class Shell:
     async def _expand_parameter(self, expr: str, io_: _Io) -> str:
         """${name}, ${#name}, ${name:-x}, ${name%pat}, ${name/a/b}, ${name:1:2}, ${name^^} ..."""
         if len(expr) > 1 and expr[0] == "#":
-            return str(len(self.positional)) if expr[1:] in ("@", "*") else str(len(self.get_variable(expr[1:])))
+            if expr[1:] in ("@", "*"):
+                return str(len(self.positional))
+            self._check_set(expr[1:], io_)
+            return str(len(self.get_variable(expr[1:])))
         m = self._PARAM.match(expr)
         if not m:
             raise ShellError(f"${{{expr}}}: bad substitution")
         name, rest = m.group(1), m.group(2)
         value = self.get_variable(name)
+        if not (rest[:1] in ("-", "=", "+", "?") or rest[:2] in (":-", ":=", ":+", ":?")):  # defaults handle unset vars
+            self._check_set(name, io_)
         if not rest:
             return value
 
@@ -776,6 +805,12 @@ class Shell:
             return tail[:length]
         raise ShellError(f"${{{expr}}}: bad substitution")
 
+    def _check_set(self, name: str, io_: _Io) -> None:
+        """set -u: expanding an unset variable is an error that ends the (sub)shell, like bash."""
+        if self.nounset and name not in ("@", "*") and not self._is_set(name):
+            io_.err.write(f"bash: {name}: unbound variable\n")
+            raise ExitSignal(127)
+
     def _expand_tilde(self, text: str) -> str:
         if text == "~" or text.startswith("~/"):
             return self.env.get("HOME", "/") + text[1:]
@@ -856,6 +891,8 @@ class Shell:
 
             for f in fields:
                 matches = glob_expand(self, "".join(f.pattern)) if f.has_glob else []
+                if f.has_glob and not matches and "nullglob" in self.shopts:
+                    continue
                 result.extend(matches or ["".join(f.text)])
         return result
 
@@ -1134,8 +1171,31 @@ def glob_expand(shell: Shell, pattern: str) -> list[str]:
     """Matches a glob against the virtual filesystem; returns paths in the same form (relative/absolute) as the pattern."""
     absolute = pattern.startswith("/")
     current = [("/" if absolute else shell.cwd, "/" if absolute else "")]
-    for seg in [s for s in pattern.split("/") if s]:
+    dotglob, globstar = "dotglob" in shell.shopts, "globstar" in shell.shopts
+    segs = [s for s in pattern.split("/") if s]
+    for k, seg in enumerate(segs):
         nxt = []
+        if seg == "**" and globstar:  # zero or more directories; as the last segment, every file and directory below
+            last = not pattern.endswith("/") and k == len(segs) - 1
+            stack = list(current)
+            while stack:
+                abs_, display = stack.pop(0)
+                if not last:
+                    nxt.append((abs_, display))
+                elif display and (abs_, display) in current:
+                    nxt.append((abs_, _join(display, "")))  # bash lists the base itself as "dir/"
+                if shell.fs.is_dir(abs_) and shell.fs.can_read(abs_):
+                    for name in shell.fs.listdir(abs_):
+                        child = normalize(abs_, name)
+                        if dotglob or not name.startswith("."):
+                            if shell.fs.is_dir(child):
+                                stack.append((child, _join(display, name)))
+                            elif last:
+                                nxt.append((child, _join(display, name)))
+                    if last and (abs_, display) not in current:
+                        nxt.append((abs_, display))
+            current = nxt
+            continue
         for abs_, display in current:
             if not shell.fs.is_dir(abs_) or not shell.fs.can_read(abs_):
                 continue
@@ -1144,7 +1204,7 @@ def glob_expand(shell: Shell, pattern: str) -> list[str]:
             elif _has_unescaped_wildcard(seg):
                 rx = glob_to_regex(seg)
                 for name in shell.fs.listdir(abs_):
-                    if rx.match(name) and (not name.startswith(".") or seg.startswith(".")):
+                    if rx.match(name) and (not name.startswith(".") or seg.startswith(".") or dotglob):
                         nxt.append((normalize(abs_, name), _join(display, name)))
             else:
                 name = re.sub(r"\\(.)", r"\1", seg)

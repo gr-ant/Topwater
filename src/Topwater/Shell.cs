@@ -156,6 +156,11 @@ public sealed partial class Shell
     internal List<string> Positional { get; set; } = [];
     internal bool Errexit { get; set; }
     internal bool Pipefail { get; set; }
+    internal bool Nounset { get; set; }
+    /// <summary>shopt -s names: nullglob, dotglob, globstar.</summary>
+    internal HashSet<string> Shopts { get; private set; } = [];
+    /// <summary>Only EXIT runs; it fires when the tool call (or script) ends.</summary>
+    internal Dictionary<string, string> Traps { get; private set; } = [];
 
     public string Cwd
     {
@@ -218,9 +223,12 @@ public sealed partial class Shell
         int code;
         var previousUser = Fs.RunAs;
         Fs.RunAs = Options.User; // the agent's commands run as a regular user
+        var io = new Io(new StdinBuffer(""), stdout, stderr);
         try
         {
-            code = await ExecScriptAsync(Parser.Parse(commandLine), new Io(new StdinBuffer(""), stdout, stderr), cancellationToken);
+            // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
+            try { code = await ExecScriptAsync(Parser.Parse(commandLine), io, cancellationToken); }
+            finally { await RunExitTrapAsync(io, cancellationToken); }
         }
         catch (ParseException e) { stderr.WriteLine($"bash: {e.Message}"); code = 2; }
         catch (ExitSignal e) { code = e.Code; }
@@ -235,7 +243,7 @@ public sealed partial class Shell
         finally
         {
             // shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
-            Errexit = Pipefail = false;
+            Errexit = Pipefail = Nounset = false;
             Fs.RunAs = previousUser;
             if (_procSubCount > 0 && Fs.IsDirectory("/dev/fd"))
                 using (Fs.AsRoot())
@@ -259,16 +267,31 @@ public sealed partial class Shell
             finally { if (positional != null) Positional = savedPos; }
         }
         var saved = SaveState();
+        Traps = [];
         if (positional != null) Positional = positional;
-        try { return await ExecScriptAsync(script, io, ct); }
+        try
+        {
+            try { return await ExecScriptAsync(script, io, ct); }
+            finally { await RunExitTrapAsync(io, ct); }
+        }
         catch (ExitSignal e) { return e.Code; }
         finally { RestoreState(saved); }
     }
 
-    sealed record State(string Cwd, Dictionary<string, string> Env, Dictionary<string, string> Aliases,
-        Dictionary<string, Command> Functions, List<string> Positional, bool Errexit, bool Pipefail);
+    async Task RunExitTrapAsync(Io io, CancellationToken ct)
+    {
+        if (!Traps.Remove("EXIT", out var action) || action.Length == 0) return;
+        var savedCode = LastExitCode;
+        try { await RunScriptTextAsync(action, io, subshell: false, ct); }
+        catch (ControlFlow) { }
+        LastExitCode = savedCode;
+    }
 
-    State SaveState() => new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail);
+    sealed record State(string Cwd, Dictionary<string, string> Env, Dictionary<string, string> Aliases,
+        Dictionary<string, Command> Functions, List<string> Positional, bool Errexit, bool Pipefail, bool Nounset,
+        HashSet<string> Shopts, Dictionary<string, string> Traps);
+
+    State SaveState() => new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps));
 
     void RestoreState(State s)
     {
@@ -278,6 +301,9 @@ public sealed partial class Shell
         Positional = s.Positional;
         Errexit = s.Errexit;
         Pipefail = s.Pipefail;
+        Nounset = s.Nounset;
+        Shopts = s.Shopts;
+        Traps = s.Traps;
         _cwd = Fs.IsDirectory(s.Cwd) ? s.Cwd : "/";
     }
 
@@ -682,12 +708,19 @@ public sealed partial class Shell
     /// <summary>${name}, ${#name}, ${name:-x}, ${name%pat}, ${name/a/b}, ${name:1:2}, ${name^^} ...</summary>
     async Task<string> ExpandParameterAsync(string expr, Io io, CancellationToken ct)
     {
-        if (expr.Length > 1 && expr[0] == '#') return expr[1..] is "@" or "*" ? Positional.Count.ToString(CultureInfo.InvariantCulture) : GetVariable(expr[1..]).Length.ToString(CultureInfo.InvariantCulture);
+        if (expr.Length > 1 && expr[0] == '#')
+        {
+            if (expr[1..] is "@" or "*") return Positional.Count.ToString(CultureInfo.InvariantCulture);
+            CheckSet(expr[1..], io);
+            return GetVariable(expr[1..]).Length.ToString(CultureInfo.InvariantCulture);
+        }
         var m = ParamRe.Match(expr);
         if (!m.Success) throw new ShellException($"${{{expr}}}: bad substitution");
         var name = m.Groups[1].Value;
         var rest = m.Groups[2].Value;
         var value = GetVariable(name);
+        if (!(rest.Length > 0 && rest[0] is '-' or '=' or '+' or '?' || rest.StartsWith(":-") || rest.StartsWith(":=") || rest.StartsWith(":+") || rest.StartsWith(":?")))
+            CheckSet(name, io); // defaults handle unset variables
         if (rest.Length == 0) return value;
 
         async Task<string> Arg(string text)
@@ -764,6 +797,14 @@ public sealed partial class Shell
             return tail[..(int)Math.Min(len, tail.Length)];
         }
         throw new ShellException($"${{{expr}}}: bad substitution");
+    }
+
+    /// <summary>set -u: expanding an unset variable is an error that ends the (sub)shell, like bash.</summary>
+    void CheckSet(string name, Io io)
+    {
+        if (!Nounset || name is "@" or "*" || IsSet(name)) return;
+        io.Err.WriteLine($"bash: {name}: unbound variable");
+        throw new ExitSignal(127);
     }
 
     /// <summary>&lt;(cmd): writes cmd's output to /dev/fd/N (removed after the tool call) and returns that path.</summary>
@@ -925,7 +966,7 @@ public sealed partial class Shell
             {
                 var matches = f.HasGlob ? Glob.Expand(this, f.Pattern.ToString()) : [];
                 if (matches.Count > 0) result.AddRange(matches);
-                else result.Add(f.Text.ToString());
+                else if (!(f.HasGlob && Shopts.Contains("nullglob"))) result.Add(f.Text.ToString());
             }
         }
         return result;
@@ -1163,9 +1204,37 @@ internal static class Glob
     {
         bool absolute = pattern.StartsWith('/');
         var current = new List<(string Abs, string Display)> { (absolute ? "/" : shell.Cwd, absolute ? "/" : "") };
-        foreach (var seg in pattern.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        bool dotglob = shell.Shopts.Contains("dotglob"), globstar = shell.Shopts.Contains("globstar");
+        var segs = pattern.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int k = 0; k < segs.Length; k++)
         {
+            var seg = segs[k];
             var next = new List<(string, string)>();
+            if (seg == "**" && globstar) // zero or more directories; as the last segment, every file and directory below
+            {
+                bool last = !pattern.EndsWith('/') && k == segs.Length - 1;
+                var queue = new Queue<(string Abs, string Display)>(current);
+                while (queue.Count > 0)
+                {
+                    var (abs, display) = queue.Dequeue();
+                    bool isBase = current.Contains((abs, display));
+                    if (!last) next.Add((abs, display));
+                    else if (display.Length > 0 && isBase) next.Add((abs, Join(display, ""))); // bash lists the base itself as "dir/"
+                    if (shell.Fs.IsDirectory(abs) && shell.Fs.CanRead(abs))
+                    {
+                        foreach (var name in shell.Fs.List(abs))
+                        {
+                            var child = VirtualFileSystem.Normalize(abs, name);
+                            if (!dotglob && name.StartsWith('.')) continue;
+                            if (shell.Fs.IsDirectory(child)) queue.Enqueue((child, Join(display, name)));
+                            else if (last) next.Add((child, Join(display, name)));
+                        }
+                        if (last && !isBase) next.Add((abs, display));
+                    }
+                }
+                current = next;
+                continue;
+            }
             foreach (var (abs, display) in current)
             {
                 if (!shell.Fs.IsDirectory(abs) || !shell.Fs.CanRead(abs)) continue;
@@ -1174,7 +1243,7 @@ internal static class Glob
                 {
                     var re = ToRegex(seg);
                     foreach (var name in shell.Fs.List(abs))
-                        if (re.IsMatch(name) && (!name.StartsWith('.') || seg.StartsWith('.')))
+                        if (re.IsMatch(name) && (!name.StartsWith('.') || seg.StartsWith('.') || dotglob))
                             next.Add((VirtualFileSystem.Normalize(abs, name), Join(display, name)));
                 }
                 else

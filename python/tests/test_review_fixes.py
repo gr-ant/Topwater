@@ -99,6 +99,15 @@ CASES = [
     ("echo 'hello' | tr a-y b-z; echo 'hello' | tr -d l", "ifmmp\nheo\n"),
     ("for i in 1 2; do echo $i >> ap.txt; cat ap.txt; done; echo x > ap.txt; echo y >> ap.txt; cat ap.txt; wc -c ap.txt",
      "1\n1\n2\nx\ny\n4 ap.txt\n"),
+    # --- set -u, trap EXIT, shopt, printf -v, cd --, cp/mv ---
+    ("set -u; echo ${x:-d} \"$@\" ok; echo $undefined; echo never", "d ok\nbash: undefined: unbound variable\n[exit code 127]"),
+    ("set -u; (echo $y); echo after", "after\nbash: y: unbound variable\n"),
+    ("trap 'echo cleanup' EXIT; echo work; bash -c 'trap \"echo inner\" EXIT; exit 3'; echo \"code $?\"",
+     "work\ninner\ncode 3\ncleanup\n"),
+    ("shopt -s nullglob; echo *.none end; shopt -s globstar; echo **/*.log; echo d/**", "end\nd/sub/b.log\nd/ d/a.txt d/sub d/sub/b.log\n"),
+    ("printf -v v '%03d' 7; echo $v; cd -- d && pwd | sed 's#.*/##'", "007\nd\n"),
+    ("cp -v f.txt d/; mv -v g.txt g2.txt; cp f.txt nodir/", "'f.txt' -> 'd/f.txt'\nrenamed 'g.txt' -> 'g2.txt'\n"
+     "cp: cannot create regular file 'nodir/': Not a directory\n[exit code 1]"),
     # --- awk: RS, CONVFMT, big integers, POSIX classes, functions, getline ---
     ("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'",
      "1: 3\n2: 1\n1 x\n2 y\n\n"),
