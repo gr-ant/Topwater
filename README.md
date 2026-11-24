@@ -91,6 +91,19 @@ Either way, `orders --status open --limit 5 --include-archived`, `orders open` (
 all work. Parameters become `--kebab-case` options or positionals, `bool` becomes a flag, and enums, arrays,
 stdin and cancellation are supported. Return a string (stdout), an int (exit code), or any object (JSON).
 
+## Try it in your browser
+
+```bash
+cd python && PYTHONPATH=src python -m topwater.web --demo     # then open http://127.0.0.1:8000
+```
+
+A small web terminal (standard library only) runs your commands in one session, exactly as an agent's tool call
+would. It has history, Tab completion and shareable `?run=` links. `--demo` preloads sample files and an `orders`
+command. From code, `topwater.web.serve(factory=make_my_shell)` serves your own configured shell. It listens on
+localhost and has no authentication.
+
+<p align="center"><img alt="Topwater web terminal" src="assets/screenshots/web-terminal.png" width="760"></p>
+
 ## The tool description
 
 The default description is honest about the sandbox and keeps the stakes real:
@@ -117,11 +130,16 @@ either. Being upfront about the limits did best.
   - shell: `export env set shift local read alias history which type command test [ bash source eval let sleep timeout time help`
   - system: `uname whoami hostname date ps id uptime free nproc`, with `--version`/`--help` that look like the real GNU tools
 - **Realism:** `/etc/os-release` (Ubuntu 24.04), `/etc/passwd`, `/bin` and `/usr/bin` listing every command (yours included), `/dev/null`
+- **A regular user account:** the agent runs as `agent`, not root. It owns its home directory and can use `/tmp`,
+  while `/etc`, `/usr`, `/bin`, `/var/log` and `/root` belong to root. Writes there fail with `Permission denied`,
+  `chmod`/`chown` on them fail with `Operation not permitted`, and `sudo` says `agent is not in the sudoers file`.
+  `chmod` on the agent's own files is real: scripts need `chmod +x` before `./script.sh` runs, and `ls -l`/`stat`
+  show the actual modes. Your app is unrestricted when it uses `shell.Fs` / `shell.fs` directly, and files it creates
+  belong to whoever owns the directory, so data you put in the agent's home is the agent's to edit.
 - **Safety:** loops stop after 100,000 iterations (configurable). `set -e` and `pipefail` reset after every tool call.
 
 **Not supported:** arrays, `select`, background jobs (`&` runs in sequence), `>(...)`, `awk` user functions and
-`getline`, and `jq` object construction. `chmod` is accepted but doesn't change permissions yet, and agents notice
-when `ls -l` still shows `-rw-r--r--`.
+`getline`, `jq` object construction, and group permissions.
 
 ## Results with a real model
 
@@ -150,15 +168,16 @@ src/Topwater/              C# library (Shell, parser, filesystem, built-ins, [Co
 tests/Topwater.Tests/      xUnit tests
 python/src/topwater/       Python port (same behaviour, same test cases)
 python/tests/              unittest tests
+python/src/topwater/web.py web terminal (python -m topwater.web)
 python/examples/           real-model harness and the handbook quiz
-assets/brand/              logo, icon and wordmark (SVG + PNG)
+assets/                   logo, icon and wordmark (SVG + PNG), screenshots
 ```
 
 ## Development
 
 ```bash
-dotnet test                                          # C#: 68 tests
-cd python && python -m unittest discover -s tests    # Python: 16 tests (70+ cases)
+dotnet test                                          # C#: 69 tests
+cd python && python -m unittest discover -s tests    # Python: 17 tests (80+ cases)
 GEMINI_API_KEY=... VARIANTS=plain,restricted,fake REPEAT=2 python examples/gemini_harness.py
 ```
 

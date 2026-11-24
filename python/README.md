@@ -26,3 +26,5 @@ result = await topwater.execute_tool(shell, command)   # or shell.run(command).t
 `orders --status open --limit 5 --include-archived` and `orders --help` (generated) both work. See the repository README for the full list of supported shell syntax and built-ins; behaviour matches the C# library.
 
 Tests: `python -m unittest discover -s tests`
+
+Web terminal for trying commands by hand: `PYTHONPATH=src python -m topwater.web --demo`, then open http://127.0.0.1:8000.
