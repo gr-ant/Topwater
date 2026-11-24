@@ -283,21 +283,35 @@ What the program sees:
   agent's paths.
 - **Environment.** The agent's own variables (`export GIT_AUTHOR_NAME=...`), then `PATH` from your process,
   `HOME`, `USER`, a private `TMPDIR`, and your `Environment` on top. Nothing else from your process is passed.
-- **File modes.** The execute bit travels both ways. Other permission bits and timestamps do not.
+- **File modes.** The execute bit travels both ways. Other permission bits do not.
 - **Symlinks.** A link the program creates stays on disk for later calls but is not visible in the agent's
   filesystem, and is never written through.
 - **Exit codes.** The program's own, or 124 on timeout and 126 if it cannot be started.
 
 Programs that keep running in the background do not fit well: the call returns once the main process exits, and
 whatever the helper writes later is not copied back. Turn that behaviour off if the program allows it (OfficeCLI:
-`OFFICECLI_NO_AUTO_RESIDENT=1`). Every call copies the whole workspace, so keep large files out of it or list
-them in `Exclude`.
+`OFFICECLI_NO_AUTO_RESIDENT=1`). Only files whose size or modification time changed since the last call are
+copied, but every call still lists the whole workspace, so keep very large trees out of it or list them in `Exclude`.
+A synced file on disk carries the agent's modification time.
 
 **This is not sandboxed.** The program is real and runs with your process's permissions. Topwater points
 it at the private folder and redirects path arguments there, which stops casual wandering but is not a security
 boundary: a path whose top-level folder exists nowhere (`-o /report.pdf`) is passed through as typed, and the
-program can open any file your process can. Wrap only tools you would let the agent use directly, and use `Launcher` with a real sandbox
-(bubblewrap, firejail, a container) when the stakes call for it.
+program can open any file your process can (`git -c alias.x='!cat ~/.ssh/id_rsa' x`). Wrap only tools you would let
+the agent use directly, and run them in a real sandbox when the stakes call for it. On Linux with
+[bubblewrap](https://github.com/containers/bubblewrap) installed:
+
+```csharp
+using var git = shell.RegisterHostCommand("git", options: new() { Launcher = HostSandbox.Bubblewrap(network: true) });
+```
+
+The program then sees only the private folder (read-write), a fresh empty `/tmp`, `/usr`, `/bin`, `/lib*`, a few
+files from `/etc` needed to run and look up names, and the program itself; not your home directory or anything
+else on disk. The network is off unless you pass `network: true` (git clone and push need it). Folders the
+program needs besides those (a runtime under `/opt`) go in as read-only extras: `Bubblewrap(false, "/opt/tool")`.
+It throws when `bwrap` is missing or cannot create a sandbox (some distributions restrict unprivileged user
+namespaces). For anything else (firejail, a container) write your own `Launcher`: it gets the command line and
+the private folder and returns the command line to run.
 
 ## The tool description
 
