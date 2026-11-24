@@ -60,7 +60,7 @@ public class AgentFeatureTests
         await Out(sh, "cat > run.sh <<'EOF'\n#!/bin/bash\nset -e\necho \"script $1 $2 ($#)\"\nfor a in \"$@\"; do echo \"arg: $a\"; done\nEOF\nchmod +x run.sh");
         Assert.Equal("script x y z (2)\narg: x\narg: y z\n", await Out(sh, "./run.sh x 'y z'"));
         Assert.Equal("script a  (1)\narg: a\n", await Out(sh, "bash run.sh a"));
-        await Out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py");
+        await Out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py && chmod +x p.py");
         var r = await sh.RunAsync("./p.py");
         Assert.Equal(126, r.ExitCode);
         Assert.Contains("bad interpreter", r.Stderr);
@@ -163,6 +163,48 @@ public class AgentFeatureTests
         Assert.Equal("north 220\nsouth 100\neast 42\n", await Out(sh, "printf 'south 100\\neast 42\\nnorth 220\\n' | sort -k2,2nr"));
         Assert.Equal("b,2,x\na,10,y\n", await Out(sh, "printf 'a,10,y\\nb,2,x\\n' | sort -t, -k2n --debug"));
         Assert.Equal("project/src/a.py:x\n", await Out(sh, "mkdir -p project/node_modules; echo x > project/node_modules/z.py; echo x > project/n.txt; grep -r --include='*.py' --exclude=b.py --exclude-dir={node_modules,.git} x project"));
+    }
+
+    /// <summary>The agent is a regular, non-root user.</summary>
+    [Fact]
+    public async Task RegularUserPermissions()
+    {
+        var sh = new Shell();
+        // chmod on the agent's own files is real and visible
+        await Out(sh, "printf 'echo ran' > s.sh");
+        var r = await sh.RunAsync("./s.sh");
+        Assert.Equal((126, "bash: ./s.sh: Permission denied\n"), (r.ExitCode, r.Stderr));
+        Assert.Equal("-rw-r--r--\n-rwxr-xr-x\nran\n", await Out(sh, "ls -l s.sh | cut -c1-10; chmod +x s.sh; ls -l s.sh | cut -c1-10; ./s.sh"));
+        Assert.Equal("mode of 's.sh' changed from 0755 (rwxr-xr-x) to 0700 (rwx------)\n", await Out(sh, "chmod -v go-rx s.sh"));
+        Assert.Equal("640 agent\n", await Out(sh, "chmod 640 s.sh; stat -c '%a %U' s.sh"));
+        Assert.Equal("ok\n", await Out(sh, "[ -x /usr/bin/grep ] && [ ! -w /etc/passwd ] && [ -w ~ ] && echo ok"));
+
+        // system areas belong to root
+        foreach (var (cmd, err) in new[]
+        {
+            ("echo x > /etc/motd", "bash: /etc/motd: Permission denied\n"),
+            ("rm /usr/bin/grep", "rm: /usr/bin/grep: Permission denied\n"),
+            ("chmod 777 /etc/passwd", "chmod: changing permissions of '/etc/passwd': Operation not permitted\n"),
+            ("chown agent /etc/passwd", "chown: changing ownership of '/etc/passwd': Operation not permitted\n"),
+            ("ls /root", "ls: /root: Permission denied\n"),
+            ("sudo cat /etc/shadow", "agent is not in the sudoers file.\n"),
+        })
+        {
+            r = await sh.RunAsync(cmd);
+            Assert.True(r.ExitCode != 0 && r.Stderr == err, $"{cmd}: [{r.ExitCode}] {r.Stderr}");
+        }
+        Assert.True(sh.Fs.IsFile("/usr/bin/grep"));
+        Assert.Contains("root:x:0:0", await Out(sh, "cat /etc/passwd"));               // still readable
+        Assert.Equal("drwxrwxrwt root\n", await Out(sh, "stat -c '%A %U' /tmp"));      // shared scratch space
+        Assert.Equal("x\n", await Out(sh, "echo x > /tmp/f && cat /tmp/f"));
+        r = await sh.RunAsync("find / -name shadow");                                  // unreadable dirs are reported, not fatal
+        Assert.Equal((1, "find: '/root': Permission denied\n"), (r.ExitCode, r.Stderr));
+
+        // the app itself is unrestricted, and files it creates belong to the directory's owner
+        sh.Fs.WriteAllText("/etc/app.conf", "mode=prod");
+        sh.Fs.WriteAllText("/home/agent/notes.txt", "hi");
+        Assert.Equal("root\nagent\n", await Out(sh, "stat -c %U /etc/app.conf ~/notes.txt"));
+        Assert.Equal("hi!\n", await Out(sh, "echo '!' >> ~/notes.txt; tr -d '\\n' < ~/notes.txt; echo"));
     }
 
     [Fact]

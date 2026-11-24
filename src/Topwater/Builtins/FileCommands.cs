@@ -11,9 +11,8 @@ internal static partial class Builtins
     static string LongEntry(CommandContext ctx, string abs, string name, bool human)
     {
         var st = ctx.Fs.Stat(abs);
-        var user = ctx.Shell.Options.User;
         var size = human ? HumanSize(st.Size) : st.Size.ToString();
-        return $"{(st.IsDirectory ? "drwxr-xr-x" : "-rw-r--r--")} 1 {user} {user} {size,6} {st.Modified:MMM dd HH:mm} {name}";
+        return $"{VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode)} 1 {st.Owner,-5} {st.Owner,-5} {size,6} {st.Modified:MMM dd HH:mm} {name}";
     }
 
     static void RegisterFileCommands(Shell shell)

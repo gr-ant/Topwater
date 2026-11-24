@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 
 from ..shell import glob_to_regex
-from ..vfs import ShellError, get_name, normalize
+from ..vfs import ShellError, format_mode, get_name, normalize
 from . import Args, inputs, split_lines
 
 
@@ -19,10 +19,8 @@ def _human(n: int) -> str:
 
 def _long_entry(ctx, path: str, name: str, human: bool) -> str:
     st = ctx.fs.stat(path)
-    user = ctx.shell.user
     size = _human(st.size) if human else str(st.size)
-    perms = "drwxr-xr-x" if st.is_dir else "-rw-r--r--"
-    return f"{perms} 1 {user} {user} {size:>6} {st.modified:%b %d %H:%M} {name}"
+    return f"{format_mode(st.is_dir, st.mode)} 1 {st.owner:<5} {st.owner:<5} {size:>6} {st.modified:%b %d %H:%M} {name}"
 
 
 def _ls(ctx):
@@ -177,6 +175,7 @@ class _Find:
         self.p = 0
         self.max_depth, self.min_depth = 10**9, 0
         self.has_action = False
+        self.denied = False
         self.deletes: list[str] = []
         self.batches: list[tuple[list[str], list[str]]] = []
 
@@ -204,7 +203,13 @@ class _Find:
                 ctx.print(display)
             if depth >= self.max_depth or not ctx.fs.is_dir(path):
                 return
-            for name in ctx.fs.listdir(path):
+            try:
+                names = ctx.fs.listdir(path)
+            except ShellError:
+                ctx.error(f"find: '{display}': Permission denied")
+                self.denied = True
+                return
+            for name in names:
                 await walk(normalize(path, name), display + name if display.endswith("/") else display + "/" + name, depth + 1)
 
         code = 0
@@ -218,6 +223,8 @@ class _Find:
         for cmd, paths in self.batches:
             if paths and await ctx.invoke([y for x in cmd for y in (paths if x == "{}" else [x])]) != 0:
                 code = 1
+        if self.denied:
+            code = 1
         for path in sorted(self.deletes, key=len, reverse=True):
             if ctx.fs.exists(path):
                 ctx.fs.delete(path, recursive=True)

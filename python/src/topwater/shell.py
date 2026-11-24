@@ -184,6 +184,14 @@ class Shell:
         if not self.fs.exists("/etc/passwd"):
             self.fs.write_text("/etc/passwd", f"root:x:0:0:root:/root:/bin/bash\n{user}:x:1000:1000:{user}:{home}:/bin/bash\n")
         self.fs.write_text("/dev/null", "")
+        # a regular (non-root) account: the agent owns its home; system areas belong to root
+        self.fs.mkdir("/root", parents=True)
+        self.fs.chmod("/root", 0o700)
+        self.fs.set_owner(home, user, recursive=True)
+        self.fs.chmod(home, 0o750)
+        for d in ("/tmp", "/var/tmp"):
+            self.fs.chmod(d, 0o1777)
+        self.fs.chmod("/dev/null", 0o666)
         self.env: dict[str, str] = {
             "HOME": home, "USER": user, "LOGNAME": user, "HOSTNAME": hostname, "SHELL": "/bin/bash",
             "PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "TERM": "xterm-256color",
@@ -220,9 +228,11 @@ class Shell:
         if self._builtin_names is not None:
             self._builtin_names.discard(name)  # an app command replacing a built-in owns its own --help/--version
         if "/" not in name and name not in (".", "..") and self.fs.is_dir("/usr/bin"):
-            self.fs.write_text("/usr/bin/" + name, EXECUTABLE_STUB)
-            if self.fs.is_dir("/bin"):
-                self.fs.write_text("/bin/" + name, EXECUTABLE_STUB)
+            with self.fs.as_root():
+                for d in ("/usr/bin/", "/bin/"):
+                    if self.fs.is_dir(d):
+                        self.fs.write_text(d + name, EXECUTABLE_STUB)
+                        self.fs.chmod(d + name, 0o755)
         return self
 
     def register(self, *targets: Any) -> "Shell":
@@ -233,9 +243,10 @@ class Shell:
         return self
 
     def unregister(self, name: str) -> bool:
-        for d in ("/usr/bin/", "/bin/"):
-            if self.fs.is_file(d + name):
-                self.fs.delete(d + name)
+        with self.fs.as_root():
+            for d in ("/usr/bin/", "/bin/"):
+                if self.fs.is_file(d + name):
+                    self.fs.delete(d + name)
         return self.commands.pop(name, None) is not None
 
     # ---------- execution ----------
@@ -247,6 +258,7 @@ class Shell:
     async def run_async(self, command_line: str) -> ShellResult:
         self.history.append(command_line)
         out, err = io.StringIO(), io.StringIO()
+        previous_user, self.fs.run_as = self.fs.run_as, self.user  # the agent's commands run as a regular user
         try:
             code = await self._exec_script(Parser.parse(command_line), _Io(StdinBuffer(), out, err))
         except ParseError as e:
@@ -259,9 +271,11 @@ class Shell:
         finally:
             # shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
             self.errexit = self.pipefail = False
+            self.fs.run_as = previous_user
             if self._proc_sub_count and self.fs.is_dir("/dev/fd"):
-                for f in self.fs.listdir("/dev/fd"):
-                    self.fs.delete("/dev/fd/" + f, recursive=True)
+                with self.fs.as_root():
+                    for f in self.fs.listdir("/dev/fd"):
+                        self.fs.delete("/dev/fd/" + f, recursive=True)
             self._proc_sub_count = 0
         self.last_exit_code = code
         return ShellResult(out.getvalue(), err.getvalue(), code)
@@ -554,6 +568,9 @@ class Shell:
         if not self.fs.is_file(path):
             io_.err.write(f"bash: {name}: No such file or directory\n")
             return 127
+        if not (self.fs.can_execute(path) and self.fs.can_read(path)):
+            io_.err.write(f"bash: {name}: Permission denied\n")
+            return 126
         text = self.fs.read_text(path)
         if text.startswith(EXECUTABLE_STUB[:4]):
             io_.err.write(f"bash: {name}: cannot execute binary file\n")
@@ -627,7 +644,8 @@ class Shell:
             await self._run_script_text(part.source, replace(io_, stdin=StdinBuffer(), out=out), subshell=True)
             path = f"/dev/fd/{63 + self._proc_sub_count}"
             self._proc_sub_count += 1
-            self.fs.write_text(path, out.getvalue())
+            with self.fs.as_root():
+                self.fs.write_text(path, out.getvalue())
             return path
         out = io.StringIO()
         self.last_exit_code = await self._run_script_text(part.source, replace(io_, stdin=StdinBuffer(), out=out), subshell=True)
@@ -1057,7 +1075,7 @@ def glob_expand(shell: Shell, pattern: str) -> list[str]:
     for seg in [s for s in pattern.split("/") if s]:
         nxt = []
         for abs_, display in current:
-            if not shell.fs.is_dir(abs_):
+            if not shell.fs.is_dir(abs_) or not shell.fs.can_read(abs_):
                 continue
             if seg in (".", ".."):
                 nxt.append((normalize(abs_, seg), _join(display, seg)))

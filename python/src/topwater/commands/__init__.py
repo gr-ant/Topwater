@@ -87,11 +87,11 @@ _BASH_VERSION = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)"
 _VERSIONS = {
     "grep": "grep (GNU grep) 3.11", "sed": "sed (GNU sed) 4.9", "find": "find (GNU findutils) 4.9.0",
     "xargs": "xargs (GNU findutils) 4.9.0", "diff": "diff (GNU diffutils) 3.10", "jq": "jq-1.7.1", "tree": "tree v2.1.1",
-    "bash": _BASH_VERSION, "sh": _BASH_VERSION, "file": "file-5.45", "less": "less 590 (GNU regular expressions)",
+    "bash": _BASH_VERSION, "sh": _BASH_VERSION, "file": "file-5.45", "sudo": "Sudo version 1.9.15p5", "less": "less 590 (GNU regular expressions)",
     "ps": "ps from procps-ng 4.0.4", "free": "free from procps-ng 4.0.4", "uptime": "uptime from procps-ng 4.0.4",
     "column": "column from util-linux 2.39.3", "rev": "rev from util-linux 2.39.3", "more": "more from util-linux 2.39.3",
 }
-_NO_STANDARD_OPTIONS = {"echo", "printf", "test", "[", "true", "false", "awk", "help", "exit", "return", "break", "continue",
+_NO_STANDARD_OPTIONS = {"sudo", "su", "echo", "printf", "test", "[", "true", "false", "awk", "help", "exit", "return", "break", "continue",
                         "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"}
 
 
@@ -276,8 +276,14 @@ def test_unary(shell, op: str, arg: str) -> bool:
         return arg == ""
     if op == "-n":
         return arg != ""
-    if op in ("-e", "-r", "-w", "-x"):
+    if op == "-e":
         return fs.exists(path)
+    if op == "-r":
+        return fs.can_read(path)
+    if op == "-w":
+        return fs.can_write(path)
+    if op == "-x":
+        return fs.can_execute(path)
     if op == "-f":
         return fs.is_file(path)
     if op == "-d":

@@ -97,7 +97,14 @@ def _grep(ctx):
             continue
 
         def walk(d, display):
-            for name in ctx.fs.listdir(d):
+            try:
+                names = ctx.fs.listdir(d)
+            except ShellError:
+                if not a.has("s"):
+                    ctx.error(f"grep: {display}: Permission denied")
+                errors()
+                return
+            for name in names:
                 child = normalize(d, name)
                 child_display = name if display == "." else display.rstrip("/") + "/" + name
                 if ctx.fs.is_dir(child):

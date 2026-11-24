@@ -67,7 +67,7 @@ class AgentFeatureTests(unittest.TestCase):
         out(sh, "cat > run.sh <<'EOF'\n#!/bin/bash\nset -e\necho \"script $1 $2 ($#)\"\nfor a in \"$@\"; do echo \"arg: $a\"; done\nEOF\nchmod +x run.sh")
         self.assertEqual("script x y z (2)\narg: x\narg: y z\n", out(sh, "./run.sh x 'y z'"))
         self.assertEqual("script a  (1)\narg: a\n", out(sh, "bash run.sh a"))
-        out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py")
+        out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py && chmod +x p.py")
         r = sh.run("./p.py")
         self.assertEqual(126, r.exit_code)
         self.assertIn("bad interpreter", r.stderr)
@@ -158,6 +158,40 @@ class AgentFeatureTests(unittest.TestCase):
         self.assertEqual("north 220\nsouth 100\neast 42\n", out(sh, "printf 'south 100\\neast 42\\nnorth 220\\n' | sort -k2,2nr"))
         self.assertEqual("b,2,x\na,10,y\n", out(sh, "printf 'a,10,y\\nb,2,x\\n' | sort -t, -k2n --debug"))
         self.assertEqual("project/src/a.py:x\n", out(sh, "mkdir -p project/node_modules; echo x > project/node_modules/z.py; echo x > project/n.txt; grep -r --include='*.py' --exclude=b.py --exclude-dir={node_modules,.git} x project"))
+
+    def test_regular_user_permissions(self):
+        """The agent is a regular, non-root user."""
+        sh = Shell()
+        # chmod on the agent's own files is real and visible
+        out(sh, "printf 'echo ran' > s.sh")
+        r = sh.run("./s.sh")
+        self.assertEqual((126, "bash: ./s.sh: Permission denied\n"), (r.exit_code, r.stderr))
+        self.assertEqual("-rw-r--r--\n-rwxr-xr-x\nran\n", out(sh, "ls -l s.sh | cut -c1-10; chmod +x s.sh; ls -l s.sh | cut -c1-10; ./s.sh"))
+        self.assertEqual("mode of 's.sh' changed from 0755 (rwxr-xr-x) to 0700 (rwx------)\n", out(sh, "chmod -v go-rx s.sh"))
+        self.assertEqual("640 agent\n", out(sh, "chmod 640 s.sh; stat -c '%a %U' s.sh"))
+        self.assertEqual("ok\n", out(sh, "[ -x /usr/bin/grep ] && [ ! -w /etc/passwd ] && [ -w ~ ] && echo ok"))
+        # system areas belong to root
+        for cmd, err in [
+            ("echo x > /etc/motd", "bash: /etc/motd: Permission denied\n"),
+            ("rm /usr/bin/grep", "rm: /usr/bin/grep: Permission denied\n"),
+            ("chmod 777 /etc/passwd", "chmod: changing permissions of '/etc/passwd': Operation not permitted\n"),
+            ("chown agent /etc/passwd", "chown: changing ownership of '/etc/passwd': Operation not permitted\n"),
+            ("ls /root", "ls: /root: Permission denied\n"),
+            ("sudo cat /etc/shadow", "agent is not in the sudoers file.\n"),
+        ]:
+            r = sh.run(cmd)
+            self.assertTrue(r.exit_code != 0 and r.stderr == err, f"{cmd}: [{r.exit_code}] {r.stderr}")
+        self.assertTrue(sh.fs.is_file("/usr/bin/grep"))
+        self.assertIn("root:x:0:0", out(sh, "cat /etc/passwd"))
+        self.assertEqual("drwxrwxrwt root\n", out(sh, "stat -c '%A %U' /tmp"))
+        self.assertEqual("x\n", out(sh, "echo x > /tmp/f && cat /tmp/f"))
+        r = sh.run("find / -name shadow")
+        self.assertEqual((1, "find: '/root': Permission denied\n"), (r.exit_code, r.stderr))
+        # the app itself is unrestricted, and files it creates belong to the directory's owner
+        sh.fs.write_text("/etc/app.conf", "mode=prod")
+        sh.fs.write_text("/home/agent/notes.txt", "hi")
+        self.assertEqual("root\nagent\n", out(sh, "stat -c %U /etc/app.conf ~/notes.txt"))
+        self.assertEqual("hi!\n", out(sh, "echo '!' >> ~/notes.txt; tr -d '\\n' < ~/notes.txt; echo"))
 
     def test_runaway_loops_are_stopped(self):
         r = Shell(max_loop_iterations=50).run("while true; do :; done")

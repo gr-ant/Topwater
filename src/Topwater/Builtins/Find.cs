@@ -34,7 +34,10 @@ internal sealed class Find
             if (depth >= _minDepth && await expr(new Entry(abs, VirtualFileSystem.GetName(abs), display)) && !_hasAction)
                 _ctx.Stdout.WriteLine(display);
             if (depth >= _maxDepth || !_ctx.Fs.IsDirectory(abs)) return;
-            foreach (var name in _ctx.Fs.List(abs))
+            IReadOnlyList<string> names;
+            try { names = _ctx.Fs.List(abs); }
+            catch (ShellException) { _ctx.Stderr.WriteLine($"find: '{display}': Permission denied"); code = 1; return; }
+            foreach (var name in names)
                 await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1);
         }
         foreach (var s in starts)

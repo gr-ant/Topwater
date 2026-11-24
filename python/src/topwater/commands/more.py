@@ -14,7 +14,7 @@ from datetime import datetime
 
 from .. import arith
 from ..shell import ExitSignal, LoopControl, ReturnSignal
-from ..vfs import ShellError, get_parent, normalize
+from ..vfs import ShellError, format_mode, get_parent, normalize
 from . import Args, inputs, split_lines, unescape, write_lines
 
 
@@ -256,19 +256,21 @@ def _stat(ctx):
             continue
         st = ctx.fs.stat(path)
         kind = "directory" if st.is_dir else "regular empty file" if st.size == 0 else "regular file"
-        mode = "755" if st.is_dir else "644"
-        rwx = "drwxr-xr-x" if st.is_dir else "-rw-r--r--"
+        mode = f"{st.mode:03o}"
+        rwx = format_mode(st.is_dir, st.mode)
+        user = st.owner
+        uid = "0" if user == "root" else "1000"
         mtime = st.modified.strftime("%Y-%m-%d %H:%M:%S.%f000 +0000")
         if a.value("c") is not None:
             values = {
-                "n": p, "s": str(st.size), "F": kind, "a": mode, "A": rwx, "U": user, "G": user, "u": "1000", "g": "1000",
+                "n": p, "s": str(st.size), "F": kind, "a": mode, "A": rwx, "U": user, "G": user, "u": uid, "g": uid,
                 "y": mtime, "Y": str(int(st.modified.timestamp())), "b": str((st.size + 511) // 512), "%": "%",
             }
             ctx.print(re.sub(r"%(.)", lambda m: values.get(m.group(1), m.group(0)), a.value("c")))
             continue
         blocks = (st.size + 511) // 512 * 8
         ctx.stdout.write(f"  File: {p}\n  Size: {st.size:<10}\tBlocks: {blocks:<10} IO Block: 4096   {kind}\n"
-                         f"Access: (0{mode}/{rwx})  Uid: ( 1000/{user:>8})   Gid: ( 1000/{user:>8})\n"
+                         f"Access: ({mode:0>4}/{rwx})  Uid: ({uid:>5}/{user:>8})   Gid: ({uid:>5}/{user:>8})\n"
                          f"Modify: {mtime}\nChange: {mtime}\n")
     return code
 
@@ -320,16 +322,128 @@ def _df(ctx):
         "Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1       41152736 8123456  31016272  21% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n")
 
 
-def _noop_on_files(ctx):
-    files = [x for x in ctx.args if not x.startswith("-")][1:]  # first operand is the mode/owner
+def chmod_parse(spec: str, mode: int, is_dir: bool) -> int:
+    """Octal (755) or symbolic (u+x, go-w, a=r, +x, +t) mode."""
+    if re.fullmatch(r"[0-7]{1,4}", spec):
+        return int(spec, 8)
+    for clause in spec.split(","):
+        m = re.fullmatch(r"([ugoa]*)([-+=])([rwxXt]*)", clause)
+        if not m:
+            raise ShellError(f"invalid mode: '{spec}'")
+        who = "ugo" if m.group(1) in ("", "a") else m.group(1).replace("a", "ugo")
+        bits, sticky = 0, False
+        for c in m.group(3):
+            if c == "r":
+                bits |= 4
+            elif c == "w":
+                bits |= 2
+            elif c == "x" or (c == "X" and (is_dir or mode & 0o111)):
+                bits |= 1
+            elif c == "t":
+                sticky = True
+        mask = clear = 0
+        for w in who:
+            shift = {"u": 6, "g": 3, "o": 0}[w]
+            mask |= bits << shift
+            clear |= 7 << shift
+        sticky_bit = 0o1000 if sticky else 0
+        op = m.group(2)
+        mode = mode | mask | sticky_bit if op == "+" else mode & ~(mask | sticky_bit) if op == "-" else (mode & ~clear) | mask | sticky_bit
+    return mode
+
+
+def _chmod(ctx):
+    recursive = verbose = changes = quiet = False
+    spec, files = None, []
+    for arg in ctx.args:
+        if arg in ("-R", "--recursive"):
+            recursive = True
+        elif arg in ("-v", "--verbose"):
+            verbose = True
+        elif arg in ("-c", "--changes"):
+            changes = True
+        elif arg in ("-f", "--silent", "--quiet"):
+            quiet = True
+        elif spec is None:
+            spec = arg  # may look like an option, e.g. -x or -w
+        else:
+            files.append(arg)
+    if spec is None or not files:
+        raise ShellError("missing operand" if spec is None else f"missing operand after '{spec}'")
+    code = 0
+
+    def fmt(st, m):
+        return f"{m:04o} ({format_mode(st.is_dir, m)[1:]})"
+
+    def apply(display, path):
+        nonlocal code
+        st = ctx.fs.stat(path)
+        mode = chmod_parse(spec, st.mode, st.is_dir)
+        try:
+            ctx.fs.chmod(path, mode)
+        except ShellError:
+            if not quiet:
+                ctx.error(f"chmod: changing permissions of '{display}': Operation not permitted")
+            code = 1
+            return
+        if mode != st.mode and (verbose or changes):
+            ctx.print(f"mode of '{display}' changed from {fmt(st, st.mode)} to {fmt(st, mode)}")
+        elif mode == st.mode and verbose:
+            ctx.print(f"mode of '{display}' retained as {fmt(st, mode)}")
+        if recursive and st.is_dir and ctx.fs.can_read(path):
+            for n in ctx.fs.listdir(path):
+                apply(display.rstrip("/") + "/" + n, normalize(path, n))
+
+    for f in files:
+        path = ctx.resolve(f)
+        if not ctx.fs.exists(path):
+            ctx.error(f"chmod: cannot access '{f}': No such file or directory")
+            code = 1
+            continue
+        apply(f, path)
+    return code
+
+
+def _chown(ctx):
+    operands = [x for x in ctx.args if not x.startswith("-")]
+    files = operands[1:]  # first operand is the owner
     if not files:
         raise ShellError("missing operand")
+    owner = operands[0].split(":")[0]
     code = 0
     for f in files:
-        if not ctx.fs.exists(ctx.resolve(f)):
+        path = ctx.resolve(f)
+        if not ctx.fs.exists(path):
             ctx.error(f"{ctx.name}: cannot access '{f}': No such file or directory")
             code = 1
+            continue
+        try:
+            ctx.fs.set_owner(path, owner or ctx.fs.stat(path).owner, "-R" in ctx.args)
+        except ShellError:
+            ctx.error(f"{ctx.name}: changing ownership of '{f}': Operation not permitted")
+            code = 1
     return code
+
+
+def _sudo(ctx):
+    """The agent is a regular user: privilege escalation fails the way it does on a real server."""
+    user = ctx.shell.user
+    if ctx.args in (["-V"], ["--version"]):
+        ctx.print("Sudo version 1.9.15p5")
+        return 0
+    if not ctx.args:
+        ctx.error("usage: sudo -h | -K | -k | -V\nusage: sudo [-AbEHknPS] [-u user] [command [arg ...]]")
+        return 1
+    if ctx.args[0] in ("-l", "--list"):
+        ctx.error(f"Sorry, user {user} may not run sudo on {ctx.shell.hostname}.")
+        return 1
+    ctx.error(f"{user} is not in the sudoers file.")
+    return 1
+
+
+def _su(ctx):
+    ctx.error("Password: \nsu: Authentication failure")
+    return 1
 
 
 def _nl(ctx):
@@ -657,9 +771,11 @@ def register(shell) -> None:
     r("stat", _stat, "Show file status")
     r("du", _du, "Estimate disk usage")
     r("df", _df, "Report filesystem disk space")
-    r("chmod", _noop_on_files, "Change file mode bits")
-    r("chown", _noop_on_files, "Change file owner")
-    r("chgrp", _noop_on_files, "Change file group")
+    r("chmod", _chmod, "Change file mode bits")
+    r("chown", _chown, "Change file owner")
+    r("chgrp", _chown, "Change file group")
+    r("sudo", _sudo, "Execute a command as another user")
+    r("su", _su, "Run a command with a substitute user ID")
     r("nl", _nl, "Number lines")
     r("less", _pager, "View files (non-interactive: prints them)")
     r("more", _pager, "View files (non-interactive: prints them)")

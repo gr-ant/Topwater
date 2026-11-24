@@ -87,7 +87,10 @@ internal static partial class Builtins
                 if (!recursive) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {f}: Is a directory"); error = true; continue; }
                 void Walk(string dirAbs, string display)
                 {
-                    foreach (var name in ctx.Fs.List(dirAbs))
+                    IReadOnlyList<string> names;
+                    try { names = ctx.Fs.List(dirAbs); }
+                    catch (ShellException) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {display}: Permission denied"); error = true; return; }
+                    foreach (var name in names)
                     {
                         var child = VirtualFileSystem.Normalize(dirAbs, name);
                         var childDisplay = display == "." && f == "." ? name : display.TrimEnd('/') + "/" + name;

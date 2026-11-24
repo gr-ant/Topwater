@@ -114,6 +114,14 @@ public sealed partial class Shell
         if (!Fs.Exists("/etc/passwd"))
             Fs.WriteAllText("/etc/passwd", $"root:x:0:0:root:/root:/bin/bash\n{user}:x:1000:1000:{user}:{home}:/bin/bash\n");
         Fs.WriteAllText("/dev/null", "");
+        // a regular (non-root) account: the agent owns its home; system areas belong to root
+        Fs.CreateDirectory("/root", parents: true);
+        Fs.Chmod("/root", Oct("700"));
+        Fs.SetOwner(home, user, recursive: true);
+        Fs.Chmod(home, Oct("750"));
+        Fs.Chmod("/tmp", Oct("1777"));
+        Fs.Chmod("/var/tmp", Oct("1777"));
+        Fs.Chmod("/dev/null", Oct("666"));
         Environment["HOME"] = home;
         Environment["USER"] = user;
         Environment["LOGNAME"] = user;
@@ -128,6 +136,8 @@ public sealed partial class Shell
     }
 
     HashSet<string>? _builtinNames;
+
+    internal static int Oct(string s) => Convert.ToInt32(s, 8);
     int _procSubCount;
 
     public ShellOptions Options { get; }
@@ -165,8 +175,13 @@ public sealed partial class Shell
         _builtinNames?.Remove(name); // an app command replacing a built-in owns its own --help/--version
         if (!name.Contains('/') && name is not "." and not ".." && Fs.IsDirectory("/usr/bin"))
         {
-            Fs.WriteAllText("/usr/bin/" + name, ExecutableStub);
-            if (Fs.IsDirectory("/bin")) Fs.WriteAllText("/bin/" + name, ExecutableStub);
+            using var _ = Fs.AsRoot();
+            foreach (var dir in new[] { "/usr/bin/", "/bin/" })
+            {
+                if (!Fs.IsDirectory(dir)) continue;
+                Fs.WriteAllText(dir + name, ExecutableStub);
+                Fs.Chmod(dir + name, Oct("755"));
+            }
         }
         return this;
     }
@@ -183,8 +198,9 @@ public sealed partial class Shell
 
     public bool Unregister(string name)
     {
-        foreach (var dir in new[] { "/usr/bin/", "/bin/" })
-            if (Fs.IsFile(dir + name)) Fs.Delete(dir + name);
+        using (Fs.AsRoot())
+            foreach (var dir in new[] { "/usr/bin/", "/bin/" })
+                if (Fs.IsFile(dir + name)) Fs.Delete(dir + name);
         return _commands.Remove(name);
     }
 
@@ -196,6 +212,8 @@ public sealed partial class Shell
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         int code;
+        var previousUser = Fs.RunAs;
+        Fs.RunAs = Options.User; // the agent's commands run as a regular user
         try
         {
             code = await ExecScriptAsync(Parser.Parse(commandLine), new Io(new StdinBuffer(""), stdout, stderr), cancellationToken);
@@ -208,8 +226,10 @@ public sealed partial class Shell
         {
             // shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
             Errexit = Pipefail = false;
+            Fs.RunAs = previousUser;
             if (_procSubCount > 0 && Fs.IsDirectory("/dev/fd"))
-                foreach (var f in Fs.List("/dev/fd")) Fs.Delete("/dev/fd/" + f, recursive: true);
+                using (Fs.AsRoot())
+                    foreach (var f in Fs.List("/dev/fd")) Fs.Delete("/dev/fd/" + f, recursive: true);
             _procSubCount = 0;
         }
         LastExitCode = code;
@@ -558,6 +578,7 @@ public sealed partial class Shell
     {
         if (Fs.IsDirectory(path)) { io.Err.WriteLine($"bash: {name}: Is a directory"); return 126; }
         if (!Fs.IsFile(path)) { io.Err.WriteLine($"bash: {name}: No such file or directory"); return 127; }
+        if (!Fs.CanExecute(path) || !Fs.CanRead(path)) { io.Err.WriteLine($"bash: {name}: Permission denied"); return 126; }
         var text = Fs.ReadAllText(path);
         if (text.StartsWith(ExecutableStub[..4])) { io.Err.WriteLine($"bash: {name}: cannot execute binary file"); return 126; }
         if (text.StartsWith("#!"))
@@ -731,7 +752,7 @@ public sealed partial class Shell
         var output = new StringWriter();
         await RunScriptTextAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, subshell: true, ct);
         var path = $"/dev/fd/{63 + _procSubCount++}";
-        Fs.WriteAllText(path, output.ToString());
+        using (Fs.AsRoot()) Fs.WriteAllText(path, output.ToString());
         return path;
     }
 
@@ -1073,7 +1094,7 @@ internal static class Glob
             var next = new List<(string, string)>();
             foreach (var (abs, display) in current)
             {
-                if (!shell.Fs.IsDirectory(abs)) continue;
+                if (!shell.Fs.IsDirectory(abs) || !shell.Fs.CanRead(abs)) continue;
                 if (seg is "." or "..") { next.Add((VirtualFileSystem.Normalize(abs, seg), Join(display, seg))); continue; }
                 if (HasUnescapedWildcard(seg))
                 {

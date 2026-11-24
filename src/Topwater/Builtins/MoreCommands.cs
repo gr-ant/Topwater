@@ -224,15 +224,16 @@ internal static partial class Builtins
         {
             var a = Args.Parse(ctx.Args, "Lt", "c", "format=c,dereference=L,terse=t");
             int code = 0;
-            var user = ctx.Shell.Options.User;
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
                 if (!ctx.Fs.Exists(abs)) { ctx.Stderr.WriteLine($"stat: cannot statx '{p}': No such file or directory"); code = 1; continue; }
                 var st = ctx.Fs.Stat(abs);
                 var type = st.IsDirectory ? "directory" : st.Size == 0 ? "regular empty file" : "regular file";
-                var mode = st.IsDirectory ? "755" : "644";
-                var rwx = st.IsDirectory ? "drwxr-xr-x" : "-rw-r--r--";
+                var mode = Convert.ToString(st.Mode, 8).PadLeft(3, '0');
+                var rwx = VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode);
+                var owner = st.Owner;
+                var uid = owner == "root" ? "0" : "1000";
                 var mtime = st.Modified.ToString("yyyy-MM-dd HH:mm:ss.fffffff00 +0000", CultureInfo.InvariantCulture);
                 if (a.Value('c') is { } fmt)
                 {
@@ -242,8 +243,8 @@ internal static partial class Builtins
                         if (fmt[i] != '%' || i + 1 >= fmt.Length) { sb.Append(fmt[i]); continue; }
                         sb.Append(fmt[++i] switch
                         {
-                            'n' => p, 's' => st.Size.ToString(), 'F' => type, 'a' => mode, 'A' => rwx, 'U' => user, 'G' => user,
-                            'u' => "1000", 'g' => "1000", 'y' => mtime, 'Y' => new DateTimeOffset(st.Modified).ToUnixTimeSeconds().ToString(),
+                            'n' => p, 's' => st.Size.ToString(), 'F' => type, 'a' => mode, 'A' => rwx, 'U' => owner, 'G' => owner,
+                            'u' => uid, 'g' => uid, 'y' => mtime, 'Y' => new DateTimeOffset(st.Modified).ToUnixTimeSeconds().ToString(),
                             'b' => ((st.Size + 511) / 512).ToString(), 'i' => (Math.Abs(abs.GetHashCode()) % 1000000).ToString(), '%' => "%",
                             var c => "%" + c,
                         });
@@ -253,7 +254,7 @@ internal static partial class Builtins
                 }
                 ctx.Stdout.Write(
                     $"  File: {p}\n  Size: {st.Size,-10}\tBlocks: {(st.Size + 511) / 512 * 8,-10} IO Block: 4096   {type}\n" +
-                    $"Access: (0{mode}/{rwx})  Uid: ( 1000/{user,8})   Gid: ( 1000/{user,8})\n" +
+                    $"Access: ({mode.PadLeft(4, '0')}/{rwx})  Uid: ({uid,5}/{owner,8})   Gid: ({uid,5}/{owner,8})\n" +
                     $"Modify: {mtime}\nChange: {mtime}\n");
             }
             return code;
@@ -299,18 +300,41 @@ internal static partial class Builtins
             return 0;
         }, "Report filesystem disk space");
 
-        CommandHandler noopOnFiles = ctx =>
+        shell.Register("chmod", Chmod.Run, "Change file mode bits");
+
+        CommandHandler chown = ctx =>
         {
-            var files = ctx.Args.Where(x => !x.StartsWith('-')).Skip(1).ToList(); // first operand is the mode/owner
+            var files = ctx.Args.Where(x => !x.StartsWith('-')).Skip(1).ToList(); // first operand is the owner
             if (files.Count == 0) throw new ShellException("missing operand");
+            var owner = ctx.Args.First(x => !x.StartsWith('-')).Split(':')[0];
             int code = 0;
             foreach (var f in files)
-                if (!ctx.Fs.Exists(ctx.ResolvePath(f))) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot access '{f}': No such file or directory"); code = 1; }
+            {
+                var path = ctx.ResolvePath(f);
+                if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot access '{f}': No such file or directory"); code = 1; continue; }
+                try { ctx.Fs.SetOwner(path, owner.Length > 0 ? owner : ctx.Fs.Stat(path).Owner, ctx.Args.Contains("-R")); }
+                catch (ShellException) { ctx.Stderr.WriteLine($"{ctx.Name}: changing ownership of '{f}': Operation not permitted"); code = 1; }
+            }
             return Task.FromResult(code);
         };
-        shell.Register("chmod", noopOnFiles, "Change file mode bits");
-        shell.Register("chown", noopOnFiles, "Change file owner");
-        shell.Register("chgrp", noopOnFiles, "Change file group");
+        shell.Register("chown", chown, "Change file owner");
+        shell.Register("chgrp", chown, "Change file group");
+
+        // the agent is a regular user: privilege escalation fails the way it does on a real server
+        shell.Register("sudo", ctx =>
+        {
+            var user = ctx.Shell.Options.User;
+            if (ctx.Args is ["-V"] or ["--version"]) { ctx.Stdout.WriteLine("Sudo version 1.9.15p5"); return 0; }
+            if (ctx.Args.Count == 0) { ctx.Stderr.WriteLine("usage: sudo -h | -K | -k | -V\nusage: sudo [-AbEHknPS] [-u user] [command [arg ...]]"); return 1; }
+            if (ctx.Args[0] is "-l" or "--list") { ctx.Stderr.WriteLine($"Sorry, user {user} may not run sudo on {ctx.Shell.Options.Hostname}."); return 1; }
+            ctx.Stderr.WriteLine($"{user} is not in the sudoers file.");
+            return 1;
+        }, "Execute a command as another user");
+        shell.Register("su", ctx =>
+        {
+            ctx.Stderr.WriteLine("Password: \nsu: Authentication failure");
+            return 1;
+        }, "Run a command with a substitute user ID");
 
         shell.Register("nl", ctx =>
         {
@@ -620,5 +644,83 @@ internal static class Diff
             foreach (var o in hunk)
                 w.WriteLine(o.Op switch { Op.Equal => " " + x[o.A], Op.Delete => "-" + x[o.A], _ => "+" + y[o.B] });
         }
+    }
+}
+
+/// <summary>chmod with octal (755) and symbolic (u+x, go-w, a=r, +x) modes, -R, -v and -c.</summary>
+internal static class Chmod
+{
+    public static Task<int> Run(CommandContext ctx)
+    {
+        bool recursive = false, verbose = false, changes = false, quiet = false;
+        string? spec = null;
+        var files = new List<string>();
+        foreach (var arg in ctx.Args)
+        {
+            if (arg is "-R" or "--recursive") recursive = true;
+            else if (arg is "-v" or "--verbose") verbose = true;
+            else if (arg is "-c" or "--changes") changes = true;
+            else if (arg is "-f" or "--silent" or "--quiet") quiet = true;
+            else if (spec == null) spec = arg; // may look like an option, e.g. -x or -w
+            else files.Add(arg);
+        }
+        if (spec == null || files.Count == 0) throw new ShellException(spec == null ? "missing operand" : $"missing operand after '{spec}'");
+        int code = 0;
+        void Apply(string display, string path)
+        {
+            var st = ctx.Fs.Stat(path);
+            var mode = Parse(spec, st.Mode, st.IsDirectory);
+            try { ctx.Fs.Chmod(path, mode); }
+            catch (ShellException) { if (!quiet) ctx.Stderr.WriteLine($"chmod: changing permissions of '{display}': Operation not permitted"); code = 1; return; }
+            string Fmt(int m) => $"{Convert.ToString(m, 8).PadLeft(4, '0')} ({VirtualFileSystem.FormatMode(st.IsDirectory, m)[1..]})";
+            if (mode != st.Mode && (verbose || changes)) ctx.Stdout.WriteLine($"mode of '{display}' changed from {Fmt(st.Mode)} to {Fmt(mode)}");
+            else if (mode == st.Mode && verbose) ctx.Stdout.WriteLine($"mode of '{display}' retained as {Fmt(mode)}");
+            if (recursive && st.IsDirectory && ctx.Fs.CanRead(path))
+                foreach (var n in ctx.Fs.List(path)) Apply(display.TrimEnd('/') + "/" + n, VirtualFileSystem.Normalize(path, n));
+        }
+        foreach (var f in files)
+        {
+            var path = ctx.ResolvePath(f);
+            if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"chmod: cannot access '{f}': No such file or directory"); code = 1; continue; }
+            Apply(f, path);
+        }
+        return Task.FromResult(code);
+    }
+
+    public static int Parse(string spec, int mode, bool isDir)
+    {
+        if (System.Text.RegularExpressions.Regex.IsMatch(spec, "^[0-7]{1,4}$")) return Convert.ToInt32(spec, 8);
+        foreach (var clause in spec.Split(','))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(clause, "^([ugoa]*)([-+=])([rwxXt]*)$");
+            if (!m.Success) throw new ShellException($"invalid mode: '{spec}'");
+            var who = m.Groups[1].Value is "" or "a" ? "ugo" : m.Groups[1].Value.Replace("a", "ugo");
+            int bits = 0;
+            bool sticky = false;
+            foreach (var c in m.Groups[3].Value)
+                switch (c)
+                {
+                    case 'r': bits |= 4; break;
+                    case 'w': bits |= 2; break;
+                    case 'x': bits |= 1; break;
+                    case 'X': if (isDir || (mode & 0b001_001_001) != 0) bits |= 1; break;
+                    case 't': sticky = true; break;
+                }
+            int mask = 0, clear = 0;
+            foreach (var w in who)
+            {
+                int shift = w == 'u' ? 6 : w == 'g' ? 3 : 0;
+                mask |= bits << shift;
+                clear |= 7 << shift;
+            }
+            int stickyBit = sticky ? 0x200 : 0;
+            mode = m.Groups[2].Value switch
+            {
+                "+" => mode | mask | stickyBit,
+                "-" => mode & ~(mask | stickyBit),
+                _ => (mode & ~clear) | mask | stickyBit,
+            };
+        }
+        return mode;
     }
 }

@@ -73,12 +73,12 @@ internal static partial class Builtins
         ["grep"] = "grep (GNU grep) 3.11", ["sed"] = "sed (GNU sed) 4.9", ["find"] = "find (GNU findutils) 4.9.0",
         ["xargs"] = "xargs (GNU findutils) 4.9.0", ["diff"] = "diff (GNU diffutils) 3.10", ["jq"] = "jq-1.7.1", ["tree"] = "tree v2.1.1",
         ["bash"] = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)", ["sh"] = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
-        ["file"] = "file-5.45", ["less"] = "less 590 (GNU regular expressions)", ["ps"] = "ps from procps-ng 4.0.4",
+        ["file"] = "file-5.45", ["sudo"] = "Sudo version 1.9.15p5", ["less"] = "less 590 (GNU regular expressions)", ["ps"] = "ps from procps-ng 4.0.4",
         ["free"] = "free from procps-ng 4.0.4", ["uptime"] = "uptime from procps-ng 4.0.4", ["column"] = "column from util-linux 2.39.3",
         ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3",
     };
 
-    static readonly HashSet<string> NoStandardOptions = ["echo", "printf", "test", "[", "true", "false", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];
+    static readonly HashSet<string> NoStandardOptions = ["sudo", "su", "echo", "printf", "test", "[", "true", "false", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];
 
     /// <summary>`tool --version` / `tool --help` for built-ins, so probing them looks like a real system.</summary>
     internal static bool StandardOption(CommandContext ctx, RegisteredCommand cmd, string arg)
@@ -380,7 +380,10 @@ internal static class Test
         {
             "-z" => arg.Length == 0,
             "-n" => arg.Length > 0,
-            "-e" or "-r" or "-w" or "-x" => fs.Exists(path),
+            "-e" => fs.Exists(path),
+            "-r" => fs.CanRead(path),
+            "-w" => fs.CanWrite(path),
+            "-x" => fs.CanExecute(path),
             "-f" => fs.IsFile(path),
             "-d" => fs.IsDirectory(path),
             "-s" => fs.IsFile(path) && fs.Stat(path).Size > 0,
