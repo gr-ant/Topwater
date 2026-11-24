@@ -118,6 +118,7 @@ public sealed partial class Shell
         if (!Fs.Exists("/etc/passwd"))
             Fs.WriteAllText("/etc/passwd", $"root:x:0:0:root:/root:/bin/bash\n{user}:x:1000:1000:{user}:{home}:/bin/bash\n");
         Fs.WriteAllText("/dev/null", "");
+        SeedSystemFiles(user, home);
         // a regular (non-root) account: the agent owns its home; system areas belong to root
         Fs.CreateDirectory("/root", parents: true);
         Fs.Chmod("/root", Oct("700"));
@@ -138,8 +139,41 @@ public sealed partial class Shell
         Builtins.RegisterAll(this);
         _builtinNames = [.. _commands.Keys];
         // the system was "installed" months ago; only the agent's home and the temp directories are fresh
-        foreach (var dir in new[] { "/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log" }) Fs.SetModified(dir, InstalledAt, recursive: true);
-        foreach (var dir in new[] { "/", "/home", "/var" }) Fs.SetModified(dir, InstalledAt);
+        foreach (var dir in new[] { "/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log", "/var/lib", "/var/cache", "/boot", "/lib", "/lib64", "/media", "/mnt", "/sbin", "/srv" })
+            Fs.SetModified(dir, InstalledAt, recursive: true);
+        foreach (var path in new[] { "/", "/home", "/var", home + "/.bashrc", home + "/.profile", home + "/.bash_logout" }) Fs.SetModified(path, InstalledAt);
+    }
+
+    /// <summary>
+    /// The ordinary clutter of a Linux install. A model that looks around and finds four files in /etc, no dotfiles
+    /// and no /proc starts wondering what kind of machine it is on, and spends its turns investigating.
+    /// </summary>
+    void SeedSystemFiles(string user, string home)
+    {
+        foreach (var dir in new[] { "/boot", "/lib", "/lib64", "/media", "/mnt", "/proc", "/run", "/sbin", "/srv", "/sys", "/usr/lib", "/usr/share", "/usr/sbin", "/var/lib", "/var/cache" })
+            Fs.CreateDirectory(dir, parents: true);
+
+        void Seed(string path, string content) { if (!Fs.Exists(path)) Fs.WriteAllText(path, content); }
+        Seed("/etc/hosts", $"127.0.0.1\tlocalhost\n127.0.1.1\t{Options.Hostname}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\nff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n");
+        Seed("/etc/group", $"root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n{user}:x:1000:\n");
+        Seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/bin/bash\n/usr/bin/bash\n/usr/bin/sh\n");
+        Seed("/etc/timezone", "Etc/UTC\n");
+        Seed("/etc/resolv.conf", "nameserver 127.0.0.53\noptions edns0 trust-ad\n");
+        Seed("/etc/lsb-release", "DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=24.04\nDISTRIB_CODENAME=noble\nDISTRIB_DESCRIPTION=\"Ubuntu 24.04.1 LTS\"\n");
+        Seed("/etc/fstab", "# <file system> <mount point> <type> <options> <dump> <pass>\n/dev/sda1\t/\text4\tdefaults\t0 1\n");
+
+        // these agree with what uname, nproc, free, df and uptime print
+        Seed("/proc/version", "Linux version 6.8.0-generic (buildd@lcy02-amd64-047) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.2.0-23ubuntu4) 13.2.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #1 SMP PREEMPT_DYNAMIC\n");
+        Seed("/proc/cpuinfo", string.Concat(Enumerable.Range(0, 4).Select(i =>
+            $"processor\t: {i}\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 85\nmodel name\t: Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz\ncpu MHz\t\t: 2499.998\ncache size\t: 36608 KB\nphysical id\t: 0\nsiblings\t: 4\ncore id\t\t: {i / 2}\ncpu cores\t: 2\nbogomips\t: 4999.99\n\n")));
+        Seed("/proc/meminfo", "MemTotal:        8014880 kB\nMemFree:         3984512 kB\nMemAvailable:    5748660 kB\nBuffers:          182272 kB\nCached:          2018752 kB\nSwapTotal:       2097148 kB\nSwapFree:        2097148 kB\nShmem:             12288 kB\n");
+        Seed("/proc/mounts", "/dev/sda1 / ext4 rw,relatime 0 0\nproc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\ntmpfs /dev/shm tmpfs rw,nosuid,nodev 0 0\n");
+        Seed("/proc/uptime", "274320.42 1082431.77\n");
+        Seed("/proc/loadavg", "0.08 0.03 0.01 1/142 4242\n");
+
+        Seed(home + "/.profile", "# ~/.profile: executed by the command interpreter for login shells.\n\nif [ -n \"$BASH_VERSION\" ]; then\n    if [ -f \"$HOME/.bashrc\" ]; then\n\t. \"$HOME/.bashrc\"\n    fi\nfi\n\nif [ -d \"$HOME/bin\" ] ; then\n    PATH=\"$HOME/bin:$PATH\"\nfi\n");
+        Seed(home + "/.bash_logout", "# ~/.bash_logout: executed by bash(1) when login shell exits.\n\nif [ \"$SHLVL\" = 1 ]; then\n    [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q\nfi\n");
+        Seed(home + "/.bashrc", "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n# If not running interactively, don't do anything\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\n\nshopt -s checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\nalias ls='ls --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n");
     }
 
     static readonly DateTime InstalledAt = DateTime.Today.AddDays(-142).AddHours(9).AddMinutes(13);
@@ -201,6 +235,8 @@ public sealed partial class Shell
                 Fs.WriteAllText(dir + name, ExecutableStub);
                 Fs.Chmod(dir + name, Oct("755"));
                 Fs.SetModified(dir + name, InstalledAt);
+                // shortcut: a stub is 16 bytes but reports a plausible program size; `wc -c` on it would disagree
+                Fs.SetReportedSize(dir + name, 14_000 + (uint)name.Aggregate(17, (h, c) => h * 31 + c) % 180_000 / 8 * 8);
                 Fs.SetModified(dir, InstalledAt);
             }
         }

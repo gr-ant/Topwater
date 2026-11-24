@@ -123,8 +123,10 @@ The agent is a regular user called `agent`, not root:
 - Your app is not restricted. Files it creates belong to whoever owns the directory, so data you put in the
   agent's home is the agent's to edit, and data you put in `/etc` is read-only for it.
 
-The machine looks like Ubuntu 24.04: `/etc/os-release`, `/etc/passwd`, `/bin` and `/usr/bin` listing every
-command (yours included), and `/dev/null`.
+The machine looks like a lived-in Ubuntu 24.04 install: the standard folders, `/etc` files such as `os-release`,
+`passwd`, `hosts` and `group`, a `/proc` whose `cpuinfo` and `meminfo` agree with `nproc` and `free`, the usual
+dotfiles in the agent's home, and `/bin` and `/usr/bin` listing every program (yours included) with plausible
+sizes and install dates. Shell built-ins such as `cd` and `eval` are not listed as programs, as on a real system.
 
 ## Documents
 

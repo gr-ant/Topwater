@@ -37,6 +37,7 @@ public sealed class VirtualFileSystem
             set { _text = value; _appended = null; }
         }
         public byte[]? Data; // set for binary files; Content is then unused
+        public long? ReportedSize; // what `ls -l` and `stat` show for a program stub, whose real content is a few bytes
         public byte[] Raw => Data ?? System.Text.Encoding.UTF8.GetBytes(Content);
 
         public void Store(string? text, byte[]? bytes, bool append)
@@ -148,7 +149,7 @@ public sealed class VirtualFileSystem
     public FileStat Stat(string path) => Find(path) switch
     {
         Dir d => new(true, 4096, d.Modified, d.Mode, d.Owner),
-        FileNode f => new(false, f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
+        FileNode f => new(false, f.ReportedSize ?? f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
         _ => throw new ShellException($"{path}: No such file or directory"),
     };
 
@@ -216,6 +217,11 @@ public sealed class VirtualFileSystem
             if (recursive && n is Dir d) foreach (var child in d.Children.Values) Walk(child);
         }
         Walk(node);
+    }
+
+    internal void SetReportedSize(string path, long size)
+    {
+        if (Find(path) is FileNode f) f.ReportedSize = size;
     }
 
     public void Touch(string path)

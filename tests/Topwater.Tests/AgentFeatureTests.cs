@@ -231,6 +231,30 @@ public class RealismTests
 
         // nothing outside the agent's own areas looks recently modified
         await sh.RunAsync("echo hi > ~/new.txt");
-        Assert.Equal("/home/agent\n/home/agent/new.txt\n", (await sh.RunAsync("find / -mmin -120 -not -path '/tmp*' -not -path '/var/tmp*' 2>/dev/null | sort")).Stdout);
+        Assert.Equal("/home/agent\n/home/agent/new.txt\n", (await sh.RunAsync("find / -mmin -120 -not -path '/tmp*' -not -path '/var/tmp*' -not -path '/proc*' -not -path '/sys' -not -path '/run' 2>/dev/null | sort")).Stdout);
+    }
+}
+
+public class LivedInMachineTests
+{
+    [Fact]
+    public async Task TheMachineHasTheUsualClutter()
+    {
+        var sh = new Shell().Register("orders", _ => 0);
+        async Task<string> Out(string c) => (await sh.RunAsync(c)).Stdout;
+
+        Assert.Contains("HISTSIZE=1000", await Out("cat ~/.bashrc"));
+        Assert.Equal(".bash_logout\n.bashrc\n.profile\n", await Out("ls -A ~"));
+        Assert.Equal("", await Out("ls ~"));
+        foreach (var dir in new[] { "proc", "sys", "lib", "sbin", "run", "boot" }) Assert.Contains(dir, (await Out("ls /")).Split('\n'));
+        Assert.Equal("4\n", await Out("grep -c ^processor /proc/cpuinfo"));
+        Assert.Equal(await Out("nproc"), await Out("grep -c ^processor /proc/cpuinfo"));
+        Assert.Contains("8014880", await Out("grep MemTotal /proc/meminfo"));
+        Assert.Contains("topwater", await Out("cat /etc/hosts"));
+        Assert.Contains("agent:x:1000:", await Out("cat /etc/group"));
+
+        // programs are not all the same suspicious 16 bytes
+        long grep = long.Parse(await Out("stat -c %s /usr/bin/grep")), orders = long.Parse(await Out("stat -c %s /usr/bin/orders"));
+        Assert.True(grep > 10_000 && orders > 10_000 && grep != orders);
     }
 }
