@@ -97,6 +97,8 @@ CASES = [
     # --- the null command, and tr's fast path ---
     (": > f.txt; wc -c < f.txt; : ${NEWVAR:=dflt}; echo $NEWVAR; while :; do break; done; type :", "0\ndflt\n: is a shell builtin\n"),
     ("echo 'hello' | tr a-y b-z; echo 'hello' | tr -d l", "ifmmp\nheo\n"),
+    ("for i in 1 2; do echo $i >> ap.txt; cat ap.txt; done; echo x > ap.txt; echo y >> ap.txt; cat ap.txt; wc -c ap.txt",
+     "1\n1\n2\nx\ny\n4 ap.txt\n"),
     # --- awk: RS, CONVFMT, big integers, POSIX classes, functions, getline ---
     ("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'",
      "1: 3\n2: 1\n1 x\n2 y\n\n"),

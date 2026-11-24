@@ -78,6 +78,7 @@ public class ReviewFixTests
     [InlineData("type cd ls; type -t echo; command -v cd", "cd is a shell builtin\nls is /usr/bin/ls\nbuiltin\ncd\n")]
     [InlineData(": > f.txt; wc -c < f.txt; : ${NEWVAR:=dflt}; echo $NEWVAR; while :; do break; done; type :", "0\ndflt\n: is a shell builtin\n")]
     [InlineData("echo 'hello' | tr a-y b-z; echo 'hello' | tr -d l", "ifmmp\nheo\n")]
+    [InlineData("for i in 1 2; do echo $i >> ap.txt; cat ap.txt; done; echo x > ap.txt; echo y >> ap.txt; cat ap.txt; wc -c ap.txt", "1\n1\n2\nx\ny\n4 ap.txt\n")]
     [InlineData("printf 'a b\\nc\\n\\nd\\n' | awk -v RS= '{ print NR \": \" NF }'; echo 'x;y' | awk -v RS=';' '{ print NR, $0 }'", "1: 3\n2: 1\n1 x\n2 y\n\n")]
     [InlineData("awk 'BEGIN { CONVFMT = \"%.2f\"; x = 3.14159; print (x \"\"), 2^53, 1e16 }'", "3.14 9007199254740992 10000000000000000\n")]
     [InlineData("awk '/[[:digit:]]$/ { n++ } END { print n }' f.txt; echo 'a.b' | awk '/a[.]b/'", "4\na.b\n")]

@@ -29,7 +29,13 @@ public sealed class VirtualFileSystem
     sealed class Dir : Node { public readonly SortedDictionary<string, Node> Children = new(StringComparer.Ordinal); }
     sealed class FileNode : Node
     {
-        public string Content = "";
+        string? _text = "";
+        System.Text.StringBuilder? _appended; // `>>` writes accumulate here, so append loops stay linear
+        public string Content
+        {
+            get => _text ??= _appended!.ToString();
+            set { _text = value; _appended = null; }
+        }
         public byte[]? Data; // set for binary files; Content is then unused
         public byte[] Raw => Data ?? System.Text.Encoding.UTF8.GetBytes(Content);
 
@@ -43,7 +49,13 @@ public sealed class VirtualFileSystem
             }
             else
             {
-                Content = append ? Content + text : text!;
+                if (append)
+                {
+                    _appended ??= new System.Text.StringBuilder(Content);
+                    _appended.Append(text);
+                    _text = null;
+                }
+                else Content = text!;
                 Data = null;
             }
         }

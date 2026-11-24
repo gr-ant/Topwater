@@ -43,16 +43,25 @@ class _File:
     owner: str = "root"
     mode: int = DEFAULT_FILE_MODE
     data: bytes | None = None  # set for binary files (written with write_bytes); content is then unused
+    appended: list[str] = field(default_factory=list)  # `>>` chunks not yet joined, so append loops stay linear
+
+    def text(self) -> str:
+        if self.appended:
+            self.content, self.appended = self.content + "".join(self.appended), []
+        return self.content
 
     def raw(self) -> bytes:
-        return self.content.encode() if self.data is None else self.data
+        return self.text().encode() if self.data is None else self.data
 
     def store(self, content: str | bytes, append: bool) -> None:
         if isinstance(content, bytes) or (append and self.data is not None):
             new = content if isinstance(content, bytes) else content.encode()
-            self.content, self.data = "", (self.raw() + new if append else new)
+            self.data = self.raw() + new if append else new
+            self.content, self.appended = "", []
+        elif append:
+            self.appended.append(content)
         else:
-            self.content, self.data = (self.content + content if append else content), None
+            self.content, self.data, self.appended = content, None, []
 
 
 def normalize(cwd: str, path: str) -> str:
@@ -172,7 +181,7 @@ class VirtualFileSystem:
 
     def read_text(self, path: str) -> str:
         n = self._read(path)
-        return n.content if n.data is None else n.data.decode("utf-8", "replace")
+        return n.text() if n.data is None else n.data.decode("utf-8", "replace")
 
     def read_bytes(self, path: str) -> bytes:
         """The file's exact bytes (UTF-8 for files written as text)."""
@@ -341,5 +350,5 @@ class VirtualFileSystem:
 
 def _clone(n, owner: str):
     if isinstance(n, _File):
-        return _File(n.content, owner=owner, mode=n.mode, data=n.data)
+        return _File(n.text(), owner=owner, mode=n.mode, data=n.data)
     return _Dir({k: _clone(v, owner) for k, v in n.children.items()}, owner=owner, mode=n.mode)
