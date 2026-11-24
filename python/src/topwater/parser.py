@@ -577,7 +577,7 @@ class Lexer:
         raise ParseError("unexpected EOF while looking for matching `)'")
 
 
-_RESERVED = {"then", "elif", "else", "fi", "do", "done", "esac", "}"}
+_RESERVED = {"then", "elif", "else", "fi", "do", "done", "esac", "}", "in"}
 COND_BINARY = {"==", "=", "!=", "=~", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"}
 
 

@@ -196,6 +196,8 @@ def _copy_or_move(ctx):
             ctx.error(f"{ctx.name}: '{s}' and '{dest_arg}' are the same file")
             code = 1
             continue
+        if target == "/dev/null" and not move:
+            continue  # copying to /dev/null discards the data
         (ctx.fs.move if move else ctx.fs.copy)(src, target)
         if a.has("v"):
             shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg

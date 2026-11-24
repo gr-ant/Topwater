@@ -158,6 +158,7 @@ internal static partial class Builtins
                 { ctx.Stderr.WriteLine($"cp: -r not specified; omitting directory '{s}'"); code = 1; continue; }
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
                 if (target == src) { ctx.Stderr.WriteLine($"{ctx.Name}: '{s}' and '{destArg}' are the same file"); code = 1; continue; }
+                if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data
                 if (move) ctx.Fs.Move(src, target); else ctx.Fs.Copy(src, target);
                 if (a.Has('v')) ctx.Stdout.WriteLine($"{(move ? "renamed " : "")}'{s}' -> '{(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)}'");
             }

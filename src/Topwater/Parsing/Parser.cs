@@ -535,7 +535,7 @@ internal sealed class Parser
                 case "[[": return WithRedirects(ParseCond());
                 case "select": throw new ParseException("'select' is not supported by this shell");
             }
-            if (Reserved.Contains(kw) && kw != "in" || kw == "}") throw Unexpected();
+            if (Reserved.Contains(kw) || kw == "}") throw Unexpected();
             if (At(1) is { Kind: TokenKind.Op, Op: "(" } && At(2) is { Kind: TokenKind.Op, Op: ")" }) return ParseFunction(false);
         }
 
