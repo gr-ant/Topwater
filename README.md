@@ -111,19 +111,33 @@ The full list is in the [reference](docs/reference.md).
 
 ## Test results
 
-The shell has been run end to end by a real model (Gemini Flash) on three tasks: answering questions from
-Word, Excel and HTML documents (6 / 6 checks), analysing a SQLite database (7 / 7), and cutting a release
-with the real `git` (10 / 10). Those runs used the Python version of the same shell, which now lives on the
-[`python` branch](../../tree/python) together with the scripts.
+All of these were run by a real model, Gemini Flash, with nothing but the `bash` tool. The samples are small,
+so read them as "it works", not as benchmarks.
 
-In the same setup, telling the model plainly that it is in a sandboxed shell without Python, network or git
-solved more tasks (11 of 12) than pretending to be an ordinary machine or calling it a simulation (9 of 12 each).
-That wording is the default tool description.
+**MCP server as a command.** The model triaged an issue tracker that it could reach only through an MCP server
+mounted as `tracker`. It found the tools with `tracker --help` and passed 6 / 6 checks in 12 commands, none
+failing. One run, five tools: `examples/McpAgent`.
 
-The MCP mount was tested the same way in C#: Gemini Flash triaged an issue tracker that it could reach only
-through an MCP server mounted as `tracker`. It found the tools with `tracker --help` and passed 6 / 6 checks
-in 12 commands, none of them failing. That is one run on a five-tool server; run it yourself with
-`GEMINI_API_KEY=... dotnet run --project examples/McpAgent`.
+**Six everyday tasks, three ways of describing the tool** (two runs each, `examples/Harness`):
+
+| How the tool was described | Tasks solved |
+|---|---|
+| "An ordinary Linux machine" | 9 / 12 |
+| **"A sandboxed shell. No Python, network or git." (the default)** | **11 / 12** |
+| "A simulated environment" | 9 / 12 |
+
+Every failure was the model running out of its 25 turns, never a wrong answer. Four of the six tasks passed
+every time. On the other two (sum a CSV, write a backup script) the model often explored the machine for 20
+turns before doing a one-line job: reading unrelated files, looking for Python, searching for hidden test
+files. The default description did best, but a two-task gap on twelve runs is not strong evidence.
+
+**What helps more is your system prompt.** Adding "Go straight to the task: run only the commands it needs,
+and do not explore the machine first" took those two tasks from 6 / 8 to 8 / 8 and cut the average from 21.6
+commands to 17.0.
+
+**Earlier runs.** The Python version of the same shell passed three longer tasks: answering questions from
+Word, Excel and HTML documents (6 / 6 checks), analysing a SQLite database (7 / 7), and cutting a release with
+the real `git` (10 / 10). Those scripts are on the [`python` branch](../../tree/python).
 
 ## Limitations
 

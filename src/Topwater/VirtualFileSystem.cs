@@ -206,6 +206,18 @@ public sealed class VirtualFileSystem
         dir.Modified = DateTime.Now;
     }
 
+    /// <summary>Back-dates a path (and optionally everything under it), so system files don't all look brand new.</summary>
+    internal void SetModified(string path, DateTime when, bool recursive = false)
+    {
+        if (Find(path) is not { } node) return;
+        void Walk(Node n)
+        {
+            n.Modified = when;
+            if (recursive && n is Dir d) foreach (var child in d.Children.Values) Walk(child);
+        }
+        Walk(node);
+    }
+
     public void Touch(string path)
     {
         if (Find(path) is { } n)

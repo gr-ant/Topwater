@@ -137,7 +137,16 @@ public sealed partial class Shell
         Cwd = home;
         Builtins.RegisterAll(this);
         _builtinNames = [.. _commands.Keys];
+        // the system was "installed" months ago; only the agent's home and the temp directories are fresh
+        foreach (var dir in new[] { "/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log" }) Fs.SetModified(dir, InstalledAt, recursive: true);
+        foreach (var dir in new[] { "/", "/home", "/var" }) Fs.SetModified(dir, InstalledAt);
     }
+
+    static readonly DateTime InstalledAt = DateTime.Today.AddDays(-142).AddHours(9).AddMinutes(13);
+
+    // bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
+    static readonly HashSet<string> NoProgramFile = ["alias", "break", "cd", "command", "continue", "declare", "eval", "exit", "export", "help",
+        "history", "let", "local", "read", "readonly", "return", "set", "shift", "shopt", "source", "trap", "type", "typeset", "unalias", "unset"];
 
     HashSet<string>? _builtinNames;
 
@@ -182,7 +191,8 @@ public sealed partial class Shell
     {
         _commands[name] = new RegisteredCommand(name, description, usage, handler);
         _builtinNames?.Remove(name); // an app command replacing a built-in owns its own --help/--version
-        if (!name.Contains('/') && name is not "." and not ".." and not ":" && Fs.IsDirectory("/usr/bin"))
+        bool shellOnly = _builtinNames is null && NoProgramFile.Contains(name);
+        if (!shellOnly && !name.Contains('/') && name is not "." and not ".." and not ":" && Fs.IsDirectory("/usr/bin"))
         {
             using var _ = Fs.AsRoot();
             foreach (var dir in new[] { "/usr/bin/", "/bin/" })
@@ -190,6 +200,8 @@ public sealed partial class Shell
                 if (!Fs.IsDirectory(dir)) continue;
                 Fs.WriteAllText(dir + name, ExecutableStub);
                 Fs.Chmod(dir + name, Oct("755"));
+                Fs.SetModified(dir + name, InstalledAt);
+                Fs.SetModified(dir, InstalledAt);
             }
         }
         return this;

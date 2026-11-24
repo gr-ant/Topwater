@@ -109,6 +109,7 @@ shell.RegisterTools("crm", specs, async (tool, arguments, ct) => new ToolResult(
 The filesystem is in memory. Put data anywhere through `shell.Fs`:
 
 ```csharp
+shell.Fs.CreateDirectory("/home/agent/data", parents: true);
 shell.Fs.WriteAllText("/home/agent/data/config.json", text);
 shell.Fs.WriteAllBytes("/home/agent/logo.png", data);
 ```

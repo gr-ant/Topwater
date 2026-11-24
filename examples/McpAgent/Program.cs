@@ -4,9 +4,7 @@
 //   GEMINI_API_KEY=... dotnet run --project examples/McpAgent
 using System.ComponentModel;
 using System.IO.Pipelines;
-using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -68,50 +66,16 @@ var shell = new Shell();
 await shell.MountMcpAsync("tracker", client);
 
 // ---------- the agent loop ----------
-const string Task = """
+const string Prompt = """
     The team's issue tracker is available as the `tracker` command. Please triage it:
     1. Issue 7 is a duplicate. Close it.
     2. Assign every remaining open issue labelled "bug" that has no assignee to dana, and add the comment "Triaged" to each.
     3. Write the ids you assigned to ~/triaged.txt, one per line, lowest first.
     4. Tell me how many open issues are left unassigned afterwards.
     """;
-var http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
-http.DefaultRequestHeaders.Add("x-goog-api-key", key);
-var tools = JsonNode.Parse($$"""[{"functionDeclarations":[{"name":"{{BashTool.Name}}","description":{{JsonSerializer.Serialize(BashTool.Description)}},"parameters":{{BashTool.InputSchemaJson}}}]}]""");
-var contents = new JsonArray { new JsonObject { ["role"] = "user", ["parts"] = new JsonArray { new JsonObject { ["text"] = Task } } } };
-string answer = "(turn limit reached)";
-int commands = 0, failed = 0;
-for (int turn = 0; turn < 30; turn++)
-{
-    var request = new JsonObject
-    {
-        ["systemInstruction"] = JsonNode.Parse("""{"parts":[{"text":"You are an autonomous agent working through a bash tool. Use the tool to inspect and act; do not ask the user questions. When finished, reply with a short final answer."}]}"""),
-        ["contents"] = contents.DeepClone(), ["tools"] = tools!.DeepClone(),
-    };
-    var response = await http.PostAsJsonAsync("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent", request);
-    var body = JsonNode.Parse(await response.Content.ReadAsStringAsync());
-    if (!response.IsSuccessStatusCode) { Console.Error.WriteLine($"model call failed: {(int)response.StatusCode} {body?["error"]?["message"]}"); return 1; }
-    var content = body?["candidates"]?[0]?["content"]?.DeepClone() ?? JsonNode.Parse("""{"role":"model","parts":[]}""")!;
-    contents.Add(content);   // echoed back verbatim, which keeps the model's thought signatures
-    var parts = content["parts"]?.AsArray() ?? [];
-    var calls = parts.Where(p => p?["functionCall"] is not null).ToList();
-    if (calls.Count == 0)
-    {
-        answer = string.Concat(parts.Where(p => p?["thought"] is null).Select(p => p?["text"]?.GetValue<string>())).Trim();
-        break;
-    }
-    var replies = new JsonArray();
-    foreach (var call in calls)
-    {
-        string command = call!["functionCall"]!["args"]?["command"]?.GetValue<string>() ?? "";
-        var result = await shell.RunAsync(command);
-        commands++;
-        if (result.ExitCode != 0) failed++;
-        Console.WriteLine($"  $ {command.Trim().Split('\n')[0]}\n    -> exit {result.ExitCode}{(result.Stderr.Trim().Length > 0 ? " | " + result.Stderr.Trim().Split('\n')[0] : "")}");
-        replies.Add(new JsonObject { ["functionResponse"] = new JsonObject { ["name"] = call["functionCall"]!["name"]!.GetValue<string>(), ["response"] = new JsonObject { ["output"] = result.ToToolOutput() } } });
-    }
-    contents.Add(new JsonObject { ["role"] = "user", ["parts"] = replies });
-}
+var run = await GeminiAgent.RunAsync(shell, Prompt, key, verbose: true);
+string answer = run.Answer;
+int commands = run.Commands.Count, failed = run.Commands.Count(c => c.ExitCode != 0);
 stop.Cancel();
 
 // ---------- checks against the tracker's real state ----------

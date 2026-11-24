@@ -216,3 +216,21 @@ public class AgentFeatureTests
         Assert.Contains("loop aborted", r.Stderr);
     }
 }
+
+/// <summary>Details a model checks when it is deciding whether the machine is real.</summary>
+public class RealismTests
+{
+    [Fact]
+    public async Task ShellBuiltinsAreNotProgramFilesAndSystemFilesAreOld()
+    {
+        var sh = new Shell().Register("orders", _ => 0);
+        var bin = (await sh.RunAsync("ls /bin")).Stdout.Split('\n');
+        foreach (var name in new[] { "eval", "cd", "export", "break", "source", "history" }) Assert.DoesNotContain(name, bin);
+        foreach (var name in new[] { "ls", "grep", "test", "echo", "orders" }) Assert.Contains(name, bin);
+        Assert.Equal("ok\n", (await sh.RunAsync("eval 'echo ok'; cd /tmp && export X=1 && type cd >/dev/null")).Stdout);
+
+        // nothing outside the agent's own areas looks recently modified
+        await sh.RunAsync("echo hi > ~/new.txt");
+        Assert.Equal("/home/agent\n/home/agent/new.txt\n", (await sh.RunAsync("find / -mmin -120 -not -path '/tmp*' -not -path '/var/tmp*' 2>/dev/null | sort")).Stdout);
+    }
+}
