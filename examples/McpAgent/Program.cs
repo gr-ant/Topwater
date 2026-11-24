@@ -74,6 +74,8 @@ const string Prompt = """
     4. Tell me how many open issues are left unassigned afterwards.
     """;
 var run = await GeminiAgent.RunAsync(shell, Prompt, key, verbose: true);
+var logPath = RunLog.NewPath("mcp-agent");
+RunLog.Save(logPath, run);
 string answer = run.Answer;
 int commands = run.Commands.Count, failed = run.Commands.Count(c => c.ExitCode != 0);
 stop.Cancel();
@@ -92,7 +94,7 @@ var checks = new (string label, bool ok)[]
 };
 Console.WriteLine($"\n=== MCP triage: {commands} commands, {failed} non-zero exits\n{answer}\n");
 foreach (var (label, ok) in checks) Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}  {label}");
-Console.WriteLine($"\n{(checks.All(c => c.ok) ? "PASSED" : "FAILED")} ({checks.Count(c => c.ok)}/{checks.Length})");
+Console.WriteLine($"\n{(checks.All(c => c.ok) ? "PASSED" : "FAILED")} ({checks.Count(c => c.ok)}/{checks.Length})\ntranscript: {logPath}");
 return checks.All(c => c.ok) ? 0 : 1;
 
 record Issue(int Id, string Title, string State, string[] Labels, string? Assignee);

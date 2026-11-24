@@ -65,3 +65,19 @@ public static class GeminiAgent
         }
     }
 }
+
+/// <summary>Every example run is saved as JSON under ./runs (git-ignored), so a transcript is there when you need it.</summary>
+public static class RunLog
+{
+    static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+
+    /// <summary>A new path such as runs/harness-20261124-091500.json; set LOG to choose the file yourself.</summary>
+    public static string NewPath(string name)
+    {
+        if (Environment.GetEnvironmentVariable("LOG") is { Length: > 0 } chosen) return chosen;
+        Directory.CreateDirectory("runs");
+        return Path.Combine("runs", $"{name}-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+    }
+
+    public static void Save(string path, object data) => File.WriteAllText(path, JsonSerializer.Serialize(data, Indented));
+}

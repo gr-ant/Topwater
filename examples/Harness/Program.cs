@@ -2,8 +2,9 @@
 // reports how many were solved and how often the model went looking around instead of working.
 //
 //   GEMINI_API_KEY=... dotnet run --project examples/Harness
-//   VARIANTS=plain,restricted,fake REPEAT=2 TASK_IDS=2,4 WORKERS=3 LOG=run.json SYSTEM_PROMPT="..."   (all optional)
-using System.Text.Json;
+//   VARIANTS=plain,restricted,fake REPEAT=2 TASK_IDS=2,4 WORKERS=3 SYSTEM_PROMPT="..."   (all optional)
+//
+// Every run is saved to runs/harness-<time>.json as it goes (LOG=file.json to choose the path).
 using System.Text.RegularExpressions;
 using Topwater;
 
@@ -76,6 +77,7 @@ var jobs = (from r in Enumerable.Range(1, repeat) from t in taskIds from v in va
 Console.WriteLine($"variants={string.Join(",", variants)} tasks={string.Join(",", taskIds)} repeat={repeat} -> {jobs.Count} runs");
 
 var results = new List<Result>();
+var logPath = RunLog.NewPath("harness");
 using var gate = new SemaphoreSlim(int.Parse(Environment.GetEnvironmentVariable("WORKERS") ?? "3"));
 await Task.WhenAll(jobs.Select(async job =>
 {
@@ -88,7 +90,12 @@ await Task.WhenAll(jobs.Select(async job =>
         try { run = await GeminiAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25); }
         catch (Exception e) { run = new AgentRun($"(API error: {e.Message})", []); }
         var result = new Result(job.variant, job.task, job.rep, check(run.Answer, shell), run.Answer, run.Commands, run.Commands.Count(c => probe.IsMatch(c.Command)));
-        lock (results) results.Add(result);
+        lock (results)
+        {
+            results.Add(result);
+            // saved after every run, so an interrupted session still leaves its transcripts behind
+            RunLog.Save(logPath, new { systemPrompt = SystemPrompt, results = results.OrderBy(r => r.Variant).ThenBy(r => r.Task).ThenBy(r => r.Rep) });
+        }
         Console.WriteLine($"  [{job.variant,10}] task {job.task} rep {job.rep}: {(result.Solved ? "PASS" : "FAIL")}  commands={run.Commands.Count,2}  probes={result.Probes}");
     }
     finally { gate.Release(); }
@@ -103,8 +110,7 @@ foreach (var v in variants)
 Console.WriteLine("\nper task (solved/runs):");
 foreach (var t in taskIds)
     Console.WriteLine($"  task {t}: " + string.Join("  ", variants.Select(v => $"{v}={results.Count(r => r.Variant == v && r.Task == t && r.Solved)}/{results.Count(r => r.Variant == v && r.Task == t)}")));
-if (Environment.GetEnvironmentVariable("LOG") is { Length: > 0 } log)
-    File.WriteAllText(log, JsonSerializer.Serialize(results.OrderBy(r => r.Variant).ThenBy(r => r.Task).ThenBy(r => r.Rep), new JsonSerializerOptions { WriteIndented = true }));
+Console.WriteLine($"\ntranscripts: {logPath}");
 return 0;
 
 record Result(string Variant, int Task, int Rep, bool Solved, string Answer, List<AgentCommand> Commands, int Probes);

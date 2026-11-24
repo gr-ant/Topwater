@@ -488,3 +488,6 @@ python/examples/gemini_run_log.json
 *.egg-info/
 python/build/
 python/dist/
+
+# Saved transcripts from the examples
+runs/

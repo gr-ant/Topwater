@@ -131,9 +131,11 @@ every time. On the other two (sum a CSV, write a backup script) the model often 
 turns before doing a one-line job: reading unrelated files, looking for Python, searching for hidden test
 files. The default description did best, but a two-task gap on twelve runs is not strong evidence.
 
-**What helps more is your system prompt.** Adding "Go straight to the task: run only the commands it needs,
-and do not explore the machine first" took those two tasks from 6 / 8 to 8 / 8 and cut the average from 21.6
-commands to 17.0.
+**A system prompt line helps a little.** Adding "Go straight to the task: run only the commands it needs,
+and do not explore the machine first" took those two tasks from 6 / 8 to 8 / 8 in one batch, but a later run
+with the same line still explored for 21 turns and failed. Expect this model to wander; give it turns to spare.
+
+Every example saves its full transcript under `runs/`, so you can see exactly what the model did.
 
 **Earlier runs.** The Python version of the same shell passed three longer tasks: answering questions from
 Word, Excel and HTML documents (6 / 6 checks), analysing a SQLite database (7 / 7), and cutting a release with
