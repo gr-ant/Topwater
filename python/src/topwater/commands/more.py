@@ -122,16 +122,14 @@ def _read(ctx):
         line = re.sub(r"\\(.)", r"\1", line)
     if not a.positional:
         env["REPLY"] = line
-        return 0
-    ifs = env.get("IFS", " \t\n")
-    seps = [c for c in ifs if not c.isspace()]
-    if seps:
-        fields = [f.strip() for f in re.split("|".join(map(re.escape, seps)), line, maxsplit=len(names) - 1)]
     else:
-        fields = line.strip().split(None, len(names) - 1)
-    for i, n in enumerate(names):
-        env[n] = fields[i].strip() if i < len(fields) else ""
-    return 0
+        from ..shell import split_fields
+
+        fields = split_fields(line, env.get("IFS", " \t\n"), len(names))
+        for i, n in enumerate(names):
+            env[n] = fields[i] if i < len(fields) else ""
+    # like bash, a final line with no trailing newline is still assigned, but read reports end of input
+    return 0 if ctx._stdin.last_terminated else 1
 
 
 async def _eval(ctx):

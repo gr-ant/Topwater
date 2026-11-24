@@ -34,6 +34,8 @@ public sealed record RegisteredCommand(string Name, string Description, string? 
 internal sealed class StdinBuffer(string text)
 {
     int _pos;
+    /// <summary>False when the last ReadLine hit end of input before the delimiter.</summary>
+    public bool LastTerminated { get; private set; } = true;
     public string ReadAll() { var r = text[_pos..]; _pos = text.Length; return r; }
 
     public string? ReadLine(char delimiter = '\n')
@@ -42,6 +44,7 @@ internal sealed class StdinBuffer(string text)
         int nl = text.IndexOf(delimiter, _pos);
         var line = nl < 0 ? text[_pos..] : text[_pos..nl];
         _pos = nl < 0 ? text.Length : nl + 1;
+        LastTerminated = nl >= 0;
         return line;
     }
 }
@@ -73,6 +76,7 @@ public sealed class CommandContext
     public string? ReadLine(char delimiter = '\n') => _stdin.ReadLine(delimiter);
 
     internal Shell.Io Io => new(_stdin, Stdout, Stderr);
+    internal bool LastLineTerminated => _stdin.LastTerminated;
 
     /// <summary>Runs another command with this command's stdout/stderr (used by xargs).</summary>
     public Task<int> InvokeAsync(IReadOnlyList<string> argv, string stdin = "") =>
@@ -222,6 +226,12 @@ public sealed partial class Shell
         catch (ExitSignal e) { code = e.Code; }
         catch (ReturnSignal e) { code = e.Code; }
         catch (LoopControl) { code = 0; }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e) // an interpreter bug must not take down the host's agent loop
+        {
+            stderr.WriteLine($"bash: internal error: {e.GetType().Name}: {e.Message}");
+            code = 1;
+        }
         finally
         {
             // shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
@@ -567,12 +577,19 @@ public sealed partial class Shell
             io.Err.WriteLine($"{name}: {e.Message}");
             return e.ExitCode;
         }
+        catch (Exception e) when (e is FormatException or OverflowException)
+        {
+            io.Err.WriteLine($"{name}: invalid number{(BadNumber.Match(e.Message) is { Success: true } m ? $": '{m.Groups[1].Value}'" : "")}");
+            return 1;
+        }
         catch (Exception e)
         {
             io.Err.WriteLine($"{name}: {e.Message}");
             return 1;
         }
     }
+
+    static readonly Regex BadNumber = new("input string '(.*)' was not", RegexOptions.Singleline);
 
     async Task<int> RunScriptFileAsync(string name, string path, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
@@ -643,7 +660,7 @@ public sealed partial class Shell
         || (char.IsDigit(name[0]) && int.TryParse(name, out var n) && n <= Positional.Count)
         || Environment.ContainsKey(name);
 
-    async Task<string> ExpandPartAsync(WordPart part, Io io, CancellationToken ct) => part switch
+    internal async Task<string> ExpandPartAsync(WordPart part, Io io, CancellationToken ct) => part switch
     {
         LiteralPart l => l.Text,
         VariablePart v => await ExpandParameterAsync(v.Name, io, ct),
@@ -791,6 +808,25 @@ public sealed partial class Shell
     string ExpandTilde(string text) =>
         text == "~" || text.StartsWith("~/") ? Environment.GetValueOrDefault("HOME", "/") + text[1..] : text;
 
+    /// <summary>
+    /// Splits text on IFS like bash: IFS whitespace runs collapse and are trimmed at the ends, every other IFS character
+    /// delimits one field. maxFields &gt; 0 leaves the rest of the line in the last field (`read a b`).
+    /// </summary>
+    internal static List<string> SplitFields(string text, string ifs, int maxFields = 0)
+    {
+        if (ifs.Length == 0) return text.Length > 0 ? [text] : [];
+        var ws = string.Concat(" \t\n".Where(ifs.Contains));
+        var other = string.Concat(ifs.Where(c => !ws.Contains(c)));
+        if (ws.Length > 0) text = text.Trim(ws.ToCharArray());
+        if (text.Length == 0) return [];
+        static string Set(string chars) => "[" + string.Concat(chars.Select(c => c is '\\' or ']' or '[' or '^' or '-' ? "\\" + c : c.ToString())) + "]";
+        string wsRx = Set(ws), otherRx = Set(other);
+        var sep = other.Length == 0 ? wsRx + "+" : ws.Length == 0 ? otherRx : $"{wsRx}*{otherRx}{wsRx}*|{wsRx}+";
+        var fields = new Regex(sep).Split(text, Math.Max(0, maxFields)).ToList();
+        if (maxFields <= 0 && other.Length > 0 && fields.Count > 0 && fields[^1].Length == 0) fields.RemoveAt(fields.Count - 1); // "a,b," is two fields
+        return fields;
+    }
+
     sealed class Field
     {
         public readonly StringBuilder Text = new();
@@ -841,16 +877,17 @@ public sealed partial class Shell
                 }
                 if (part.Quoted) { AddText(text, true); continue; }
 
-                // unquoted $VAR / $(cmd): split on whitespace
-                var pieces = text.Split(new[] { ' ', '\t', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                if (pieces.Length == 0) { if (text.Length > 0) End(); continue; }
-                if (char.IsWhiteSpace(text[0])) End();
-                for (int k = 0; k < pieces.Length; k++)
+                // unquoted $VAR / $(cmd) / $((...)): split into fields on $IFS
+                var ifs = Environment.GetValueOrDefault("IFS", " \t\n");
+                var pieces = SplitFields(text, ifs);
+                if (pieces.Count == 0) { if (text.Length > 0 && ifs.Length > 0) End(); continue; }
+                if (ifs.Contains(text[0])) End();
+                for (int k = 0; k < pieces.Count; k++)
                 {
                     if (k > 0) End();
                     AddText(pieces[k], false);
                 }
-                if (char.IsWhiteSpace(text[^1])) End();
+                if (ifs.Contains(text[^1])) End();
             }
             End();
 
@@ -932,7 +969,14 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
                     bool match = Glob.ToRegex(await shell.PatternAsync(right, io, ct), slashes: true).IsMatch(l);
                     return op == "!=" ? !match : match;
                 case "=~":
-                    var re = await shell.ExpandSingleAsync(right, io, ct);
+                    // quoted parts of the regex match literally
+                    var reText = new StringBuilder();
+                    foreach (var part in right.Parts)
+                    {
+                        var t = await shell.ExpandPartAsync(part, io, ct);
+                        reText.Append(part.Quoted ? Regex.Escape(t) : t);
+                    }
+                    var re = reText.ToString();
                     try
                     {
                         var m = Regex.Match(l, re);
@@ -1112,6 +1156,9 @@ internal static class Glob
             }
             current = next;
         }
+        if (pattern.EndsWith('/')) // `echo */` lists directories only
+            return current.Where(c => c.Display.Length > 0 && shell.Fs.IsDirectory(c.Abs))
+                .Select(c => c.Display == "/" ? "/" : c.Display + "/").Order(StringComparer.Ordinal).ToList();
         return current.Select(c => c.Display).Where(d => d.Length > 0).Order(StringComparer.Ordinal).ToList();
     }
 

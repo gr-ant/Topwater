@@ -74,9 +74,9 @@ class Args:
     @staticmethod
     def numeric_shorthand(args) -> list[str]:
         """Rewrites "-5" into "-n 5" (head/tail style)."""
-        out = []
+        out: list[str] = []
         for a in args:
-            if len(a) > 1 and a[0] == "-" and a[1:].isdigit():
+            if len(a) > 1 and a[0] == "-" and a[1:].isdigit() and not (out and out[-1] in ("-n", "-c", "--lines", "--bytes")):
                 out += ["-n", a[1:]]
             else:
                 out.append(a)
@@ -118,9 +118,9 @@ def write_lines(w, lines) -> None:
         w.write(line + "\n")
 
 
-def inputs(ctx, files, on_error, raw: bool = False):
-    """Yields (name, text) for each file argument (or stdin when there are none / "-"), reporting missing files.
-    With raw, yields the bytes instead (exact for binary files)."""
+def inputs(ctx, files, on_error, raw: bool = False, quiet: bool = False):
+    """Yields (name, text) for each file argument (or stdin when there are none / "-"), reporting missing files
+    (unless quiet). With raw, yields the bytes instead (exact for binary files)."""
     stdin = ctx.stdin.encode() if raw else ctx.stdin
     if not files:
         yield "(standard input)", stdin
@@ -132,26 +132,42 @@ def inputs(ctx, files, on_error, raw: bool = False):
         try:
             text = (ctx.fs.read_bytes if raw else ctx.fs.read_text)(ctx.resolve(f))
         except ShellError as e:
-            ctx.stderr.write(f"{ctx.name}: {f}: {str(e).rsplit(': ', 1)[-1]}\n")
+            if not quiet:
+                ctx.stderr.write(f"{ctx.name}: {f}: {str(e).rsplit(': ', 1)[-1]}\n")
             on_error()
             continue
         yield f, text
 
 
-_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "0": "\0", "a": "\a", "e": "\x1b", '"': '"'}
+_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "a": "\a", "b": "\b", "f": "\f", "v": "\v", "e": "\x1b", '"': '"'}
 
 
-def unescape(s: str, keep_unknown: bool = False) -> str:
+def unescape(s: str, keep_unknown: bool = False, echo: bool = False) -> str:
+    """Backslash escapes: \\n \\t ..., \\xHH, and octal (\\NNN, or \\0NNN for echo -e)."""
     out = []
     i = 0
     while i < len(s):
-        if s[i] == "\\" and i + 1 < len(s):
-            n = s[i + 1]
-            out.append(_ESCAPES.get(n, ("\\" + n) if keep_unknown else n))
-            i += 2
-        else:
+        if s[i] != "\\" or i + 1 >= len(s):
             out.append(s[i])
             i += 1
+            continue
+        n = s[i + 1]
+        if n in "01234567" and (not echo or n == "0"):
+            j = i + 2 if echo else i + 1
+            k = j
+            while k < len(s) and k < j + 3 and s[k] in "01234567":
+                k += 1
+            out.append(chr(int(s[j:k] or "0", 8) & 0xFF))
+            i = k
+        elif n == "x" and i + 2 < len(s) and s[i + 2] in "0123456789abcdefABCDEF":
+            k = i + 2
+            while k < len(s) and k < i + 4 and s[k] in "0123456789abcdefABCDEF":
+                k += 1
+            out.append(chr(int(s[i + 2:k], 16)))
+            i = k
+        else:
+            out.append(_ESCAPES.get(n, ("\\" + n) if keep_unknown else n))
+            i += 2
     return "".join(out)
 
 
@@ -183,7 +199,9 @@ def _echo(ctx):
             escapes = False
         args.pop(0)
     text = " ".join(args)
-    ctx.stdout.write((unescape(text, keep_unknown=True) if escapes else text) + ("\n" if newline else ""))
+    if escapes and "\\c" in text:  # \c: print nothing more, not even the newline
+        text, newline = text[:text.index("\\c")], False
+    ctx.stdout.write((unescape(text, keep_unknown=True, echo=True) if escapes else text) + ("\n" if newline else ""))
 
 
 def _cd(ctx):
@@ -299,30 +317,111 @@ def test_unary(shell, op: str, arg: str) -> bool:
     raise ShellError(f"{op}: unary operator expected", 2)
 
 
-def evaluate_test(ctx, a: list[str]) -> bool:
-    if a and a[0] == "!":
-        return not evaluate_test(ctx, a[1:])
-    if len(a) == 0:
+_TEST_BINARY = {"=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"}
+
+
+def _test_binary(left: str, op: str, right: str) -> bool:
+    if op in ("=", "=="):
+        return left == right
+    if op == "!=":
+        return left != right
+    if op == "<":
+        return left < right
+    if op == ">":
+        return left > right
+    if op in ("-nt", "-ot"):
         return False
-    if len(a) == 1:
+    try:
+        l, r = int(left.strip()), int(right.strip())
+    except ValueError:
+        raise ShellError(f"{left if not _is_int(left) else right}: integer expression expected", 2) from None
+    return {"-eq": l == r, "-ne": l != r, "-lt": l < r, "-le": l <= r, "-gt": l > r, "-ge": l >= r}[op]
+
+
+def _is_int(s: str) -> bool:
+    try:
+        int(s.strip())
+        return True
+    except ValueError:
+        return False
+
+
+def evaluate_test(ctx, a: list[str]) -> bool:
+    """test / [ ]: POSIX rules for up to 3 arguments, then ! ( ) -a -o with the usual precedence."""
+    n = len(a)
+    if n == 0:
+        return False
+    if n == 1:
         return a[0] != ""
-    if len(a) == 2:
+    if n == 2:
+        if a[0] == "!":
+            return a[1] == ""
         return test_unary(ctx.shell, a[0], a[1])
-    if len(a) == 3:
-        left, op, right = a
-        if op in ("=", "=="):
-            return left == right
-        if op == "!=":
-            return left != right
-        try:
-            l, r = int(left), int(right)
-        except ValueError:
-            raise ShellError("integer expression expected", 2) from None
-        ops = {"-eq": l == r, "-ne": l != r, "-lt": l < r, "-le": l <= r, "-gt": l > r, "-ge": l >= r}
-        if op not in ops:
-            raise ShellError(f"{op}: binary operator expected", 2)
-        return ops[op]
-    raise ShellError("too many arguments (-a/-o are not supported; use && or ||)", 2)
+    if n == 3:
+        if a[1] in _TEST_BINARY:
+            return _test_binary(a[0], a[1], a[2])
+        if a[1] in ("-a", "-o"):
+            return (a[0] != "" and a[2] != "") if a[1] == "-a" else (a[0] != "" or a[2] != "")
+        if a[0] == "!":
+            return not evaluate_test(ctx, a[1:])
+        if a[0] == "(" and a[2] == ")":
+            return a[1] != ""
+        raise ShellError(f"{a[1]}: binary operator expected", 2)
+    if n == 4 and a[0] == "!":
+        return not evaluate_test(ctx, a[1:])
+    pos = 0
+
+    def peek() -> str | None:
+        return a[pos] if pos < n else None
+
+    def or_() -> bool:
+        nonlocal pos
+        v = and_()
+        while peek() == "-o":
+            pos += 1
+            v = and_() or v
+        return v
+
+    def and_() -> bool:
+        nonlocal pos
+        v = not_()
+        while peek() == "-a":
+            pos += 1
+            v = not_() and v
+        return v
+
+    def not_() -> bool:
+        nonlocal pos
+        if peek() == "!":
+            pos += 1
+            return not not_()
+        return primary()
+
+    def primary() -> bool:
+        nonlocal pos
+        t = peek()
+        if t is None:
+            raise ShellError("argument expected", 2)
+        if t == "(":
+            pos += 1
+            v = or_()
+            if peek() != ")":
+                raise ShellError("`)' expected", 2)
+            pos += 1
+            return v
+        if pos + 2 < n and a[pos + 1] in _TEST_BINARY:
+            pos += 3
+            return _test_binary(t, a[pos - 2], a[pos - 1])
+        if t.startswith("-") and len(t) == 2 and pos + 1 < n:
+            pos += 2
+            return test_unary(ctx.shell, t, a[pos - 1])
+        pos += 1
+        return t != ""
+
+    v = or_()
+    if pos < n:
+        raise ShellError("too many arguments", 2)
+    return v
 
 
 def _bracket(ctx):
@@ -371,51 +470,84 @@ def _help(ctx):
         ctx.print(f"  {name.ljust(width)}{cmds[name].description}")
 
 
-_PRINTF_SPEC = re.compile(r"%([-0 +#]*)(\d*)(?:\.(\d+))?([sdifxXoc%])")
+_PRINTF_SPEC = re.compile(r"%([-0 +#]*)(\*|\d*)(?:\.(\*|\d*))?([sdifxXoceEgGbq%])")
+_SHELL_SAFE = re.compile(r"[A-Za-z0-9_./+:,=@%^-]+")
 
 
-def printf_format(fmt: str, args: list[str]) -> str:
+def _c_integer(s: str) -> tuple[int, bool]:
+    """Parses a printf integer argument like bash: 0x1f, 017 (octal), 'c (character code). Returns (value, valid)."""
+    t = s.strip()
+    if t[:1] in ("'", '"'):
+        return (ord(t[1]) if len(t) > 1 else 0), True
+    m = re.match(r"[+-]?(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)", t)
+    if not m:
+        return 0, t == ""
+    body = m.group(1)
+    v = int(body, 16) if body[:2].lower() == "0x" else int(body, 8) if body.startswith("0") else int(body)
+    return (-v if t.startswith("-") else v), m.end() == len(t)
+
+
+def _c_float(s: str) -> tuple[float, bool]:
+    t = s.strip()
+    m = re.match(r"[+-]?(\d+\.?\d*([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?|inf|nan)", t, re.I)
+    if not m:
+        return 0.0, t == ""
+    return float(m.group(0)), m.end() == len(t)
+
+
+def shell_quote(s: str) -> str:
+    """printf %q: quotes a string so bash would read it back as one word."""
+    if s == "":
+        return "''"
+    if _SHELL_SAFE.fullmatch(s):
+        return s
+    if any(ord(c) < 32 or ord(c) == 127 for c in s):
+        body = s.replace("\\", "\\\\").replace("'", "\\'")
+        for c, e in (("\n", "\\n"), ("\t", "\\t"), ("\r", "\\r"), ("\x1b", "\\E")):
+            body = body.replace(c, e)
+        return "$'" + re.sub(r"[\x00-\x1f\x7f]", lambda m: f"\\{ord(m.group(0)):03o}", body) + "'"
+    return re.sub(r"([^A-Za-z0-9_./+:,=@%^-])", r"\\\1", s)
+
+
+def printf_format(fmt: str, args: list[str], errors: list[str] | None = None) -> str:
+    """bash printf: C conversions, the format is reused while arguments remain; bad numbers are reported in errors."""
     fmt = unescape(fmt, keep_unknown=True)
     out = []
     nxt = 0
 
-    def num(s: str) -> int:
-        try:
-            return int(s)
-        except ValueError:
-            return 0
+    def take() -> str:
+        nonlocal nxt
+        arg = args[nxt] if nxt < len(args) else ""
+        nxt += 1
+        return arg
 
     def sub(m: re.Match) -> str:
-        nonlocal nxt
         flags, width, prec, conv = m.group(1), m.group(2), m.group(3), m.group(4)
         if conv == "%":
             return "%"
-        arg = args[nxt] if nxt < len(args) else ""
-        nxt += 1
-        w = int(width) if width else 0
-        if conv == "s":
-            s = arg[: int(prec)] if prec else arg
-        elif conv == "c":
-            s = arg[:1]
-        elif conv in "di":
-            s = str(num(arg))
-        elif conv == "x":
-            s = format(num(arg), "x")
-        elif conv == "X":
-            s = format(num(arg), "X")
-        elif conv == "o":
-            s = format(num(arg), "o")
-        else:
-            try:
-                f = float(arg)
-            except ValueError:
-                f = 0.0
-            s = f"{f:.{int(prec) if prec else 6}f}"
-        if len(s) >= w:
-            return s
-        if "-" in flags:
-            return s.ljust(w)
-        return s.rjust(w, "0") if "0" in flags and conv != "s" else s.rjust(w)
+        if width == "*":
+            w, _ = _c_integer(take())
+            flags, width = (flags + "-", str(-w)) if w < 0 else (flags, str(w))
+        if prec == "*":
+            prec = str(max(0, _c_integer(take())[0]))
+        arg = take()
+        spec = "%" + flags + width + ("." + (prec or "0") if prec is not None else "")
+        if conv in "sbq":
+            text = unescape(arg, keep_unknown=True, echo=True) if conv == "b" else shell_quote(arg) if conv == "q" else arg
+            return (spec + "s") % text
+        if conv == "c":
+            return (spec + "s") % arg[:1]
+        if conv in "dioxX":
+            v, ok = _c_integer(arg)
+            if not ok and errors is not None:
+                errors.append(f"printf: {arg}: invalid number")
+            if conv == "o" and "#" in flags:  # C's %#o is a leading 0, Python's is 0o
+                return (spec.replace("#", "") + "s") % ("0" + format(v, "o") if v else "0")
+            return (spec + conv.replace("i", "d")) % v
+        v, ok = _c_float(arg)
+        if not ok and errors is not None:
+            errors.append(f"printf: {arg}: invalid number")
+        return (spec + conv) % v
 
     while True:
         before = nxt
@@ -426,9 +558,16 @@ def printf_format(fmt: str, args: list[str]) -> str:
 
 
 def _printf(ctx):
-    if not ctx.args:
+    args = list(ctx.args)
+    if args and args[0] == "--":
+        args.pop(0)
+    if not args:
         raise ShellError("usage: printf format [arguments]", 2)
-    ctx.stdout.write(printf_format(ctx.args[0], ctx.args[1:]))
+    errors: list[str] = []
+    ctx.stdout.write(printf_format(args[0], args[1:], errors))
+    for e in errors:
+        ctx.error(e)
+    return 1 if errors else 0
 
 
 def _register_shell_commands(shell) -> None:

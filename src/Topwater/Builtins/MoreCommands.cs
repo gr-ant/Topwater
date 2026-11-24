@@ -93,14 +93,14 @@ internal static partial class Builtins
             var env = ctx.Shell.Environment;
             if (line == null) { foreach (var n in names) env[n] = ""; return 1; }
             if (!a.Has('r')) line = System.Text.RegularExpressions.Regex.Replace(line, @"\\(.)", "$1");
-            if (a.Positional.Count == 0) { env["REPLY"] = line; return 0; }
-            var ifs = env.GetValueOrDefault("IFS", " \t\n");
-            var seps = ifs.Where(c => !char.IsWhiteSpace(c)).ToArray();
-            string[] fields = seps.Length > 0
-                ? line.Split(seps, names.Count).Select(f => f.Trim()).ToArray()
-                : line.Trim().Split((char[]?)null, names.Count, StringSplitOptions.RemoveEmptyEntries).Select(f => f.Trim()).ToArray();
-            for (int i = 0; i < names.Count; i++) env[names[i]] = i < fields.Length ? fields[i] : "";
-            return 0;
+            if (a.Positional.Count == 0) env["REPLY"] = line;
+            else
+            {
+                var fields = Shell.SplitFields(line, env.GetValueOrDefault("IFS", " \t\n"), names.Count);
+                for (int i = 0; i < names.Count; i++) env[names[i]] = i < fields.Count ? fields[i] : "";
+            }
+            // like bash, a final line with no trailing newline is still assigned, but read reports end of input
+            return ctx.LastLineTerminated ? 0 : 1;
         }, "Read a line from stdin into variables");
 
         shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken), "Run arguments as a shell command");

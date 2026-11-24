@@ -105,6 +105,11 @@ internal sealed class Lexer(string s)
                 tokens.Add(new(TokenKind.Redirect, Redirect: new(1, append ? "&>>" : "&>", null, null)));
                 continue;
             }
+            if (tokens.Count > 0 && tokens[^1] is { Kind: TokenKind.Word } prev && prev.Word!.Is("=~"))
+            {
+                tokens.Add(new(TokenKind.Word, Word: LexWord(regex: true)));
+                continue;
+            }
             if (c == '<' && Peek(1) == '(') { tokens.Add(new(TokenKind.Word, Word: LexWord())); continue; }
             if (c is '>' or '<') { tokens.Add(LexRedirect(c == '>' ? 1 : 0)); continue; }
             if (c == '(' && Peek(1) == '(' && FindArithClose(_i + 2) is var close and >= 0)
@@ -192,10 +197,12 @@ internal sealed class Lexer(string s)
         _pending.Clear();
     }
 
-    Word LexWord()
+    /// <param name="regex">Lexes the right side of [[ x =~ re ]], where ( ) | &lt; &gt; are part of the word.</param>
+    Word LexWord(bool regex = false)
     {
         var parts = new List<WordPart>();
         var lit = new StringBuilder();
+        int depth = 0;
         void Flush() { if (lit.Length > 0) { parts.Add(new LiteralPart(lit.ToString(), false)); lit.Clear(); } }
 
         while (_i < s.Length)
@@ -209,7 +216,13 @@ internal sealed class Lexer(string s)
                 _i = close + 1;
                 continue;
             }
-            if (c is ' ' or '\t' or '\r' or '\n' or '|' or '&' or ';' or '(' or ')' or '<' or '>') break;
+            if (regex && c is '(' or ')')
+            {
+                depth += c == '(' ? 1 : -1;
+                if (depth < 0) break;
+            }
+            if (c is ' ' or '\t' or '\r' or '\n' or '|' or '&' or ';' or '(' or ')' or '<' or '>'
+                && !(regex && (c is '(' or ')' or '|' or '<' or '>' || (depth > 0 && c is ' ' or '\t')))) break;
             switch (c)
             {
                 case '\\':
@@ -228,6 +241,13 @@ internal sealed class Lexer(string s)
                     Flush(); _i++;
                     parts.AddRange(LexQuoted('"'));
                     break;
+                case '$' when Peek(1) == '\'':
+                    Flush(); parts.Add(new LiteralPart(LexAnsiC(), true));
+                    break;
+                case '$' when Peek(1) == '"': // $"..." (locale translation) is just "..."
+                    Flush(); _i += 2;
+                    parts.AddRange(LexQuoted('"'));
+                    break;
                 case '$':
                     Flush(); parts.Add(LexDollar(false));
                     break;
@@ -241,6 +261,55 @@ internal sealed class Lexer(string s)
         }
         Flush();
         return new Word(parts);
+    }
+
+    /// <summary>$'...': backslash escapes are decoded (\n, \t, \x41, \u00e9, \0NN, \', ...).</summary>
+    string LexAnsiC()
+    {
+        int i = _i + 2;
+        var sb = new StringBuilder();
+        static bool IsOct(char ch) => ch is >= '0' and <= '7';
+        while (i < s.Length && s[i] != '\'')
+        {
+            char c = s[i];
+            if (c != '\\' || i + 1 >= s.Length) { sb.Append(c); i++; continue; }
+            char n = s[i + 1];
+            i += 2;
+            switch (n)
+            {
+                case 'a': sb.Append('\a'); break;
+                case 'b': sb.Append('\b'); break;
+                case 'e' or 'E': sb.Append('\u001b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'v': sb.Append('\v'); break;
+                case '\\' or '\'' or '"' or '?': sb.Append(n); break;
+                case >= '0' and <= '7':
+                    int j = i - 1;
+                    while (j < s.Length && j < i + 2 && IsOct(s[j])) j++;
+                    sb.Append((char)(Convert.ToInt32(s[(i - 1)..j], 8) & 0xFF));
+                    i = j;
+                    break;
+                case 'x' or 'u' or 'U':
+                    int limit = n == 'x' ? 2 : n == 'u' ? 4 : 8, k = i;
+                    while (k < s.Length && k < i + limit && Uri.IsHexDigit(s[k])) k++;
+                    if (k == i) { sb.Append('\\').Append(n); break; }
+                    long code = Convert.ToInt64(s[i..k], 16);
+                    sb.Append(code <= 0x10FFFF && code is < 0xD800 or > 0xDFFF ? char.ConvertFromUtf32((int)code) : "\uFFFD");
+                    i = k;
+                    break;
+                case 'c' when i < s.Length:
+                    sb.Append((char)(char.ToUpperInvariant(s[i]) ^ 0x40));
+                    i++;
+                    break;
+                default: sb.Append('\\').Append(n); break;
+            }
+        }
+        if (i >= s.Length) throw new ParseException("unexpected EOF while looking for matching `''");
+        _i = i + 1;
+        return sb.ToString();
     }
 
     /// <summary>Double-quoted text (terminator '"') or a heredoc body / ${...} argument (terminator null).</summary>

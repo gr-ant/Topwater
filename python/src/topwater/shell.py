@@ -17,6 +17,7 @@ from .parser import (
 )
 from .vfs import ShellError, VirtualFileSystem, get_name, get_parent, normalize
 
+_BAD_INT = re.compile(r"invalid literal for int\(\) with base \d+: '(.*)'$", re.S)
 EXECUTABLE_STUB = "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
 
@@ -60,6 +61,7 @@ class StdinBuffer:
     def __init__(self, text: str = ""):
         self.text = text
         self.pos = 0
+        self.last_terminated = True  # False when read_line hit end of input before the delimiter
 
     def read_all(self) -> str:
         r = self.text[self.pos:]
@@ -72,6 +74,7 @@ class StdinBuffer:
         nl = self.text.find(delimiter, self.pos)
         line = self.text[self.pos:] if nl < 0 else self.text[self.pos:nl]
         self.pos = len(self.text) if nl < 0 else nl + 1
+        self.last_terminated = nl >= 0
         return line
 
 
@@ -268,6 +271,11 @@ class Shell:
             code = e.code
         except LoopControl:
             code = 0
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except Exception as e:  # an interpreter bug must not take down the host's agent loop
+            err.write(f"bash: internal error: {type(e).__name__}: {e}\n")
+            code = 1
         finally:
             # shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
             self.errexit = self.pipefail = False
@@ -558,7 +566,8 @@ class Shell:
             io_.err.write(f"{name}: {e}\n")
             return e.exit_code
         except Exception as e:  # a tool crashing must not crash the agent loop
-            io_.err.write(f"{name}: {e}\n")
+            m = _BAD_INT.match(str(e)) if isinstance(e, ValueError) else None
+            io_.err.write(f"{name}: invalid number: '{m.group(1)}'\n" if m else f"{name}: {e}\n")
             return 1
 
     async def _run_script_file(self, name: str, path: str, argv: list[str], io_: _Io) -> int:
@@ -818,19 +827,20 @@ class Shell:
                 if part.quoted:
                     add(text, True)
                     continue
-                # unquoted $VAR / $(cmd) / $((...)): split on whitespace
-                pieces = text.split()
+                # unquoted $VAR / $(cmd) / $((...)): split into fields on $IFS
+                ifs = self.env.get("IFS", " \t\n")
+                pieces = split_fields(text, ifs)
                 if not pieces:
-                    if text:
+                    if text and ifs:
                         end()
                     continue
-                if text[0].isspace():
+                if text[0] in ifs:
                     end()
                 for k, piece in enumerate(pieces):
                     if k:
                         end()
                     add(piece, False)
-                if text[-1].isspace():
+                if text[-1] in ifs:
                     end()
             end()
 
@@ -838,6 +848,29 @@ class Shell:
                 matches = glob_expand(self, "".join(f.pattern)) if f.has_glob else []
                 result.extend(matches or ["".join(f.text)])
         return result
+
+
+def split_fields(text: str, ifs: str, max_fields: int = 0) -> list[str]:
+    """Splits text on IFS like bash: IFS whitespace runs collapse and are trimmed at the ends, every other IFS
+    character delimits one field. max_fields > 0 leaves the rest of the line in the last field (`read a b`)."""
+    if not ifs:
+        return [text] if text else []
+    ws = "".join(c for c in " \t\n" if c in ifs)
+    other = "".join(c for c in ifs if c not in ws)
+    text = text.strip(ws) if ws else text
+    if not text:
+        return []
+    ws_rx = f"[{re.escape(ws)}]" if ws else ""
+    if not other:
+        sep = ws_rx + "+"
+    elif not ws:
+        sep = f"[{re.escape(other)}]"
+    else:
+        sep = f"{ws_rx}*[{re.escape(other)}]{ws_rx}*|{ws_rx}+"
+    fields = re.split(sep, text, maxsplit=max(0, max_fields - 1))
+    if max_fields <= 0 and other and fields and fields[-1] == "":
+        fields.pop()  # "a,b," is two fields, not three
+    return fields
 
 
 class _Field:
@@ -922,8 +955,9 @@ class _CondEvaluator:
             if op in ("==", "=", "!="):
                 match = bool(glob_to_regex(await self.sh._pattern(right, self.io), slashes=True).match(lv))
                 return not match if op == "!=" else match
-            rv = await self.sh._expand_single(right, self.io)
             if op == "=~":
+                parts = [await self.sh._expand_part(p, self.io) for p in right.parts]
+                rv = "".join(re.escape(t) if p.quoted else t for p, t in zip(right.parts, parts))
                 try:
                     m = re.search(rv, lv)
                 except re.error:
@@ -931,6 +965,7 @@ class _CondEvaluator:
                 if m:
                     self.sh.env["BASH_REMATCH"] = m.group(0)
                 return m is not None
+            rv = await self.sh._expand_single(right, self.io)
             if op == "<":
                 return lv < rv
             if op == ">":
@@ -1090,4 +1125,6 @@ def glob_expand(shell: Shell, pattern: str) -> list[str]:
                 if shell.fs.exists(child):
                     nxt.append((child, _join(display, name)))
         current = nxt
+    if pattern.endswith("/"):  # `echo */` lists directories only
+        return sorted(_join(d, "") if d != "/" else d for a, d in current if d and shell.fs.is_dir(a))
     return sorted(d for _, d in current if d)

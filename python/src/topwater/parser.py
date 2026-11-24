@@ -248,6 +248,9 @@ class Lexer:
                     self.i += 1
                 tokens.append(Token("redirect", redirect=Redirect(1, "&>>" if append else "&>")))
                 continue
+            if tokens and tokens[-1].kind == "word" and tokens[-1].word.is_("=~"):
+                tokens.append(Token("word", word=self.lex_word(regex=True)))
+                continue
             if c == "<" and self.peek(1) == "(":
                 tokens.append(Token("word", word=self.lex_word()))
                 continue
@@ -342,10 +345,12 @@ class Lexer:
             doc.body = Word(Lexer(text).lex_quoted(None)) if doc.expand else Word([Literal(text, True)])
         self.pending.clear()
 
-    def lex_word(self) -> Word:
+    def lex_word(self, regex: bool = False) -> Word:
+        """regex=True lexes the right side of [[ x =~ re ]], where ( ) | < > are part of the word."""
         s = self.s
         parts: list = []
         lit: list[str] = []
+        depth = 0
 
         def flush():
             if lit:
@@ -360,7 +365,11 @@ class Lexer:
                 parts.append(ProcSub(s[self.i + 2:close]))
                 self.i = close + 1
                 continue
-            if c in _WORD_BREAK:
+            if regex and c in "()":
+                depth += 1 if c == "(" else -1
+                if depth < 0:
+                    break
+            if c in _WORD_BREAK and not (regex and (c in "()|<>" or (depth > 0 and c in " \t"))):
                 break
             if c == "\\":
                 if self.i + 1 >= len(s):
@@ -383,6 +392,13 @@ class Lexer:
                 flush()
                 self.i += 1
                 parts.extend(self.lex_quoted('"'))
+            elif c == "$" and self.peek(1) == "'":
+                flush()
+                parts.append(Literal(self.lex_ansi_c(), True))
+            elif c == "$" and self.peek(1) == '"':  # $"..." (locale translation) is just "..."
+                flush()
+                self.i += 2
+                parts.extend(self.lex_quoted('"'))
             elif c == "$":
                 flush()
                 parts.append(self.lex_dollar(False))
@@ -394,6 +410,50 @@ class Lexer:
                 self.i += 1
         flush()
         return Word(parts)
+
+    def lex_ansi_c(self) -> str:
+        """$'...': backslash escapes are decoded (\\n, \\t, \\x41, \\u00e9, \\0NN, \\', ...)."""
+        s = self.s
+        i = self.i + 2
+        out: list[str] = []
+        while i < len(s) and s[i] != "'":
+            c = s[i]
+            if c != "\\" or i + 1 >= len(s):
+                out.append(c)
+                i += 1
+                continue
+            n = s[i + 1]
+            i += 2
+            simple = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+                      "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+            if n in simple:
+                out.append(simple[n])
+            elif n in "01234567":
+                j = i - 1
+                while j < len(s) and j < i + 2 and s[j] in "01234567":
+                    j += 1
+                out.append(chr(int(s[i - 1:j], 8) & 0xFF))
+                i = j
+            elif n in "xuU":
+                limit = {"x": 2, "u": 4, "U": 8}[n]
+                j = i
+                while j < len(s) and j < i + limit and s[j] in "0123456789abcdefABCDEF":
+                    j += 1
+                if j == i:
+                    out.append("\\" + n)
+                else:
+                    code = int(s[i:j], 16)
+                    out.append(chr(code) if code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd")
+                    i = j
+            elif n == "c" and i < len(s):
+                out.append(chr(ord(s[i].upper()) ^ 0x40))
+                i += 1
+            else:
+                out.append("\\" + n)
+        if i >= len(s):
+            raise ParseError("unexpected EOF while looking for matching `''")
+        self.i = i + 1
+        return "".join(out)
 
     def lex_quoted(self, terminator: str | None) -> list:
         """Double-quoted text (terminator '"') or a heredoc body / ${...} argument (terminator None)."""

@@ -50,8 +50,17 @@ internal sealed class Args
     }
 
     /// <summary>Rewrites "-5" into "-n 5" (head/tail/xargs style).</summary>
-    public static List<string> NumericShorthand(IReadOnlyList<string> args) =>
-        args.SelectMany(a => a.Length > 1 && a[0] == '-' && a.Skip(1).All(char.IsDigit) ? new[] { "-n", a[1..] } : [a]).ToList();
+    public static List<string> NumericShorthand(IReadOnlyList<string> args)
+    {
+        var result = new List<string>();
+        foreach (var a in args)
+        {
+            bool isValue = result.Count > 0 && result[^1] is "-n" or "-c" or "--lines" or "--bytes";
+            if (a.Length > 1 && a[0] == '-' && a.Skip(1).All(char.IsDigit) && !isValue) result.AddRange(["-n", a[1..]]);
+            else result.Add(a);
+        }
+        return result;
+    }
 }
 
 internal static partial class Builtins
@@ -126,25 +135,39 @@ internal static partial class Builtins
         }
     }
 
-    internal static string Unescape(string s)
+    /// <summary>Backslash escapes: \n \t ..., \xHH, and octal (\NNN, or \0NNN for echo -e).</summary>
+    internal static string Unescape(string s, bool keepUnknown = false, bool echo = false)
     {
         var sb = new StringBuilder();
+        static bool IsOct(char c) => c is >= '0' and <= '7';
         for (int i = 0; i < s.Length; i++)
         {
             if (s[i] != '\\' || i + 1 >= s.Length) { sb.Append(s[i]); continue; }
-            char n = s[++i];
-            sb.Append(n switch { 'n' => '\n', 't' => '\t', 'r' => '\r', '\\' => '\\', '0' => '\0', 'a' => '\a', 'e' => '\u001b', '"' => '"', _ => n });
-        }
-        return sb.ToString();
-    }
-
-    static string SafeUnescape(string s)
-    {
-        var sb = new StringBuilder();
-        for (int i = 0; i < s.Length; i++)
-        {
-            if (s[i] == '\\' && i + 1 < s.Length && "ntr\\0ae\"".Contains(s[i + 1])) { sb.Append(Unescape(s.Substring(i, 2))); i++; }
-            else sb.Append(s[i]);
+            char n = s[i + 1];
+            if (IsOct(n) && (!echo || n == '0'))
+            {
+                int j = echo ? i + 2 : i + 1, k = j;
+                while (k < s.Length && k < j + 3 && IsOct(s[k])) k++;
+                sb.Append((char)((k > j ? Convert.ToInt32(s[j..k], 8) : 0) & 0xFF));
+                i = k - 1;
+            }
+            else if (n == 'x' && i + 2 < s.Length && Uri.IsHexDigit(s[i + 2]))
+            {
+                int k = i + 2;
+                while (k < s.Length && k < i + 4 && Uri.IsHexDigit(s[k])) k++;
+                sb.Append((char)Convert.ToInt32(s[(i + 2)..k], 16));
+                i = k - 1;
+            }
+            else
+            {
+                i++;
+                var known = n switch
+                {
+                    'n' => "\n", 't' => "\t", 'r' => "\r", '\\' => "\\", 'a' => "\a", 'b' => "\b", 'f' => "\f", 'v' => "\v",
+                    'e' => "\u001b", '"' => "\"", _ => null,
+                };
+                sb.Append(known ?? (keepUnknown ? "\\" + n : n.ToString()));
+            }
         }
         return sb.ToString();
     }
@@ -166,16 +189,21 @@ internal static partial class Builtins
                 args.RemoveAt(0);
             }
             var text = string.Join(' ', args);
-            ctx.Stdout.Write(escapes ? SafeUnescape(text) : text);
+            if (escapes && text.IndexOf("\\c", StringComparison.Ordinal) is var stop and >= 0) { text = text[..stop]; newline = false; } // \c: print nothing more
+            ctx.Stdout.Write(escapes ? Unescape(text, keepUnknown: true, echo: true) : text);
             if (newline) ctx.Stdout.Write('\n');
             return 0;
         }, "Print arguments");
 
         shell.Register("printf", ctx =>
         {
-            if (ctx.Args.Count == 0) throw new ShellException("usage: printf format [arguments]", 2);
-            ctx.Stdout.Write(Printf.Format(ctx.Args[0], ctx.Args.Skip(1).ToList()));
-            return 0;
+            var args = ctx.Args.ToList();
+            if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
+            if (args.Count == 0) throw new ShellException("usage: printf format [arguments]", 2);
+            var errors = new List<string>();
+            ctx.Stdout.Write(Printf.Format(args[0], args.Skip(1).ToList(), errors));
+            foreach (var e in errors) ctx.Stderr.WriteLine(e);
+            return errors.Count > 0 ? 1 : 0;
         }, "Format and print data");
 
         shell.Register("cd", ctx =>
@@ -401,39 +429,218 @@ internal static class Test
         };
     }
 
+    static readonly HashSet<string> BinaryOps = ["=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"];
+
+    static bool Binary(string left, string op, string right)
+    {
+        switch (op)
+        {
+            case "=" or "==": return left == right;
+            case "!=": return left != right;
+            case "<": return string.CompareOrdinal(left, right) < 0;
+            case ">": return string.CompareOrdinal(left, right) > 0;
+            case "-nt" or "-ot": return false;
+        }
+        bool okL = long.TryParse(left.Trim(), out var l), okR = long.TryParse(right.Trim(), out var r);
+        if (!okL || !okR) throw new ShellException($"{(okL ? right : left)}: integer expression expected", 2);
+        return op switch { "-eq" => l == r, "-ne" => l != r, "-lt" => l < r, "-le" => l <= r, "-gt" => l > r, _ => l >= r };
+    }
+
+    /// <summary>test / [ ]: POSIX rules for up to 3 arguments, then ! ( ) -a -o with the usual precedence.</summary>
     public static bool Evaluate(CommandContext ctx, List<string> a)
     {
-        if (a.Count > 0 && a[0] == "!") return !Evaluate(ctx, a.Skip(1).ToList());
-        switch (a.Count)
+        int n = a.Count;
+        switch (n)
         {
             case 0: return false;
             case 1: return a[0].Length > 0;
-            case 2:
-                return Unary(ctx.Shell, a[0], a[1]);
+            case 2: return a[0] == "!" ? a[1].Length == 0 : Unary(ctx.Shell, a[0], a[1]);
             case 3:
-                if (a[1] is "=" or "==") return a[0] == a[2];
-                if (a[1] == "!=") return a[0] != a[2];
-                if (!long.TryParse(a[0], out var l) || !long.TryParse(a[2], out var r))
-                    throw new ShellException($"integer expression expected", 2);
-                return a[1] switch
-                {
-                    "-eq" => l == r, "-ne" => l != r, "-lt" => l < r, "-le" => l <= r, "-gt" => l > r, "-ge" => l >= r,
-                    _ => throw new ShellException($"{a[1]}: binary operator expected", 2),
-                };
-            default: throw new ShellException("too many arguments (-a/-o are not supported; use && or ||)", 2);
+                if (BinaryOps.Contains(a[1])) return Binary(a[0], a[1], a[2]);
+                if (a[1] is "-a" or "-o") return a[1] == "-a" ? a[0].Length > 0 && a[2].Length > 0 : a[0].Length > 0 || a[2].Length > 0;
+                if (a[0] == "!") return !Evaluate(ctx, a.Skip(1).ToList());
+                if (a[0] == "(" && a[2] == ")") return a[1].Length > 0;
+                throw new ShellException($"{a[1]}: binary operator expected", 2);
+            case 4 when a[0] == "!": return !Evaluate(ctx, a.Skip(1).ToList());
         }
+        int pos = 0;
+        string? Peek() => pos < n ? a[pos] : null;
+        bool Or()
+        {
+            var v = And();
+            while (Peek() == "-o") { pos++; var r = And(); v = v || r; }
+            return v;
+        }
+        bool And()
+        {
+            var v = Not();
+            while (Peek() == "-a") { pos++; var r = Not(); v = v && r; }
+            return v;
+        }
+        bool Not()
+        {
+            if (Peek() == "!") { pos++; return !Not(); }
+            return Primary();
+        }
+        bool Primary()
+        {
+            var t = Peek() ?? throw new ShellException("argument expected", 2);
+            if (t == "(")
+            {
+                pos++;
+                var v = Or();
+                if (Peek() != ")") throw new ShellException("`)' expected", 2);
+                pos++;
+                return v;
+            }
+            if (pos + 2 < n && BinaryOps.Contains(a[pos + 1])) { pos += 3; return Binary(t, a[pos - 2], a[pos - 1]); }
+            if (t.Length == 2 && t[0] == '-' && pos + 1 < n) { pos += 2; return Unary(ctx.Shell, t, a[pos - 1]); }
+            pos++;
+            return t.Length > 0;
+        }
+        var result = Or();
+        if (pos < n) throw new ShellException("too many arguments", 2);
+        return result;
     }
 }
 
 internal static class Printf
 {
-    static readonly System.Text.RegularExpressions.Regex Spec = new(@"%([-0 +#]*)(\d*)(?:\.(\d+))?([sdifxXoc%])");
+    static readonly System.Text.RegularExpressions.Regex Spec = new(@"%([-0 +#]*)(\*|\d*)(?:\.(\*|\d*))?([sdifxXoceEgGbq%])");
+    static readonly System.Text.RegularExpressions.Regex ShellSafe = new(@"^[A-Za-z0-9_./+:,=@%^-]+$");
+    static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
 
-    public static string Format(string format, List<string> args)
+    /// <summary>Parses a printf integer argument like bash: 0x1f, 017 (octal), 'c (character code).</summary>
+    internal static (long Value, bool Valid) CInteger(string s)
     {
-        var fmt = Unescape(format);
+        var t = s.Trim();
+        if (t.Length > 0 && t[0] is '\'' or '"') return (t.Length > 1 ? t[1] : 0, true);
+        var m = System.Text.RegularExpressions.Regex.Match(t, "^[+-]?(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)");
+        if (!m.Success) return (0, t.Length == 0);
+        var body = m.Groups[1].Value;
+        long v;
+        try
+        {
+            v = body.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? Convert.ToInt64(body[2..], 16)
+                : body.StartsWith('0') ? (body.Length > 1 ? Convert.ToInt64(body, 8) : 0) : long.Parse(body, Inv);
+        }
+        catch (OverflowException) { return (long.MaxValue, false); }
+        return (t.StartsWith('-') ? -v : v, m.Length == t.Length);
+    }
+
+    static (double Value, bool Valid) CFloat(string s)
+    {
+        var t = s.Trim();
+        var m = System.Text.RegularExpressions.Regex.Match(t, @"^[+-]?(\d+\.?\d*([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?|inf|nan)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!m.Success) return (0, t.Length == 0);
+        var text = m.Value.ToLowerInvariant();
+        double v = text.EndsWith("inf") ? (text.StartsWith('-') ? double.NegativeInfinity : double.PositiveInfinity)
+            : text.EndsWith("nan") ? double.NaN : double.Parse(m.Value, Inv);
+        return (v, m.Length == t.Length);
+    }
+
+    /// <summary>printf %q: quotes a string so bash would read it back as one word.</summary>
+    internal static string ShellQuote(string s)
+    {
+        if (s.Length == 0) return "''";
+        if (ShellSafe.IsMatch(s)) return s;
+        var sb = new StringBuilder();
+        if (s.Any(c => c < 32 || c == 127))
+        {
+            sb.Append("$'");
+            foreach (var c in s)
+                sb.Append(c switch
+                {
+                    '\\' => "\\\\", '\'' => "\\'", '\n' => "\\n", '\t' => "\\t", '\r' => "\\r", '\u001b' => "\\E",
+                    _ when c < 32 || c == 127 => "\\" + Convert.ToString(c, 8).PadLeft(3, '0'),
+                    _ => c.ToString(),
+                });
+            return sb.Append('\'').ToString();
+        }
+        foreach (var c in s)
+        {
+            if (!(char.IsAsciiLetterOrDigit(c) || "_./+:,=@%^-".Contains(c))) sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>C printf formatting of one number (flags "-0 +#", width, precision; conversions d o x X e E f g G).</summary>
+    internal static string FormatNumber(string flags, int width, int? prec, char conv, double fval, long ival)
+    {
+        bool left = flags.Contains('-'), zero = flags.Contains('0') && !left, alt = flags.Contains('#');
+        bool negative;
+        string body;
+        if (conv is 'd' or 'o' or 'x' or 'X')
+        {
+            negative = ival < 0;
+            ulong mag = negative ? (ulong)(-(ival + 1)) + 1 : (ulong)ival;
+            body = conv switch
+            {
+                'o' => Convert.ToString((long)mag, 8), 'x' => mag.ToString("x"), 'X' => mag.ToString("X"),
+                _ => mag.ToString(Inv),
+            };
+            if (prec is { } p) { body = p == 0 && mag == 0 ? "" : body.PadLeft(p, '0'); zero = false; }
+            if (alt && conv == 'o' && !body.StartsWith('0')) body = "0" + body;
+            if (alt && conv is 'x' or 'X' && mag != 0) body = (conv == 'x' ? "0x" : "0X") + body;
+        }
+        else
+        {
+            negative = fval < 0 || (fval == 0 && double.IsNegative(fval));
+            double mag = Math.Abs(fval);
+            int pr = prec ?? 6;
+            if (double.IsNaN(fval)) body = char.IsUpper(conv) ? "NAN" : "nan";
+            else if (double.IsInfinity(fval)) body = char.IsUpper(conv) ? "INF" : "inf";
+            else body = char.ToLowerInvariant(conv) switch
+            {
+                'f' => mag.ToString("F" + pr, Inv),
+                'e' => Exponent(mag, pr, conv == 'E'),
+                _ => General(mag, pr, conv == 'G', alt),
+            };
+            if (double.IsNaN(fval) || double.IsInfinity(fval)) zero = false;
+        }
+        var sign = negative ? "-" : flags.Contains('+') ? "+" : flags.Contains(' ') ? " " : "";
+        int pad = width - sign.Length - body.Length;
+        if (pad <= 0) return sign + body;
+        if (left) return sign + body + new string(' ', pad);
+        if (zero)
+        {
+            var prefix = body.StartsWith("0x") || body.StartsWith("0X") ? body[..2] : "";
+            return sign + prefix + new string('0', pad) + body[prefix.Length..];
+        }
+        return new string(' ', pad) + sign + body;
+    }
+
+    static string Exponent(double mag, int prec, bool upper)
+    {
+        var s = mag.ToString((upper ? "E" : "e") + prec, Inv); // e.g. 1.234500e+003
+        int e = s.IndexOfAny(['e', 'E']);
+        var exp = s[(e + 2)..].TrimStart('0');
+        return s[..(e + 2)] + exp.PadLeft(2, '0');
+    }
+
+    static string General(double mag, int prec, bool upper, bool alt)
+    {
+        int p = prec == 0 ? 1 : prec;
+        if (mag == 0) return alt ? "0." + new string('0', p - 1) : "0";
+        var e = Exponent(mag, p - 1, upper);
+        int x = int.Parse(e[(e.IndexOfAny(['e', 'E']) + 1)..], Inv);
+        string body = p > x && x >= -4 ? mag.ToString("F" + (p - 1 - x), Inv) : e;
+        if (alt) return body;
+        int ePos = body.IndexOfAny(['e', 'E']);
+        string mant = ePos < 0 ? body : body[..ePos], rest = ePos < 0 ? "" : body[ePos..];
+        if (mant.Contains('.')) mant = mant.TrimEnd('0').TrimEnd('.');
+        return mant + rest;
+    }
+
+    /// <summary>bash printf: C conversions, the format is reused while arguments remain; bad numbers are reported in errors.</summary>
+    public static string Format(string format, List<string> args, List<string>? errors = null)
+    {
+        var fmt = Builtins.Unescape(format, keepUnknown: true);
         var sb = new StringBuilder();
         int next = 0;
+        string Take() { var v = next < args.Count ? args[next] : ""; next++; return v; }
         do
         {
             int before = next;
@@ -441,44 +648,38 @@ internal static class Printf
             {
                 char conv = m.Groups[4].Value[0];
                 if (conv == '%') return "%";
-                var arg = next < args.Count ? args[next++] : "";
                 var flags = m.Groups[1].Value;
-                int width = m.Groups[2].Value.Length > 0 ? int.Parse(m.Groups[2].Value) : 0;
-                int? prec = m.Groups[3].Value.Length > 0 ? int.Parse(m.Groups[3].Value) : null;
-                string s = conv switch
+                int width = 0;
+                if (m.Groups[2].Value == "*")
                 {
-                    's' => prec is { } p && p < arg.Length ? arg[..p] : arg,
-                    'c' => arg.Length > 0 ? arg[..1] : "",
-                    'd' or 'i' => ParseLong(arg).ToString(),
-                    'x' => ParseLong(arg).ToString("x"),
-                    'X' => ParseLong(arg).ToString("X"),
-                    'o' => System.Convert.ToString(ParseLong(arg), 8),
-                    _ => (double.TryParse(arg, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0)
-                        .ToString("F" + (prec ?? 6), System.Globalization.CultureInfo.InvariantCulture),
-                };
-                if (s.Length >= width) return s;
-                if (flags.Contains('-')) return s.PadRight(width);
-                return flags.Contains('0') && conv != 's' ? s.PadLeft(width, '0') : s.PadLeft(width);
+                    var w = CInteger(Take()).Value;
+                    if (w < 0) { flags += "-"; w = -w; }
+                    width = (int)Math.Min(w, 10_000);
+                }
+                else if (m.Groups[2].Value.Length > 0) width = (int)Math.Min(long.Parse(m.Groups[2].Value, Inv), 10_000);
+                int? prec = null;
+                if (m.Groups[3].Success)
+                    prec = m.Groups[3].Value == "*" ? (int)Math.Clamp(CInteger(Take()).Value, 0, 10_000)
+                        : m.Groups[3].Value.Length > 0 ? (int)Math.Min(long.Parse(m.Groups[3].Value, Inv), 10_000) : 0;
+                var arg = Take();
+                if (conv is 's' or 'b' or 'q' or 'c')
+                {
+                    var text = conv switch { 'b' => Builtins.Unescape(arg, keepUnknown: true, echo: true), 'q' => ShellQuote(arg), 'c' => arg.Length > 0 ? arg[..1] : "", _ => arg };
+                    if (prec is { } p && p < text.Length && conv != 'c') text = text[..p];
+                    return flags.Contains('-') ? text.PadRight(width) : text.PadLeft(width);
+                }
+                if (conv is 'd' or 'i' or 'o' or 'x' or 'X')
+                {
+                    var (v, ok) = CInteger(arg);
+                    if (!ok) errors?.Add($"printf: {arg}: invalid number");
+                    return FormatNumber(flags, width, prec, conv == 'i' ? 'd' : conv, 0, v);
+                }
+                var (f, fok) = CFloat(arg);
+                if (!fok) errors?.Add($"printf: {arg}: invalid number");
+                return FormatNumber(flags, width, prec, conv, f, 0);
             }));
             if (next == before) break; // format consumed no arguments
         } while (next < args.Count);
-        return sb.ToString();
-    }
-
-    static long ParseLong(string s) => long.TryParse(s, out var v) ? v : 0;
-
-    static string Unescape(string s)
-    {
-        var sb = new StringBuilder();
-        for (int i = 0; i < s.Length; i++)
-        {
-            if (s[i] == '\\' && i + 1 < s.Length)
-            {
-                char n = s[++i];
-                sb.Append(n switch { 'n' => "\n", 't' => "\t", 'r' => "\r", '\\' => "\\", '"' => "\"", 'e' => "\u001b", _ => "\\" + n });
-            }
-            else sb.Append(s[i]);
-        }
         return sb.ToString();
     }
 }
