@@ -120,8 +120,10 @@ In the same setup, telling the model plainly that it is in a sandboxed shell wit
 solved more tasks (11 of 12) than pretending to be an ordinary machine or calling it a simulation (9 of 12 each).
 That wording is the default tool description.
 
-The MCP mount is covered by automated tests against an in-process MCP server. It has not yet been run by a
-model end to end.
+The MCP mount was tested the same way in C#: Gemini Flash triaged an issue tracker that it could reach only
+through an MCP server mounted as `tracker`. It found the tools with `tracker --help` and passed 6 / 6 checks
+in 12 commands, none of them failing. That is one run on a five-tool server; run it yourself with
+`GEMINI_API_KEY=... dotnet run --project examples/McpAgent`.
 
 ## Limitations
 
