@@ -38,7 +38,8 @@ def zip_bytes(parts: dict) -> bytes:
 
 
 def rels(*items) -> str:
-    body = "".join(f'<Relationship Id="{i}" Type="t" Target="{t}"{" TargetMode=\"External\"" if t.startswith("http") else ""}/>'
+    ext = ' TargetMode="External"'
+    body = "".join(f'<Relationship Id="{i}" Type="t" Target="{t}"{ext if t.startswith("http") else ""}/>'
                    for i, t in items)
     return f"<Relationships {RELS}>{body}</Relationships>"
 
@@ -126,7 +127,7 @@ XLSX_MD = """## Sales
 def make_pptx() -> bytes:
     def sp(ph, *paras):
         nv = f'<p:nvPr><p:ph type="{ph}"/></p:nvPr>' if ph else "<p:nvPr/>"
-        body = "".join(f'<a:p>{"<a:pPr lvl=\"%s\"/>" % lvl if lvl else ""}<a:r><a:t>{t}</a:t></a:r></a:p>' for t, lvl in paras)
+        body = "".join("<a:p>" + ('<a:pPr lvl="%s"/>' % lvl if lvl else "") + f"<a:r><a:t>{t}</a:t></a:r></a:p>" for t, lvl in paras)
         return f"<p:sp><p:nvSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvSpPr/>{nv}</p:nvSpPr><p:txBody>{body}</p:txBody></p:sp>"
 
     def slide(*shapes):
