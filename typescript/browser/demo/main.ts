@@ -11,7 +11,7 @@ const seed: [string, string][] = [
   ['/home/agent/notes.txt', `Welcome to Topwater.
 
 This is a simulated Linux shell running in your browser tab. Try:
-  - the buttons on the right (grep, awk, jq, tar, bc ...)
+  - the buttons on the right (grep, awk, jq, tar ...)
   - ls, cd, cat, pipes, redirects, for loops, functions
   - Upload files with the button (or drop them on the terminal); they land in /home/agent
   - Run "download FILE" to save any file to your computer
@@ -53,7 +53,7 @@ const examples = [
   "awk -F, 'NR>1 {s+=$3} END {print s}' data/sales.csv",
   `jq '.[] | select(.status=="open") | .id' data/orders.json`,
   'tar czf backup.tgz data logs && tar tzf backup.tgz',
-  "echo 'scale=20; 4*a(1)' | bc -l",
+  'for n in 8 16 32 64; do echo "2^$n = $((2**n))"; done',
   'cat /etc/os-release',
 ];
 const DOWNLOAD_HOME = 'tar czf /tmp/home.tgz -C /home agent && download /tmp/home.tgz';

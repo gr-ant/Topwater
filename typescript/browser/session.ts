@@ -78,12 +78,12 @@ export class TopwaterSession {
   private async runNow(command: string, onOutput?: Pending['onOutput']): Promise<RunResult> {
     const id = this.nextId++;
     const limit = this.options.shell?.maxCallDurationMs ?? 120_000;
-    let streamed = '';
+    let streamed = '', streamedErr = '';
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stopped = new Promise<RunResult>(resolve => {
-      timer = setTimeout(() => resolve({ stdout: streamed, stderr: '', exitCode: 124, hardStopped: true, trailer: '' }), limit + (this.options.graceMs ?? 2000));
+      timer = setTimeout(() => resolve({ stdout: streamed, stderr: streamedErr, exitCode: 124, hardStopped: true, trailer: '' }), limit + (this.options.graceMs ?? 2000));
     });
-    const done = this.request<RunResult>(id, { t: 'run', id, command }, (text, stream) => { if (stream === 'stdout') streamed += text; onOutput?.(text, stream); });
+    const done = this.request<RunResult>(id, { t: 'run', id, command }, (text, stream) => { if (stream === 'stdout') streamed += text; else streamedErr += text; onOutput?.(text, stream); });
     const result = await Promise.race([done, stopped]);
     clearTimeout(timer);
     if (!result.hardStopped) return result;
