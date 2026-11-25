@@ -684,6 +684,13 @@ public sealed partial class Shell
             GetStringBuilder().Clear(); // dropped even if the disk is full, so a loop writing to a full disk doesn't grow the buffer
             shell.Fs.AppendAllText(Path, text);
         }
+
+        public override void Write(string? value)
+        {
+            if (value is not { Length: >= 1 << 20 }) { base.Write(value); return; }
+            Full(); // a big write (cat of a big file) goes straight to the file instead of through the buffer
+            shell.Fs.AppendAllText(Path, value);
+        }
     }
 
     /// <summary>A file opened by `exec >file`: written through, so later commands in the same call can read it.</summary>

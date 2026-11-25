@@ -1000,9 +1000,9 @@ internal static class Sed
         return parts;
     }
 
-    static string Expand(List<ReplPart> parts, Match m)
+    /// <summary>Appends the replacement for m to sb, stopping at the string limit before it grows further.</summary>
+    static void Expand(List<ReplPart> parts, Match m, StringBuilder sb, long maxString)
     {
-        var sb = new StringBuilder();
         char? mode = null, one = null;
         foreach (var p in parts)
         {
@@ -1019,12 +1019,12 @@ internal static class Sed
                 text = (one == 'u' ? char.ToUpperInvariant(text[0]) : char.ToLowerInvariant(text[0])) + text[1..];
                 one = null;
             }
+            if (sb.Length + (long)text.Length > maxString) throw Shell.TooLarge("sed: pattern space", maxString, "process the input in smaller pieces");
             sb.Append(text);
         }
-        return sb.ToString();
     }
 
-    static (string Text, bool Changed) Substitute(Cmd c, string ps)
+    static (string Text, bool Changed) Substitute(Cmd c, string ps, long maxString)
     {
         var sb = new StringBuilder();
         int pos = 0, count = 0, prevEnd = -1;
@@ -1034,7 +1034,8 @@ internal static class Sed
             if (m.Length == 0 && m.Index == prevEnd) continue; // no empty match right after the previous match (GNU: "abc" s/b*/X/g -> XaXcX)
             prevEnd = m.Index + m.Length;
             if (++count < c.Nth) continue;
-            sb.Append(ps, pos, m.Index - pos).Append(Expand(c.Repl, m));
+            sb.Append(ps, pos, m.Index - pos);
+            Expand(c.Repl, m, sb, maxString);
             pos = m.Index + m.Length;
             done = true;
             if (!c.Global) break;
@@ -1138,7 +1139,7 @@ internal static class Sed
                 switch (c.Op)
                 {
                     case 's':
-                        (ps, var changed) = Substitute(c, ps);
+                        (ps, var changed) = Substitute(c, ps, maxString);
                         if (changed) { tflag = true; if (c.Print) Write(ps, true); }
                         break;
                     case 'p': Write(ps, true); break;

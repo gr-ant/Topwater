@@ -699,22 +699,24 @@ internal sealed class AwkRunner
                 var repl = S(1);
                 var target = a.Count > 2 ? a[2] : new FieldN(new NumN(0));
                 var src = Get(target).ToStr();
-                int count = 0;
-                long grown = src.Length;
-                var result = re.Replace(src, m =>
+                int count = 0, pos = 0;
+                // one builder rather than Regex.Replace, which holds a string per match until the end
+                var sb = new StringBuilder();
+                for (var m = re.Match(src); m.Success; m = m.NextMatch())
                 {
                     count++;
-                    var sb = new StringBuilder();
+                    sb.Append(src, pos, m.Index - pos);
                     for (int i = 0; i < repl.Length; i++)
                     {
                         if (repl[i] == '\\' && i + 1 < repl.Length && repl[i + 1] is '&' or '\\') sb.Append(repl[++i]);
-                        else if (repl[i] == '&') sb.Append(m.Value);
+                        else if (repl[i] == '&') sb.Append(src, m.Index, m.Length);
                         else sb.Append(repl[i]);
                     }
-                    if ((grown += sb.Length - m.Length) > _ctx.Shell.Options.MaxStringBytes) throw TooLarge();
-                    return sb.ToString();
-                }, c.Name == "sub" ? 1 : -1);
-                if (count > 0) Set(target, AV.Str(result));
+                    pos = m.Index + m.Length;
+                    if (sb.Length > _ctx.Shell.Options.MaxStringBytes) throw TooLarge();
+                    if (c.Name == "sub") break;
+                }
+                if (count > 0) Set(target, AV.Str(sb.Append(src, pos, src.Length - pos).ToString()));
                 return AV.Num(count);
             }
             case "match":

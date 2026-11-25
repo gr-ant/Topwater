@@ -33,7 +33,8 @@ public sealed class VirtualFileSystem
         System.Text.StringBuilder? _appended; // `>>` writes accumulate here, so append loops stay linear
         public string Content
         {
-            get => _text ??= _appended!.ToString();
+            // the builder is dropped once read, so a file isn't held twice; the next append copies it once (as the read did)
+            get { if (_text == null) { _text = _appended!.ToString(); _appended = null; } return _text; }
             set { _text = value; _appended = null; }
         }
         public byte[]? Data; // set for binary files; Content is then unused
