@@ -70,6 +70,77 @@ describe('snapshots in the C# format', () => {
     await expect(ShellSnapshot.load(rebuild({ ...manifest, functions: [{ name: 'f', body: '{ :; }; rm -rf /' }] }))).rejects.toThrow(/not one function/);
     await expect(ShellSnapshot.load(good, { maxFileSystemBytes: 10 })).rejects.toThrow(/MaxFileSystemBytes/);
   });
+
+  /** The snapshot with its manifest changed by `edit`. */
+  const tamper = (bytes: Uint8Array, edit: (m: any) => void) => {
+    const entries = readZip(bytes);
+    const entry = entries.find(e => e.name === 'manifest.json')!;
+    const manifest = JSON.parse(new TextDecoder().decode(inflateRaw(entry.data)));
+    edit(manifest);
+    const raw = new TextEncoder().encode(JSON.stringify(manifest));
+    return writeZip(entries.map(e => e === entry ? { ...e, method: 0, usize: raw.length, data: raw, crc: 0 } : e));
+  };
+  const fileEntry = (m: any, path: string) => m.files.find((f: any) => f.path === path);
+
+  it('links survive save, load and restore', async () => {
+    const sh = new Shell();
+    await sh.run('mkdir -p d/s; echo hi > d/f; ln -s f d/l; ln -s /etc d/etc; ln -s nowhere d/dang; ln -s . d/s/self; ln -s loop2 loop1; ln -s loop1 loop2; ln d/f d/h; ln -s f d/sl; ln d/sl d/sl2');
+    const snap = ShellSnapshot.capture(sh);
+    const bytes = await snap.save();
+    const manifest = JSON.parse(new TextDecoder().decode(inflateRaw(readZip(bytes).find(e => e.name === 'manifest.json')!.data)));
+    expect(manifest.version).toBe(2);
+    expect(fileEntry(manifest, '/home/agent/d/l')).toMatchObject({ type: 'symlink', target: 'f' });
+    expect(fileEntry(manifest, '/home/agent/d/h').link).toBe('/home/agent/d/f');
+    const probe = 'readlink d/l d/etc d/dang loop1; cat d/l d/s/self/self/../f; stat -c \'%h %F\' d/f d/h d/sl2; echo more >> d/h; cat d/f; cat loop1 2>&1';
+    const want = 'f\n/etc\nnowhere\nloop2\nhi\nhi\n2 regular file\n2 regular file\n2 symbolic link\nhi\nmore\ncat: loop1: Too many levels of symbolic links\n';
+    const loaded = new Shell();
+    (await ShellSnapshot.load(bytes)).restore(loaded);
+    expect((await loaded.run(probe)).stdout).toBe(want);
+    await sh.run('rm -r d loop1');
+    snap.restore(sh);
+    expect((await sh.run(probe)).stdout).toBe(want);
+  });
+
+  it('checks the links in a snapshot', async () => {
+    const sh = new Shell();
+    await sh.run('mkdir d; echo x > x; ln -s /etc l');
+    const good = await ShellSnapshot.capture(sh).save();
+    const rejected = (edit: (m: any) => void) => ShellSnapshot.load(tamper(good, edit));
+    // an entry can't be put through a link (it would land in /etc), nor be a hard link to a directory, a later or a missing entry
+    await expect(rejected(m => { fileEntry(m, '/home/agent/x').path = '/home/agent/l/x'; })).rejects.toThrow('parent is not a directory');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/x').link = '/home/agent/d'; })).rejects.toThrow('not an earlier file');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/x').link = '/home/agent/missing'; })).rejects.toThrow('not an earlier file');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/l').link = '/home/agent/x'; })).rejects.toThrow('not an earlier file');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/x').link = '../etc/passwd'; })).rejects.toThrow('bad link');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/l').target = 'a\0b'; })).rejects.toThrow('bad symlink target');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/l').target = 'a'.repeat(4097); })).rejects.toThrow('bad symlink target');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/x').type = 'symlink'; delete fileEntry(m, '/home/agent/x').blob; })).rejects.toThrow('bad symlink target');
+    await expect(rejected(m => { fileEntry(m, '/home/agent/x').type = 'socket'; })).rejects.toThrow('unknown type "socket"');
+    // a link to anywhere, even a loop, loads: it is only a path, resolved later with the agent's permissions
+    const loaded = new Shell();
+    (await rejected(m => { fileEntry(m, '/home/agent/l').target = 'l'; })).restore(loaded);
+    expect(loaded.fs.readLink('/home/agent/l')).toBe('l');
+  });
+
+  it('loads a snapshot with links saved by the C# port', async () => {
+    // made with: mkdir -p d/s; echo hi > d/f; ln -s f d/l; ln -s /etc d/etc; ln -s nowhere d/dang; ln -s . d/s/self; ln -s loop2 loop1;
+    // ln -s loop1 loop2; ln d/f d/h; ln -s f d/sl; ln d/sl d/sl2; cd d
+    const sh = new Shell();
+    (await ShellSnapshot.load(readFileSync(new URL('../../tests/Topwater.Tests/snapshots/links-from-csharp.zip', import.meta.url)))).restore(sh);
+    const r = await sh.run("pwd; readlink l etc dang s/self ../loop1 sl2; cat l s/self/self/../f; stat -c '%h %F' f h sl2; echo more >> h; cat f; cat ../loop1 2>&1");
+    expect(r.stdout).toBe('/home/agent/d\nf\n/etc\nnowhere\n.\nloop2\nf\nhi\nhi\n2 regular file\n2 regular file\n2 symbolic link\nhi\nmore\n' +
+      'cat: ../loop1: Too many levels of symbolic links\n');
+  });
+
+  it('loads the snapshots the other ports saved', async () => {
+    // setup: see tests/Topwater.Tests/SnapshotTests.cs, ASnapshotSavedByAnotherPortLoads
+    for (const file of ['from-python.zip', 'from-csharp.zip']) {
+      const sh = new Shell();
+      (await ShellSnapshot.load(readFileSync(new URL(`../../tests/Topwater.Tests/snapshots/${file}`, import.meta.url)))).restore(sh);
+      const r = await sh.run('echo "$PWD $n $EXP [$plain] ${!arr[@]} ${arr[2]} ${map[key two]} $1|$2"; greet you; cat u.txt; whoami');
+      expect(r.stdout, file).toBe('/home/agent/proj 5 exp "q" $x [multi\nline] 0 2 three v2 p1|p 2\nhi you\nhéllo wörld\nagent\n');
+    }
+  });
 });
 
 describe('recordings in the C# format', () => {

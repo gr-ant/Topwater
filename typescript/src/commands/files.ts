@@ -1,5 +1,5 @@
 // File commands: ls cat mkdir touch rm rmdir cp mv find tree stat du df chmod chown file mktemp realpath ...
-import { Args, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, type CommandContext, type CommandHandler } from '../command.js';
+import { Args, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, type CommandContext, type CommandHandler } from '../command.js';
 import { VirtualFileSystem, NO_SPACE, type FileStat } from '../vfs.js';
 import { globRegex } from '../glob.js';
 import { strftime } from '../format.js';
@@ -78,16 +78,20 @@ const blockSize = (st: FileStat, human: boolean) => (human ? humanSize(st.blocks
 /** ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned); `widthFrom`
  * are more paths that count toward the widths (ls sizes the columns for its file operands over all operands). */
 function longEntries(ctx: CommandContext, entries: [abs: string, name: string][], human: boolean, widthFrom: string[] = [],
-  style?: string, blocks = false): string[] {
+  style?: string, blocks = false, follow = false, classify?: (st: FileStat) => string): string[] {
   const now = ctx.fs.clock();
   const size = (st: FileStat) => (human ? humanSize(st.size) : String(st.size));
-  const rows = entries.map(([abs, name]) => ({ st: ctx.fs.stat(abs), name }));
+  const rows = entries.map(([abs, name]) => ({ st: ctx.fs.stat(abs, follow), name, abs }));
   if (rows.length === 0) return [];
-  const all = [...rows.map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p))];
+  const all = [...rows.map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p, follow))];
   const width = (f: (st: FileStat) => string) => all.reduce((m, st) => Math.max(m, f(st).length), -Infinity);
   const lw = width(st => String(st.links)), ow = width(st => st.owner), sw = width(size), bw = width(st => blockSize(st, human));
-  return rows.map(({ st, name }) => (blocks ? blockSize(st, human).padStart(bw) + ' ' : '') + `${VirtualFileSystem.formatMode(st.isDirectory, st.mode)} ${String(st.links).padStart(lw)} ` +
-    `${st.owner.padEnd(ow)} ${st.owner.padEnd(ow)} ${size(st).padStart(sw)} ${lsDate(st.modified, now, style)} ${name}`);
+  return rows.map(({ st, name, abs }) => {
+    // a link shows where it points; -F marks that target's type
+    const shown = st.linkTarget !== null ? name + ' -> ' + st.linkTarget + (classify && ctx.fs.exists(abs) ? classify(ctx.fs.stat(abs)) : '') : name + (classify?.(st) ?? '');
+    return (blocks ? blockSize(st, human).padStart(bw) + ' ' : '') + `${VirtualFileSystem.formatMode(st)} ${String(st.links).padStart(lw)} ` +
+      `${st.owner.padEnd(ow)} ${st.owner.padEnd(ow)} ${size(st).padStart(sw)} ${lsDate(st.modified, now, style)} ${shown}`;
+  });
 }
 
 /** touch -t [[CC]YY]MMDDhhmm[.ss]; a two-digit year 69-99 is 19YY, else 20YY. */
@@ -140,7 +144,8 @@ export function parseMode(spec: string, mode: number, isDir: boolean): number {
 
 // ---------- find ----------
 
-interface Entry { abs: string; name: string; display: string; depth: number; start: string }
+/** `follow`: whether tests see what a symbolic link leads to (-L, or -H for a starting point) rather than the link. */
+interface Entry { abs: string; name: string; display: string; depth: number; start: string; follow: boolean }
 type Pred = (e: Entry) => Promise<boolean> | boolean;
 class Quit extends Error {}
 
@@ -162,9 +167,13 @@ class Find {
   constructor(private ctx: CommandContext) {}
 
   async run(): Promise<number> {
-    const ctx = this.ctx;
+    const ctx = this.ctx, fs = ctx.fs;
+    // -P (the default) never follows symbolic links, -H only those named as starting points, -L all of them
+    const options: string[] = [];
+    while (options.length < ctx.args.length && ['-P', '-H', '-L'].includes(ctx.args[options.length])) options.push(ctx.args[options.length]);
+    const mode = options.length > 0 ? options[options.length - 1][1] : 'P';
     const starts: string[] = [];
-    let k = 0;
+    let k = options.length;
     while (k < ctx.args.length && !ctx.args[k].startsWith('-') && ctx.args[k] !== '!' && ctx.args[k] !== '(') starts.push(ctx.args[k++]);
     this.args = ctx.args.slice(k);
     if (starts.length === 0) starts.push('.');
@@ -172,26 +181,38 @@ class Find {
     if (this.p < this.args.length) throw new ShellError(`unexpected \`${this.args[this.p]}'`);
     let code = 0;
     let visited = 0;
-    const walk = async (abs: string, display: string, depth: number, start: string): Promise<void> => {
+    const above: { real: string; display: string }[] = []; // directories being walked, so -L stops at a link back up
+    const walk = async (abs: string, display: string, depth: number, start: string, follow: boolean): Promise<void> => {
       if (++visited % 500 === 0) ctx.checkTime();
       this.prune = false;
-      if (depth >= this.minDepth && (await expr({ abs, name: nameOf(abs), display, depth, start })) && !this.hasAction) line(ctx, display);
-      if (this.prune || depth >= this.maxDepth || !ctx.fs.isDirectory(abs)) return;
+      const dir = fs.isDirectory(abs, follow);
+      const real = dir && follow ? fs.realPath(abs) ?? abs : abs;
+      const loop = dir && follow ? above.find(x => x.real === real) : undefined;
+      if (loop) {
+        ctx.stderr.write(`find: File system loop detected; ${quoteL(display)} is part of the same file system loop as ${quoteL(loop.display)}.\n`);
+        code = 1;
+        return;
+      }
+      if (depth >= this.minDepth && (await expr({ abs, name: nameOf(abs), display, depth, start, follow })) && !this.hasAction) line(ctx, display);
+      if (this.prune || depth >= this.maxDepth || !dir) return;
       let names: string[];
-      try { names = ctx.fs.list(abs); } catch { ctx.stderr.write(`find: ${quoteL(display)}: Permission denied\n`); code = 1; return; }
-      for (const name of names) await walk(norm(abs, name), display.endsWith('/') ? display + name : display + '/' + name, depth + 1, start);
+      try { names = fs.list(abs); } catch { ctx.stderr.write(`find: ${quoteL(display)}: Permission denied\n`); code = 1; return; }
+      above.push({ real, display });
+      for (const name of names) await walk(norm(abs, name), display.endsWith('/') ? display + name : display + '/' + name, depth + 1, start, mode === 'L');
+      above.pop();
     };
     try {
       for (const s of starts) {
         const abs = ctx.resolvePath(s);
-        if (!ctx.fs.exists(abs)) { ctx.stderr.write(`find: ${quoteL(s)}: ${ctx.fs.whyMissing(abs)}\n`); code = 1; continue; }
-        await walk(abs, s, 0, s);
+        const follow = mode !== 'P' || s.endsWith('/');
+        if (!fs.exists(abs, follow) && !fs.exists(abs, false)) { ctx.stderr.write(`find: ${quoteL(s)}: ${fs.whyMissing(abs, follow)}\n`); code = 1; continue; }
+        await walk(abs, s, 0, s, follow);
       }
     } catch (e) { if (!(e instanceof Quit)) throw e; }
     for (const { cmd, paths } of this.batches)
       if (paths.length > 0 && (await ctx.invoke(cmd.flatMap(x => (x === '{}' ? paths : [x])))) !== 0) code = 1;
     for (const path of [...this.deletes].sort((a, b) => b.length - a.length)) {
-      try { if (ctx.fs.exists(path)) ctx.fs.delete(path, true); } catch (e) {
+      try { if (ctx.fs.exists(path, false)) ctx.fs.delete(path, true); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
         ctx.stderr.write(`find: cannot delete '${path}': ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
         code = 1;
@@ -238,9 +259,12 @@ class Find {
     return this.primary();
   }
 
+  /** The entry's status: what a link leads to when following, unless it leads nowhere (then the link, as find -L does). */
+  private stat(e: Entry): FileStat { return this.ctx.fs.stat(e.abs, e.follow && this.ctx.fs.exists(e.abs)); }
+
   /** find -printf: %p %f %h %P %s %d %y %m %M %u %g %k %t %T@ %Tk ... with optional width, plus \n \t \0 escapes. */
   private printf(fmt: string, e: Entry): string {
-    const st = this.ctx.fs.stat(e.abs);
+    const st = this.stat(e);
     let out = '';
     for (let i = 0; i < fmt.length;) {
       const c = fmt[i];
@@ -272,11 +296,13 @@ class Find {
           case 'H': value = e.start; break;
           case 's': value = String(st.size); break;
           case 'd': value = String(e.depth); break;
-          case 'y': case 'Y': value = st.isDirectory ? 'd' : 'f'; break;
+          case 'y': value = typeChar(st); break;
+          case 'Y': value = typeChar(this.stat({ ...e, follow: true })); break;
+          case 'l': value = st.linkTarget ?? ''; break;
           case 'm': value = (st.mode & 0o7777).toString(8); break;
-          case 'M': value = VirtualFileSystem.formatMode(st.isDirectory, st.mode); break;
+          case 'M': value = VirtualFileSystem.formatMode(st); break;
           case 'u': case 'g': value = st.owner; break;
-          case 'n': value = '1'; break;
+          case 'n': value = String(st.links); break;
           case 'k': value = String(Math.ceil(st.size / 4096) * 4); break;
           case 'b': value = String(Math.ceil(st.size / 4096) * 8); break;
           default: value = '%' + d;
@@ -305,11 +331,12 @@ class Find {
         try { re = new RegExp('^(?:' + src + ')$', tok === '-iregex' ? 'i' : ''); } catch { throw new ShellError(`invalid regular expression '${src}'`); }
         return e => re.test(e.display);
       }
-      case '-type': {
+      case '-type': case '-xtype': {
         const t = arg();
-        if (!['f', 'd', 'l'].includes(t) && !/^[fdl](,[fdl])*$/.test(t)) throw new ShellError(`Unknown argument to -type: ${t}`);
+        if (!['f', 'd', 'l'].includes(t) && !/^[fdl](,[fdl])*$/.test(t)) throw new ShellError(`Unknown argument to ${tok}: ${t}`);
         const types = t.split(',');
-        return e => types.some(x => x !== 'l' && fs.isDirectory(e.abs) === (x === 'd'));
+        // -xtype: the other view of a link (what it leads to under -P, the link itself under -L)
+        return e => types.includes(typeChar(this.stat(tok === '-type' ? e : { ...e, follow: !e.follow })));
       }
       case '-maxdepth': this.maxDepth = Number(arg()); return () => true;
       case '-mindepth': this.minDepth = Number(arg()); return () => true;
@@ -319,7 +346,7 @@ class Find {
         if (!/^(\d+\.?\d*|\.\d+)$/.test(num)) throw new ShellError(`invalid argument \`${spec}' to \`${tok}'`);
         const unit = tok === '-mmin' ? 1 : 1440, n = Number(num);
         return e => {
-          const age = (ctx.shell.now() - fs.stat(e.abs).modified) / 60_000 / unit;
+          const age = (ctx.shell.now() - this.stat(e).modified) / 60_000 / unit;
           return spec[0] === '-' ? age < n : spec[0] === '+' ? age > n : Math.floor(age) === n;
         };
       }
@@ -327,7 +354,7 @@ class Find {
         const reference = arg(), refAbs = ctx.resolvePath(reference);
         if (!fs.exists(refAbs)) throw new ShellError(`${quoteL(reference)}: ${fs.whyMissing(refAbs)}`);
         const refTime = fs.stat(refAbs).modified;
-        return e => fs.stat(e.abs).modified > refTime; }
+        return e => this.stat(e).modified > refTime; }
       case '-size': {
         const spec = arg();
         const m = /^([+-]?)(\d+)([cwbkMG]?)$/.exec(spec);
@@ -337,21 +364,22 @@ class Find {
         const unit = ({ c: 1, w: 2, k: 1024, M: 1 << 20, G: 1 << 30 } as Record<string, number>)[m[3]] ?? 512;
         const n = Number(m[2]);
         return e => {
-          if (fs.isDirectory(e.abs)) return false;
-          const size = Math.ceil(fs.stat(e.abs).size / unit);
+          const st = this.stat(e);
+          if (st.isDirectory) return false;
+          const size = Math.ceil(st.size / unit);
           return m[1] === '+' ? size > n : m[1] === '-' ? size < n : size === n;
         };
       }
-      case '-empty': return e => (fs.isDirectory(e.abs) ? fs.list(e.abs).length === 0 : fs.stat(e.abs).size === 0);
+      case '-empty': return e => { const st = this.stat(e); return st.isDirectory ? fs.list(e.abs).length === 0 : !st.isSymlink && st.size === 0; };
       case '-readable': return e => fs.canRead(e.abs);
       case '-writable': return e => fs.canWrite(e.abs);
       case '-executable': return e => fs.canExecute(e.abs);
-      case '-user': { const u = arg(); return e => fs.stat(e.abs).owner === u; }
+      case '-user': { const u = arg(); return e => this.stat(e).owner === u; }
       case '-perm': {
         const spec = arg();
         const mode = parseInt(spec.replace(/^[-/]/, ''), 8);
         return e => {
-          const m = fs.stat(e.abs).mode & 0o7777;
+          const m = this.stat(e).mode & 0o7777;
           return spec[0] === '-' ? (m & mode) === mode : spec[0] === '/' ? (m & mode) !== 0 : m === mode;
         };
       }
@@ -382,6 +410,8 @@ class Find {
   }
 }
 
+const typeChar = (st: FileStat) => (st.isSymlink ? 'l' : st.isDirectory ? 'd' : 'f');
+
 // ---------- registration ----------
 
 export function registerFiles(shell: Shell) {
@@ -389,41 +419,60 @@ export function registerFiles(shell: Shell) {
 
   reg('ls', ctx => {
     // \u0001: --time-style=STYLE, \u0002: --full-time
-    const a = Args.parse(ctx.args, 'alhA1dFrtRSCZsk\u0002', '\u0001',
-      'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002');
+    const a = Args.parse(ctx.args, 'alhA1dFrtRSCZskLH\u0002', '\u0001',
+      'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002,dereference=L,dereference-command-line=H');
     const paths = a.positional.length > 0 ? a.positional : ['.'];
-    const lng = a.has('l') || a.has('\u0002'), human = a.has('h'), blocks = a.has('s');
+    const lng = a.has('l') || a.has('\u0002'), human = a.has('h'), blocks = a.has('s'), deref = a.has('L');
     const ts = a.value('\u0001');
     const style = a.has('\u0002') ? 'full-iso' : lng && ts !== undefined ? timeStyle(ts) : undefined;
     let code = 0;
     const fs = ctx.fs;
-    const show = (entries: [string, string][], widthFrom?: string[]) => {
-      const named = entries.map(([abs, name]): [string, string] => [abs, name + (a.has('F') && fs.isDirectory(abs) && name !== '.' && name !== '..' ? '/' : '')]);
-      if (lng) { for (const l of longEntries(ctx, named, human, widthFrom, style, blocks)) line(ctx, l); return; }
+    // -F: what each kind of entry gets; a link itself gets @ (unless -L follows it)
+    const classify = (st: FileStat) => (st.isDirectory ? '/' : st.isSymlink ? '@' : st.mode & 0o111 ? '*' : '');
+    const show = (entries: [string, string][], follow: boolean, widthFrom?: string[]) => {
+      if (lng) { for (const l of longEntries(ctx, entries, human, widthFrom, style, blocks, follow, a.has('F') ? classify : undefined)) line(ctx, l); return; }
+      const named = entries.map(([abs, name]): [string, string] => [abs, name + (a.has('F') && fs.exists(abs, follow) ? classify(fs.stat(abs, follow)) : '')]);
       if (!blocks) { for (const e of named) line(ctx, e[1]); return; }
-      const sizes = named.map(e => blockSize(fs.stat(e[0]), human));
+      const sizes = named.map(e => blockSize(fs.stat(e[0], follow && fs.exists(e[0])), human));
       const w = Math.max(0, ...sizes.map(x => x.length));
       named.forEach((e, k) => line(ctx, sizes[k].padStart(w) + ' ' + e[1]));
     };
-    const exists = (p: string) => fs.exists(ctx.resolvePath(p));
+    // a link named on the command line is followed to a directory, unless -l, -d or -F shows the link itself
+    const followOperand = (p: string) => deref || a.has('H') || p.endsWith('/') || !(lng || a.has('d') || a.has('F'));
+    const exists = (p: string) => fs.exists(ctx.resolvePath(p), deref || p.endsWith('/'));
+    const statOf = (p: string) => fs.stat(ctx.resolvePath(p), deref || a.has('H') || p.endsWith('/'));
     // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
     const ordered = (ps: string[]) => {
       let list = [...ps].sort();
-      if (a.has('t')) list = list.sort((x, y) => fs.stat(ctx.resolvePath(y)).modified - fs.stat(ctx.resolvePath(x)).modified);
-      if (a.has('S')) list = list.sort((x, y) => fs.stat(ctx.resolvePath(y)).size - fs.stat(ctx.resolvePath(x)).size);
+      if (a.has('t')) list = list.sort((x, y) => statOf(y).modified - statOf(x).modified);
+      if (a.has('S')) list = list.sort((x, y) => statOf(y).size - statOf(x).size);
       return a.has('r') ? list.reverse() : list;
     };
-    const files = ordered(paths.filter(p => exists(p) && (a.has('d') || !fs.isDirectory(ctx.resolvePath(p)))));
-    for (const p of paths.filter(p => !exists(p))) { ctx.stderr.write(`ls: cannot access '${p}': ${fs.whyMissing(ctx.resolvePath(p))}\n`); code = 2; }
-    show(files.map(f => [ctx.resolvePath(f), f]), paths.filter(p => !files.includes(p)).map(p => ctx.resolvePath(p)).filter(p => fs.exists(p)));
+    const files = ordered(paths.filter(p => exists(p) && (a.has('d') || !fs.isDirectory(ctx.resolvePath(p), followOperand(p)))));
+    for (const p of paths.filter(p => !exists(p))) { ctx.stderr.write(`ls: cannot access '${p}': ${fs.whyMissing(ctx.resolvePath(p), deref || p.endsWith('/'))}\n`); code = 2; }
+    const groups = new Map<boolean, string[]>();
+    for (const f of files) { const k = deref || a.has('H') || f.endsWith('/'); groups.set(k, [...(groups.get(k) ?? []), f]); }
+    for (const [follow, group] of groups)
+      show(group.map(f => [ctx.resolvePath(f), f]), follow, paths.filter(p => !files.includes(p) && exists(p)).map(p => ctx.resolvePath(p)));
     const dirs = ordered(paths.filter(p => !files.includes(p) && fs.isDirectory(ctx.resolvePath(p))));
     let first = files.length === 0;
+    const listed = new Set<string>(); // real paths, so -RL stops at a link back up the tree
     const listDir = (abs: string, label: string) => {
+      abs = fs.realPath(abs) ?? abs; // where it really is, so "." and ".." are the directories themselves
+      if (a.has('R') && deref) {
+        if (listed.has(abs)) { ctx.stderr.write(`ls: ${label}: not listing already-listed directory\n`); code = 2; return; }
+        listed.add(abs);
+      }
       if (paths.length > 1 || a.has('R')) line(ctx, (first ? '' : '\n') + label + ':');
       first = false;
       if (!fs.canRead(abs)) { ctx.stderr.write(`ls: cannot open directory '${label}': Permission denied\n`); code = 2; return; }
       let entries = fs.list(abs).filter(n => a.has('a') || a.has('A') || !n.startsWith('.'));
-      const st = (n: string) => fs.stat(norm(abs, n));
+      if (deref && lng) {
+        // shortcut: GNU also lists such an entry as "l????????? ? ..."; it is left out
+        for (const n of entries.filter(n => !fs.exists(norm(abs, n)))) { ctx.stderr.write(`ls: cannot access '${trimEnd(label, '/')}/${n}': ${fs.whyMissing(norm(abs, n))}\n`); code = 1; }
+        entries = entries.filter(n => fs.exists(norm(abs, n)));
+      }
+      const st = (n: string) => fs.stat(norm(abs, n), deref && fs.exists(norm(abs, n)));
       if (a.has('t')) entries = [...entries].sort((x, y) => st(y).modified - st(x).modified);
       if (a.has('S')) entries = [...entries].sort((x, y) => st(y).size - st(x).size);
       if (a.has('a')) entries.unshift('.', '..');
@@ -432,12 +481,12 @@ export function registerFiles(shell: Shell) {
         const kib = entries.reduce((sum, n) => sum + st(n).blocks / 2, 0);
         line(ctx, `total ${human ? humanSize(kib * 1024) : kib}`);
       }
-      show(entries.map(n => [norm(abs, n), n]));
+      show(entries.map(n => [norm(abs, n), n]), deref);
       if (!a.has('R')) return;
       for (const n of entries) {
         if (n === '.' || n === '..') continue;
         const child = norm(abs, n);
-        if (fs.isDirectory(child)) listDir(child, trimEnd(label, '/') + '/' + n);
+        if (fs.isDirectory(child, deref)) listDir(child, trimEnd(label, '/') + '/' + n);
       }
     };
     for (const d of dirs) listDir(ctx.resolvePath(d), d);
@@ -511,7 +560,8 @@ export function registerFiles(shell: Shell) {
       if (a.has('c') && !ctx.fs.exists(path)) continue;
       try {
         // an explicit time needs ownership, not write permission
-        if (when === undefined) ctx.fs.touch(path);
+        if (a.has('h') && ctx.fs.isSymlink(path)) ctx.fs.setModifiedTime(path, when ?? ctx.fs.clock(), false);
+        else if (when === undefined) ctx.fs.touch(path);
         else { if (!ctx.fs.exists(path)) ctx.fs.touch(path); ctx.fs.setModifiedTime(path, when); }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
@@ -529,11 +579,11 @@ export function registerFiles(shell: Shell) {
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
-      if (!ctx.fs.exists(abs)) {
-        if (!a.has('f') || ctx.fs.whyMissing(abs) !== 'No such file or directory') { ctx.stderr.write(`rm: cannot remove '${p}': ${ctx.fs.whyMissing(abs)}\n`); code = 1; }
+      if (!ctx.fs.exists(abs, false)) {
+        if (!a.has('f') || ctx.fs.whyMissing(abs, false) !== 'No such file or directory') { ctx.stderr.write(`rm: cannot remove '${p}': ${ctx.fs.whyMissing(abs, false)}\n`); code = 1; }
         continue;
       }
-      if (ctx.fs.isDirectory(abs) && !recursive && !a.has('d')) { ctx.stderr.write(`rm: cannot remove '${p}': Is a directory\n`); code = 1; continue; }
+      if (ctx.fs.isDirectory(abs, p.endsWith('/')) && !recursive && !a.has('d')) { ctx.stderr.write(`rm: cannot remove '${p}': Is a directory\n`); code = 1; continue; }
       if (recursive && /(^|\/)\.\.?\/*$/.test(p)) { ctx.stderr.write(`rm: refusing to remove '.' or '..' directory: skipping '${p}'\n`); code = 1; continue; }
       try {
         ctx.fs.delete(abs, recursive);
@@ -556,7 +606,7 @@ export function registerFiles(shell: Shell) {
       // -p: a/b/c, then a/b, then a
       for (let p = trimEnd(arg, '/'); p.length > 0; p = a.has('p') && p.lastIndexOf('/') > 0 ? trimEnd(p.slice(0, p.lastIndexOf('/')), '/') : '') {
         const abs = ctx.resolvePath(p);
-        let why: string | null = !ctx.fs.isDirectory(abs) ? (ctx.fs.exists(abs) ? 'Not a directory' : ctx.fs.whyMissing(abs)) : null;
+        let why: string | null = !ctx.fs.isDirectory(abs, false) ? (ctx.fs.exists(abs, false) ? 'Not a directory' : ctx.fs.whyMissing(abs)) : null;
         if (why === null) {
           try { ctx.fs.delete(abs); if (a.has('v')) line(ctx, `rmdir: removing directory, ${quoteAlways(p)}`); } catch (e) {
             if (!(e instanceof ShellError)) throw e;
@@ -571,8 +621,10 @@ export function registerFiles(shell: Shell) {
 
   const copyOrMove: CommandHandler = ctx => {
     const move = ctx.name === 'mv';
-    const a = Args.parse(ctx.args, move ? 'fvniTZ' : 'rRfvanpiTZ', 't', 'recursive=r,force=f,verbose=v,no-clobber=n,archive=a,target-directory=t,no-target-directory=T');
+    const a = Args.parse(ctx.args, move ? 'fvniTZ' : 'rRfvanpiTZLPHd', 't', 'recursive=r,force=f,verbose=v,no-clobber=n,archive=a,target-directory=t,no-target-directory=T,dereference=L,no-dereference=P');
     const fs = ctx.fs;
+    // cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
+    const followTop = !move && !(a.has('P') || a.has('d') || a.has('a')) && (a.has('L') || a.has('H') || !(a.has('r') || a.has('R')));
     const positional = [...a.positional];
     const targetDir = a.value('t');
     if (targetDir !== undefined) positional.push(targetDir);
@@ -590,12 +642,18 @@ export function registerFiles(shell: Shell) {
     let code = 0;
     for (const s of sources) {
       const src = ctx.resolvePath(s);
-      if (!fs.exists(src)) { ctx.stderr.write(`${ctx.name}: cannot stat '${s}': ${fs.whyMissing(src)}\n`); code = 1; continue; }
-      if (!move && fs.isDirectory(src) && !(a.has('r') || a.has('R') || a.has('a'))) { ctx.stderr.write(`cp: -r not specified; omitting directory '${s}'\n`); code = 1; continue; }
+      if (!fs.exists(src, followTop)) { ctx.stderr.write(`${ctx.name}: cannot stat '${s}': ${fs.whyMissing(src, followTop)}\n`); code = 1; continue; }
+      if (!move && fs.isDirectory(src, followTop) && !(a.has('r') || a.has('R') || a.has('a'))) { ctx.stderr.write(`cp: -r not specified; omitting directory '${s}'\n`); code = 1; continue; }
       const target = destIsDir ? norm(dest, nameOf(src)) : dest;
+      if (target === src || (!move && followTop && fs.sameFile(src, target))) { ctx.stderr.write(`${ctx.name}: '${s}' and '${destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg}' are the same file\n`); code = 1; continue; }
+      if (!move && fs.isFile(src, followTop) && fs.isSymlink(target) && !fs.exists(target)) {
+        ctx.stderr.write(`cp: not writing through dangling symlink '${destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg}'\n`);
+        code = 1;
+        continue;
+      }
       if (target === '/dev/null' && !move) continue; // copying to /dev/null discards the data
       const shown = destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg;
-      const srcDir = fs.isDirectory(src);
+      const srcDir = fs.isDirectory(src, followTop);
       const clash = target === src ? `${quoteAlways(s)} and ${quoteAlways(shown)} are the same file`
         : srcDir && target.startsWith(src + '/')
           ? move ? `cannot move ${quoteAlways(s)} to a subdirectory of itself, ${quoteAlways(shown)}`
@@ -614,16 +672,21 @@ export function registerFiles(shell: Shell) {
       }
       if (a.has('n') && fs.exists(target)) continue;
       if (move && srcDir && fs.isDirectory(target)) fs.delete(target); // an empty directory is replaced
+      const broken = (abs: string, why: string) => {
+        const p = typed(new Error(abs + ': '), s, src)[0];
+        ctx.stderr.write(why === 'cyclic' ? `cp: cannot copy cyclic symbolic link '${p}'\n` : `cp: cannot stat '${p}': ${why}\n`);
+        code = 1;
+      };
       try {
         if (move) {
           fs.move(src, target);
-        } else if (fs.isDirectory(src) && fs.isDirectory(target)) {
+        } else if (fs.isDirectory(src, followTop) && fs.isDirectory(target)) {
           // copying a directory onto an existing one merges into it
           const merge = (from: string, to: string) => {
             for (const n of fs.list(from)) {
               const f = norm(from, n), t = norm(to, n);
-              if (fs.isDirectory(f) && fs.isDirectory(t)) merge(f, t);
-              else fs.copy(f, t);
+              if (fs.isDirectory(f, a.has('L')) && fs.isDirectory(t)) merge(f, t);
+              else fs.copy(f, t, undefined, a.has('L'), a.has('L'), broken);
             }
           };
           merge(src, target);
@@ -632,10 +695,15 @@ export function registerFiles(shell: Shell) {
             const p = typed(new Error(abs + ': '), s, src)[0];
             ctx.stderr.write(dir ? `cp: cannot access '${p}': Permission denied\n` : `cp: cannot open '${p}' for reading: Permission denied\n`);
             code = 1;
-          });
+          }, followTop, a.has('L'), broken);
         }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
+        if (e.message.includes(' into itself, ') || e.message.includes(' to a subdirectory of itself, ')) {
+          ctx.stderr.write(move ? `mv: cannot move '${s}' to a subdirectory of itself, '${shown}'\n` : `cp: cannot copy a directory, '${s}', into itself, '${shown}'\n`);
+          code = 1;
+          continue;
+        }
         if (e.message.endsWith(NO_SPACE)) { ctx.stderr.write(`${ctx.name}: error writing '${shown}': ${NO_SPACE}\n`); code = 1; continue; }
         const why = typed(e, s, src)[1];
         ctx.stderr.write(move ? `mv: cannot move '${s}' to '${shown}': ${why}\n`
@@ -650,6 +718,65 @@ export function registerFiles(shell: Shell) {
   reg('cp', copyOrMove, 'Copy files and directories');
   reg('mv', copyOrMove, 'Move or rename files');
 
+  reg('ln', ctx => {
+    const a = Args.parse(ctx.args, 'sfnvTrLPb', 't', 'symbolic=s,force=f,no-dereference=n,no-target-directory=T,target-directory=t,verbose=v,relative=r,logical=L,physical=P');
+    const fs = ctx.fs;
+    const sym = a.has('s');
+    let ops = a.positional;
+    let into = a.value('t');
+    const last = ops[ops.length - 1];
+    if (into === undefined && ((!a.has('T') && ops.length > 1 && fs.isDirectory(ctx.resolvePath(last), !a.has('n'))) || ops.length > 2)) into = last;
+    if (ops.length === 0 || (ops.length === 1 && a.has('T') && into === undefined))
+      throw new UsageException(ops.length === 0 ? 'missing file operand' : `missing destination file operand after ${quoteAlways(ops[0])}`);
+    if (into !== undefined && a.value('t') === undefined) ops = ops.slice(0, -1);
+    if (into !== undefined && !fs.isDirectory(ctx.resolvePath(into))) {
+      const abs = ctx.resolvePath(into);
+      throw new ShellError(a.value('t') !== undefined && !fs.exists(abs) ? `failed to access ${quoteAlways(into)}: ${fs.whyMissing(abs)}`
+        : fs.exists(abs) ? `target ${quoteAlways(into)} is not a directory` : `target ${quoteAlways(into)}: No such file or directory`);
+    }
+    // (what the link points to, the link's name): `ln f` links into ".", `ln f d` into d when it is a directory
+    const pairs: [string, string][] = into !== undefined || ops.length === 1
+      ? ops.map(t => [t, (into === undefined ? '' : trimEnd(into, '/') + '/') + nameOf(t)])
+      : [[ops[0], ops[1]]];
+    let code = 0;
+    for (const [target, name] of pairs) {
+      const shownName = into === undefined && ops.length === 1 ? './' + name : name;
+      const abs = ctx.resolvePath(name), src = ctx.resolvePath(target);
+      const failure = (why: string, arrow = true) =>
+        `ln: failed to create ${sym ? 'symbolic' : 'hard'} link ${quoteAlways(shownName)}${!arrow ? '' : sym ? (target.length === 0 ? " -> ''" : '') : ' => ' + quoteAlways(target)}: ${why}\n`;
+      try {
+        if (!sym && !fs.exists(src, a.has('L'))) { ctx.stderr.write(`ln: failed to access ${quoteAlways(target)}: ${fs.whyMissing(src, a.has('L'))}\n`); code = 1; continue; }
+        if (!sym && fs.isDirectory(src)) { ctx.stderr.write(`ln: ${target}: hard link not allowed for directory\n`); code = 1; continue; }
+        if (fs.exists(abs, false)) {
+          if (!a.has('f')) { ctx.stderr.write(failure('File exists', false)); code = 1; continue; }
+          if (fs.isDirectory(abs, false)) { ctx.stderr.write(`ln: ${name}: cannot overwrite directory\n`); code = 1; continue; }
+          if (fs.sameFile(abs, sym ? norm(VirtualFileSystem.getParent(abs), target) : src)) { ctx.stderr.write(`ln: ${quoteAlways(target)} and ${quoteAlways(name)} are the same file\n`); code = 1; continue; }
+          fs.delete(abs);
+        }
+        if (!sym) fs.createHardLink(src, abs, a.has('L'));
+        else {
+          let stored = target;
+          if (a.has('r') && target.length > 0) {
+            // -r: from the link's real directory to the target's real path
+            const to = (fs.realPath(src, false) ?? src).split('/').filter(Boolean);
+            const dir = VirtualFileSystem.getParent(abs);
+            const from = (fs.realPath(dir) ?? dir).split('/').filter(Boolean);
+            let common = 0;
+            while (common < to.length && common < from.length && to[common] === from[common]) common++;
+            stored = [...Array(from.length - common).fill('..'), ...to.slice(common)].join('/') || '.';
+          }
+          fs.createSymlink(abs, stored);
+        }
+        if (a.has('v')) line(ctx, `${quoteAlways(shownName)} ${sym ? '->' : '=>'} ${quoteAlways(target)}`);
+      } catch (e) {
+        if (!(e instanceof ShellError)) throw e;
+        ctx.stderr.write(failure(reason(e), reason(e) !== 'File exists'));
+        code = 1;
+      }
+    }
+    return code;
+  }, 'Make links between files (-s symbolic, -f replace)');
+
   reg('find', ctx => new Find(ctx).run(), 'Search for files');
 
   reg('tree', ctx => {
@@ -661,12 +788,12 @@ export function registerFiles(shell: Shell) {
     let dirs = 0, files = 0;
     let out = root + '\n';
     const walk = (dir: string, prefix: string, depth: number) => {
-      const entries = ctx.fs.list(dir).filter(n => (a.has('a') || !n.startsWith('.')) && (!a.has('d') || ctx.fs.isDirectory(norm(dir, n))));
+      const entries = ctx.fs.list(dir).filter(n => (a.has('a') || !n.startsWith('.')) && (!a.has('d') || ctx.fs.isDirectory(norm(dir, n), false)));
       entries.forEach((n, i) => {
         const last = i === entries.length - 1;
         const child = norm(dir, n);
-        out += prefix + (last ? '└── ' : '├── ') + n + '\n';
-        if (ctx.fs.isDirectory(child)) {
+        out += prefix + (last ? '└── ' : '├── ') + n + (ctx.fs.isSymlink(child) ? ' -> ' + ctx.fs.readLink(child) : '') + '\n';
+        if (ctx.fs.isDirectory(child, false)) {
           dirs++;
           if (depth < maxDepth && ctx.fs.canRead(child)) walk(child, prefix + (last ? '    ' : '│   '), depth + 1);
         } else files++;
@@ -701,17 +828,23 @@ export function registerFiles(shell: Shell) {
   }, 'Strip the last component from a path');
 
   const realpath: CommandHandler = ctx => {
-    const a = Args.parse(ctx.args, 'fesmqnz', '', 'canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,quiet=q,no-newline=n');
-    if (ctx.name === 'readlink' && !a.has('f') && !a.has('e') && !a.has('m')) return 1; // nothing is a symlink
+    const a = Args.parse(ctx.args, 'fesmqnzvLP', '', 'canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,no-symlinks=s,quiet=q,no-newline=n,zero=z,verbose=v,logical=L,physical=P');
+    const readlink = ctx.name === 'readlink', plain = readlink && !a.has('f') && !a.has('e') && !a.has('m');
+    // readlink is silent about failures unless -v; realpath reports them unless -q
+    const report = readlink ? a.has('v') : !a.has('q');
+    if (a.positional.length === 0 && readlink) throw new UsageException('missing operand');
+    const fs = ctx.fs;
+    const end = a.has('z') ? '\0' : readlink && a.has('n') && a.positional.length === 1 ? '' : '\n';
     let code = 0;
     for (const p of a.positional.length ? a.positional : ['.']) {
       const abs = ctx.resolvePath(p);
-      if (!a.has('m') && !ctx.fs.exists(abs) && (a.has('e') || ctx.name === 'realpath' || !ctx.fs.isDirectory(VirtualFileSystem.getParent(abs)))) {
-        if (!a.has('q')) ctx.stderr.write(`${ctx.name}: ${quote(p)}: ${ctx.fs.whyMissing(abs)}\n`);
-        code = 1;
-        continue;
-      }
-      ctx.stdout.write(abs + (a.has('n') ? '' : '\n'));
+      let result: string | null, why = '';
+      if (plain) {
+        try { result = fs.readLink(abs); } catch (e) { result = null; why = reason(e); }
+      } else if (!readlink && a.has('s')) result = norm(ctx.shell.cwd, p); // -s: no links resolved
+      else { result = fs.realPath(abs, a.has('e')) ?? (a.has('m') ? abs : null); why = fs.whyMissing(abs); }
+      if (result === null) { if (report) ctx.stderr.write(`${ctx.name}: ${quote(p)}: ${why}\n`); code = 1; continue; }
+      ctx.stdout.write(result + end);
     }
     return code;
   };
@@ -723,11 +856,13 @@ export function registerFiles(shell: Shell) {
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
-      if (!ctx.fs.exists(abs)) { ctx.stderr.write(`stat: cannot statx '${p}': ${ctx.fs.whyMissing(abs)}\n`); code = 1; continue; }
-      const st = ctx.fs.stat(abs);
-      const type = st.isDirectory ? 'directory' : st.size === 0 ? 'regular empty file' : 'regular file';
+      const follow = a.has('L');
+      if (!ctx.fs.exists(abs, follow)) { ctx.stderr.write(`stat: cannot statx '${p}': ${ctx.fs.whyMissing(abs, follow)}\n`); code = 1; continue; }
+      const st = ctx.fs.stat(abs, follow);
+      const type = st.isSymlink ? 'symbolic link' : st.isDirectory ? 'directory' : st.size === 0 ? 'regular empty file' : 'regular file';
+      const named = st.linkTarget !== null ? `${quoteAlways(p)} -> ${quoteAlways(st.linkTarget)}` : quoteAlways(p);
       const mode = st.mode.toString(8).padStart(3, '0');
-      const rwx = VirtualFileSystem.formatMode(st.isDirectory, st.mode);
+      const rwx = VirtualFileSystem.formatMode(st);
       const uid = st.owner === 'root' ? '0' : '1000';
       const mtime = strftime(st.modified, '%Y-%m-%d %H:%M:%S.') + String(st.modified % 1000).padStart(3, '0') + '000000 +0000';
       const fmt = a.value('c');
@@ -739,7 +874,7 @@ export function registerFiles(shell: Shell) {
           let h = 0;
           for (const ch of abs) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0;
           const v: Record<string, string> = {
-            n: p, s: String(st.size), F: type, a: mode, A: rwx, U: st.owner, G: st.owner, u: uid, g: uid, y: mtime,
+            n: p, N: named, s: String(st.size), F: type, a: mode, A: rwx, U: st.owner, G: st.owner, u: uid, g: uid, y: mtime,
             Y: String(Math.floor(st.modified / 1000)), b: String(st.blocks), B: '512', i: String(h % 1_000_000), h: String(st.links), '%': '%',
           };
           out += v[c] ?? '%' + c;
@@ -747,7 +882,7 @@ export function registerFiles(shell: Shell) {
         line(ctx, out);
         continue;
       }
-      ctx.stdout.write(`  File: ${p}\n  Size: ${String(st.size).padEnd(10)}\tBlocks: ${String(st.blocks).padEnd(10)} IO Block: 4096   ${type}\n` +
+      ctx.stdout.write(`  File: ${p}${st.isSymlink ? ' -> ' + st.linkTarget : ''}\n  Size: ${String(st.size).padEnd(10)}\tBlocks: ${String(st.blocks).padEnd(10)} IO Block: 4096   ${type}\n` +
         `Access: (${mode.padStart(4, '0')}/${rwx})  Uid: (${uid.padStart(5)}/${st.owner.padStart(8)})   Gid: (${uid.padStart(5)}/${st.owner.padStart(8)})\n` +
         `Modify: ${mtime}\nChange: ${mtime}\n`);
     }
@@ -761,8 +896,8 @@ export function registerFiles(shell: Shell) {
       : kb < 10 ? `${kb.toFixed(1)}K` : kb < 1024 ? `${kb}K` : kb < 1 << 20 ? `${fmt1(kb / 1024)}M` : `${fmt1(kb / 1048576)}G`);
     let total = 0, code = 0;
     const walk = (abs: string, display: string, depth: number): number => {
-      if (!ctx.fs.isDirectory(abs)) {
-        const kb = Math.ceil(ctx.fs.stat(abs).size / 4096) * 4;
+      if (!ctx.fs.isDirectory(abs, false)) {
+        const kb = ctx.fs.stat(abs, false).blocks / 2;
         if ((a.has('a') && depth <= maxDepth) || depth === 0) line(ctx, `${fmt(kb)}\t${display}`);
         return kb;
       }
@@ -774,7 +909,7 @@ export function registerFiles(shell: Shell) {
     };
     for (const p of a.positional.length ? a.positional : ['.']) {
       const abs = ctx.resolvePath(p);
-      if (!ctx.fs.exists(abs)) { ctx.stderr.write(`du: cannot access '${p}': No such file or directory\n`); code = 1; continue; }
+      if (!ctx.fs.exists(abs, false)) { ctx.stderr.write(`du: cannot access '${p}': No such file or directory\n`); code = 1; continue; }
       total += walk(abs, p, 0);
     }
     if (a.has('c')) line(ctx, `${fmt(total)}\ttotal`);

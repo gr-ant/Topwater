@@ -156,7 +156,7 @@ export function expandGlob(g: GlobContext, pattern: string): string[] {
           for (const name of fs.list(abs)) {
             const child = VirtualFileSystem.normalize(abs, name);
             if (!g.dotglob && name.startsWith('.')) continue;
-            if (fs.isDirectory(child)) queue.push([child, join(display, name)]);
+            if (fs.isDirectory(child, false)) queue.push([child, join(display, name)]); // like bash, ** does not follow links
             else if (last) next.push([child, join(display, name)]);
           }
           if (last && !isBase) next.push([abs, display]);
@@ -176,7 +176,7 @@ export function expandGlob(g: GlobContext, pattern: string): string[] {
       } else {
         const name = unescape(seg);
         const child = VirtualFileSystem.normalize(abs, name);
-        if (fs.exists(child)) next.push([child, join(display, name)]);
+        if (fs.exists(child, false)) next.push([child, join(display, name)]);
       }
     }
     current = next;

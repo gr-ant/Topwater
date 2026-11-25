@@ -365,7 +365,8 @@ export class Shell implements ArithHost {
     this.environment.set('PWD', abs);
   }
 
-  resolvePath(path: string): string { return VirtualFileSystem.normalize(this.cwdPath, path); }
+  /** An absolute path for `path` from the cwd; ".." goes up from where the path really is, past symbolic links, as the kernel resolves it. */
+  resolvePath(path: string): string { return this.agentFs.normalizePhysical(this.cwdPath, path); }
 
   // ---------- registration ----------
 
@@ -2313,7 +2314,7 @@ class CondEvaluator {
         case '>': return l > await sh.expandSingle(right, io);
         case '-nt': return testNewer(sh, l, await sh.expandSingle(right, io));
         case '-ot': return testNewer(sh, await sh.expandSingle(right, io), l);
-        case '-ef': return sh.resolvePath(l) === sh.resolvePath(await sh.expandSingle(right, io)) && sh.fs.exists(sh.resolvePath(l));
+        case '-ef': return sh.agentFs.sameFile(sh.resolvePath(l), sh.resolvePath(await sh.expandSingle(right, io)));
         default: {
           const a = evalArith(sh, l), b = evalArith(sh, await sh.expandSingle(right, io));
           return op === '-eq' ? a === b : op === '-ne' ? a !== b : op === '-lt' ? a < b : op === '-le' ? a <= b : op === '-gt' ? a > b : a >= b;

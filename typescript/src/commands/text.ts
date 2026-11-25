@@ -98,6 +98,7 @@ function grep(ctx: CommandContext): number {
     if (!ctx.fs.isDirectory(abs)) { files.push(f); continue; }
     walked = true;
     if (!recursive) { if (!quietErr) ctx.stderr.write(`grep: ${f}: Is a directory\n`); error = true; continue; }
+    const above = new Set<string>([ctx.fs.realPath(abs) ?? abs]); // the directories being walked
     const walk = (dirAbs: string, display: string) => {
       let names: string[];
       try { names = ctx.fs.list(dirAbs); } catch (e) {
@@ -110,7 +111,15 @@ function grep(ctx: CommandContext): number {
         ctx.checkTime();
         const child = VirtualFileSystem.normalize(dirAbs, name);
         const childDisplay = display === '.' && implicitDot ? name : display.replace(/\/+$/, '') + '/' + name;
-        if (ctx.fs.isDirectory(child)) { if (!excludeDir.some(r => r.test(name))) walk(child, childDisplay); }
+        if (!a.has('R') && ctx.fs.isSymlink(child)) continue; // -r skips links it meets; -R follows them
+        if (ctx.fs.isDirectory(child)) {
+          if (excludeDir.some(r => r.test(name))) continue;
+          const real = ctx.fs.realPath(child);
+          if (real === null || above.has(real)) { if (!quietErr) ctx.stderr.write(`grep: ${childDisplay}: warning: recursive directory loop\n`); continue; }
+          above.add(real);
+          walk(child, childDisplay);
+          above.delete(real);
+        }
         else if ((include.length === 0 || include.some(r => r.test(name))) && !exclude.some(r => r.test(name))) files.push(childDisplay);
       }
     };

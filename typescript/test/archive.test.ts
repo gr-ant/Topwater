@@ -246,23 +246,21 @@ describe('tar: hostile archives', () => {
     expect(cat(`${H}/o/tmp/abs.txt`)).toBe('x');
     expect(env.fs.exists('/tmp/abs.txt')).toBe(false);
   });
-  it('creates no symlinks and reports them', async () => {
-    putBytes(`${H}/sym.tar`, tarOf(tarMember('link', { type: '2', link: '/etc/passwd' }), tarMember('dev', { type: '3' })));
+  it('keeps a symbolic link the archive made but writes and hard-links nothing through it', async () => {
+    put('/etc/passwd', 'root:x\n');
+    putBytes(`${H}/sym.tar`, tarOf(
+      tarMember('lnk', { type: '2', link: '/etc' }), tarMember('lnk/passwd', { data: 'x' }),
+      tarMember('up', { type: '2', link: '..' }), tarMember('up/escaped', { data: 'x' }),
+      tarMember('hl4', { type: '1', link: 'lnk/passwd' }), tarMember('dev', { type: '3' })));
     env.fs.mkdir(`${H}/o`);
     const r = await run(['tar', 'xf', 'sym.tar', '-C', 'o']);
     expect(r.exitCode).toBe(2);
-    expect(r.stderr).toContain('Cannot create symlink');
-    expect(env.fs.exists(`${H}/o/link`)).toBe(false);
-    expect(env.fs.exists(`${H}/o/dev`)).toBe(false);
-  });
-  it('hard links copy only files inside the target', async () => {
-    putBytes(`${H}/hard.tar`, tarOf(tarMember('a', { data: 'AAA' }), tarMember('b', { type: '1', link: 'a' }), tarMember('c', { type: '1', link: '../../etc/passwd' }), tarMember('d', { type: '1', link: '/etc/passwd' })));
-    env.fs.mkdir(`${H}/o`);
-    const r = await run(['tar', 'xf', 'hard.tar', '-C', 'o']);
-    expect(cat(`${H}/o/b`)).toBe('AAA');
-    expect(env.fs.exists(`${H}/o/c`)).toBe(false);
-    expect(env.fs.exists(`${H}/o/d`)).toBe(false);
-    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain('tar: lnk/passwd: Cannot open: Not a directory');
+    expect(r.stderr).toContain('tar: up/escaped: Cannot open: Not a directory');
+    expect(r.stderr).toContain('tar: hl4: Cannot hard link to ‘lnk/passwd’: No such file or directory');
+    expect(env.fs.readLink(`${H}/o/lnk`)).toBe('/etc');
+    for (const p of [`${H}/escaped`, `${H}/o/hl4`, `${H}/o/dev`]) expect(env.fs.exists(p), p).toBe(false);
+    expect(env.fs.readText('/etc/passwd')).toBe('root:x\n');
   });
   it('stops past the byte limit with the limit message', async () => {
     env.shell.options.maxExtractBytes = 1000;

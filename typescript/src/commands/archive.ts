@@ -1,7 +1,7 @@
 // tar, gzip/gunzip/zcat and zip/unzip over the virtual filesystem. Archive bytes cross pipes as pipe text (bytes.ts).
 // Archives are untrusted: extraction never leaves the target directory (`..` is refused, absolute names are made
-// relative, symlinks are not created, hard links copy only a file already extracted), and one extraction or
-// decompression stops past ctx.shell.options.maxExtractBytes / maxExtractEntries.
+// relative, nothing is written under or hard-linked through a symbolic link the archive made, hard links only reach entries
+// already there), and one extraction or decompression stops past ctx.shell.options.maxExtractBytes / maxExtractEntries.
 
 import { Args, ShellError, reason, type CommandContext } from '../command.js';
 import { concatBytes, decodeBytes, encodeText } from '../bytes.js';
@@ -81,7 +81,8 @@ const dec = new TextDecoder();
 function setString(block: Uint8Array, off: number, len: number, s: string) { block.set(enc.encode(s).subarray(0, len), off); }
 function setOctal(block: Uint8Array, off: number, len: number, n: number) { setString(block, off, len, Math.max(0, Math.floor(n)).toString(8).padStart(len - 1, '0')); }
 
-interface TarMember { name: string; type: '0' | '5'; mode: number; mtime: number; owner: string; data: Uint8Array }
+/** type: file, hard link (`link` is the member it names), symbolic link (`link` is its target) or directory */
+interface TarMember { name: string; type: '0' | '1' | '2' | '5'; mode: number; mtime: number; owner: string; data: Uint8Array; link?: string }
 
 function paxRecord(key: string, value: string): Uint8Array {
   const body = ` ${key}=${value}\n`;
@@ -112,6 +113,7 @@ function tarHeader(name: string, type: string, size: number, m: TarMember): Uint
   setString(b, 263, 2, '00');
   setString(b, 265, 32, m.owner);
   setString(b, 297, 32, m.owner);
+  if (type !== 'x' && m.link !== undefined) setString(b, 157, 100, m.link);
   setString(b, 345, 155, prefix);
   b.fill(0x20, 148, 156);
   let sum = 0;
@@ -129,8 +131,9 @@ function tarBlocks(m: TarMember): Uint8Array[] {
       if (enc.encode(m.name.slice(0, i)).length <= 155 && enc.encode(m.name.slice(i + 1)).length <= 100 && i + 1 < m.name.length) return true;
     return false;
   })();
-  if (!fits) {
-    const rec = paxRecord('path', m.name);
+  const longLink = m.link !== undefined && enc.encode(m.link).length > 100;
+  if (!fits || longLink) {
+    const rec = concat([...(fits ? [] : [paxRecord('path', m.name)]), ...(longLink ? [paxRecord('linkpath', m.link!)] : [])]);
     parts.push(tarHeader('PaxHeader', 'x', rec.length, m), rec, new Uint8Array((BLOCK - rec.length % BLOCK) % BLOCK));
   }
   parts.push(tarHeader(fits ? m.name : m.name.slice(0, 99), m.type, m.data.length, m), m.data, new Uint8Array((BLOCK - m.data.length % BLOCK) % BLOCK));
@@ -251,16 +254,21 @@ async function tar(ctx: CommandContext): Promise<number> {
     const archivePath = archive === '-' ? null : ctx.resolvePath(archive);
     const verbose = archive === '-' ? ctx.stderr : ctx.stdout;
     const parts: Uint8Array[] = [];
+    const linked: { path: string; member: string }[] = []; // files with several names already stored
     const add = (name: string, path: string) => {
       if (path === archivePath) return; // the archive itself, as GNU tar skips it
       let member = name.replace(/^\/+/, '');
       try {
-        const st = fs.stat(path);
+        const st = fs.stat(path, false); // a symbolic link is stored as one, never followed
         if (st.isDirectory) member = member.replace(/\/+$/, '') + '/';
+        // a file with several names: the first goes in whole, later ones as links to it
+        const first = st.links > 1 && !st.isDirectory ? linked.find(l => fs.sameFile(l.path, path, false))?.member : undefined;
+        const type = st.isDirectory ? '5' : first !== undefined ? '1' : st.isSymlink ? '2' : '0';
         const children = st.isDirectory ? fs.list(path) : [];
-        const data = st.isDirectory ? new Uint8Array(0) : fs.readBytes(path);
+        const data = type === '0' ? fs.readBytes(path) : new Uint8Array(0);
+        if (st.links > 1 && first === undefined && !st.isDirectory) linked.push({ path, member });
         if (member !== '/') {
-          parts.push(...tarBlocks({ name: member, type: st.isDirectory ? '5' : '0', mode: st.mode, mtime: Math.floor(st.modified / 1000), owner: st.owner, data }));
+          parts.push(...tarBlocks({ name: member, type, mode: st.mode, mtime: Math.floor(st.modified / 1000), owner: st.owner, data, link: first ?? st.linkTarget ?? undefined }));
           if (a.has('v')) verbose.write(member + '\n');
         }
         for (const c of children) add(name.replace(/\/+$/, '') + '/' + c, path.replace(/\/+$/, '') + '/' + c);
@@ -273,7 +281,7 @@ async function tar(ctx: CommandContext): Promise<number> {
     for (const f of a.positional) {
       if (f.startsWith('/') && !stripped) { stripped = true; ctx.stderr.write("tar: Removing leading `/' from member names\n"); }
       const path = VirtualFileSystem.normalize(dir, f);
-      if (!fs.exists(path)) fail(`${f}: Cannot stat: ${fs.whyMissing(path)}`);
+      if (!fs.exists(path, false)) fail(`${f}: Cannot stat: ${fs.whyMissing(path, false)}`);
       else add(f, path);
     }
     parts.push(new Uint8Array(BLOCK * 2));
@@ -313,6 +321,11 @@ async function tar(ctx: CommandContext): Promise<number> {
     }
 
     const budget = new Budget(ctx.shell.options, 2);
+    const made = new Set<string>(); // symbolic links this extraction created
+    const throughMadeLink = (path: string) => {
+      for (let p = VirtualFileSystem.getParent(path); p.length > dir.length && p !== '/'; p = VirtualFileSystem.getParent(p)) if (made.has(p) && fs.isSymlink(p)) return true;
+      return false;
+    };
     const wanted = a.positional.map(p => p.replace(/\/+$/, ''));
     const found = wanted.map(() => false);
     const announced = new Set<string>();
@@ -356,6 +369,10 @@ async function tar(ctx: CommandContext): Promise<number> {
             continue;
           }
           if (a.has('v')) info.write(name + '\n');
+          // like GNU tar's placeholders for links: nothing lands under (or links to something under) a symbolic link this
+          // archive made, so a crafted member can't use one to write outside the target directory
+          if (throughMadeLink(target)) throw new ShellError(`${target}: Not a directory`);
+          if (e.type !== '5' && fs.exists(target, false) && !fs.isDirectory(target, false)) fs.delete(target); // a member replaces what is there, never writes through a link
           if (e.type === '5') fs.mkdir(target, true); // shortcut: the archived directory mode isn't restored, so read-only dirs can't block their own contents
           else if (isFile) {
             budget.charge(e.data.length);
@@ -366,18 +383,19 @@ async function tar(ctx: CommandContext): Promise<number> {
           } else if (e.type === '1') {
             const linkParts = nonEmpty(e.link.slice(linkPrefix.length).split('/'));
             const linkTarget = under(dir, linkParts.slice(strip));
-            // the filesystem has no hard links: copy a file this archive (or the target dir) already holds
-            if (linkParts.length <= strip || !fs.isFile(linkTarget) || linkTarget === target) {
+            // only to a file this archive (or the target dir) already holds, never through a link it made
+            if (linkParts.length <= strip || !fs.exists(linkTarget, false) || fs.isDirectory(linkTarget, false) || linkTarget === target || throughMadeLink(linkTarget)) {
               fail(`${name}: Cannot hard link to ‘${linkParts.join('/')}’: No such file or directory`);
               continue;
             }
-            const copy = fs.readBytes(linkTarget);
-            budget.charge(copy.length);
             fs.mkdir(VirtualFileSystem.getParent(target), true);
-            fs.writeBytes(target, copy);
-            fs.chmod(target, fs.stat(linkTarget).mode);
-          } else if (e.type === '2') fail(`${name}: Cannot create symlink to ‘${e.link}’: Operation not supported`);
-          else fail(`${name}: Cannot mknod: Operation not permitted`);
+            fs.createHardLink(linkTarget, target);
+          } else if (e.type === '2') {
+            fs.mkdir(VirtualFileSystem.getParent(target), true);
+            fs.createSymlink(target, e.link);
+            made.add(target);
+            fs.setModifiedTime(target, e.mtime * 1000, false);
+          } else fail(`${name}: Cannot mknod: Operation not permitted`);
         } catch (ex) {
           if (!(ex instanceof ShellError) || ex instanceof ExtractLimit) throw ex;
           fail(`${name}: Cannot open: ${reason(ex)}`);
@@ -521,8 +539,9 @@ async function zip(ctx: CommandContext): Promise<number> {
     }
   }
   let added = 0;
+  const walking = new Set<string>(); // real paths of the directories being added
   const add = async (name: string, path: string): Promise<void> => {
-    if (path === archivePath) return;
+    if (path === archivePath || !fs.exists(path)) return; // a dangling link has nothing to store
     const st = fs.stat(path);
     const entryName = name.split('/').filter(p => p !== '' && p !== '.').join('/') + (st.isDirectory ? '/' : '');
     if (entryName !== '/') {
@@ -543,8 +562,14 @@ async function zip(ctx: CommandContext): Promise<number> {
         info.write(`${old >= 0 ? 'updating' : '  adding'}: ${entryName} (${stored ? 'stored 0' : `deflated ${Math.floor(pct)}`}%)\n`);
       }
     }
-    if (st.isDirectory && (a.has('r') || entryName === '/'))
+    if (st.isDirectory && (a.has('r') || entryName === '/')) {
+      // zip follows links to directories: one leading back up the tree would never end
+      const real = fs.realPath(path);
+      if (real === null || walking.has(real)) return;
+      walking.add(real);
       for (const child of fs.list(path)) await add(name.replace(/\/+$/, '') + '/' + child, path.replace(/\/+$/, '') + '/' + child);
+      walking.delete(real);
+    }
   };
   const names = a.positional.slice(1);
   for (const f of names) if (!fs.exists(ctx.resolvePath(f)) && !a.has('q')) info.write(`\tzip warning: name not matched: ${f}\n`);

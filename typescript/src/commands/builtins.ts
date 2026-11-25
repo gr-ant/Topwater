@@ -25,7 +25,8 @@ export function testUnary(shell: Shell, op: string, arg: string): boolean {
     case '-f': return fs.isFile(path);
     case '-d': return fs.isDirectory(path);
     case '-s': return fs.isFile(path) && fs.stat(path).size > 0;
-    case '-L': case '-h': case '-b': case '-c': case '-p': case '-S': case '-t': case '-g': case '-u': case '-k': return false; // no links, devices, pipes, terminals
+    case '-L': case '-h': return fs.isSymlink(path);
+    case '-b': case '-c': case '-p': case '-S': case '-t': case '-g': case '-u': case '-k': return false; // no devices, pipes, terminals
     case '-O': case '-G': case '-N': return fs.exists(path);
     case '-v': return shell.isVariableSet(arg);
     case '-o': return shell.optionList.some(([n, on]) => n === arg && on);
@@ -50,7 +51,7 @@ function testBinary(shell: Shell, left: string, op: string, right: string): bool
     case '>': return left > right;
     case '-nt': return testNewer(shell, left, right);
     case '-ot': return testNewer(shell, right, left);
-    case '-ef': return shell.resolvePath(left) === shell.resolvePath(right) && shell.agentFs.exists(shell.resolvePath(left));
+    case '-ef': return shell.agentFs.sameFile(shell.resolvePath(left), shell.resolvePath(right));
   }
   const okL = /^\s*[-+]?\d+\s*$/.test(left), okR = /^\s*[-+]?\d+\s*$/.test(right);
   if (!okL || !okR) throw new ShellError(`${okL ? right : left}: integer expression expected`, 2);
@@ -366,20 +367,26 @@ export function registerBuiltins(shell: Shell) {
   reg('cd', ctx => {
     const sh = ctx.shell;
     const args = [...ctx.args];
-    while (['-L', '-P', '-e', '-@'].includes(args[0])) args.shift();
+    let physical = false;
+    while (['-L', '-P', '-e', '-@'].includes(args[0])) { const f = args.shift()!; if (f === '-L' || f === '-P') physical = f === '-P'; }
     if (args[0] === '--') args.shift();
     if (args.length > 1) throw new ShellError('too many arguments');
     const target = args.length === 0 ? sh.environment.get('HOME') ?? '/' : args[0] === '-' ? sh.environment.get('OLDPWD') ?? sh.cwd : args[0];
-    const abs = ctx.resolvePath(target);
+    // like bash: the new directory is the old one's logical path plus the operand, ".." removing a name (-L, the default);
+    // if that isn't a directory, or with -P, the physical path, every symbolic link resolved
+    let abs = VirtualFileSystem.normalize(sh.cwd, target);
+    if (physical || !ctx.fs.isDirectory(abs)) abs = ctx.resolvePath(target);
     if (!ctx.fs.exists(abs)) throw new ShellError(`${target}: ${ctx.fs.whyMissing(abs)}`);
     if (!ctx.fs.isDirectory(abs)) throw new ShellError(`${target}: Not a directory`);
     if (!ctx.fs.canExecute(abs)) throw new ShellError(`${target}: Permission denied`);
+    if (physical) abs = ctx.fs.realPath(abs) ?? abs;
     sh.environment.set('OLDPWD', sh.cwd);
     sh.cwd = abs;
     if (args.length === 1 && args[0] === '-') line(ctx, abs);
   }, 'Change the working directory');
 
-  reg('pwd', ctx => line(ctx, ctx.shell.cwd), 'Print the working directory');
+  // -P: the physical path, symbolic links resolved; -L (the default): the logical one cd kept
+  reg('pwd', ctx => line(ctx, ctx.args.findLast(x => x === '-L' || x === '-P') === '-P' ? ctx.fs.realPath(ctx.shell.cwd) ?? ctx.shell.cwd : ctx.shell.cwd), 'Print the working directory');
 
   reg('export', ctx => {
     const sh = ctx.shell;

@@ -7,7 +7,9 @@ import { parse, ParseError, type Script } from './parser.js';
 import type { Shell, ShellOptions } from './shell.js';
 import type { VfsEntry } from './vfs.js';
 
-export const SNAPSHOT_FORMAT_VERSION = 1;
+/** The newest format version this writes and loads. Version 2 added symbolic links (type "symlink" with a "target") and hard
+ * links (a "link" naming the entry's first path); a snapshot without links is still written as version 1. */
+export const SNAPSHOT_FORMAT_VERSION = 2;
 const FORMAT = 'topwater-snapshot';
 const enc = new TextEncoder();
 
@@ -85,9 +87,12 @@ export class ShellSnapshot {
       zip.push({ name, method: 8, flags: 0, crc: crc32(raw), usize: raw.length, time, date, ext: 0, data: await deflate('deflate-raw', raw) });
     const written = new Set<string>();
     const files: Record<string, unknown>[] = [];
+    let links = false;
     for (const e of this.files) {
-      const entry: Record<string, unknown> = { path: e.path, type: e.isDirectory ? 'dir' : 'file', mode: e.mode.toString(8).padStart(4, '0'), owner: e.owner, mtime: formatTime(e.modified) };
-      if (!e.isDirectory) {
+      const type = e.isDirectory ? 'dir' : e.linkTarget !== null ? 'symlink' : 'file';
+      const entry: Record<string, unknown> = { path: e.path, type, mode: e.mode.toString(8).padStart(4, '0'), owner: e.owner, mtime: formatTime(e.modified), target: e.linkTarget ?? undefined, link: e.hardLink ?? undefined };
+      links ||= e.linkTarget !== null || e.hardLink !== null;
+      if (type === 'file') {
         const bytes = e.data ?? enc.encode(e.text ?? '');
         entry.size = bytes.length;
         if (e.data) entry.binary = true;
@@ -103,7 +108,7 @@ export class ShellSnapshot {
     const st = this.state;
     const names = [...new Set([...st.variables.keys(), ...st.arrays.keys(), ...st.attributes.keys()])].sort(ordinal);
     const manifest: Record<string, unknown> = {
-      format: FORMAT, version: SNAPSHOT_FORMAT_VERSION, created: formatTime(this.created), user: this.user, hostname: this.hostname, cwd: st.cwd, files,
+      format: FORMAT, version: links ? SNAPSHOT_FORMAT_VERSION : 1, created: formatTime(this.created), user: this.user, hostname: this.hostname, cwd: st.cwd, files,
       variables: names.map(n => dropEmpty({
         name: n, value: st.variables.get(n), attrs: st.attributes.get(n), exported: isExported(st, n),
         array: st.arrays.has(n) ? (a => ({ assoc: a.assoc || undefined, next: a.next || undefined, items: a.items }))(st.arrays.get(n)!) : undefined,
@@ -190,13 +195,19 @@ async function read(bytes: Uint8Array, o: { maxFileSystemBytes: number; maxStrin
     seen.add(path);
     if (path !== '/') {
       const parent = path.slice(0, path.lastIndexOf('/')) || '/';
-      if (!dirs.has(parent)) throw bad(`${path}: its parent ${parent} must come first`);
+      if (!dirs.has(parent)) throw bad(seen.has(parent) ? `${path}: parent is not a directory` : `${path}: its parent ${parent} must come first`); // never through a link
     }
     if (typeof f.mode !== 'string' || !/^[0-7]{1,4}$/.test(f.mode)) throw bad(`${path}: bad mode`);
     const owner = check(f.owner, USER, `${path}: owner`);
     const modified = parseTime(f.mtime, `${path}: mtime`);
     let text: string | null = null, data: Uint8Array | null = null;
-    if (f.type === 'file') {
+    if (f.link != null && (typeof f.link !== 'string' || f.link.length > 4096 || f.link[0] !== '/' || canonical(f.link) !== f.link || f.type === 'dir'))
+      throw bad(`${path}: bad link ${JSON.stringify(f.link)}`);
+    if ((f.type === 'symlink' && !(typeof f.target === 'string' && f.target.length > 0 && f.target.length <= 4096)) || (typeof f.target === 'string' && f.target.includes('\0')))
+      throw bad(`${path}: bad symlink target`);
+    if (f.link != null && !(seen.has(f.link) && f.link !== path && !dirs.has(f.link)))
+      throw bad(`${path}: hard link to ${f.link}, which is not an earlier file`);
+    if (f.type === 'file' && f.link == null) { // another name of a file shares the first one's content
       if (f.reportedSize != null && !(Number.isSafeInteger(f.reportedSize) && f.reportedSize >= 0)) throw bad(`${path}: negative reportedSize`);
       if (f.size === 0) { if (f.binary) data = new Uint8Array(0); else text = ''; }
       else {
@@ -213,10 +224,13 @@ async function read(bytes: Uint8Array, o: { maxFileSystemBytes: number; maxStrin
         }
         if (f.binary) data = content as Uint8Array; else text = content as string;
       }
-    } else if (f.type !== 'dir') throw bad(`${path}: unknown type ${JSON.stringify(f.type)}`);
+    } else if (f.type !== 'dir' && f.type !== 'symlink' && f.type !== 'file') throw bad(`${path}: unknown type ${JSON.stringify(f.type)}`);
     if (f.type === 'dir') dirs.add(path);
     else if (path === '/') throw bad('/ is not a directory');
-    files.push({ path, isDirectory: f.type === 'dir', mode: parseInt(f.mode, 8), owner, modified, text, data, reportedSize: f.type === 'file' ? f.reportedSize ?? null : null });
+    files.push({
+      path, isDirectory: f.type === 'dir', mode: parseInt(f.mode, 8), owner, modified, text, data, reportedSize: f.type === 'file' && f.link == null ? f.reportedSize ?? null : null,
+      linkTarget: f.type === 'symlink' ? f.target : null, hardLink: f.link ?? null,
+    });
   }
   return new (ShellSnapshot as any)(files, readState(m, o), user, hostname, parseTime(m.created, 'created'));
 }
