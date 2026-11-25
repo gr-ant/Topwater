@@ -49,6 +49,8 @@ var tasks = new (string prompt, Func<string, Shell, bool> check)[]
         (a, _) => Regex.IsMatch(a, @"\b8\b") && a.Contains("35")),
     ("What OS and version is this machine running, who am I, and how much disk space is free?",
         (a, _) => a.Contains("24.04") && a.Contains("agent")),
+    // 7: the hard one; see Incident below for the data and its traps
+    (Incident.Prompt, (a, sh) => a.Contains("10.1.3.7") && Incident.Check(sh)),
 };
 
 var SystemPrompt = Environment.GetEnvironmentVariable("SYSTEM_PROMPT") ?? "You are an autonomous agent operating a Linux machine through a bash tool. Use the tool to inspect and act; " +
@@ -68,8 +70,17 @@ Shell MakeShell()
     fs.WriteAllText("/home/agent/project/README.md", "# Deploy scripts\n\nRun `bash src/deploy.sh`.\n");
     fs.WriteAllText("/home/agent/data/sales.csv", "date,region,amount\n2026-01-03,north,120.50\n2026-01-04,south,80\n2026-01-04,north,99.50\n2026-01-05,east,42\n2026-01-06,south,20\n");
     fs.WriteAllText("/var/log/app.log", string.Concat(Enumerable.Range(0, 40).Select(i => $"2026-11-2{i % 4} 10:0{i % 10}:00 {(i % 5 == 0 ? "ERROR" : "INFO")} request {i}\n")));
+    Incident.AddFixture(fs);
     fs.SetOwner("/home/agent", "agent", recursive: true);
     return sh;
+}
+
+if (Environment.GetEnvironmentVariable("REFERENCE") is { Length: > 0 })
+{
+    var sh = MakeShell();
+    Console.Write((await sh.RunAsync(Incident.ReferenceSolution)).ToToolOutput());
+    Console.WriteLine(Incident.Check(sh) ? "reference solution: PASS" : "reference solution: FAIL");
+    return Incident.Check(sh) ? 0 : 1;
 }
 
 var variants = (Environment.GetEnvironmentVariable("VARIANTS") ?? "restricted").Split(',', StringSplitOptions.RemoveEmptyEntries);
@@ -133,4 +144,115 @@ class OrderTools
     public IEnumerable<Order> List([System.ComponentModel.Description("Filter by status (open|shipped)")] string? status = null,
                                    [System.ComponentModel.Description("Only orders at or above this total")] double minTotal = 0.0)
         => Orders.Where(o => (status is null || o.Status == status) && o.Total >= minTotal);
+}
+
+/// <summary>
+/// Task 7: an incident review over rotated nginx logs. Traps: the oldest file (gzipped) is in UTC+1, so naive times
+/// pull 192.168.7.44 into the window; 10.1.200.1's 404s have a response size of 500, which fools `grep ' 5..'`;
+/// 172.16.9.9 has a 5xx at exactly 14:00:00 (excluded) and sits next to, not inside, Initech's range; malformed lines.
+/// </summary>
+static class Incident
+{
+    public const string Prompt =
+        "Incident review. The web server's access logs are in /var/log/nginx/ (the current file and rotated ones). Considering only " +
+        "requests between 2026-11-20 10:00:00 and 14:00:00 UTC (start inclusive, end exclusive) that got a 5xx response, find the 3 " +
+        "client IPs with the most such responses. Map each IP to a customer using the CIDR ranges in ~/data/customers.json (use " +
+        "\"unknown\" if none match). Write ~/incident/report.csv with the header ip,customer,count_5xx,first_seen and one row per IP, " +
+        "sorted by count descending, where first_seen is that IP's earliest 5xx in the window, in UTC, formatted YYYY-MM-DDTHH:MM:SSZ. " +
+        "Then package the incident directory as ~/incident.tar.gz (paths inside starting with incident/). Tell me the top offender.";
+
+    static readonly string[] Expected =
+    [
+        "ip,customer,count_5xx,first_seen",
+        "10.1.3.7,Acme,9,2026-11-20T10:07:15Z",
+        "10.2.5.20,Globex,7,2026-11-20T10:45:00Z",
+        "172.16.9.9,unknown,6,2026-11-20T11:00:00Z",
+    ];
+
+    public static bool Check(Shell sh)
+    {
+        const string report = "/home/agent/incident/report.csv";
+        if (!sh.Fs.IsFile(report)) return false;
+        var lines = sh.Fs.ReadAllText(report).Replace("\r", "").Trim().Split('\n').Select(l => l.Trim()).ToArray();
+        if (!lines.SequenceEqual(Expected)) return false;
+        var listing = sh.RunAsync("tar tzf /home/agent/incident.tar.gz").GetAwaiter().GetResult();
+        return listing.ExitCode == 0 && listing.Stdout.Split('\n').Any(l => l.Trim() is "incident/report.csv" or "./incident/report.csv");
+    }
+
+    static DateTime T(string hms) => DateTime.Parse($"2026-11-20T{hms}Z", null, System.Globalization.DateTimeStyles.AdjustToUniversal);
+
+    static IEnumerable<(string Ip, DateTime Utc, int Status, int Bytes)> Events()
+    {
+        string[] noiseIps = ["10.1.4.4", "10.2.6.6", "198.51.100.7", "10.3.0.9"];
+        int[] noiseStatus = [200, 200, 301, 200, 404, 200, 304];
+        int i = 0;
+        for (var t = T("06:00:30"); t < T("15:00:00"); t = t.AddMinutes(3), i++)
+            yield return (noiseIps[i % noiseIps.Length], t, noiseStatus[i % noiseStatus.Length], 120 + i * 37 % 480);
+        foreach (var (ip, st, times) in new (string, int[], string[])[]
+        {
+            ("10.1.3.7", [500, 503], ["09:00:00", "10:07:15", "10:22:40", "10:51:03", "11:14:59", "11:40:00", "12:20:31", "12:55:12", "13:10:44", "13:47:09", "14:12:00", "14:30:00", "14:45:00"]),
+            ("10.2.5.20", [502, 503, 504], ["10:45:00", "11:05:00", "11:30:00", "11:50:00", "12:10:00", "12:40:00", "13:20:00"]),
+            ("172.16.9.9", [500], ["11:00:00", "11:45:00", "12:30:00", "13:00:00", "13:30:00", "13:59:59", "14:00:00", "14:03:00"]),
+            ("192.168.7.44", [502], ["09:10:00", "09:25:00", "09:40:00", "09:55:00", "10:35:00", "11:20:00", "12:05:00", "12:50:00", "13:40:00"]),
+            ("10.1.9.9", [500], ["11:11:11", "12:12:12"]),
+            ("203.0.113.5", [503], ["10:15:00", "12:45:00", "13:15:00"]),
+        })
+            for (int k = 0; k < times.Length; k++) yield return (ip, T(times[k]), st[k % st.Length], 230 + k);
+        foreach (var hms in new[] { "10:12:00", "10:44:00", "11:16:00", "11:48:00", "12:21:00", "12:52:00", "13:25:00", "13:57:00" })
+            yield return ("10.1.200.1", T(hms), 404, 500);   // size 500, not status 500
+    }
+
+    public static void AddFixture(VirtualFileSystem fs)
+    {
+        fs.WriteAllText("/home/agent/data/customers.json", """
+            [
+              {"name": "Acme", "cidrs": ["10.1.0.0/16"]},
+              {"name": "Globex", "cidrs": ["10.2.4.0/22", "192.168.7.0/24"]},
+              {"name": "Initech", "cidrs": ["172.16.16.0/20"]},
+              {"name": "Umbrella", "cidrs": ["203.0.113.128/25"]}
+            ]
+            """);
+        string[] paths = ["/api/orders", "/api/cart", "/login", "/static/app.js", "/api/search?q=shoes"];
+        string Line((string Ip, DateTime Utc, int Status, int Bytes) e, int n, TimeSpan offset) =>
+            $"{e.Ip} - - [{(e.Utc + offset).ToString("dd/MMM/yyyy:HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"{(offset < TimeSpan.Zero ? "-" : "+")}{offset:hhmm}] \"GET {paths[n % paths.Length]} HTTP/1.1\" {e.Status} {e.Bytes} \"-\" \"Mozilla/5.0\"\n";
+        var all = Events().OrderBy(e => e.Utc).ThenBy(e => e.Ip).ToList();
+        string Render(DateTime from, DateTime to, TimeSpan offset) =>
+            string.Concat(all.Select((e, n) => (e, n)).Where(x => x.e.Utc >= from && x.e.Utc < to).Select(x => Line(x.e, x.n, offset)));
+        static byte[] Gzip(string text)
+        {
+            using var ms = new MemoryStream();
+            using (var gz = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Optimal)) gz.Write(System.Text.Encoding.UTF8.GetBytes(text));
+            return ms.ToArray();
+        }
+        fs.CreateDirectory("/var/log/nginx", parents: true);
+        // the oldest file predates the server's move to UTC
+        fs.WriteAllBytes("/var/log/nginx/access.log.3.gz", Gzip(Render(DateTime.MinValue, T("10:30:00"), TimeSpan.FromHours(1))));
+        fs.WriteAllBytes("/var/log/nginx/access.log.2.gz", Gzip(Render(T("10:30:00"), T("12:00:00"), TimeSpan.Zero)));
+        var one = Render(T("12:00:00"), T("13:30:00"), TimeSpan.Zero).Split('\n').ToList();
+        one.Insert(10, "10.1.3.7 - - [20/Nov/2026:12:3");
+        one.Insert(25, "\"GET /api/orders HTTP/1.1\" 500 0");
+        fs.WriteAllText("/var/log/nginx/access.log.1", string.Join('\n', one));
+        fs.WriteAllText("/var/log/nginx/access.log", Render(T("13:30:00"), DateTime.MaxValue, TimeSpan.Zero));
+    }
+
+    public const string ReferenceSolution = """
+        jq -r '.[] | .name as $n | .cidrs[] | "\(.) \($n)"' ~/data/customers.json > /tmp/cidrs
+        { zcat /var/log/nginx/access.log.3.gz /var/log/nginx/access.log.2.gz; cat /var/log/nginx/access.log.1 /var/log/nginx/access.log; } |
+        awk 'function ipn(s,  p) { split(s, p, "."); return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4] }
+          NR == FNR { c[++n] = $0; next }
+          NF >= 10 && $9 ~ /^5[0-9][0-9]$/ {
+            split(substr($4, 2), t, ":"); off = $5; sub(/\]/, "", off)
+            sg = substr(off, 1, 1) == "-" ? -1 : 1
+            s = t[2] * 3600 + t[3] * 60 + t[4] - sg * (substr(off, 2, 2) * 3600 + substr(off, 4, 2) * 60)
+            if (s < 36000 || s >= 50400) next
+            cnt[$1]++; if (!($1 in first) || s < first[$1]) first[$1] = s }
+          END { for (ip in cnt) { cust = "unknown"
+                  for (i = 1; i <= n; i++) { split(c[i], a, " "); split(a[1], b, "/"); d = 2 ^ (32 - b[2])
+                    if (int(ipn(ip) / d) == int(ipn(b[1]) / d)) { cust = a[2]; break } }
+                  f = first[ip]; printf "%s,%s,%d,2026-11-20T%02d:%02d:%02dZ\n", ip, cust, cnt[ip], int(f / 3600), int(f % 3600 / 60), f % 60 } }' /tmp/cidrs - |
+        sort -t, -k3,3nr | head -3 > /tmp/rows
+        mkdir -p ~/incident && { echo ip,customer,count_5xx,first_seen; cat /tmp/rows; } > ~/incident/report.csv
+        tar czf ~/incident.tar.gz -C ~ incident && cat ~/incident/report.csv && tar tzf ~/incident.tar.gz
+        """;
 }
