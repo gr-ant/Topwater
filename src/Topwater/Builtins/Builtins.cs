@@ -277,22 +277,34 @@ internal static partial class Builtins
 
         shell.Register("cd", ctx =>
         {
-            var args = ctx.Args.SkipWhile(x => x is "-L" or "-P" or "-e" or "-@").ToList();
+            var flags = ctx.Args.TakeWhile(x => x is "-L" or "-P" or "-e" or "-@").ToList();
+            var args = ctx.Args.Skip(flags.Count).ToList();
             if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
             if (args.Count > 1) throw new ShellException("too many arguments");
             var target = args.Count == 0 ? ctx.Shell.Environment.GetValueOrDefault("HOME", "/")
                 : args[0] == "-" ? ctx.Shell.Environment.GetValueOrDefault("OLDPWD", ctx.Shell.Cwd) : args[0];
-            var abs = ctx.ResolvePath(target);
+            // like bash: the new directory is the old one's logical path plus the operand, ".." removing a name (-L, the
+            // default); if that isn't a directory, or with -P, the physical path, every symbolic link resolved
+            bool physical = flags.LastOrDefault(f => f is "-L" or "-P") == "-P";
+            var abs = VirtualFileSystem.Normalize(ctx.Shell.Cwd, target);
+            if (physical || !ctx.Fs.IsDirectory(abs)) abs = ctx.ResolvePath(target);
             if (!ctx.Fs.Exists(abs)) throw new ShellException($"{target}: {ctx.Fs.WhyMissing(abs)}");
             if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{target}: Not a directory");
             if (!ctx.Fs.CanExecute(abs)) throw new ShellException($"{target}: Permission denied");
+            if (physical) abs = ctx.Fs.RealPath(abs, out _) ?? abs;
             ctx.Shell.Environment["OLDPWD"] = ctx.Shell.Cwd;
             ctx.Shell.Cwd = abs;
             if (args is ["-"]) ctx.Stdout.WriteLine(abs);
             return 0;
         }, "Change the working directory");
 
-        shell.Register("pwd", ctx => { ctx.Stdout.WriteLine(ctx.Shell.Cwd); return 0; }, "Print the working directory");
+        shell.Register("pwd", ctx =>
+        {
+            // -P: the physical path, symbolic links resolved; -L (the default): the logical one cd kept
+            bool physical = ctx.Args.LastOrDefault(x => x is "-L" or "-P") == "-P";
+            ctx.Stdout.WriteLine(physical ? ctx.Fs.RealPath(ctx.Shell.Cwd, out _) ?? ctx.Shell.Cwd : ctx.Shell.Cwd);
+            return 0;
+        }, "Print the working directory");
 
         shell.Register("export", ctx =>
         {
@@ -746,7 +758,8 @@ internal static class Test
             "-f" => fs.IsFile(path),
             "-d" => fs.IsDirectory(path),
             "-s" => fs.IsFile(path) && fs.Stat(path).Size > 0,
-            "-L" or "-h" or "-b" or "-c" or "-p" or "-S" or "-t" or "-g" or "-u" or "-k" => false, // no links, devices, pipes, sockets, terminals or special bits
+            "-L" or "-h" => fs.IsSymlink(path),
+            "-b" or "-c" or "-p" or "-S" or "-t" or "-g" or "-u" or "-k" => false, // no devices, pipes, sockets, terminals or special bits
             "-O" or "-G" or "-N" => fs.Exists(path),
             "-v" => shell.IsVariableSet(arg),
             "-o" => shell.OptionList.Any(o => o.Name == arg && o.On),
@@ -754,7 +767,7 @@ internal static class Test
         };
     }
 
-    static readonly HashSet<string> BinaryOps = ["=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"];
+    static readonly HashSet<string> BinaryOps = ["=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef"];
 
     /// <summary>-nt / -ot: a missing file is older than any existing one, as in bash.</summary>
     internal static bool Newer(Shell sh, string left, string right)
@@ -773,6 +786,7 @@ internal static class Test
             case ">": return string.CompareOrdinal(left, right) > 0;
             case "-nt": return Newer(sh, left, right);
             case "-ot": return Newer(sh, right, left);
+            case "-ef": return sh.Fs.SameFile(sh.ResolvePath(left), sh.ResolvePath(right));
         }
         bool okL = long.TryParse(left.Trim(), out var l), okR = long.TryParse(right.Trim(), out var r);
         if (!okL || !okR) throw new ShellException($"{(okL ? right : left)}: integer expression expected", 2);

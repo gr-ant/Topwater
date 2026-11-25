@@ -657,7 +657,7 @@ internal sealed class Lexer(string s)
 internal sealed class Parser
 {
     static readonly HashSet<string> Reserved = ["then", "elif", "else", "fi", "do", "done", "esac", "in"];
-    static readonly HashSet<string> CondBinary = ["==", "=", "!=", "=~", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"];
+    static readonly HashSet<string> CondBinary = ["==", "=", "!=", "=~", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef"];
 
     readonly List<Token> _t;
     readonly string _src;

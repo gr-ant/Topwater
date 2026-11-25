@@ -142,18 +142,24 @@ public class BashCompatArchives
             Link(w, TarEntryType.HardLink, "hl", "../outside");
             Link(w, TarEntryType.HardLink, "hl2", "/etc/passwd");
             Link(w, TarEntryType.HardLink, "hl3", "good.txt");
+            Link(w, TarEntryType.SymbolicLink, "up", "..");
+            File(w, "up/escaped");
+            Link(w, TarEntryType.HardLink, "hl4", "lnk/passwd");
         }));
         sh.Fs.WriteAllText("/tmp/w/outside", "secret\n");
         var r = await sh.RunAsync("mkdir x && tar xf evil.tar -C x; echo rc=$?; cd x && find . | sort; cat hl3");
-        Assert.Equal("rc=2\n.\n./abs.txt\n./good.txt\n./hl3\n./lnk\n./lnk/passwd\ngood\n", r.Stdout);
+        Assert.Equal("rc=2\n.\n./abs.txt\n./good.txt\n./hl3\n./lnk\n./up\ngood\n", r.Stdout);
         Assert.Contains("tar: Removing leading `../' from member names", r.Stderr);
         Assert.Contains("tar: ../up.txt: Member name contains '..'", r.Stderr);
         Assert.Contains("tar: ok/../../up2.txt: Member name contains '..'", r.Stderr);
         Assert.Contains("tar: Removing leading `/' from member names", r.Stderr);
-        Assert.Contains("tar: lnk: Cannot create symlink to ‘/etc’: Operation not supported", r.Stderr);
+        // a link the archive made is kept, but nothing is written or hard-linked through it (as GNU tar does)
+        Assert.Contains("tar: lnk/passwd: Cannot open: Not a directory", r.Stderr);
+        Assert.Contains("tar: up/escaped: Cannot open: Not a directory", r.Stderr);
+        Assert.Contains("tar: hl4: Cannot hard link to ‘lnk/passwd’: No such file or directory", r.Stderr);
         Assert.Contains("tar: hl: Cannot hard link to ‘outside’: No such file or directory", r.Stderr);
         Assert.Contains("tar: hl2: Cannot hard link to ‘etc/passwd’: No such file or directory", r.Stderr);
-        foreach (var p in new[] { "/tmp/up.txt", "/tmp/w/up.txt", "/tmp/up2.txt", "/abs.txt", "/etc/evil", "/tmp/w/x/hl" }) Assert.False(sh.Fs.Exists(p), p);
+        foreach (var p in new[] { "/tmp/up.txt", "/tmp/w/up.txt", "/tmp/up2.txt", "/abs.txt", "/etc/evil", "/tmp/w/x/hl", "/tmp/w/escaped", "/tmp/w/x/hl4" }) Assert.False(sh.Fs.Exists(p), p);
         Assert.Equal("secret\n", sh.Fs.ReadAllText("/tmp/w/outside"));
         Assert.StartsWith("root:", sh.Fs.ReadAllText("/etc/passwd"));
     }
@@ -181,8 +187,7 @@ public class BashCompatArchives
         sh.Fs.WriteAllBytes("/tmp/w/bomb.gz", Gzip(zeros));
         sh.Fs.WriteAllBytes("/tmp/w/bomb.tgz", Tar(w => File(w, "z", zeros), gzip: true));
         sh.Fs.WriteAllBytes("/tmp/w/bomb.tar", Tar(w => File(w, "z", zeros)));
-        // a small file copied by many hard links, and many tiny entries
-        sh.Fs.WriteAllBytes("/tmp/w/links.tar", Tar(w => { File(w, "f", new byte[300_000]); for (int i = 0; i < 10; i++) Link(w, TarEntryType.HardLink, $"l{i}", "f"); }));
+        // many tiny entries
         sh.Fs.WriteAllBytes("/tmp/w/many.tar", Tar(w => { for (int i = 0; i < 60; i++) File(w, $"f{i}"); }));
         var zip = new MemoryStream();
         using (var z = new ZipArchive(zip, ZipArchiveMode.Create, leaveOpen: true))
@@ -198,7 +203,6 @@ public class BashCompatArchives
             ("tar xzf bomb.tgz -C x", 2, $"tar: {limit}"),
             ("tar xf bomb.tar -C x", 2, $"tar: {limit}"),
             ("tar xOf bomb.tar > /dev/null", 2, $"tar: {limit}"),
-            ("tar xf links.tar -C x", 2, $"tar: {limit}"),
             ("tar tf many.tar > /dev/null", 2, "tar: archive exceeds the 50-entry extraction limit; stopping"),
             ("unzip -q bomb.zip -d x", 1, $"unzip: {limit}"),
             ("unzip -p bomb.zip > /dev/null", 1, $"unzip: {limit}"),

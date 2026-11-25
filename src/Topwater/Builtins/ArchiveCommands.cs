@@ -6,8 +6,8 @@ namespace Topwater;
 
 /// <summary>
 /// tar, gzip/gunzip/zcat, zip/unzip over the virtual filesystem. Archive bytes cross pipes and redirects as <see cref="ByteText"/>.
-/// Archives are untrusted: extraction never leaves the target directory (no `..`, absolute names are made relative, symlinks
-/// aren't created since the filesystem has none, hard links copy only files already extracted), and every extraction or
+/// Archives are untrusted: extraction never leaves the target directory (no `..`, absolute names are made relative, nothing is
+/// written under or hard-linked through a symbolic link the archive made, hard links only reach entries already there), and every extraction or
 /// decompression stops with an error past <see cref="ShellOptions.MaxExtractBytes"/> / <see cref="ShellOptions.MaxExtractEntries"/>.
 /// </summary>
 internal static partial class Builtins
@@ -178,23 +178,30 @@ internal static partial class Builtins
             var verbose = archive == "-" ? ctx.Stderr : ctx.Stdout;
             var ms = new MemoryStream();
             bool stripped = false;
+            var linked = new List<(string Path, string Member)>(); // files with several names already stored
             using (var w = new TarWriter(ms, TarEntryFormat.Gnu, leaveOpen: true))
             {
-                void Add(string name, string path)
+                var walking = new HashSet<string>(StringComparer.Ordinal); // real paths of the directories being added
+            void Add(string name, string path)
                 {
                     if (path == archivePath) return; // the archive itself, as GNU tar skips it
                     var member = name.TrimStart('/');
                     try
                     {
-                        var st = fs.Stat(path);
+                        var st = fs.Stat(path, follow: false); // a symbolic link is stored as one, never followed
                         if (st.IsDirectory) member = member.TrimEnd('/') + "/";
-                        var entry = new GnuTarEntry(st.IsDirectory ? TarEntryType.Directory : TarEntryType.RegularFile, member)
+                        // a file with several names: the first goes in whole, later ones as links to it
+                        var first = st.Links > 1 && !st.IsDirectory ? linked.FirstOrDefault(l => fs.SameFile(l.Path, path) && fs.IsSymlink(l.Path) == st.IsSymlink).Member : null;
+                        var type = st.IsDirectory ? TarEntryType.Directory : first != null ? TarEntryType.HardLink : st.IsSymlink ? TarEntryType.SymbolicLink : TarEntryType.RegularFile;
+                        var entry = new GnuTarEntry(type, member)
                         {
                             Mode = (UnixFileMode)(st.Mode & 0xFFF), ModificationTime = st.Modified,
                             UserName = st.Owner, GroupName = st.Owner, Uid = st.Owner == "root" ? 0 : 1000, Gid = st.Owner == "root" ? 0 : 1000,
                         };
+                        if ((first ?? st.LinkTarget) is { } linkName) entry.LinkName = linkName;
                         var children = st.IsDirectory ? fs.List(path) : [];
-                        if (!st.IsDirectory) entry.DataStream = new MemoryStream(fs.ReadAllBytes(path));
+                        if (type == TarEntryType.RegularFile) entry.DataStream = new MemoryStream(fs.ReadAllBytes(path));
+                        if (st.Links > 1 && first == null && !st.IsDirectory) linked.Add((path, member));
                         if (member != "/")
                         {
                             w.WriteEntry(entry);
@@ -208,7 +215,7 @@ internal static partial class Builtins
                 {
                     if (f.StartsWith('/') && !stripped) { stripped = true; ctx.Stderr.WriteLine("tar: Removing leading `/' from member names"); }
                     var path = VirtualFileSystem.Normalize(dir, f);
-                    if (!fs.Exists(path)) Fail($"{f}: Cannot stat: {fs.WhyMissing(path)}");
+                    if (!fs.Exists(path, follow: false)) Fail($"{f}: Cannot stat: {fs.WhyMissing(path, follow: false)}");
                     else Add(f, path);
                 }
             }
@@ -244,6 +251,13 @@ internal static partial class Builtins
         }
 
         var budget = new ExtractBudget(ctx.Shell.Options, 2);
+        var made = new HashSet<string>(StringComparer.Ordinal); // symbolic links this extraction created
+        bool ThroughMadeLink(string path)
+        {
+            for (var p = VirtualFileSystem.GetParent(path); p.Length > dir.Length && p != "/"; p = VirtualFileSystem.GetParent(p))
+                if (made.Contains(p) && fs.IsSymlink(p)) return true;
+            return false;
+        }
         var wanted = a.Positional.Select(p => p.TrimEnd('/')).ToList();
         var found = new bool[wanted.Count];
         var announced = new HashSet<string>();
@@ -305,6 +319,11 @@ internal static partial class Builtins
                     continue;
                 }
                 if (a.Has('v')) info.WriteLine(name);
+                // like GNU tar's placeholders for links: nothing lands under (or links to something under) a symbolic link this
+                // archive made, so a crafted member can't use one to write outside the target directory
+                if (ThroughMadeLink(target)) throw new ShellException($"{target}: Not a directory");
+                if (e.EntryType != TarEntryType.Directory && fs.Exists(target, follow: false) && !fs.IsDirectory(target, follow: false))
+                    fs.Delete(target); // a member replaces what is there, never writes through a link
                 switch (e.EntryType)
                 {
                     case TarEntryType.Directory:
@@ -320,20 +339,20 @@ internal static partial class Builtins
                     case TarEntryType.HardLink:
                         var linkParts = e.LinkName[linkPrefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
                         var linkTarget = VirtualFileSystem.Normalize(dir, string.Join('/', linkParts.Skip(strip)));
-                        // the filesystem has no hard links: copy a file this archive (or the target dir) already holds
-                        if (linkParts.Length <= strip || !fs.IsFile(linkTarget) || linkTarget == target)
+                        // only to a file this archive (or the target dir) already holds, never through a link it made
+                        if (linkParts.Length <= strip || !fs.Exists(linkTarget, follow: false) || fs.IsDirectory(linkTarget, follow: false) || linkTarget == target || ThroughMadeLink(linkTarget))
                         {
                             Fail($"{name}: Cannot hard link to ‘{string.Join('/', linkParts)}’: No such file or directory");
                             break;
                         }
-                        var copy = fs.ReadAllBytes(linkTarget);
-                        budget.Charge(copy.Length);
                         fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
-                        fs.WriteAllBytes(target, copy);
-                        fs.Chmod(target, fs.Stat(linkTarget).Mode);
+                        fs.CreateHardLink(linkTarget, target);
                         break;
                     case TarEntryType.SymbolicLink:
-                        Fail($"{name}: Cannot create symlink to ‘{e.LinkName}’: Operation not supported");
+                        fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
+                        fs.CreateSymlink(target, e.LinkName);
+                        made.Add(target);
+                        fs.SetModifiedTime(target, e.ModificationTime.UtcDateTime, follow: false);
                         break;
                     default:
                         Fail($"{name}: Cannot mknod: Operation not permitted");
@@ -454,9 +473,10 @@ internal static partial class Builtins
         try
         {
             using var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true);
+            var walking = new HashSet<string>(StringComparer.Ordinal); // real paths of the directories being added
             void Add(string name, string path)
             {
-                if (path == archivePath) return;
+                if (path == archivePath || !fs.Exists(path)) return; // a dangling link has nothing to store
                 var st = fs.Stat(path);
                 var entryName = string.Join('/', name.Split('/').Where(p => p is not ("" or "."))) + (st.IsDirectory ? "/" : "");
                 if (entryName != "/")
@@ -474,7 +494,12 @@ internal static partial class Builtins
                     if (!a.Has('q')) info.WriteLine($"{(old != null ? "updating" : "  adding")}: {entryName} ({(stored ? "stored 0" : $"deflated {(200L * (data.Length - deflated) / data.Length + 1) >> 1}")}%)");
                 }
                 if (st.IsDirectory && (a.Has('r') || entryName == "/"))
+                {
+                    // zip follows links to directories: one leading back up the tree would never end
+                    if (fs.RealPath(path, out _) is not { } real || !walking.Add(real)) return;
                     foreach (var child in fs.List(path)) Add(name.TrimEnd('/') + "/" + child, path.TrimEnd('/') + "/" + child);
+                    walking.Remove(real);
+                }
             }
             var names = a.Positional.Skip(1).ToList();
             foreach (var f in names)
@@ -511,7 +536,7 @@ internal static partial class Builtins
             return 0;
         }
         var name = a.Positional[0];
-        var path = new[] { name, name + ".zip", name + ".ZIP" }.Select(ctx.ResolvePath).FirstOrDefault(fs.IsFile);
+        var path = new[] { name, name + ".zip", name + ".ZIP" }.Select(ctx.ResolvePath).FirstOrDefault(p => fs.IsFile(p));
         if (path == null)
         {
             ctx.Stderr.WriteLine($"unzip:  cannot find or open {name}, {name}.zip or {name}.ZIP.");

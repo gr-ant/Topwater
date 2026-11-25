@@ -654,15 +654,25 @@ internal static partial class Builtins
 
         CommandHandler realpath = ctx =>
         {
-            var a = Args.Parse(ctx.Args, "fesmqnz", longs: "canonicalize=f,canonicalize-existing=e,canonicalize-missing=m");
-            if (ctx.Name == "readlink" && !a.Has('f') && !a.Has('e') && !a.Has('m')) return Task.FromResult(1); // nothing is a symlink
+            var a = Args.Parse(ctx.Args, "fesmqnzvLP", longs: "canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,no-symlinks=s,quiet=q,no-newline=n,zero=z,verbose=v,logical=L,physical=P");
+            bool readlink = ctx.Name == "readlink", plain = readlink && !a.Has('f') && !a.Has('e') && !a.Has('m');
+            // readlink is silent about failures unless -v; realpath reports them unless -q
+            bool report = readlink ? a.Has('v') : !a.Has('q');
+            if (a.Positional.Count == 0 && readlink) throw new UsageException("missing operand");
+            var fs = ctx.Fs;
+            var end = a.Has('z') ? "\0" : readlink && a.Has('n') && a.Positional.Count == 1 ? "" : "\n";
             int code = 0;
             foreach (var p in a.Positional.DefaultIfEmpty("."))
             {
                 var abs = ctx.ResolvePath(p);
-                if (!a.Has('m') && !ctx.Fs.Exists(abs) && (a.Has('e') || ctx.Name == "realpath" || !ctx.Fs.IsDirectory(VirtualFileSystem.GetParent(abs))))
-                { ctx.Stderr.WriteLine($"{ctx.Name}: {Builtins.Quote(p)}: {ctx.Fs.WhyMissing(abs)}"); code = 1; continue; }
-                ctx.Stdout.WriteLine(abs);
+                string? result, why;
+                if (plain)
+                    try { result = fs.ReadLink(abs); why = null; }
+                    catch (ShellException e) { result = null; why = Reason(e); }
+                else if (!readlink && a.Has('s')) { result = VirtualFileSystem.Normalize(ctx.Shell.Cwd, p); why = null; } // -s: no links resolved
+                else result = fs.RealPath(abs, out why, existing: a.Has('e')) ?? (a.Has('m') ? abs : null);
+                if (result == null) { if (report) ctx.Stderr.WriteLine($"{ctx.Name}: {Builtins.Quote(p)}: {why}"); code = 1; continue; }
+                ctx.Stdout.Write(result + end);
             }
             return Task.FromResult(code);
         };
@@ -676,11 +686,13 @@ internal static partial class Builtins
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.Exists(abs)) { ctx.Stderr.WriteLine($"stat: cannot statx '{p}': {ctx.Fs.WhyMissing(abs)}"); code = 1; continue; }
-                var st = ctx.Fs.Stat(abs);
-                var type = st.IsDirectory ? "directory" : st.Size == 0 ? "regular empty file" : "regular file";
+                bool follow = a.Has('L');
+                if (!ctx.Fs.Exists(abs, follow)) { ctx.Stderr.WriteLine($"stat: cannot statx '{p}': {ctx.Fs.WhyMissing(abs, follow)}"); code = 1; continue; }
+                var st = ctx.Fs.Stat(abs, follow);
+                var type = st.IsSymlink ? "symbolic link" : st.IsDirectory ? "directory" : st.Size == 0 ? "regular empty file" : "regular file";
+                var named = st.LinkTarget is { } target ? $"{QuoteAlways(p)} -> {QuoteAlways(target)}" : QuoteAlways(p);
                 var mode = Convert.ToString(st.Mode, 8).PadLeft(3, '0');
-                var rwx = VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode);
+                var rwx = VirtualFileSystem.FormatMode(st);
                 var owner = st.Owner;
                 var uid = owner == "root" ? "0" : "1000";
                 var mtime = st.Modified.ToString("yyyy-MM-dd HH:mm:ss.fffffff00 +0000", CultureInfo.InvariantCulture);
@@ -692,7 +704,7 @@ internal static partial class Builtins
                         if (fmt[i] != '%' || i + 1 >= fmt.Length) { sb.Append(fmt[i]); continue; }
                         sb.Append(fmt[++i] switch
                         {
-                            'n' => p, 's' => st.Size.ToString(), 'F' => type, 'a' => mode, 'A' => rwx, 'U' => owner, 'G' => owner,
+                            'n' => p, 'N' => named, 's' => st.Size.ToString(), 'F' => type, 'a' => mode, 'A' => rwx, 'U' => owner, 'G' => owner,
                             'u' => uid, 'g' => uid, 'y' => mtime, 'Y' => new DateTimeOffset(st.Modified).ToUnixTimeSeconds().ToString(),
                             'b' => st.Blocks.ToString(), 'B' => "512", 'h' => st.Links.ToString(), 'i' => (Math.Abs(abs.GetHashCode()) % 1000000).ToString(), '%' => "%",
                             var c => "%" + c,
@@ -702,7 +714,7 @@ internal static partial class Builtins
                     continue;
                 }
                 ctx.Stdout.Write(
-                    $"  File: {p}\n  Size: {st.Size,-10}\tBlocks: {st.Blocks,-10} IO Block: 4096   {type}\n" +
+                    $"  File: {p}{(st.IsSymlink ? " -> " + st.LinkTarget : "")}\n  Size: {st.Size,-10}\tBlocks: {st.Blocks,-10} IO Block: 4096   {type}\n" +
                     $"Access: ({mode.PadLeft(4, '0')}/{rwx})  Uid: ({uid,5}/{owner,8})   Gid: ({uid,5}/{owner,8})\n" +
                     $"Modify: {mtime}\nChange: {mtime}\n");
             }
@@ -719,9 +731,9 @@ internal static partial class Builtins
             int code = 0;
             long Walk(string abs, string display, int depth)
             {
-                if (!ctx.Fs.IsDirectory(abs))
+                if (!ctx.Fs.IsDirectory(abs, follow: false))
                 {
-                    long kb = (ctx.Fs.Stat(abs).Size + 4095) / 4096 * 4;
+                    long kb = ctx.Fs.Stat(abs, follow: false).Blocks / 2;
                     if (a.Has('a') && depth <= maxDepth || depth == 0) ctx.Stdout.WriteLine($"{Fmt(kb)}\t{display}");
                     return kb;
                 }
@@ -733,7 +745,7 @@ internal static partial class Builtins
             foreach (var p in a.Positional.DefaultIfEmpty("."))
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.Exists(abs)) { ctx.Stderr.WriteLine($"du: cannot access '{p}': No such file or directory"); code = 1; continue; }
+                if (!ctx.Fs.Exists(abs, follow: false)) { ctx.Stderr.WriteLine($"du: cannot access '{p}': No such file or directory"); code = 1; continue; }
                 total += Walk(abs, p, 0);
             }
             if (a.Has('c')) ctx.Stdout.WriteLine($"{Fmt(total)}\ttotal");

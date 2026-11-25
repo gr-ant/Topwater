@@ -10,11 +10,14 @@ public class ShellException(string message, int exitCode = 1) : Exception(messag
 public sealed class UsageException(string message) : ShellException(message, 1);
 
 /// <param name="Mode">Unix permission bits, e.g. 0x1ED (0755).</param>
-/// <param name="Links">Hard links: 1 for a file; 2 plus one per subdirectory for a directory, as on ext4.</param>
-public readonly record struct FileStat(bool IsDirectory, long Size, DateTime Modified, int Mode, string Owner, int Links = 1)
+/// <param name="Links">Hard links: 1 for a file (more after `ln`); 2 plus one per subdirectory for a directory, as on ext4.</param>
+/// <param name="LinkTarget">For a symbolic link (a stat that didn't follow it): the path it holds. Its Size is that path's length in bytes.</param>
+public readonly record struct FileStat(bool IsDirectory, long Size, DateTime Modified, int Mode, string Owner, int Links = 1, string? LinkTarget = null)
 {
+    public bool IsSymlink => LinkTarget != null;
+
     /// <summary>512-byte blocks in use, as `stat %b` and `ls -s` count them: whole 4 KiB filesystem blocks.</summary>
-    public long Blocks => (Size + 4095) / 4096 * 8;
+    public long Blocks => IsSymlink ? 0 : (Size + 4095) / 4096 * 8; // a short link lives in its inode: no blocks
 }
 
 /// <summary>
@@ -33,8 +36,10 @@ public sealed class VirtualFileSystem
         public DateTime Modified = DateTime.UtcNow;
         public string Owner = "root";
         public int Mode;
+        public int Nlink = 1; // names this file or link has (hard links); unused for directories
     }
     sealed class Dir : Node { public readonly SortedDictionary<string, Node> Children = new(StringComparer.Ordinal); }
+    sealed class LinkNode : Node { public string Target = ""; }
     sealed class FileNode : Node
     {
         string? _text = "";
@@ -104,7 +109,16 @@ public sealed class VirtualFileSystem
 
     internal const string NoSpace = "No space left on device";
 
-    static long TreeSize(Node n) => n is FileNode f ? f.Size : ((Dir)n).Children.Values.Sum(TreeSize);
+    static long TreeSize(Node n) => n switch { FileNode f => f.Size, Dir d => d.Children.Values.Sum(TreeSize), _ => 0 };
+
+    /// <summary>Drops one name of each node in a tree being removed; returns the bytes freed (a file goes with its last name).</summary>
+    static long Unlink(Node n) => n switch
+    {
+        Dir d => d.Children.Values.Sum(Unlink),
+        _ when --n.Nlink > 0 => 0,
+        FileNode f => f.Size,
+        _ => 0,
+    };
 
     // async-local, so the app's own calls stay unrestricted while an agent command is awaiting (and concurrent shells sharing
     // this filesystem don't see each other's user); commands the app registers run inside the agent's flow, as the agent
@@ -157,36 +171,82 @@ public sealed class VirtualFileSystem
         return new string(chars);
     }
 
-    Node? Find(string path) => Find(path, out _);
+    /// <summary>"lrwxrwxrwx" for a symbolic link, else as <see cref="FormatMode(bool, int)"/>.</summary>
+    public static string FormatMode(FileStat st) => st.IsSymlink ? "l" + FormatMode(false, st.Mode)[1..] : FormatMode(st.IsDirectory, st.Mode);
 
-    /// <summary>Walks <paramref name="path"/>; like Linux, each directory passed through needs search (x) permission,
-    /// else the result is null with <paramref name="why"/> saying why: "Permission denied", "Not a directory" (a file in
-    /// the middle of the path) or "No such file or directory".</summary>
-    Node? Find(string path, out string why)
+    /// <summary>Symbolic links followed in one lookup before it fails with <see cref="Loop"/>, as on Linux.</summary>
+    const int MaxLinkHops = 40;
+    internal const string Loop = "Too many levels of symbolic links";
+
+    /// <summary>Where a path leads: the directory holding (or that would hold) its last entry, that entry's name and node
+    /// (null if absent), and its physical path. Parent is null when the path can't be reached (Why says why), and for "/".</summary>
+    readonly record struct Spot(Dir? Parent, string Name, Node? Node, string Real, string Why);
+
+    /// <summary>Walks <paramref name="path"/>; like Linux, each directory passed through needs search (x) permission, symbolic
+    /// links in the middle are followed (a relative one from the directory holding it), and the last one only when
+    /// <paramref name="follow"/>. ".." goes up from where the walk really is. A loop fails after 40 links, never hangs.</summary>
+    Spot Walk(string path, bool follow = true)
     {
-        why = "No such file or directory";
         var user = User;
-        Node cur = _root;
-        foreach (var seg in Normalize("/", path).Split('/', StringSplitOptions.RemoveEmptyEntries))
+        var chain = new List<(string Name, Dir Dir)> { ("", _root) }; // the directories walked into, for ".." and the real path
+        var todo = new Stack<string>();
+        void Push(string p)
         {
-            if (cur is not Dir d) { why = "Not a directory"; return null; }
-            if (!Permits(d, user, 1)) { why = "Permission denied"; return null; }
-            if (!d.Children.TryGetValue(seg, out var next)) return null;
-            cur = next;
+            var segs = p.Split('/');
+            for (int i = segs.Length - 1; i >= 0; i--) todo.Push(segs[i]);
         }
-        return cur;
+        Push(path);
+        string Real(string name) => string.Concat(chain.Skip(1).Select(c => "/" + c.Name)) + "/" + name;
+        static Spot Fail(string why) => new(null, "", null, "", why);
+        int hops = 0;
+        bool onFile = false; // a file was reached with more of the path to go
+        while (todo.Count > 0)
+        {
+            var seg = todo.Pop();
+            if (onFile) return Fail("Not a directory");
+            if (seg is "" or ".") continue;
+            var dir = chain[^1].Dir;
+            if (!Permits(dir, user, 1)) return Fail("Permission denied");
+            if (seg == "..") { if (chain.Count > 1) chain.RemoveAt(chain.Count - 1); continue; }
+            bool final = todo.All(t => t is "" or "."), bare = todo.Count == 0; // bare: no trailing slash, which would mean a directory
+            if (!dir.Children.TryGetValue(seg, out var next))
+                return final ? new(bare ? dir : null, seg, null, Real(seg), "No such file or directory") : Fail("No such file or directory");
+            if (next is LinkNode link && (!bare || follow))
+            {
+                if (++hops > MaxLinkHops) return Fail(Loop);
+                if (link.Target.StartsWith('/')) chain.RemoveRange(1, chain.Count - 1);
+                Push(link.Target);
+                continue;
+            }
+            if (bare) return new(dir, seg, next, Real(seg), "");
+            if (next is Dir d) chain.Add((seg, d)); else onFile = true;
+        }
+        return chain.Count == 1 ? new(null, "/", _root, "/", "") : new(chain[^2].Dir, chain[^1].Name, chain[^1].Dir, Real("")[..^1], "");
     }
 
-    /// <summary>Why <paramref name="path"/> can't be reached: "Permission denied", "Not a directory" or "No such file or directory".</summary>
-    internal string WhyMissing(string path) => Find(path, out var why) == null ? why : "No such file or directory";
+    Node? Find(string path, bool follow = true) => Walk(path, follow).Node;
 
-    /// <summary>The directory an entry is created in, removed from or renamed in; it needs search permission too.</summary>
-    Dir ParentDir(string path)
+    Node? Find(string path, out string why, bool follow = true)
     {
-        var node = Find(GetParent(path), out var why);
-        if (node is Dir d) { Require(d, 1, path); return d; }
-        throw new ShellException($"{path}: {(node == null ? why : "Not a directory")}");
+        var spot = Walk(path, follow);
+        why = spot.Why is "" ? "No such file or directory" : spot.Why;
+        return spot.Node;
     }
+
+    /// <summary>Why <paramref name="path"/> can't be reached: "Permission denied", "Not a directory", "Too many levels of
+    /// symbolic links" or "No such file or directory".</summary>
+    internal string WhyMissing(string path, bool follow = true) => Find(path, out var why, follow) == null ? why : "No such file or directory";
+
+    /// <summary>Where an entry is created, removed or renamed: its directory (which needs search permission) and name. The last
+    /// name is not followed, so this is the link itself when it is one.</summary>
+    Spot Place(string path)
+    {
+        var spot = Walk(path, follow: false);
+        if (spot.Parent == null) throw new ShellException($"{path}: {(spot.Node != null ? "Device or resource busy" : spot.Why)}");
+        return spot;
+    }
+
+    Dir ParentDir(string path) => Place(path).Parent!;
 
     static bool Permits(Node n, string? user, int bits) => user == null || ((n.Mode >> (n.Owner == user ? 6 : 0)) & bits) == bits;
     bool Allowed(Node n, int bit) => Permits(n, User, bit);
@@ -203,19 +263,86 @@ public sealed class VirtualFileSystem
             throw new ShellException($"{path}: Operation not permitted");
     }
 
-    public bool Exists(string path) => Find(path) != null;
-    public bool IsDirectory(string path) => Find(path) is Dir;
-    public bool IsFile(string path) => Find(path) is FileNode;
+    /// <param name="follow">false: a symbolic link counts itself (lstat), even one whose target is missing.</param>
+    public bool Exists(string path, bool follow = true) => Find(path, follow) != null;
+    public bool IsDirectory(string path, bool follow = true) => Find(path, follow) is Dir;
+    public bool IsFile(string path, bool follow = true) => Find(path, follow) is FileNode;
+    public bool IsSymlink(string path) => Find(path, follow: false) is LinkNode;
     public bool CanRead(string path) => Find(path) is { } n && Allowed(n, 4);
     public bool CanWrite(string path) => Find(path) is { } n && Allowed(n, 2);
     public bool CanExecute(string path) => Find(path) is { } n && Allowed(n, 1);
 
-    public FileStat Stat(string path) => Find(path, out var why) switch
+    /// <summary>Whether two paths lead to the same file or directory (`test -ef`): through hard or symbolic links.</summary>
+    public bool SameFile(string a, string b) => Find(a) is { } n && ReferenceEquals(n, Find(b));
+
+    /// <param name="follow">false: a symbolic link's own status (lstat), with <see cref="FileStat.LinkTarget"/> set.</param>
+    public FileStat Stat(string path, bool follow = true) => Find(path, out var why, follow) switch
     {
         Dir d => new(true, 4096, d.Modified, d.Mode, d.Owner, 2 + d.Children.Values.Count(c => c is Dir)),
-        FileNode f => new(false, f.ReportedSize ?? f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
+        FileNode f => new(false, f.ReportedSize ?? f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner, f.Nlink),
+        LinkNode l => new(false, System.Text.Encoding.UTF8.GetByteCount(l.Target), l.Modified, l.Mode, l.Owner, l.Nlink, l.Target),
         _ => throw new ShellException($"{path}: {why}"),
     };
+
+    /// <summary>The path a symbolic link holds (`readlink`); "Invalid argument" for anything else.</summary>
+    public string ReadLink(string path) => Find(path, out var why, follow: false) switch
+    {
+        LinkNode l => l.Target,
+        null => throw new ShellException($"{path}: {why}"),
+        _ => throw new ShellException($"{path}: Invalid argument"),
+    };
+
+    /// <summary>The physical absolute path with every symbolic link resolved (`realpath`, `pwd -P`). With
+    /// <paramref name="existing"/> false the last name may be missing (`readlink -f`). Null, with <paramref name="why"/>,
+    /// when it can't be resolved.</summary>
+    public string? RealPath(string path, out string why, bool existing = true)
+    {
+        var spot = Walk(path);
+        why = spot.Why is "" ? "No such file or directory" : spot.Why;
+        return spot.Node != null || (!existing && spot.Parent != null) ? spot.Real : null;
+    }
+
+    /// <summary>Like <see cref="Normalize"/>, but ".." leaves where the path so far really is, after its symbolic links, as
+    /// the kernel resolves it (the shell's cwd itself stays logical, as bash keeps it).</summary>
+    public string NormalizePhysical(string cwd, string path)
+    {
+        var full = path.StartsWith('/') ? path : cwd.TrimEnd('/') + "/" + path;
+        if (!full.Split('/').Contains("..")) return Normalize("/", full);
+        var p = "/";
+        foreach (var seg in full.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (seg == ".") continue;
+            p = seg == ".." ? GetParent(RealPath(p, out _) ?? p) : p == "/" ? "/" + seg : p + "/" + seg;
+        }
+        return p;
+    }
+
+    /// <summary>Creates a symbolic link at <paramref name="path"/> holding <paramref name="target"/> (`ln -s`), which need not exist.</summary>
+    public void CreateSymlink(string path, string target)
+    {
+        if (target.Length == 0) throw new ShellException($"{path}: No such file or directory");
+        var spot = Place(path);
+        if (spot.Node != null) throw new ShellException($"{path}: File exists");
+        Require(spot.Parent!, 2, path);
+        spot.Parent!.Children[spot.Name] = new LinkNode { Target = target, Owner = RunAs ?? spot.Parent.Owner, Mode = 0x1FF, Modified = Clock() };
+        spot.Parent.Modified = Clock();
+    }
+
+    /// <summary>Gives <paramref name="existing"/> a second name, <paramref name="path"/> (`ln`). With <paramref name="follow"/>
+    /// false a symbolic link is linked itself. Like Linux with protected_hardlinks, the agent may only link files it owns or
+    /// can read and write.</summary>
+    public void CreateHardLink(string existing, string path, bool follow = false)
+    {
+        var node = Find(existing, out var why, follow) ?? throw new ShellException($"{existing}: {why}");
+        if (node is Dir) throw new ShellException($"{existing}: hard link not allowed for directory");
+        var spot = Place(path);
+        if (spot.Node != null) throw new ShellException($"{path}: File exists");
+        Require(spot.Parent!, 2, path);
+        if (Restricted && node.Owner != RunAs && !Allowed(node, 6)) throw new ShellException($"{path}: Operation not permitted");
+        node.Nlink++;
+        spot.Parent!.Children[spot.Name] = node;
+        spot.Parent.Modified = Clock();
+    }
 
     public string ReadAllText(string path) => ReadNode(path) is var f && f.Data == null ? f.Content : System.Text.Encoding.UTF8.GetString(f.Data);
 
@@ -255,9 +382,9 @@ public sealed class VirtualFileSystem
     {
         path = Normalize("/", path);
         if (path == "/dev/null" && Find(path) != null) return;
-        var dir = ParentDir(path);
-        var name = GetName(path);
-        if (dir.Children.TryGetValue(name, out var existing))
+        var spot = Walk(path); // through a symbolic link, even a dangling one: its target is written or created
+        var dir = spot.Parent ?? throw new ShellException($"{path}: {(spot.Node != null ? "Is a directory" : spot.Why)}");
+        if (spot.Node is { } existing)
         {
             if (existing is not FileNode f) throw new ShellException($"{path}: Is a directory");
             Require(f, 2, path);
@@ -269,7 +396,7 @@ public sealed class VirtualFileSystem
             Require(dir, 2, path);
             var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode, Modified = Clock() };
             file.Store(content, data, false, d => Reserve(d, path));
-            dir.Children[name] = file;
+            dir.Children[spot.Name] = file;
         }
         dir.Modified = Clock();
     }
@@ -287,9 +414,9 @@ public sealed class VirtualFileSystem
     }
 
     /// <summary>Sets a modification time (tar and unzip restoring one); as with utime(2), only the owner may.</summary>
-    internal void SetModifiedTime(string path, DateTime when)
+    internal void SetModifiedTime(string path, DateTime when, bool follow = true)
     {
-        var node = Find(path, out var why) ?? throw new ShellException($"{path}: {why}");
+        var node = Find(path, out var why, follow) ?? throw new ShellException($"{path}: {why}");
         if (Restricted && node.Owner != RunAs) throw new ShellException($"{path}: Operation not permitted");
         node.Modified = when;
     }
@@ -313,16 +440,16 @@ public sealed class VirtualFileSystem
     public void CreateDirectory(string path, bool parents = false)
     {
         path = Normalize("/", path);
-        if (Find(path) is { } existing)
+        if (Find(path, follow: false) != null) // a symbolic link counts, even a dangling one
         {
-            if (parents && existing is Dir) return;
+            if (parents && Find(path) is Dir) return;
             throw new ShellException($"cannot create directory '{path}': File exists");
         }
         if (parents && !Exists(GetParent(path))) CreateDirectory(GetParent(path), true);
-        var dir = ParentDir(path);
-        Require(dir, 2, path);
-        dir.Children[GetName(path)] = new Dir { Owner = RunAs ?? dir.Owner, Mode = DefaultDirMode, Modified = Clock() };
-        dir.Modified = Clock();
+        var spot = Place(path);
+        Require(spot.Parent!, 2, path);
+        spot.Parent!.Children[spot.Name] = new Dir { Owner = RunAs ?? spot.Parent.Owner, Mode = DefaultDirMode, Modified = Clock() };
+        spot.Parent.Modified = Clock();
     }
 
     /// <summary>Entry names in a directory, sorted ordinally.</summary>
@@ -331,23 +458,26 @@ public sealed class VirtualFileSystem
         switch (Find(path, out var why))
         {
             case Dir d: Require(d, 4, path); return d.Children.Keys.ToList();
-            case FileNode: throw new ShellException($"{path}: Not a directory");
-            default: throw new ShellException($"{path}: {why}");
+            case null: throw new ShellException($"{path}: {why}");
+            default: throw new ShellException($"{path}: Not a directory");
         }
     }
 
+    /// <summary>Removes an entry (a symbolic link itself, never what it leads to); <paramref name="recursive"/> for a
+    /// directory with entries, whose links are removed, not followed.</summary>
     public void Delete(string path, bool recursive = false)
     {
         path = Normalize("/", path);
         if (path == "/") throw new ShellException("it is dangerous to operate recursively on '/'");
-        var node = Find(path, out var why) ?? throw new ShellException($"{path}: {why}");
+        var node = Find(path, out var why, follow: false) ?? throw new ShellException($"{path}: {why}");
         if (node is Dir d && d.Children.Count > 0 && !recursive) throw new ShellException($"{path}: Directory not empty");
-        var parent = ParentDir(path);
+        var spot = Place(path);
+        var parent = spot.Parent!;
         if (node is Dir tree) RequireTreeRemovable(tree, path);
         Require(parent, 2, path);
         RequireNotSticky(parent, node, path);
-        parent.Children.Remove(GetName(path));
-        UsedBytes -= TreeSize(node);
+        parent.Children.Remove(spot.Name);
+        UsedBytes -= Unlink(node);
     }
 
     // shortcut: all or nothing, naming the first entry that can't go; real rm -r removes what it can.
@@ -368,29 +498,47 @@ public sealed class VirtualFileSystem
     public void Copy(string source, string dest) => Copy(source, dest, (p, _) => throw new ShellException($"{p}: Permission denied"));
 
     /// <summary>Like `cp -r`: entries the user can't read are skipped and passed to <paramref name="denied"/> (path, is directory).</summary>
-    internal void Copy(string source, string dest, Action<string, bool> denied)
+    /// <param name="followTop">Copy what <paramref name="source"/> leads to when it is a symbolic link (cp without -r, or -H),
+    /// rather than the link.</param>
+    /// <param name="followAll">Copy what every symbolic link in the tree leads to (cp -L); a link back into a directory being
+    /// copied goes to <paramref name="broken"/> as "cyclic", one leading nowhere with its reason.</param>
+    /// <param name="broken">(path, reason) for a link -L can't copy; null to throw.</param>
+    internal void Copy(string source, string dest, Action<string, bool> denied, bool followTop = true, bool followAll = false, Action<string, string>? broken = null)
     {
         source = Normalize("/", source);
-        var node = Find(source, out var why) ?? throw new ShellException($"{source}: {why}");
+        var node = Find(source, out var why, followTop || followAll) ?? throw new ShellException($"{source}: {why}");
         dest = Normalize("/", dest);
-        if (node is Dir && (dest + "/").StartsWith(source + "/"))
+        var place = Place(dest);
+        if (node is Dir && (place.Real + "/").StartsWith(RealPath(source, out _) + "/"))
             throw new ShellException($"cannot copy a directory, '{source}', into itself, '{dest}'");
-        var target = Find(dest);
-        if (target is Dir && node is FileNode) throw new ShellException($"{dest}: Is a directory");
-        var parent = ParentDir(dest);
+        var target = place.Node is LinkNode ? Find(dest) : place.Node; // a file is copied through a link onto its target
+        if (target is Dir && node is not Dir) throw new ShellException($"{dest}: Is a directory");
+        var parent = place.Parent!;
         if (target != null) Require(target, 2, dest); else Require(parent, 2, dest);
         var user = User;
+        var copying = new HashSet<Dir>(ReferenceEqualityComparer.Instance); // directories on the way down, so -L can't loop
+        broken ??= (p, reason) => throw new ShellException($"{p}: {reason}");
         Node? Clone(Node n, string path)
         {
+            if (n is LinkNode l)
+            {
+                if (!followAll) return new LinkNode { Target = l.Target, Owner = RunAs ?? parent.Owner, Mode = l.Mode, Modified = Clock() };
+                if (Find(path, out var reason) is not { } to) { broken(path, reason); return null; }
+                if (to is Dir td && copying.Contains(td)) { broken(path, "cyclic"); return null; }
+                n = to;
+            }
             if (!Permits(n, user, n is Dir ? 5 : 4))
             {
                 denied(path, n is Dir);
                 return null;
             }
             if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode, Modified = Clock() };
+            var dir = (Dir)n;
             var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode, Modified = Clock() };
-            foreach (var (k, v) in ((Dir)n).Children)
+            copying.Add(dir);
+            foreach (var (k, v) in dir.Children)
                 if (Clone(v, path + "/" + k) is { } c) copy.Children[k] = c;
+            copying.Remove(dir);
             return copy;
         }
         if (Clone(node, source) is not { } clone) return;
@@ -398,79 +546,119 @@ public sealed class VirtualFileSystem
         if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = Clock(); }
         else
         {
-            Reserve(TreeSize(clone) - (target == null ? 0 : TreeSize(target)), dest);
-            parent.Children[GetName(dest)] = clone;
+            var old = place.Node;
+            long oldSize = old == null ? 0 : TreeSize(old);
+            Reserve(TreeSize(clone) - oldSize, dest);
+            if (old != null) UsedBytes += oldSize - Unlink(old);
+            parent.Children[place.Name] = clone;
         }
     }
 
+    /// <summary>Renames an entry; a symbolic link is moved itself, and a link at <paramref name="dest"/> is replaced, not followed.</summary>
     public void Move(string source, string dest)
     {
         source = Normalize("/", source);
         dest = Normalize("/", dest);
-        var node = Find(source, out var why) ?? throw new ShellException($"{source}: {why}");
-        if ((dest + "/").StartsWith(source + "/")) throw new ShellException($"cannot move '{source}' to a subdirectory of itself, '{dest}'");
-        var existing = Find(dest);
+        var node = Find(source, out var why, follow: false) ?? throw new ShellException($"{source}: {why}");
+        var from = Place(source);
+        var to = Place(dest);
+        // by real paths: through a link, a directory could otherwise be moved into itself and cut off from the tree
+        if ((to.Real + "/").StartsWith(from.Real + "/")) throw new ShellException($"cannot move '{source}' to a subdirectory of itself, '{dest}'");
+        var existing = to.Node;
         if (existing is Dir) throw new ShellException($"{dest}: Is a directory");
-        var target = ParentDir(dest);
-        var from = ParentDir(source);
-        Require(from, 2, source);
+        if (ReferenceEquals(existing, node)) return; // two hard links of one file: rename(2) leaves both
+        var target = to.Parent!;
+        Require(from.Parent!, 2, source);
         Require(target, 2, dest);
-        if (node is Dir && from != target) Require(node, 2, source); // its ".." entry changes
-        RequireNotSticky(from, node, source);
+        if (node is Dir && from.Parent != target) Require(node, 2, source); // its ".." entry changes
+        RequireNotSticky(from.Parent!, node, source);
         if (existing != null) RequireNotSticky(target, existing, dest);
-        from.Children.Remove(GetName(source));
-        if (existing != null) UsedBytes -= TreeSize(existing);
-        target.Children[GetName(dest)] = node;
+        from.Parent!.Children.Remove(from.Name);
+        if (existing != null) UsedBytes -= Unlink(existing);
+        target.Children[to.Name] = node;
     }
 
     // ---------- snapshots ----------
 
-    /// <summary>One entry as a snapshot sees it: a directory, or a file holding <paramref name="Text"/> or (binary) <paramref name="Data"/>.</summary>
-    internal readonly record struct Entry(string Path, bool IsDirectory, int Mode, string Owner, DateTime Modified, string? Text = null, byte[]? Data = null, long? ReportedSize = null);
+    /// <summary>One entry as a snapshot sees it: a directory, a file holding <paramref name="Text"/> or (binary) <paramref name="Data"/>,
+    /// or a symbolic link holding <paramref name="LinkTarget"/>. <paramref name="HardLink"/>: an earlier entry's path that this
+    /// one is another name of (the entry still carries the content).</summary>
+    internal readonly record struct Entry(string Path, bool IsDirectory, int Mode, string Owner, DateTime Modified, string? Text = null, byte[]? Data = null,
+        long? ReportedSize = null, string? LinkTarget = null, string? HardLink = null);
 
     /// <summary>A detached copy of the tree. Contents (strings and byte arrays, never changed in place) are shared, not copied.</summary>
-    internal VirtualFileSystem Clone() => new() { _root = (Dir)CloneNode(_root), UsedBytes = UsedBytes, Capacity = Capacity };
+    internal VirtualFileSystem Clone() => new() { _root = (Dir)CloneNode(_root, new(ReferenceEqualityComparer.Instance)), UsedBytes = UsedBytes, Capacity = Capacity };
 
     /// <summary>Replaces this tree with a copy of <paramref name="source"/>'s, keeping <see cref="Capacity"/>.</summary>
     internal void ReplaceWith(VirtualFileSystem source)
     {
-        _root = (Dir)CloneNode(source._root);
+        _root = (Dir)CloneNode(source._root, new(ReferenceEqualityComparer.Instance));
         UsedBytes = source.UsedBytes;
     }
 
-    static Node CloneNode(Node n)
+    /// <param name="copies">Nodes with several names already copied, so hard links stay one node.</param>
+    static Node CloneNode(Node n, Dictionary<Node, Node> copies)
     {
-        if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, ReportedSize = f.ReportedSize, Size = f.Size, Mode = f.Mode, Owner = f.Owner, Modified = f.Modified };
-        var d = new Dir { Mode = n.Mode, Owner = n.Owner, Modified = n.Modified };
-        foreach (var (name, child) in ((Dir)n).Children) d.Children.Add(name, CloneNode(child));
-        return d;
+        if (n.Nlink > 1 && copies.TryGetValue(n, out var done)) return done;
+        Node copy = n switch
+        {
+            FileNode f => new FileNode { Content = f.Content, Data = f.Data, ReportedSize = f.ReportedSize, Size = f.Size },
+            LinkNode l => new LinkNode { Target = l.Target },
+            _ => new Dir(),
+        };
+        (copy.Mode, copy.Owner, copy.Modified, copy.Nlink) = (n.Mode, n.Owner, n.Modified, n.Nlink);
+        if (n.Nlink > 1) copies[n] = copy;
+        if (n is Dir d) foreach (var (name, child) in d.Children) ((Dir)copy).Children.Add(name, CloneNode(child, copies));
+        return copy;
     }
 
     /// <summary>Every entry, parents before children, "/" first.</summary>
     internal IEnumerable<Entry> Entries()
     {
+        var first = new Dictionary<Node, string>(ReferenceEqualityComparer.Instance); // where each hard-linked node was seen first
         var stack = new Stack<(string Path, Node Node)>();
         stack.Push(("/", _root));
         while (stack.Count > 0)
         {
             var (path, n) = stack.Pop();
-            if (n is FileNode f) { yield return new(path, false, f.Mode, f.Owner, f.Modified, f.Data == null ? f.Content : null, f.Data, f.ReportedSize); continue; }
+            string? hard = null;
+            if (n.Nlink > 1 && !first.TryAdd(n, path)) hard = first[n];
+            if (n is FileNode f) { yield return new(path, false, f.Mode, f.Owner, f.Modified, f.Data == null ? f.Content : null, f.Data, f.ReportedSize, HardLink: hard); continue; }
+            if (n is LinkNode l) { yield return new(path, false, l.Mode, l.Owner, l.Modified, LinkTarget: l.Target, HardLink: hard); continue; }
             yield return new(path, true, n.Mode, n.Owner, n.Modified);
             foreach (var (name, child) in ((Dir)n).Children.Reverse()) stack.Push((path == "/" ? "/" + name : path + "/" + name, child));
         }
     }
 
-    /// <summary>Adds a snapshot entry ("/" sets the root's attributes). Its parent must already be a directory and the name free.</summary>
+    /// <summary>Adds a snapshot entry ("/" sets the root's attributes). Its parent must already be a directory, reached without
+    /// symbolic links (so an entry can't land anywhere but its own path), and the name free.</summary>
     internal void Put(Entry e)
     {
         if (e.Path == "/" && !e.IsDirectory) throw new ShellException("/: Not a directory");
+        if (e.LinkTarget is { } t && (t.Length is 0 or > 4096 || t.Contains('\0'))) throw new ShellException($"{e.Path}: bad link target");
+        Node? Plain(string path)
+        {
+            Node cur = _root;
+            foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                if (cur is not Dir d || !d.Children.TryGetValue(seg, out cur!)) return null;
+            return cur;
+        }
+        if (e.HardLink != null)
+        {
+            if (Plain(e.HardLink) is not { } same || same is Dir) throw new ShellException($"{e.Path}: hard link to {e.HardLink}, which is not an earlier file");
+            if (Plain(GetParent(e.Path)) is not Dir dir) throw new ShellException($"{e.Path}: parent is not a directory");
+            if (!dir.Children.TryAdd(GetName(e.Path), same)) throw new ShellException($"{e.Path}: File exists");
+            same.Nlink++;
+            return;
+        }
         Node node = e.IsDirectory ? (e.Path == "/" ? _root : new Dir())
+            : e.LinkTarget != null ? new LinkNode { Target = e.LinkTarget }
             : new FileNode { Content = e.Text ?? "", Data = e.Data, ReportedSize = e.ReportedSize, Size = e.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(e.Text ?? "") };
         node.Mode = e.Mode;
         node.Owner = e.Owner;
         node.Modified = e.Modified;
         if (e.Path == "/") return;
-        if (Find(GetParent(e.Path)) is not Dir parent) throw new ShellException($"{e.Path}: parent is not a directory");
+        if (Plain(GetParent(e.Path)) is not Dir parent) throw new ShellException($"{e.Path}: parent is not a directory");
         if (!parent.Children.TryAdd(GetName(e.Path), node)) throw new ShellException($"{e.Path}: File exists");
         UsedBytes += TreeSize(node);
     }

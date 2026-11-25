@@ -380,7 +380,8 @@ public sealed partial class Shell
         }
     }
 
-    public string ResolvePath(string path) => VirtualFileSystem.Normalize(_cwd, path);
+    /// <summary>An absolute path for <paramref name="path"/> from the cwd; ".." goes up from where the path really is, past symbolic links, as the kernel resolves it.</summary>
+    public string ResolvePath(string path) => Fs.NormalizePhysical(_cwd, path);
 
     // ---------- registration ----------
 
@@ -2350,6 +2351,7 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
                 case ">": return string.CompareOrdinal(l, await shell.ExpandSingleAsync(right, io, ct)) > 0;
                 case "-nt": return Test.Newer(shell, l, await shell.ExpandSingleAsync(right, io, ct));
                 case "-ot": return Test.Newer(shell, await shell.ExpandSingleAsync(right, io, ct), l);
+                case "-ef": return shell.Fs.SameFile(shell.ResolvePath(l), shell.ResolvePath(await shell.ExpandSingleAsync(right, io, ct)));
                 default:
                     var a = Arith.Eval(shell, l);
                     var b = Arith.Eval(shell, await shell.ExpandSingleAsync(right, io, ct));
@@ -2633,7 +2635,7 @@ internal static class Glob
                         {
                             var child = VirtualFileSystem.Normalize(abs, name);
                             if (!dotglob && name.StartsWith('.')) continue;
-                            if (shell.Fs.IsDirectory(child)) queue.Enqueue((child, Join(display, name)));
+                            if (shell.Fs.IsDirectory(child, follow: false)) queue.Enqueue((child, Join(display, name))); // like bash, ** does not follow links
                             else if (last) next.Add((child, Join(display, name)));
                         }
                         if (last && !isBase) next.Add((abs, display));
@@ -2657,7 +2659,7 @@ internal static class Glob
                 {
                     var name = Unescape(seg);
                     var child = VirtualFileSystem.Normalize(abs, name);
-                    if (shell.Fs.Exists(child)) next.Add((child, Join(display, name)));
+                    if (shell.Fs.Exists(child, follow: false)) next.Add((child, Join(display, name)));
                 }
             }
             current = next;

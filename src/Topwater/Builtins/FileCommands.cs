@@ -77,19 +77,24 @@ internal static partial class Builtins
     /// <param name="widthFrom">More entries that count toward the widths: ls sizes the columns for its file operands
     /// over all operands, directories included.</param>
     static IEnumerable<string> LongEntries(CommandContext ctx, IEnumerable<(string Abs, string Name)> entries, bool human, IEnumerable<string>? widthFrom = null,
-        string? style = null, bool blocks = false)
+        string? style = null, bool blocks = false, bool follow = false, Func<FileStat, string>? classify = null)
     {
         var now = ctx.Fs.Clock();
         string Size(FileStat st) => human ? HumanSize(st.Size) : st.Size.ToString(CultureInfo.InvariantCulture);
-        var rows = entries.Select(e => (St: ctx.Fs.Stat(e.Abs), e.Name)).Select(r => (r.St, r.Name,
+        var rows = entries.Select(e => (St: ctx.Fs.Stat(e.Abs, follow), e.Name, e.Abs)).Select(r => (r.St, r.Name, r.Abs,
             Links: r.St.Links.ToString(CultureInfo.InvariantCulture), Size: Size(r.St))).ToList();
         if (rows.Count == 0) yield break;
-        var all = rows.Select(r => r.St).Concat((widthFrom ?? []).Select(ctx.Fs.Stat)).ToList();
+        var all = rows.Select(r => r.St).Concat((widthFrom ?? []).Select(p => ctx.Fs.Stat(p, follow))).ToList();
         int lw = all.Max(s => s.Links.ToString(CultureInfo.InvariantCulture).Length), ow = all.Max(s => s.Owner.Length), sw = all.Max(s => Size(s).Length);
         int bw = all.Max(s => BlockSize(s, human).Length);
         foreach (var r in rows)
+        {
+            // a link shows where it points; -F marks that target's type
+            var name = r.St.LinkTarget is { } t ? r.Name + " -> " + t + (classify != null && ctx.Fs.Exists(r.Abs) ? classify(ctx.Fs.Stat(r.Abs)) : "")
+                : r.Name + (classify?.Invoke(r.St) ?? "");
             yield return (blocks ? BlockSize(r.St, human).PadLeft(bw) + " " : "")
-                + $"{VirtualFileSystem.FormatMode(r.St.IsDirectory, r.St.Mode)} {r.Links.PadLeft(lw)} {r.St.Owner.PadRight(ow)} {r.St.Owner.PadRight(ow)} {r.Size.PadLeft(sw)} {LsDate(r.St.Modified, now, style)} {r.Name}";
+                + $"{VirtualFileSystem.FormatMode(r.St)} {r.Links.PadLeft(lw)} {r.St.Owner.PadRight(ow)} {r.St.Owner.PadRight(ow)} {r.Size.PadLeft(sw)} {LsDate(r.St.Modified, now, style)} {name}";
+        }
     }
 
     static string ShowNonprinting(string line) => string.Concat(line.Select(c =>
@@ -100,58 +105,81 @@ internal static partial class Builtins
         shell.Register("ls", ctx =>
         {
             // \u0001: --time-style=STYLE, \u0002: --full-time
-            var a = Args.Parse(ctx.Args, "alhA1dFrtRSZsk\u0002", "\u0001",
-                "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002");
+            var a = Args.Parse(ctx.Args, "alhA1dFrtRSZskLH\u0002", "\u0001",
+                "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002,dereference=L,dereference-command-line=H");
             var paths = a.Positional.Count > 0 ? a.Positional : ["."];
-            bool lng = a.Has('l') || a.Has('\u0002'), human = a.Has('h'), blocks = a.Has('s');
+            bool lng = a.Has('l') || a.Has('\u0002'), human = a.Has('h'), blocks = a.Has('s'), deref = a.Has('L');
             var style = a.Has('\u0002') ? "full-iso" : lng && a.Value('\u0001') is { } ts ? TimeStyle(ts) : null;
+            var fs = ctx.Fs;
             int code = 0;
-            void Show(IEnumerable<(string Abs, string Name)> entries, IEnumerable<string>? widthFrom = null)
+            // -F: what each kind of entry gets; a link itself gets @ (unless -L follows it)
+            string Classify(FileStat st) => st.IsDirectory ? "/" : st.IsSymlink ? "@" : (st.Mode & 0x49) != 0 ? "*" : "";
+            void Show(IEnumerable<(string Abs, string Name)> entries, bool follow, IEnumerable<string>? widthFrom = null)
             {
-                var named = entries.Select(e => (e.Abs, Name: e.Name + (a.Has('F') && ctx.Fs.IsDirectory(e.Abs) && e.Name is not "." and not ".." ? "/" : ""))).ToList();
-                if (lng) { WriteLines(ctx.Stdout, LongEntries(ctx, named, human, widthFrom, style, blocks)); return; }
+                var named = entries.Select(e => (e.Abs, Name: e.Name + (!lng && a.Has('F') && fs.Exists(e.Abs, follow) ? Classify(fs.Stat(e.Abs, follow)) : ""))).ToList();
+                if (lng) { WriteLines(ctx.Stdout, LongEntries(ctx, named, human, widthFrom, style, blocks, follow, a.Has('F') ? Classify : null)); return; }
                 if (!blocks) { WriteLines(ctx.Stdout, named.Select(e => e.Name)); return; }
-                var sizes = named.Select(e => BlockSize(ctx.Fs.Stat(e.Abs), human)).ToList();
+                var sizes = named.Select(e => BlockSize(fs.Stat(e.Abs, follow && fs.Exists(e.Abs)), human)).ToList();
                 int w = sizes.Select(x => x.Length).DefaultIfEmpty(0).Max();
                 WriteLines(ctx.Stdout, named.Select((e, k) => sizes[k].PadLeft(w) + " " + e.Name));
             }
+
+            // a link named on the command line is followed to a directory, unless -l, -d or -F shows the link itself
+            bool FollowOperand(string p) => deref || a.Has('H') || p.EndsWith('/') || !(lng || a.Has('d') || a.Has('F'));
+            bool Exists(string p) => fs.Exists(ctx.ResolvePath(p), deref || p.EndsWith('/'));
+            FileStat StatOf(string p) => fs.Stat(ctx.ResolvePath(p), deref || a.Has('H') || p.EndsWith('/'));
 
             // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
             List<string> Ordered(IEnumerable<string> ps)
             {
                 var list = ps.OrderBy(p => p, StringComparer.Ordinal).ToList();
-                if (a.Has('t')) list = list.OrderByDescending(p => ctx.Fs.Stat(ctx.ResolvePath(p)).Modified).ToList();
-                if (a.Has('S')) list = list.OrderByDescending(p => ctx.Fs.Stat(ctx.ResolvePath(p)).Size).ToList();
+                if (a.Has('t')) list = list.OrderByDescending(p => StatOf(p).Modified).ToList();
+                if (a.Has('S')) list = list.OrderByDescending(p => StatOf(p).Size).ToList();
                 if (a.Has('r')) list.Reverse();
                 return list;
             }
-            var files = Ordered(paths.Where(p => ctx.Fs.Exists(ctx.ResolvePath(p)) && (a.Has('d') || !ctx.Fs.IsDirectory(ctx.ResolvePath(p)))));
-            foreach (var p in paths.Where(p => !ctx.Fs.Exists(ctx.ResolvePath(p)))) { ctx.Stderr.WriteLine($"ls: cannot access '{p}': {ctx.Fs.WhyMissing(ctx.ResolvePath(p))}"); code = 2; }
-            Show(files.Select(f => (ctx.ResolvePath(f), f)), paths.Except(files).Select(ctx.ResolvePath).Where(ctx.Fs.Exists));
+            var files = Ordered(paths.Where(p => Exists(p) && (a.Has('d') || !fs.IsDirectory(ctx.ResolvePath(p), FollowOperand(p)))));
+            foreach (var p in paths.Where(p => !Exists(p))) { ctx.Stderr.WriteLine($"ls: cannot access '{p}': {fs.WhyMissing(ctx.ResolvePath(p), deref || p.EndsWith('/'))}"); code = 2; }
+            foreach (var group in files.GroupBy(p => deref || a.Has('H') || p.EndsWith('/')))
+                Show(group.Select(f => (ctx.ResolvePath(f), f)), group.Key, paths.Except(files).Where(Exists).Select(ctx.ResolvePath));
 
-            var dirs = Ordered(paths.Except(files).Where(p => ctx.Fs.IsDirectory(ctx.ResolvePath(p))));
+            var dirs = Ordered(paths.Except(files).Where(p => fs.IsDirectory(ctx.ResolvePath(p))));
             bool first = files.Count == 0;
+            var listed = new HashSet<string>(StringComparer.Ordinal); // real paths, so -RL stops at a link back up the tree
             void ListDir(string abs, string label)
             {
+                if (a.Has('R') && deref && !listed.Add(fs.RealPath(abs, out _) ?? abs))
+                {
+                    ctx.Stderr.WriteLine($"ls: {label}: not listing already-listed directory");
+                    code = 2;
+                    return;
+                }
                 if (paths.Count > 1 || a.Has('R')) ctx.Stdout.WriteLine((first ? "" : "\n") + label + ":");
                 first = false;
-                if (!ctx.Fs.CanRead(abs)) { ctx.Stderr.WriteLine($"ls: cannot open directory '{label}': Permission denied"); code = 2; return; }
-                var entries = ctx.Fs.List(abs).Where(n => a.Has('a') || a.Has('A') || !n.StartsWith('.')).ToList();
-                if (a.Has('t')) entries = entries.OrderByDescending(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Modified).ToList();
-                if (a.Has('S')) entries = entries.OrderByDescending(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Size).ToList();
+                if (!fs.CanRead(abs)) { ctx.Stderr.WriteLine($"ls: cannot open directory '{label}': Permission denied"); code = 2; return; }
+                var entries = fs.List(abs).Where(n => a.Has('a') || a.Has('A') || !n.StartsWith('.')).ToList();
+                if (deref)
+                    foreach (var n in entries.Where(n => !fs.Exists(VirtualFileSystem.Normalize(abs, n))).ToList())
+                    {
+                        // shortcut: GNU also lists such an entry as "l????????? ? ..."; it is left out
+                        if (lng) { ctx.Stderr.WriteLine($"ls: cannot access '{label.TrimEnd('/')}/{n}': {fs.WhyMissing(VirtualFileSystem.Normalize(abs, n))}"); code = 1; entries.Remove(n); }
+                    }
+                FileStat St(string n) => fs.Stat(VirtualFileSystem.Normalize(abs, n), deref && fs.Exists(VirtualFileSystem.Normalize(abs, n)));
+                if (a.Has('t')) entries = entries.OrderByDescending(n => St(n).Modified).ToList();
+                if (a.Has('S')) entries = entries.OrderByDescending(n => St(n).Size).ToList();
                 if (a.Has('a')) entries.InsertRange(0, [".", ".."]);
                 if (a.Has('r')) entries.Reverse();
                 if (lng || blocks)
                 {
-                    long kib = entries.Sum(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Blocks / 2);
+                    long kib = entries.Sum(n => St(n).Blocks / 2);
                     ctx.Stdout.WriteLine($"total {(human ? HumanSize(kib * 1024) : kib)}");
                 }
-                Show(entries.Select(n => (VirtualFileSystem.Normalize(abs, n), n)));
+                Show(entries.Select(n => (VirtualFileSystem.Normalize(abs, n), n)), deref);
                 if (!a.Has('R')) return;
                 foreach (var n in entries.Where(n => n is not "." and not ".."))
                 {
                     var child = VirtualFileSystem.Normalize(abs, n);
-                    if (ctx.Fs.IsDirectory(child)) ListDir(child, label.TrimEnd('/') + "/" + n);
+                    if (fs.IsDirectory(child, deref)) ListDir(child, label.TrimEnd('/') + "/" + n);
                 }
             }
             foreach (var d in dirs) ListDir(ctx.ResolvePath(d), d);
@@ -220,7 +248,7 @@ internal static partial class Builtins
                 var path = ctx.ResolvePath(p);
                 if (a.Has('c') && !ctx.Fs.Exists(path)) continue;
                 // an explicit time needs ownership, not write permission
-                try { if (when is { } w) { if (!ctx.Fs.Exists(path)) ctx.Fs.Touch(path); ctx.Fs.SetModifiedTime(path, w); } else ctx.Fs.Touch(path); }
+                try { if (a.Has('h') && ctx.Fs.IsSymlink(path)) ctx.Fs.SetModifiedTime(path, when ?? ctx.Fs.Clock(), follow: false); else if (when is { } w) { if (!ctx.Fs.Exists(path)) ctx.Fs.Touch(path); ctx.Fs.SetModifiedTime(path, w); } else ctx.Fs.Touch(path); }
                 catch (ShellException e) { ctx.Stderr.WriteLine($"touch: cannot touch {QuoteAlways(p)}: {Typed(e, p, path).Reason}"); code = 1; }
             }
             return code;
@@ -235,12 +263,12 @@ internal static partial class Builtins
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.Exists(abs))
+                if (!ctx.Fs.Exists(abs, follow: false))
                 {
-                    if (!a.Has('f') || ctx.Fs.WhyMissing(abs) != "No such file or directory") { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': {ctx.Fs.WhyMissing(abs)}"); code = 1; }
+                    if (!a.Has('f') || ctx.Fs.WhyMissing(abs, follow: false) != "No such file or directory") { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': {ctx.Fs.WhyMissing(abs, follow: false)}"); code = 1; }
                     continue;
                 }
-                if (ctx.Fs.IsDirectory(abs) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Is a directory"); code = 1; continue; }
+                if (ctx.Fs.IsDirectory(abs, follow: p.EndsWith('/')) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Is a directory"); code = 1; continue; }
                 try { ctx.Fs.Delete(abs, recursive); }
                 catch (ShellException e) { var (path, why) = Typed(e, p, abs); ctx.Stderr.WriteLine($"rm: cannot remove '{path}': {why}"); code = 1; }
             }
@@ -258,7 +286,7 @@ internal static partial class Builtins
                 for (var p = arg.TrimEnd('/'); p.Length > 0; p = a.Has('p') && p.LastIndexOf('/') is var i and > 0 ? p[..i].TrimEnd('/') : "")
                 {
                     var abs = ctx.ResolvePath(p);
-                    string? why = !ctx.Fs.IsDirectory(abs) ? (ctx.Fs.Exists(abs) ? "Not a directory" : ctx.Fs.WhyMissing(abs)) : null;
+                    string? why = !ctx.Fs.IsDirectory(abs, follow: false) ? (ctx.Fs.Exists(abs, follow: false) ? "Not a directory" : ctx.Fs.WhyMissing(abs)) : null;
                     if (why == null)
                         try { ctx.Fs.Delete(abs); if (a.Has('v')) ctx.Stdout.WriteLine($"rmdir: removing directory, {QuoteAlways(p)}"); }
                         catch (ShellException e) { why = Typed(e, p, abs).Reason; }
@@ -271,7 +299,9 @@ internal static partial class Builtins
         CommandHandler copyOrMove = ctx =>
         {
             bool move = ctx.Name == "mv";
-            var a = Args.Parse(ctx.Args, move ? "fvniZ" : "rRfvanpZ", longs: "recursive=r,force=f");
+            var a = Args.Parse(ctx.Args, move ? "fvniZ" : "rRfvanpZLPHd", longs: "recursive=r,force=f,dereference=L,no-dereference=P");
+            // cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
+            bool followTop = !move && !(a.Has('P') || a.Has('d') || a.Has('a')) && (a.Has('L') || a.Has('H') || !(a.Has('r') || a.Has('R')));
             if (a.Positional.Count < 2) throw new UsageException(a.Positional.Count == 0 ? "missing file operand" : $"missing destination file operand after {QuoteAlways(a.Positional[0])}");
             var sources = a.Positional.Take(a.Positional.Count - 1).ToList();
             var destArg = a.Positional[^1];
@@ -288,13 +318,17 @@ internal static partial class Builtins
             foreach (var s in sources)
             {
                 var src = ctx.ResolvePath(s);
-                if (!ctx.Fs.Exists(src)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot stat '{s}': {ctx.Fs.WhyMissing(src)}"); code = 1; continue; }
-                if (!move && ctx.Fs.IsDirectory(src) && !(a.Has('r') || a.Has('R') || a.Has('a')))
+                if (!ctx.Fs.Exists(src, followTop)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot stat '{s}': {ctx.Fs.WhyMissing(src, followTop)}"); code = 1; continue; }
+                if (!move && ctx.Fs.IsDirectory(src, followTop) && !(a.Has('r') || a.Has('R') || a.Has('a')))
                 { ctx.Stderr.WriteLine($"cp: -r not specified; omitting directory '{s}'"); code = 1; continue; }
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
+                if (target == src || !move && followTop && ctx.Fs.SameFile(src, target))
+                { ctx.Stderr.WriteLine($"{ctx.Name}: '{s}' and '{destArg}' are the same file"); code = 1; continue; }
+                if (!move && ctx.Fs.IsFile(src, followTop) && ctx.Fs.IsSymlink(target) && !ctx.Fs.Exists(target))
+                { ctx.Stderr.WriteLine($"cp: not writing through dangling symlink '{(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)}'"); code = 1; continue; }
                 if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data
                 var shown = destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg;
-                bool srcDir = ctx.Fs.IsDirectory(src);
+                bool srcDir = ctx.Fs.IsDirectory(src, followTop);
                 string? clash = target == src ? $"{QuoteAlways(s)} and {QuoteAlways(shown)} are the same file"
                     : srcDir && target.StartsWith(src + "/", StringComparison.Ordinal)
                         ? move ? $"cannot move {QuoteAlways(s)} to a subdirectory of itself, {QuoteAlways(shown)}"
@@ -321,7 +355,18 @@ internal static partial class Builtins
                         var p = Typed(new ShellException(abs + ": "), s, src).Path;
                         ctx.Stderr.WriteLine(dir ? $"cp: cannot access '{p}': Permission denied" : $"cp: cannot open '{p}' for reading: Permission denied");
                         code = 1;
+                    }, followTop, a.Has('L'), (abs, why) =>
+                    {
+                        var p = Typed(new ShellException(abs + ": "), s, src).Path;
+                        ctx.Stderr.WriteLine(why == "cyclic" ? $"cp: cannot copy cyclic symbolic link '{p}'" : $"cp: cannot stat '{p}': {why}");
+                        code = 1;
                     });
+                }
+                catch (ShellException e) when (e.Message.Contains(" into itself, ") || e.Message.Contains(" to a subdirectory of itself, "))
+                {
+                    ctx.Stderr.WriteLine(move ? $"mv: cannot move '{s}' to a subdirectory of itself, '{shown}'" : $"cp: cannot copy a directory, '{s}', into itself, '{shown}'");
+                    code = 1;
+                    continue;
                 }
                 catch (ShellException e) when (e.Message.EndsWith(VirtualFileSystem.NoSpace))
                 {
@@ -359,6 +404,68 @@ internal static partial class Builtins
         }
         shell.Register("mv", copyOrMove, "Move or rename files");
 
+        shell.Register("ln", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, "sfnvTrLPb", "t", "symbolic=s,force=f,no-dereference=n,no-target-directory=T,target-directory=t,verbose=v,relative=r,logical=L,physical=P");
+            var fs = ctx.Fs;
+            bool sym = a.Has('s');
+            var ops = a.Positional;
+            var into = a.Value('t');
+            if (into == null && !a.Has('T') && ops.Count > 1 && fs.IsDirectory(ctx.ResolvePath(ops[^1]), !a.Has('n')) || ops.Count > 2) into = ops[^1];
+            if (ops.Count == 0 || (ops.Count == 1 && a.Has('T') && into == null))
+                throw new UsageException(ops.Count == 0 ? "missing file operand" : $"missing destination file operand after {QuoteAlways(ops[0])}");
+            if (into != null && a.Value('t') == null) ops = ops.Take(ops.Count - 1).ToList();
+            if (into != null && !fs.IsDirectory(ctx.ResolvePath(into)))
+                throw new ShellException(a.Value('t') != null && !fs.Exists(ctx.ResolvePath(into)) ? $"failed to access {QuoteAlways(into)}: {fs.WhyMissing(ctx.ResolvePath(into))}"
+                    : fs.Exists(ctx.ResolvePath(into)) ? $"target {QuoteAlways(into)} is not a directory" : $"target {QuoteAlways(into)}: No such file or directory");
+            // (what the link points to, the link's name): `ln f` links into ".", `ln f d` into d when it is a directory
+            var pairs = into != null || ops.Count == 1
+                ? ops.Select(t => (t, (into == null ? "" : into.TrimEnd('/') + "/") + VirtualFileSystem.GetName(t))).ToList()
+                : [(ops[0], ops[1])];
+            int code = 0;
+            foreach (var (target, name) in pairs)
+            {
+                var shownName = into == null && ops.Count == 1 ? "./" + name : name;
+                var abs = ctx.ResolvePath(name);
+                var src = ctx.ResolvePath(target);
+                string Fail(string why, bool arrow = true) =>
+                    $"ln: failed to create {(sym ? "symbolic" : "hard")} link {QuoteAlways(shownName)}{(!arrow ? "" : sym ? (target.Length == 0 ? " -> ''" : "") : " => " + QuoteAlways(target))}: {why}";
+                try
+                {
+                    if (!sym && !fs.Exists(src, a.Has('L'))) { ctx.Stderr.WriteLine($"ln: failed to access {QuoteAlways(target)}: {fs.WhyMissing(src, a.Has('L'))}"); code = 1; continue; }
+                    if (!sym && fs.IsDirectory(src)) { ctx.Stderr.WriteLine($"ln: {target}: hard link not allowed for directory"); code = 1; continue; }
+                    if (fs.Exists(abs, follow: false))
+                    {
+                        if (!a.Has('f')) { ctx.Stderr.WriteLine(Fail("File exists", arrow: false)); code = 1; continue; }
+                        if (fs.IsDirectory(abs, follow: false)) { ctx.Stderr.WriteLine($"ln: {name}: cannot overwrite directory"); code = 1; continue; }
+                        if (fs.SameFile(abs, sym ? VirtualFileSystem.Normalize(VirtualFileSystem.GetParent(abs), target) : src))
+                        { ctx.Stderr.WriteLine($"ln: {QuoteAlways(target)} and {QuoteAlways(name)} are the same file"); code = 1; continue; }
+                        fs.Delete(abs);
+                    }
+                    if (!sym) fs.CreateHardLink(src, abs, a.Has('L'));
+                    else
+                    {
+                        var stored = target;
+                        if (a.Has('r') && target.Length > 0)
+                        {
+                            // -r: from the link's real directory to the target's real path
+                            var to = (fs.RealPath(src, out _, existing: false) ?? src).Split('/', StringSplitOptions.RemoveEmptyEntries);
+                            var dir = VirtualFileSystem.GetParent(abs);
+                            var from = (fs.RealPath(dir, out _) ?? dir).Split('/', StringSplitOptions.RemoveEmptyEntries);
+                            int common = 0;
+                            while (common < to.Length && common < from.Length && to[common] == from[common]) common++;
+                            stored = string.Join('/', Enumerable.Repeat("..", from.Length - common).Concat(to.Skip(common)));
+                            if (stored.Length == 0) stored = ".";
+                        }
+                        fs.CreateSymlink(abs, stored);
+                    }
+                    if (a.Has('v')) ctx.Stdout.WriteLine($"{QuoteAlways(shownName)} {(sym ? "->" : "=>")} {QuoteAlways(target)}");
+                }
+                catch (ShellException e) { ctx.Stderr.WriteLine(Fail(Reason(e), arrow: Reason(e) != "File exists")); code = 1; }
+            }
+            return code;
+        }, "Make links between files (-s symbolic, -f replace)");
+
         shell.Register("find", Find.RunAsync, "Search for files");
 
         shell.Register("tree", ctx =>
@@ -373,13 +480,13 @@ internal static partial class Builtins
             void Walk(string dir, string prefix, int depth)
             {
                 var entries = ctx.Fs.List(dir).Where(n => a.Has('a') || !n.StartsWith('.'))
-                    .Where(n => !a.Has('d') || ctx.Fs.IsDirectory(VirtualFileSystem.Normalize(dir, n))).ToList();
+                    .Where(n => !a.Has('d') || ctx.Fs.IsDirectory(VirtualFileSystem.Normalize(dir, n), follow: false)).ToList();
                 for (int i = 0; i < entries.Count; i++)
                 {
                     bool last = i == entries.Count - 1;
                     var child = VirtualFileSystem.Normalize(dir, entries[i]);
-                    sb.Append(prefix).Append(last ? "└── " : "├── ").Append(entries[i]).Append('\n');
-                    if (ctx.Fs.IsDirectory(child))
+                    sb.Append(prefix).Append(last ? "└── " : "├── ").Append(entries[i]).Append(ctx.Fs.IsSymlink(child) ? " -> " + ctx.Fs.ReadLink(child) : "").Append('\n');
+                    if (ctx.Fs.IsDirectory(child, follow: false))
                     {
                         dirs++;
                         if (depth < maxDepth) Walk(child, prefix + (last ? "    " : "│   "), depth + 1);

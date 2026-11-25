@@ -6,7 +6,8 @@ namespace Topwater;
 /// <summary>find with real expressions: ( ) ! -not -a -o, tests, and actions (-print -print0 -exec -delete).</summary>
 internal sealed class Find
 {
-    sealed record Entry(string Abs, string Name, string Display, int Depth, string Start);
+    /// <param name="Follow">Whether tests see what a symbolic link leads to (-L, or -H for a starting point) rather than the link.</param>
+    sealed record Entry(string Abs, string Name, string Display, int Depth, string Start, bool Follow);
     sealed class QuitSignal : Exception;
     delegate Task<bool> Pred(Entry e);
 
@@ -23,39 +24,55 @@ internal sealed class Find
 
     async Task<int> Run()
     {
-        var starts = _ctx.Args.TakeWhile(x => !x.StartsWith('-') && x != "!" && x != "(").ToList();
-        _args = _ctx.Args.Skip(starts.Count).ToList();
+        // -P (the default) never follows symbolic links, -H only those named as starting points, -L all of them
+        var options = _ctx.Args.TakeWhile(x => x is "-P" or "-H" or "-L").ToList();
+        char mode = options.LastOrDefault("-P")[1];
+        var starts = _ctx.Args.Skip(options.Count).TakeWhile(x => !x.StartsWith('-') && x != "!" && x != "(").ToList();
+        _args = _ctx.Args.Skip(options.Count + starts.Count).ToList();
         if (starts.Count == 0) starts.Add(".");
         Pred expr = _args.Count == 0 ? _ => Task.FromResult(true) : ParseOr();
         if (_p < _args.Count) throw new ShellException($"unexpected `{_args[_p]}'");
 
         int code = 0;
-        async Task Walk(string abs, string display, int depth, string start)
+        var fs = _ctx.Fs;
+        var above = new List<(string Real, string Display)>(); // directories being walked, so -L stops at a link back up
+        async Task Walk(string abs, string display, int depth, string start, bool follow)
         {
             _prune = false;
-            if (depth >= _minDepth && await expr(new Entry(abs, VirtualFileSystem.GetName(abs), display, depth, start)) && !_hasAction)
+            bool dir = fs.IsDirectory(abs, follow);
+            var real = dir && follow ? fs.RealPath(abs, out _) ?? abs : abs;
+            if (dir && follow && above.FirstOrDefault(a => a.Real == real) is { Display: { } loop })
+            {
+                _ctx.Stderr.WriteLine($"find: File system loop detected; {Builtins.QuoteL(display)} is part of the same file system loop as {Builtins.QuoteL(loop)}.");
+                code = 1;
+                return;
+            }
+            if (depth >= _minDepth && await expr(new Entry(abs, VirtualFileSystem.GetName(abs), display, depth, start, follow)) && !_hasAction)
                 _ctx.Stdout.WriteLine(display);
-            if (_prune || depth >= _maxDepth || !_ctx.Fs.IsDirectory(abs)) return;
+            if (_prune || depth >= _maxDepth || !dir) return;
             IReadOnlyList<string> names;
-            try { names = _ctx.Fs.List(abs); }
+            try { names = fs.List(abs); }
             catch (ShellException) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(display)}: Permission denied"); code = 1; return; }
+            above.Add((real, display));
             foreach (var name in names)
-                await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1, start);
+                await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1, start, mode == 'L');
+            above.RemoveAt(above.Count - 1);
         }
         try
         {
             foreach (var s in starts)
             {
                 var abs = _ctx.ResolvePath(s);
-                if (!_ctx.Fs.Exists(abs)) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(s)}: {_ctx.Fs.WhyMissing(abs)}"); code = 1; continue; }
-                await Walk(abs, s, 0, s);
+                bool follow = mode != 'P' || s.EndsWith('/');
+                if (!fs.Exists(abs, follow) && !fs.Exists(abs, follow: false)) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(s)}: {fs.WhyMissing(abs, follow)}"); code = 1; continue; }
+                await Walk(abs, s, 0, s, follow);
             }
         }
         catch (QuitSignal) { }
         foreach (var (cmd, paths) in _batches)
             if (paths.Count > 0 && await _ctx.InvokeAsync(cmd.SelectMany(x => x == "{}" ? paths : [x]).ToList()) != 0) code = 1;
         foreach (var path in _deletes.OrderByDescending(p => p.Length))
-            if (_ctx.Fs.Exists(path)) _ctx.Fs.Delete(path, recursive: true);
+            if (_ctx.Fs.Exists(path, follow: false)) _ctx.Fs.Delete(path, recursive: true);
         return code;
     }
 
@@ -114,12 +131,17 @@ internal sealed class Find
         ['F'] = "yyyy-MM-dd", ['+'] = "yyyy-MM-dd'+'HH:mm:ss'.0000000000'", ['a'] = "ddd", ['b'] = "MMM", ['y'] = "yy", ['D'] = "MM/dd/yy", ['R'] = "HH:mm",
     };
 
+    /// <summary>The entry's status: what a link leads to when following, unless it leads nowhere (then the link, as find -L does).</summary>
+    FileStat Stat(Entry e) => _ctx.Fs.Stat(e.Abs, e.Follow && _ctx.Fs.Exists(e.Abs));
+
+    static char Type(FileStat st) => st.IsSymlink ? 'l' : st.IsDirectory ? 'd' : 'f';
+
     static readonly Regex PrintfSpec = new(@"\G%([-+ #0]*)(\d*)(?:\.(\d+))?");
 
     /// <summary>find -printf: %p %f %h %P %s %d %y %m %M %u %g %k %t %T@ %Tk ... with optional width, plus \n \t \0 escapes.</summary>
     string Printf(string fmt, Entry e)
     {
-        var st = _ctx.Fs.Stat(e.Abs);
+        var st = Stat(e);
         var inv = CultureInfo.InvariantCulture;
         var sb = new System.Text.StringBuilder();
         int i = 0, n = fmt.Length;
@@ -160,11 +182,13 @@ internal sealed class Find
                     'H' => e.Start,
                     's' => st.Size.ToString(inv),
                     'd' => e.Depth.ToString(inv),
-                    'y' or 'Y' => st.IsDirectory ? "d" : "f",
+                    'y' => Type(st).ToString(),
+                    'Y' => Type(Stat(e with { Follow = true })).ToString(),
+                    'l' => st.LinkTarget ?? "",
                     'm' => Convert.ToString(st.Mode & 0xFFF, 8),
-                    'M' => VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode),
+                    'M' => VirtualFileSystem.FormatMode(st),
                     'u' or 'g' => st.Owner,
-                    'n' => "1",
+                    'n' => st.Links.ToString(inv),
                     'k' => ((st.Size + 4095) / 4096 * 4).ToString(inv),
                     'b' => ((st.Size + 4095) / 4096 * 8).ToString(inv),
                     _ => "%" + d,
@@ -199,11 +223,12 @@ internal sealed class Find
                 var re = new Regex("^(?:" + Arg() + ")$", RegexOptions.None, Shell.RegexTimeout);
                 return e => T(re.IsMatch(e.Display));
             }
-            case "-type":
+            case "-type" or "-xtype":
             {
                 var t = Arg();
-                if (t is not ("f" or "d" or "l")) throw new ShellException($"Unknown argument to -type: {t}");
-                return e => T(t != "l" && fs.IsDirectory(e.Abs) == (t == "d"));
+                if (t is not ("f" or "d" or "l")) throw new ShellException($"Unknown argument to {tok}: {t}");
+                // -xtype: the other view of a link (what it leads to under -P, the link itself under -L)
+                return e => T(Type(Stat(tok == "-type" ? e : e with { Follow = !e.Follow })) == t[0]);
             }
             case "-maxdepth": _maxDepth = int.Parse(Arg()); return _ => T(true);
             case "-mindepth": _minDepth = int.Parse(Arg()); return _ => T(true);
@@ -215,7 +240,7 @@ internal sealed class Find
                 double unit = tok == "-mmin" ? 1 : 1440;
                 return e =>
                 {
-                    var age = (fs.Clock() - fs.Stat(e.Abs).Modified).TotalMinutes / unit;
+                    var age = (fs.Clock() - Stat(e).Modified).TotalMinutes / unit;
                     return T(spec[0] == '-' ? age < n : spec[0] == '+' ? age > n : Math.Floor(age) == n);
                 };
             }
@@ -225,7 +250,7 @@ internal sealed class Find
                 var refAbs = _ctx.ResolvePath(reference);
                 if (!fs.Exists(refAbs)) throw new ShellException($"{Builtins.QuoteL(reference)}: {fs.WhyMissing(refAbs)}");
                 var refTime = fs.Stat(refAbs).Modified;
-                return e => T(fs.Stat(e.Abs).Modified > refTime);
+                return e => T(Stat(e).Modified > refTime);
             }
             case "-size":
             {
@@ -237,12 +262,12 @@ internal sealed class Find
                 long n = long.Parse(m.Groups[2].Value);
                 return e =>
                 {
-                    if (fs.IsDirectory(e.Abs)) return T(false);
-                    long size = (fs.Stat(e.Abs).Size + unit - 1) / unit;
+                    if (Stat(e).IsDirectory) return T(false);
+                    long size = (Stat(e).Size + unit - 1) / unit;
                     return T(m.Groups[1].Value == "+" ? size > n : m.Groups[1].Value == "-" ? size < n : size == n);
                 };
             }
-            case "-empty": return e => T(fs.IsDirectory(e.Abs) ? fs.List(e.Abs).Count == 0 : fs.Stat(e.Abs).Size == 0);
+            case "-empty": return e => T(Stat(e) is var st && st.IsDirectory ? fs.List(e.Abs).Count == 0 : !st.IsSymlink && st.Size == 0);
             case "-true": return _ => T(true);
             case "-false": return _ => T(false);
             case "-print":
