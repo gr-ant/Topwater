@@ -45,11 +45,10 @@ You send the model one tool definition instead of one per function, and it can p
 
 | | |
 |---|---|
-| **.NET 8+** | `dotnet add package Topwater --prerelease` (add `Topwater.Mcp` for MCP servers, `Topwater.AI` for Microsoft.Extensions.AI, `Topwater.Containers` for Docker) |
+| **.NET 8+** | `dotnet add package Topwater --prerelease` (add `Topwater.Mcp` for MCP servers, `Topwater.AI` for Microsoft.Extensions.AI). `Topwater.Containers` is not on NuGet yet: reference `src/Topwater.Containers` from a clone |
 | **Python 3.10+** | `pip install "git+https://github.com/gr-ant/Topwater#subdirectory=python"` (preview, not on PyPI yet) |
-| **TypeScript, Node 20+** | `git clone https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
-
-| **Command line and MCP server** | `dotnet tool install -g Topwater.Cli --prerelease` gives you `topwater` (a shell on the simulated machine) and `topwater mcp` |
+| **TypeScript, Node 22+** | `git clone https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
+| **Command line and MCP server** | not on NuGet yet; from a clone: `dotnet pack src/Topwater.Cli -o nupkg && dotnet tool install -g Topwater.Cli --add-source nupkg --prerelease` gives you `topwater` (a shell on the simulated machine) and `topwater mcp` |
 
 None of them has runtime dependencies in its core.
 
@@ -147,7 +146,7 @@ runs it under bubblewrap, where it can see only its private copy of the agent's 
 ## Try it
 
 ```bash
-topwater                                  # after dotnet tool install -g Topwater.Cli
+topwater                                  # after installing Topwater.Cli (see Install)
 dotnet run --project examples/McpShell    # a terminal on the simulated machine
 dotnet run --project examples/WebShell    # the same, as a web page on port 8765
 dotnet test                               # C#; also: cd python && python -m pytest, cd typescript && npm test

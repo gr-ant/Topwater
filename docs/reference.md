@@ -183,8 +183,10 @@ The model sees it as `shell-bash` (Semantic Kernel prefixes the plugin name), wi
 
 The `Topwater.Cli` package is a .NET global tool, `topwater`:
 
+Not on NuGet yet. From a clone of the repository:
+
 ```bash
-dotnet tool install -g Topwater.Cli --prerelease
+dotnet pack src/Topwater.Cli -o nupkg && dotnet tool install -g Topwater.Cli --add-source nupkg --prerelease
 topwater                                   # interactive shell
 topwater run "ls -la /etc | head"          # one command, exit code passed through
 topwater mcp --state ~/.topwater/m.zip     # MCP server over stdio, machine kept across restarts
@@ -503,8 +505,10 @@ The manifest's real paths, octal modes, owner names, UTC modification times, use
 
 The `Topwater.Containers` package moves a machine between Topwater and a real Docker container, in both directions.
 
+Not on NuGet yet. Reference the project from a clone of the repository:
+
 ```bash
-dotnet add package Topwater.Containers --prerelease
+dotnet add reference path/to/Topwater/src/Topwater.Containers/Topwater.Containers.csproj
 ```
 
 Two uses:
