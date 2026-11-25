@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Topwater demo</title>
+<meta name="description" content="Topwater is a simulated bash shell for LLM agents. This demo runs the TypeScript port entirely in your browser tab.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; connect-src 'none'; style-src 'self'; img-src 'self' blob: data:">
+<link rel="icon" href="brand/favicon_32.svg" type="image/svg+xml">
+<link rel="icon" href="brand/favicon_32.png" type="image/png">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="main.js"></script>
+</head>
+<body>
+<header>
+  <div>
+    <img class="lockup light" src="brand/topwater_lockup.svg" alt="Topwater" width="537" height="160">
+    <img class="lockup dark" src="brand/topwater_lockup_dark.svg" alt="" width="537" height="160">
+  </div>
+  <button id="theme" type="button" class="quiet" title="Switch colour theme">Theme: auto</button>
+</header>
+<main>
+  <section class="intro">
+    <p>Topwater gives an LLM agent one <code>bash</code> tool backed by a simulated Linux shell: an in-process interpreter, an in-memory Ubuntu-like filesystem with users and permissions, about 110 standard commands, and resource limits.</p>
+    <p>This page runs the TypeScript port entirely in your tab, in a Web Worker. Nothing you type or upload is sent anywhere: no model, no API keys, no server.</p>
+    <p><a href="https://github.com/gr-ant/Topwater">GitHub</a> · <a href="https://www.nuget.org/packages/Topwater">NuGet</a> (the .NET library: <code>dotnet add package Topwater --prerelease</code>)</p>
+    <details><summary>What doesn't work here</summary>
+      <p>No host programs or MCP servers (a browser has no processes). The <code>api</code> command could only reach CORS-enabled APIs and isn't set up in this demo.</p>
+    </details>
+  </section>
+  <div class="layout">
+    <section id="term" class="term" data-busy="false" aria-label="Terminal">
+      <div id="out" role="log" aria-live="polite" aria-label="Terminal output"></div>
+      <form id="form" class="line" autocomplete="off">
+        <label for="cmd" id="prompt" class="prompt">agent@topwater:~$</label>
+        <textarea id="cmd" rows="1" aria-label="Command" spellcheck="false" autocapitalize="off" autocorrect="off" autofocus></textarea>
+      </form>
+      <div class="drop" hidden>Drop files to upload to /home/agent</div>
+    </section>
+    <aside>
+      <section>
+        <h2>Try these</h2>
+        <ul id="examples"></ul>
+      </section>
+      <section>
+        <h2>Files</h2>
+        <div class="row">
+          <button id="upload" type="button">Upload files</button>
+          <button id="download" type="button">Download home (.tgz)</button>
+        </div>
+        <input id="file" type="file" multiple hidden>
+        <p class="note">You can also drop files onto the terminal. In the shell, <code>download FILE</code> saves any file to your computer.</p>
+      </section>
+    </aside>
+  </div>
+</main>
+</body>
+</html>
