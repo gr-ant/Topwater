@@ -66,7 +66,8 @@ shell.Fs.WriteAllText("/home/agent/notes.txt", "hello");
 string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");   // BashTool.Name, .Description, .InputSchemaJson
 ```
 
-With Microsoft.Extensions.AI, skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
+With Microsoft.Extensions.AI, skip the wiring: `options.Tools = [shell.AsAIFunction()]`. Semantic Kernel takes the same
+function: `kernel.Plugins.AddFromFunctions("shell", [shell.AsAIFunction().AsKernelFunction()])`.
 
 **Python**
 

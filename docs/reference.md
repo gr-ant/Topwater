@@ -160,6 +160,22 @@ description; the wording matters, so measure before you change it. Models may as
 through functions made from the same shell run one at a time, in arrival order. Calling `shell.RunAsync` yourself
 at the same time is not covered.
 
+### Semantic Kernel
+
+Semantic Kernel (1.4x and later) wraps any `AIFunction` as a kernel function, so the same function is a plugin with no
+extra package:
+
+```csharp
+using Microsoft.SemanticKernel;
+using Topwater.AI;
+
+kernel.Plugins.AddFromFunctions("shell", [shell.AsAIFunction().AsKernelFunction()]);
+var settings = new PromptExecutionSettings { FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() };
+var answer = await kernel.InvokePromptAsync("How many lines are in notes.txt?", new(settings));
+```
+
+The model sees it as `shell-bash` (Semantic Kernel prefixes the plugin name), with the same description and schema.
+
 ## Authenticated API calls
 
 The machine has no network. `RegisterApi` lets the agent call a few real HTTP APIs that you choose, with
