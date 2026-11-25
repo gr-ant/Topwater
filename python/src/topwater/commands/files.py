@@ -47,10 +47,16 @@ def _ls(ctx):
         if not ctx.fs.exists(ctx.resolve(p)):
             ctx.error(f"ls: cannot access '{p}': {ctx.fs.why_missing(ctx.resolve(p))}")
             code = 2
-    files = [p for p in paths if ctx.fs.exists(ctx.resolve(p)) and (a.has("d") or not ctx.fs.is_dir(ctx.resolve(p)))]
+    def ordered(ps):  # operands are listed like directory entries: byte order (C locale), or by -t / -S, reversed by -r
+        ps = sorted(ps, key=lambda p: p.encode("utf-8", "surrogateescape"))
+        if a.has("t"): ps = sorted(ps, key=lambda p: ctx.fs.stat(ctx.resolve(p)).modified, reverse=True)
+        if a.has("S"): ps = sorted(ps, key=lambda p: ctx.fs.stat(ctx.resolve(p)).size, reverse=True)
+        return ps[::-1] if a.has("r") else ps
+
+    files = ordered([p for p in paths if ctx.fs.exists(ctx.resolve(p)) and (a.has("d") or not ctx.fs.is_dir(ctx.resolve(p)))])
     for f in files:
         ctx.print(show(ctx.resolve(f), f))
-    dirs = [p for p in paths if p not in files and ctx.fs.is_dir(ctx.resolve(p))]
+    dirs = ordered([p for p in paths if p not in files and ctx.fs.is_dir(ctx.resolve(p))])
     first = [not files]
 
     def list_dir(path, label):

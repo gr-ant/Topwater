@@ -35,11 +35,20 @@ internal static partial class Builtins
             string Show(string abs, string name) =>
                 (lng ? LongEntry(ctx, abs, name, human) : name) + (a.Has('F') && ctx.Fs.IsDirectory(abs) && name is not "." and not ".." ? "/" : "");
 
-            var files = paths.Where(p => ctx.Fs.Exists(ctx.ResolvePath(p)) && (a.Has('d') || !ctx.Fs.IsDirectory(ctx.ResolvePath(p)))).ToList();
+            // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
+            List<string> Ordered(IEnumerable<string> ps)
+            {
+                var list = ps.OrderBy(p => p, StringComparer.Ordinal).ToList();
+                if (a.Has('t')) list = list.OrderByDescending(p => ctx.Fs.Stat(ctx.ResolvePath(p)).Modified).ToList();
+                if (a.Has('S')) list = list.OrderByDescending(p => ctx.Fs.Stat(ctx.ResolvePath(p)).Size).ToList();
+                if (a.Has('r')) list.Reverse();
+                return list;
+            }
+            var files = Ordered(paths.Where(p => ctx.Fs.Exists(ctx.ResolvePath(p)) && (a.Has('d') || !ctx.Fs.IsDirectory(ctx.ResolvePath(p)))));
             foreach (var p in paths.Where(p => !ctx.Fs.Exists(ctx.ResolvePath(p)))) { ctx.Stderr.WriteLine($"ls: cannot access '{p}': {ctx.Fs.WhyMissing(ctx.ResolvePath(p))}"); code = 2; }
             foreach (var f in files) ctx.Stdout.WriteLine(Show(ctx.ResolvePath(f), f));
 
-            var dirs = paths.Except(files).Where(p => ctx.Fs.IsDirectory(ctx.ResolvePath(p))).ToList();
+            var dirs = Ordered(paths.Except(files).Where(p => ctx.Fs.IsDirectory(ctx.ResolvePath(p))));
             bool first = files.Count == 0;
             void ListDir(string abs, string label)
             {

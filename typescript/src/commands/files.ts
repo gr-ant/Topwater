@@ -314,10 +314,17 @@ export function registerFiles(shell: Shell) {
     const show = (abs: string, name: string) =>
       (lng ? longEntry(ctx, abs, name, human) : name) + (a.has('F') && fs.isDirectory(abs) && name !== '.' && name !== '..' ? '/' : '');
     const exists = (p: string) => fs.exists(ctx.resolvePath(p));
-    const files = paths.filter(p => exists(p) && (a.has('d') || !fs.isDirectory(ctx.resolvePath(p)))).sort();
+    // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
+    const ordered = (ps: string[]) => {
+      let list = [...ps].sort();
+      if (a.has('t')) list = list.sort((x, y) => fs.stat(ctx.resolvePath(y)).modified - fs.stat(ctx.resolvePath(x)).modified);
+      if (a.has('S')) list = list.sort((x, y) => fs.stat(ctx.resolvePath(y)).size - fs.stat(ctx.resolvePath(x)).size);
+      return a.has('r') ? list.reverse() : list;
+    };
+    const files = ordered(paths.filter(p => exists(p) && (a.has('d') || !fs.isDirectory(ctx.resolvePath(p)))));
     for (const p of paths.filter(p => !exists(p))) { ctx.stderr.write(`ls: cannot access '${p}': ${fs.whyMissing(ctx.resolvePath(p))}\n`); code = 2; }
     for (const f of files) line(ctx, show(ctx.resolvePath(f), f));
-    const dirs = paths.filter(p => !files.includes(p) && fs.isDirectory(ctx.resolvePath(p))).sort();
+    const dirs = ordered(paths.filter(p => !files.includes(p) && fs.isDirectory(ctx.resolvePath(p))));
     let first = files.length === 0;
     const listDir = (abs: string, label: string) => {
       if (paths.length > 1 || a.has('R')) line(ctx, (first ? '' : '\n') + label + ':');

@@ -39,3 +39,6 @@
 {"id":"idioms-039","script":"declare -A m=([x]=1 [y]=2); for k in $(echo \"${!m[@]}\" | tr ' ' '\\n' | sort); do printf '%s=%s ' \"$k\" \"${m[$k]}\"; done; echo","stdout":"x=1 y=2 \n","exitCode":0,"quiet":true}
 {"id":"idioms-040","script":"f() { echo \"$#:$*\"; }; f \"${@}\"; set -- \"\" \"\"; f \"$@\"; f $@","stdout":"0:\n2: \n0:\n","exitCode":0,"quiet":true}
 {"id":"idioms-041","script":"x='a b'; arr=($x \"$x\"); echo ${#arr[@]}","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"idioms-042","script":"mkdir zeta alpha && touch beta.txt Cfile && ls -d zeta alpha beta.txt /tmp Cfile","stdout":"/tmp\nCfile\nalpha\nbeta.txt\nzeta\n","exitCode":0,"quiet":true}
+{"id":"idioms-043","script":"mkdir zeta alpha && touch beta.txt && ls -dr zeta alpha beta.txt /tmp","stdout":"zeta\nbeta.txt\nalpha\n/tmp\n","exitCode":0,"quiet":true}
+{"id":"idioms-044","script":"mkdir zeta alpha && touch beta.txt Cfile && ls zeta beta.txt alpha Cfile","stdout":"Cfile\nbeta.txt\n\nalpha:\n\nzeta:\n","exitCode":0,"quiet":true}
