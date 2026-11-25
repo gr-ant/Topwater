@@ -437,6 +437,18 @@ public sealed partial class Shell
 
     public async Task<ShellResult> RunAsync(string commandLine, CancellationToken cancellationToken = default)
     {
+        if (Recorder is not { } recorder) return await RunCallAsync(commandLine, cancellationToken);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await RunCallAsync(commandLine, cancellationToken);
+        recorder.Add(commandLine, result, watch.Elapsed);
+        return result;
+    }
+
+    /// <summary>The recording in progress (<see cref="StartRecording"/>), which every <see cref="RunAsync"/> call is added to.</summary>
+    public ShellRecorder? Recorder { get; internal set; }
+
+    async Task<ShellResult> RunCallAsync(string commandLine, CancellationToken cancellationToken)
+    {
         _history.Add(commandLine);
         var stdout = new CappedWriter(this);
         var stderr = new CappedWriter(this);

@@ -17,6 +17,7 @@ show their APIs and list what they don't have yet.
 - [Snapshots](#snapshots)
 - [Containers](#containers)
 - [Deterministic runs](#deterministic-runs)
+- [Recordings](#recordings)
 - [Limits and safety](#limits-and-safety)
 - [Not supported](#not-supported)
 
@@ -715,6 +716,148 @@ name and user, `/proc` contents, awk's `rand()` (seeded with 0, as in gawk), and
 and jq's object keys come out (insertion order, which depends only on the input). The per-call time limit
 (`MaxCallDuration`) still runs on real time, so a runaway loop is stopped either way. A snapshot of a deterministic
 shell carries the clock and the generator's state, so restoring it and running the same commands gives the same output.
+
+## Recordings
+
+A recording is a session you can replay anywhere: the options and starting machine, then every tool call with what it
+returned. Replay it on a fresh shell as a regression test, on another starting machine or Topwater version to see what
+changed, or on real bash in an Ubuntu container to see where the simulation differs from Linux.
+
+```csharp
+var shell = new Shell(new ShellOptions { StartTime = DateTimeOffset.Parse("2026-11-25T09:00:00Z"), RandomSeed = 1 });
+// ... write the task's files ...
+using var recorder = shell.StartRecording(new RecordingOptions
+{
+    Metadata = { ["model"] = "gemini-flash-latest", ["task"] = "Find every TODO" },
+    SnapshotEvery = 5,                       // a snapshot after every 5th call, for jumping to a turn
+});
+// run the agent: RunAsync, BashTool.ExecuteAsync and AsAIFunction calls are all recorded
+recorder.Stop();                             // before your own checks, which also go through RunAsync
+recorder.Save("runs/todo.jsonl");            // or Save(stream); Save(path, sidecarSnapshots: true)
+
+var recording = Recording.Load("runs/todo.jsonl");
+ReplayReport report = await recording.ReplayAsync(configure: s => s.Register(new OrderTools()));
+Console.WriteLine(report);                   // "replay on topwater 0.1.0-preview.1: 12/12 calls match"
+```
+
+`StartRecording` snapshots the machine as the recording's start; every `RunAsync` call after it is added until `Stop`.
+Only one recording runs per shell at a time. `recorder.SnapshotNow()` attaches a snapshot to the last call on demand.
+
+### Replaying
+
+`recording.ReplayAsync(target, options)` runs each recorded command on an `IReplayTarget` and compares stdout, stderr,
+exit code and trailer call by call. The `ReplayReport` lists the calls that ran, each with what came back and its
+`ReplayDifference`s (index, command, field, expected, actual). `Matches` says whether every call matched, and
+`ToString()` gives a summary pointing at the first differing line of each field.
+
+| Target | How |
+|---|---|
+| A fresh Topwater shell at the recording's start | `recording.ReplayAsync(options, configure)`. `configure` registers your app's commands; the report warns about any the recording used that the target lacks (`recording.AppCommands`). |
+| Another starting machine, or a shell you built | `new ShellTarget(recording.CreateShell(configure, start: otherSnapshot))`, or `new ShellTarget(anyShell)` |
+| Another Topwater version | load the same file in a build of that version and replay |
+| Real bash in Docker | `await DockerTarget.StartAsync(recording.Start)` from the `Topwater.Replay` package (below) |
+| Anything else | implement `IReplayTarget` (`Name`, `RunAsync(command)`, `DisposeAsync`) |
+
+`ReplayOptions`:
+
+- `Fields`: which of `Stdout`, `Stderr`, `ExitCode`, `Trailer` to compare (all by default).
+- `Normalize`: applied to both sides' text before comparing (default: exact). `ReplayNormalizers.Volatile` replaces
+  times and dates (ISO 8601, `date`, `ls -l`), epoch seconds, mktemp names, `time` durations and uptimes with
+  placeholders; `ReplayNormalizers.Whitespace` ignores line endings and trailing whitespace; `ReplayNormalizers.Chain`
+  combines them.
+- `StopAfter`: stop after this many differing calls. `OnCall`: called after each call, for progress output.
+
+A recording made with a virtual clock and a seed (`recording.IsDeterministic`) replays exactly on the same Topwater
+version. One made without them still replays, but needs `ReplayNormalizers.Volatile` for anything that prints the time.
+
+### The machine at any turn
+
+`await recording.ShellAtAsync(i)` gives a shell as it was right after call `i` (-1: before the first). It restores the
+nearest snapshot at or before `i` and runs the calls after it again, which is exact for a deterministic recording. A
+viewer that steps through a run turn by turn can use this, and `SnapshotEvery` bounds how much it re-runs.
+
+### Recordings as regression tests
+
+The `Topwater.Replay` package turns a recording file into a test. It works with any test framework: a mismatch throws
+`ReplayMismatchException` carrying the report.
+
+```csharp
+[Fact]
+public Task Todo_session_still_behaves() =>
+    Replay.AssertMatches("recordings/todo.jsonl", configure: s => s.Register(new OrderTools()));
+```
+
+A relative path is relative to the test's source file, so recordings sit next to the tests without being copied to
+the output folder. A deterministic recording is compared exactly; others with `ReplayNormalizers.Volatile`. When a
+change is intended, run the tests with `TOPWATER_RERECORD=1`: `AssertMatches` then rewrites each file with what this
+Topwater returns instead of comparing (header, metadata and start kept; snapshots retaken where there were some).
+Review the diff and commit it. `recording.RerecordAsync(target)` does the same in code.
+
+### Real bash in Docker
+
+`DockerTarget` (in `Topwater.Replay`, which starts processes; the core package never does) replays on real bash in a
+throwaway container:
+
+```csharp
+await using var linux = await DockerTarget.StartAsync(recording.Start, new DockerTargetOptions
+{
+    Image = "ubuntu:24.04",                    // the default
+    Packages = ["jq", "tree", "file", "bc"],   // added once and cached as a local image; [] uses the image as is
+    CallTimeout = TimeSpan.FromSeconds(30),    // a call past it is killed and returns 124
+});
+var report = await recording.ReplayAsync(linux, new ReplayOptions { Normalize = ReplayNormalizers.Volatile });
+```
+
+The container (no network unless `Network = true`) gets the snapshot's host name and user (uid 1000, in place of the
+image's `ubuntu`), the files a fresh Topwater machine doesn't have or has differently (with modes, owners and times;
+not `/proc`, `/dev` or the program stubs, which the image provides for real), the variables and the working
+directory. Each call runs as `bash -c` under that user; the working directory, variables and functions are saved after
+each call and restored before the next, so state carries over as in Topwater. Aliases and `set`/`shopt` options
+don't carry over. `DockerTarget.IsAvailableAsync()` tells tests whether to skip. It is a minimal docker-run and tar
+copy, meant to be swapped for the snapshot export in `Topwater.Containers`.
+
+### The file format
+
+A recording is a JSON Lines file (UTF-8, one JSON object per line, `\n` endings). JSON Lines because a run is a
+sequence of turns: each turn is one line, so a recording can be written as the agent goes and a crash leaves a valid
+prefix, a viewer can stream it turn by turn, `git diff` shows exactly which calls changed after a re-record, and `jq`
+and `grep` work on it. Snapshots are the [snapshot zip](#the-saved-format), base64-encoded inline by default so one
+file holds the whole run, or side-car zip files referenced by relative path (`Save(path, sidecarSnapshots: true)`
+writes them to `<name>.snapshots/`), which keeps the `.jsonl` small and its diffs readable.
+
+Line 1 is the header:
+
+```json
+{"format":"topwater-recording","version":1,"created":"2026-11-25T09:00:00.0000000Z","topwater":"0.1.0-preview.1+...",
+ "options":{"user":"agent","hostname":"topwater","startTime":"2026-11-25T09:00:00.0000000Z","randomSeed":1,
+            "maxLoopIterations":100000,"maxExtractBytes":67108864,"maxExtractEntries":100000,"maxCallDurationMs":120000,
+            "maxFileSystemBytes":134217728,"maxStringBytes":33554432},
+ "appCommands":["orders"],
+ "metadata":{"model":"gemini-flash-latest","task":"Find every TODO"},
+ "start":{"embedded":"UEsDBBQAAAAI..."}}
+```
+
+(shown wrapped; in the file it is one line)
+
+- `options` are the `ShellOptions` that shape behaviour. `startTime` and `randomSeed` are absent when not set.
+- `appCommands` (optional) are the registered commands that aren't built-ins; a replay target needs them.
+- `metadata` (optional) is free-form string pairs.
+- `start` is the machine before the first call: `{"embedded": "<base64 zip>"}` or `{"file": "<relative path>"}`.
+
+Every later line is one call, in order:
+
+```json
+{"index":0,"command":"grep -rn TODO ~/project","stdout":"...","stderr":"","exitCode":0,"elapsedMs":12.5,"trailer":"[stopped: ...]","snapshot":{"embedded":"..."}}
+```
+
+`trailer` (the note a safety limit adds) and `snapshot` (the machine right after this call) are present only when
+set. `elapsedMs` is wall time, kept for information and never compared. `index` counts from 0.
+
+Version rules: readers ignore fields they don't know, so later versions may add optional fields without changing
+`version`. A change that older readers would misread raises `version`; loading a newer version fails with
+`NotSupportedException`, and later Topwater versions keep reading version 1. Loading treats the file as untrusted:
+snapshots load under the default limits or the `ShellOptions` passed to `Load` (never limits the file names) with every check
+[`ShellSnapshot.Load`](#loading-untrusted-snapshots) makes, and side-car paths may not leave the recording's directory.
 
 ## Limits and safety
 

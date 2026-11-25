@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <PackageId>Topwater.Replay</PackageId>
+    <Description>Replay Topwater recordings as regression tests, or against real bash in an Ubuntu container (Docker) to find where the simulation differs from Linux.</Description>
+    <PackageTags>agents;llm;bash;shell;testing;replay;docker</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Topwater\Topwater.csproj" />
+  </ItemGroup>
+
+</Project>
