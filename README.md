@@ -187,12 +187,12 @@ never by host, and the model never sees the credential (`api get jira /issue/PRO
 
 | | .NET | Python | TypeScript |
 |---|---|---|---|
-| [Snapshots](docs/reference.md#snapshots): undo, save and load the machine | `shell.Snapshot()`, `Restore()`, `Fork()`, `Save()`, `Shell.Load()` | not yet | `ShellSnapshot.capture(shell)`, `save()`, `load()`, `restore()`; no fork |
+| [Snapshots](docs/reference.md#snapshots): undo, save and load the machine | `shell.Snapshot()`, `Restore()`, `Fork()`, `Save()`, `Shell.Load()` | `shell.snapshot()`, `restore()`, `fork()`, `save()`, `Shell.load()` | `ShellSnapshot.capture(shell)`, `save()`, `load()`, `restore()`; no fork |
 | [Deterministic runs](docs/reference.md#deterministic-runs): a virtual clock and a seed | `StartTime`, `RandomSeed` | not yet | `startTime`, `randomSeed` |
 | [Recordings](docs/reference.md#recordings): record a session and replay it | `shell.StartRecording()`, `Recording.Load()`, `ReplayAsync()`; as a test with `Replay.AssertMatches()` or on real bash with `DockerTarget` (`Topwater.Replay`) | not yet | `startRecording(shell)`, `Recording.load()`, `replay()` |
-| [Containers](docs/reference.md#containers): turn the machine into a real Docker image, and a container back into a machine | `snapshot.BuildImageAsync(...)`, `ContainerImport.FromContainerAsync(...)` (`Topwater.Containers`) | not yet | not yet |
+| [Containers](docs/reference.md#containers): turn the machine into a real Docker image, and a container back into a machine | `snapshot.BuildImageAsync(...)`, `ContainerImport.FromContainerAsync(...)` (`Topwater.Containers`) | `build_image(snapshot, ...)`, `from_container(...)` (`topwater.containers`) | not yet |
 
-Snapshot and recording files have one format: .NET and TypeScript read each other's.
+Snapshot and recording files have one format: .NET and TypeScript read each other's, and Python reads and writes the same snapshots.
 
 ## What is in the machine
 

@@ -64,12 +64,34 @@ text = topwater.convert.to_markdown(data, "report.xlsx")
 
 from topwater.host import bubblewrap, register_host_command   # real host programs
 git = register_host_command(shell, "git", launcher=bubblewrap(network=True))   # git.close() removes its folder
+
+from topwater import ShellSnapshot                    # snapshots, in the C# zip format: either port loads the other's
+before = shell.snapshot(); shell.run("rm -rf src"); shell.restore(before)
+attempt = shell.fork()                                 # shares nothing mutable; registered handlers are shared
+shell.save("machine.zip")                              # a path or a binary file
+later = Shell.load("machine.zip")                      # built-ins only (also bytes or a file); Shell() kwargs set the limits
+shell.restore(ShellSnapshot.load("machine.zip", shell))   # or load into a shell you configured, with its limits
+
+from topwater import containers                        # host code only: no shell command reaches it
+ctx = containers.build_image(shell.snapshot(), "my-agent")   # docker build; print(ctx.report) for what didn't carry over
+containers.to_build_context(shell.snapshot()).write_to("build")   # or write_tar(f); pure, no process
+result = containers.from_container("web-1", containers.ImportOptions(paths=("/var/log", "/etc")))
+shell = Shell(result.snapshot.user); shell.restore(result.snapshot)
 ```
 
 Where Python differs from the reference:
 
-- Not ported yet: `bc` and snapshots (`Snapshot`/`Restore`/`Fork`/`Save`/`Load`). There is no Microsoft.Extensions.AI
-  equivalent; the plain tool definition works with any Python SDK's tool-calling loop.
+- Not ported yet: `bc`. There is no Microsoft.Extensions.AI equivalent; the plain tool definition works with any
+  Python SDK's tool-calling loop.
+- Snapshot load errors are `topwater.snapshot.SnapshotError` (a `ValueError`; C#'s `InvalidDataException`) and
+  `SnapshotVersionError` (C#'s `NotSupportedException`). This port has no virtual clock or random seed, so it writes no
+  `clock` or `random` and ignores them when loading (after checking them).
+- `topwater.containers` is synchronous (it shells out to the docker CLI, and an import runs `session.sh` with
+  `Shell.run`), so call it outside a running event loop. Names: `to_build_context`, `build_image`, `from_container`,
+  `from_image`, `from_tar(rootfs, ContainerConfig(user, working_dir, env), changes, options)`, `docker_available()`;
+  `ImportOptions(paths, include_binaries, restore_session, limits)` where `limits` is a dict of `Shell()` arguments.
+  Archive errors are `InvalidContainerData`, docker failures `ContainerError`. Beyond the C# checks, the export quotes
+  the account list in `setup.sh` and refuses a base image name with a line break.
 - `topwater.mcp` is a small standard-library client for servers spoken to over stdio; `mount_mcp` accepts any object
   with `list_tools()` and `call_tool(name, arguments)` returning MCP's dict shapes, so the official `mcp` SDK adapts in
   a few lines.
