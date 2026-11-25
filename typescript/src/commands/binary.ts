@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import type { Shell } from '../shell.js';
 import { Args, ShellError, inputBytes, type CommandContext } from '../command.js';
-import { decodeBytes } from '../bytes.js';
+import { decodeBytes, fromBase64, toBase64, toHex } from '../bytes.js';
+import { md5 } from '../md5.js';
 
 function num(s: string): number {
   const n = /^0x[0-9a-f]+$/i.test(s) ? parseInt(s.slice(2), 16) : /^-?\d+$/.test(s) ? parseInt(s, 10) : NaN;
@@ -24,7 +24,9 @@ function readAll(ctx: CommandContext, files: string[], onError: () => void): Uin
   return out;
 }
 
-const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
+const hex = toHex;
+const latin1 = (b: Uint8Array) => Array.from(b, c => String.fromCharCode(c)).join('');
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
 const printable = (c: Uint8Array) => Array.from(c, b => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
 
 /** [offset, chunk] per line; a null chunk is a "*" line where identical full lines repeat. */
@@ -33,7 +35,7 @@ function* lines(data: Uint8Array, width: number, squeeze: boolean): Generator<[n
   let starred = false;
   for (let i = 0; i < data.length; i += width) {
     const chunk = data.subarray(i, Math.min(i + width, data.length));
-    if (squeeze && prev && chunk.length === width && Buffer.compare(chunk, prev) === 0) {
+    if (squeeze && prev && chunk.length === width && sameBytes(chunk, prev)) {
       if (!starred) { starred = true; yield [i, null]; }
       continue;
     }
@@ -140,28 +142,31 @@ export function registerBinary(shell: Shell): void {
     let code = 0;
     const data = readAll(ctx, a.positional, () => code = 1);
     if (a.has('d')) {
-      let s = Buffer.from(data).toString('latin1');
+      let s = latin1(data);
       s = a.has('i') ? s.replace(/[^A-Za-z0-9+/=]/g, '') : s.replace(/\s/g, '');
       if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s)) throw new ShellError('invalid input');
-      ctx.stdout.write(decodeBytes(Buffer.from(s, 'base64')));
+      ctx.stdout.write(decodeBytes(fromBase64(s)));
       return code;
     }
     const w = a.value('w') ?? '76';
     if (!/^\d+$/.test(w)) throw new ShellError(`invalid wrap size: '${w}'`);
     const wrap = +w;
-    const enc = Buffer.from(data).toString('base64');
+    const enc = toBase64(data);
     ctx.stdout.write(wrap > 0 ? enc.replace(new RegExp(`.{1,${wrap}}`, 'g'), '$&\n') : enc + '\n');
     return code;
   }, 'Base64 encode/decode');
 
-  for (const [name, algo] of [['md5sum', 'md5'], ['sha1sum', 'sha1'], ['sha256sum', 'sha256'], ['sha512sum', 'sha512']]) {
-    shell.register(name, ctx => {
+  for (const [name, algo] of [['md5sum', 'md5'], ['sha1sum', 'SHA-1'], ['sha256sum', 'SHA-256'], ['sha512sum', 'SHA-512']]) {
+    shell.register(name, async ctx => {
       let code = 0;
       const files = ctx.args.filter(x => !x.startsWith('-') || x === '-');
       let out = '';
-      for (const [n, data] of inputBytes(ctx, files, () => code = 1)) out += `${createHash(algo).update(data).digest('hex')}  ${files.length === 0 ? '-' : n}\n`;
+      for (const [n, data] of inputBytes(ctx, files, () => code = 1)) {
+        const sum = algo === 'md5' ? md5(data) : toHex(new Uint8Array(await crypto.subtle.digest(algo, data as never)));
+        out += `${sum}  ${files.length === 0 ? '-' : n}\n`;
+      }
       ctx.stdout.write(out);
       return code;
-    }, `Compute ${algo.toUpperCase()} checksums`);
+    }, `Compute ${algo.replace('-', '').toUpperCase()} checksums`);
   }
 }
