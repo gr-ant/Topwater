@@ -17,6 +17,11 @@ export class DeadlineExceeded extends Error {
   constructor(public readonly owner: Deadline) { super('deadline exceeded'); }
 }
 
+/** A `sleep` reached the virtual deadline of an enclosing `timeout`; only that `timeout` catches it. */
+export class VirtualTimeout extends DeadlineExceeded {
+  constructor() { super({ at: -Infinity }); }
+}
+
 export interface Deadline { readonly at: number; readonly parent?: Deadline }
 
 /** What a command returns: an exit code (void means 0). */

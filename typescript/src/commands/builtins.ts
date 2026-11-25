@@ -363,7 +363,7 @@ export function registerBuiltins(shell: Shell) {
     if (args[0] === '--') args.shift();
     if (args.length === 0) throw new ShellError('usage: printf [-v var] format [arguments]', 2);
     const errors: string[] = [];
-    const text = printfFormat(args[0], args.slice(1), errors);
+    const text = printfFormat(args[0], args.slice(1), errors, () => ctx.shell.now());
     if (variable === undefined) ctx.stdout.write(text); else ctx.shell.setVar(variable, text);
     for (const e of errors) ctx.stderr.write(e + '\n');
     return errors.length > 0 ? 1 : 0;
@@ -1035,6 +1035,7 @@ export function registerBuiltins(shell: Shell) {
   reg('sleep', async ctx => {
     if (ctx.args.length === 0) throw new ShellError('missing operand');
     const total = ctx.args.reduce((t, a) => t + parseDuration(a), 0);
+    if (ctx.shell.virtualNow !== undefined) { ctx.shell.sleepVirtual(total); return; }
     const end = Date.now() + total;
     // sleeps really wait, up to the call's (or a `timeout`'s) deadline
     for (;;) {
@@ -1054,16 +1055,16 @@ export function registerBuiltins(shell: Shell) {
     const parent = sh.deadline;
     const own: Deadline = { at: Date.now() + parseDuration(args[0]), parent };
     sh.deadline = own;
-    try { return await sh.invoke(args.slice(1), ioOf(ctx)); } catch (e) {
+    try { return await sh.withVirtualTimeout(parseDuration(args[0]), () => sh.invoke(args.slice(1), ioOf(ctx))) ?? 124; } catch (e) {
       if (e instanceof DeadlineExceeded && e.owner === own) return 124;
       throw e;
     } finally { sh.deadline = parent; }
   }, 'Run a command with a time limit');
 
   reg('time', async ctx => {
-    const start = Date.now();
+    const start = ctx.shell.now();
     const code = ctx.args.length === 0 ? 0 : await ctx.shell.invoke([...ctx.args], ioOf(ctx));
-    const t = (Date.now() - start) / 1000;
+    const t = (ctx.shell.now() - start) / 1000;
     ctx.stderr.write(`\nreal\t${Math.floor(t / 60)}m${(t % 60).toFixed(3)}s\nuser\t0m0.000s\nsys\t0m0.000s\n`);
     return code;
   }, 'Time a command');
@@ -1092,7 +1093,7 @@ export function registerBuiltins(shell: Shell) {
   reg('date', ctx => {
     // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
     const a = Args.parse(ctx.args, 'uIR', 'dr', 'utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R');
-    let now = Date.now();
+    let now = ctx.shell.now();
     const d = a.value('d'), r = a.value('r');
     if (d !== undefined) now = parseDate(d, now);
     else if (r !== undefined) now = ctx.fs.stat(ctx.resolvePath(r)).modified;
@@ -1109,7 +1110,7 @@ export function registerBuiltins(shell: Shell) {
     line(ctx, a.has('u') || a.has('g') || a.has('G') ? (a.has('n') ? u : '1000') : `uid=1000(${u}) gid=1000(${u}) groups=1000(${u})`);
   }, 'Print user and group IDs');
   reg('uptime', ctx => line(ctx, ctx.args.includes('-p') ? 'up 3 days, 4 hours, 12 minutes'
-    : ` ${strftime(Date.now(), '%H:%M:%S')} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01`), 'Show how long the system has been running');
+    : ` ${strftime(ctx.shell.now(), '%H:%M:%S')} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01`), 'Show how long the system has been running');
   reg('free', ctx => ctx.stdout.write(ctx.args.some(x => x.includes('h'))
     ? '               total        used        free      shared  buff/cache   available\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nSwap:          2.0Gi          0B       2.0Gi\n'
     : '               total        used        free      shared  buff/cache   available\nMem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n'), 'Display memory usage');

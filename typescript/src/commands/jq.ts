@@ -645,7 +645,7 @@ fn0('rtrim', v => trimWhite(strArg('trimmed', v), false, true));
 fn0('explode', v => Array.from(strArg('exploded', v)).map(c => c.codePointAt(0)!));
 fn0('implode', v => implode(v));
 fn0('toarray', v => Array.isArray(v) ? v : [v]);
-fn0('now', () => Date.now() / 1000);
+fn0('now', (_v, I) => I.ctx.shell.now() / 1000);
 fn0('mktime', v => mktime(v));
 fn0('gmtime', v => gmtime(numArg(v)));
 fn0('localtime', v => gmtime(numArg(v)));

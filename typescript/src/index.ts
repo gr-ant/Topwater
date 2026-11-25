@@ -5,3 +5,5 @@ export { BashTool } from './tool.js';
 export { registerTools, mountMcp, type ToolSpec, type ToolResult, type ToolInvoker, type McpClientLike, type McpMountOptions } from './tools.js';
 export { registerApi, type ApiEndpoint } from './api.js';
 export { toMarkdown, addDocument } from './commands/documents.js';
+export { ShellSnapshot, SnapshotError, SnapshotVersionError, SNAPSHOT_FORMAT_VERSION } from './snapshot.js';
+export { Recording, RecordingError, startRecording, RECORDING_FORMAT_VERSION, type RecordedCall, type RecordedOptions, type RecordingOptions, type ReplayDifference } from './recording.js';

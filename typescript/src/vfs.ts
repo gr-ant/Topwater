@@ -68,8 +68,19 @@ export const DEFAULT_FILE_MODE = 0o644;
 export const DEFAULT_DIR_MODE = 0o755;
 export const NO_SPACE = 'No space left on device';
 
+/** One file or directory as a snapshot holds it. @internal */
+export interface VfsEntry {
+  path: string; isDirectory: boolean; mode: number; owner: string; modified: number;
+  /** a text file's content; null for directories and binary files */
+  text: string | null;
+  /** a binary file's exact bytes */
+  data: Uint8Array | null;
+  /** what `ls -l` shows for a program stub */
+  reportedSize: number | null;
+}
+
 /** The state every view of one filesystem shares. */
-interface Store { root: Dir; capacity: number; usedBytes: number }
+interface Store { root: Dir; capacity: number; usedBytes: number; clock: () => number }
 
 /**
  * In-memory Unix-style filesystem with owners and permission bits. Calls from your app are unrestricted (root).
@@ -83,7 +94,7 @@ export class VirtualFileSystem {
   /** The user this view acts as, or null for unrestricted access (your app). */
   readonly runAs: string | null = null;
 
-  constructor() { this.store = { root: Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE }), capacity: Number.MAX_SAFE_INTEGER, usedBytes: 0 }; }
+  constructor() { this.store = { root: Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE }), capacity: Number.MAX_SAFE_INTEGER, usedBytes: 0, clock: Date.now }; }
 
   /**
    * A view of the same files that acts as `user` (null lifts the restrictions). The shell hands its commands such a
@@ -92,6 +103,10 @@ export class VirtualFileSystem {
   as(user: string | null): VirtualFileSystem {
     return Object.assign(Object.create(VirtualFileSystem.prototype) as VirtualFileSystem, { store: this.store, runAs: user });
   }
+
+  /** Where new modification times come from: the owning shell's clock (virtual when ShellOptions.startTime is set). */
+  get clock(): () => number { return this.store.clock; }
+  set clock(v: () => number) { this.store.clock = v; }
 
   /** Most bytes the files may hold in total; the agent's writes past it fail with "No space left on device". */
   get capacity(): number { return this.store.capacity; }
@@ -213,14 +228,14 @@ export class VirtualFileSystem {
       if (!(existing instanceof FileNode)) throw new ShellError(`${path}: Is a directory`);
       this.require(existing, 2, path);
       existing.store(content, data, append, d => this.reserve(d, path));
-      existing.modified = Date.now();
+      existing.modified = this.store.clock();
     } else {
       this.require(dir, 2, path);
-      const file = Object.assign(new FileNode(), { owner: this.runAs ?? dir.owner, mode: DEFAULT_FILE_MODE });
+      const file = Object.assign(new FileNode(), { modified: this.store.clock(), owner: this.runAs ?? dir.owner, mode: DEFAULT_FILE_MODE });
       file.store(content, data, false, d => this.reserve(d, path));
       dir.children.set(name, file);
     }
-    dir.modified = Date.now();
+    dir.modified = this.store.clock();
   }
 
   /** Back-dates a path (and optionally everything under it). Unchecked: for setting up the machine. */
@@ -242,6 +257,44 @@ export class VirtualFileSystem {
     node.modified = when;
   }
 
+  /** @internal Every file and directory, parents first (contents shared, never copied: they are not changed in place). */
+  *entries(): Generator<VfsEntry> {
+    const walk = function* (n: Node, path: string): Generator<VfsEntry> {
+      if (n instanceof FileNode) {
+        yield { path, isDirectory: false, mode: n.mode, owner: n.owner, modified: n.modified, text: n.data === null ? n.content : null, data: n.data, reportedSize: n.reportedSize };
+        return;
+      }
+      yield { path, isDirectory: true, mode: n.mode, owner: n.owner, modified: n.modified, text: null, data: null, reportedSize: null };
+      for (const [name, child] of [...(n as Dir).children].sort((a, b) => ordinal(a[0], b[0]))) yield* walk(child, path === '/' ? '/' + name : `${path}/${name}`);
+    };
+    yield* walk(this.root, '/');
+  }
+
+  /** @internal Replaces every file with `entries` (parents first, as `entries()` gives them): a snapshot restore. */
+  replaceAll(entries: Iterable<VfsEntry>) {
+    const root = Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE });
+    let used = 0;
+    for (const e of entries) {
+      let node: Node;
+      if (e.isDirectory) node = e.path === '/' ? root : new Dir();
+      else {
+        const f = new FileNode();
+        f.store(e.text ?? (e.data ? null : ''), e.data ? e.data.slice() : null, false, d => { used += d; });
+        f.reportedSize = e.reportedSize;
+        node = f;
+      }
+      Object.assign(node, { mode: e.mode, owner: e.owner, modified: e.modified });
+      if (e.path === '/') continue;
+      let dir: Node | undefined = root;
+      const parts = e.path.split('/').slice(1);
+      for (const part of parts.slice(0, -1)) dir = dir instanceof Dir ? dir.children.get(part) : undefined;
+      if (!(dir instanceof Dir)) throw new ShellError(`${e.path}: parent is not a directory`);
+      dir.children.set(parts[parts.length - 1], node);
+    }
+    this.store.root = root;
+    this.store.usedBytes = used;
+  }
+
   setReportedSize(path: string, size: number) {
     const n = this.node(path);
     if (n instanceof FileNode) n.reportedSize = size;
@@ -249,7 +302,7 @@ export class VirtualFileSystem {
 
   touch(path: string) {
     const { node, denied } = this.find(path);
-    if (node) { this.require(node, 2, path); node.modified = Date.now(); }
+    if (node) { this.require(node, 2, path); node.modified = this.store.clock(); }
     else if (denied) throw new ShellError(`${path}: Permission denied`);
     else this.writeText(path, '');
   }
@@ -265,8 +318,8 @@ export class VirtualFileSystem {
     if (parents && !this.exists(parent)) this.mkdir(parent, true);
     const dir = this.parentDir(path);
     this.require(dir, 2, path);
-    dir.children.set(VirtualFileSystem.getName(path), Object.assign(new Dir(), { owner: this.runAs ?? dir.owner, mode: DEFAULT_DIR_MODE }));
-    dir.modified = Date.now();
+    dir.children.set(VirtualFileSystem.getName(path), Object.assign(new Dir(), { modified: this.store.clock(), owner: this.runAs ?? dir.owner, mode: DEFAULT_DIR_MODE }));
+    dir.modified = this.store.clock();
   }
 
   /** Entry names in a directory, sorted by code unit (like `LC_ALL=C ls`). */
@@ -334,7 +387,7 @@ export class VirtualFileSystem {
     // copying onto an existing file writes into it, keeping its owner and mode, as cp does
     if (target instanceof FileNode && c instanceof FileNode) {
       target.store(c.data ? null : c.content, c.data, false, d => this.reserve(d, dest));
-      target.modified = Date.now();
+      target.modified = this.store.clock();
     } else {
       this.reserve(treeSize(c) - (target ? treeSize(target) : 0), dest);
       parent.children.set(VirtualFileSystem.getName(dest), c);

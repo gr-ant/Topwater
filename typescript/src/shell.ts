@@ -1,6 +1,6 @@
 import { VirtualFileSystem, ShellError, ordinal } from './vfs.js';
 import {
-  StdinBuffer, LimitExceeded, DeadlineExceeded, tooLarge, nullWriter, sizeText,
+  StdinBuffer, LimitExceeded, DeadlineExceeded, VirtualTimeout, tooLarge, nullWriter, sizeText,
   type CommandContext, type CommandHandler, type RegisteredCommand, type Writer, type Deadline,
 } from './command.js';
 import {
@@ -16,6 +16,7 @@ import { registerAll } from './commands/index.js';
 import { registerApi, type ApiEndpoint } from './api.js';
 import { registerTools, mountMcp, type ToolSpec, type ToolInvoker, type McpClientLike, type McpMountOptions } from './tools.js';
 import { testUnary, testNewer, attributeFlags } from './commands/builtins.js';
+import { SNAPSHOT_SET_OPTIONS, type ShellStateData } from './snapshot.js';
 
 export interface ShellOptions {
   /** The agent's user name (default "agent"); its home is /home/<user>. */
@@ -31,6 +32,10 @@ export interface ShellOptions {
   maxExtractEntries: number;
   /** Longest one tool call may run, in ms. Past it the call stops with exit code 124 and a trailer. */
   maxCallDurationMs: number;
+  /** Start of a virtual clock, ms since the Unix epoch (UTC): time then stands still and `sleep` advances it instantly. Default: the real clock. */
+  startTime?: number;
+  /** Seeds $RANDOM and mktemp names so a run repeats exactly. Default: unpredictable. Assigning RANDOM=n reseeds either way. */
+  randomSeed?: number;
   /** Most bytes all files may hold together; the agent's writes past it fail with ENOSPC. */
   maxFileSystemBytes: number;
   /** Longest one string may be, and the most all variables may hold together (characters). */
@@ -266,7 +271,10 @@ export class Shell implements ArithHost {
   private readonly sources: string[] = [];
   private arg0 = 'bash';
   private readonly jobs = new Map<number, number>();
-  private secondsBase = Date.now();
+  private secondsBase = 0;
+  private virtualClock: number | undefined;
+  private virtualDeadline: number | undefined;
+  private random: bigint | undefined;
   private totalIterations = 0;
   private scriptDepth = 0;
   private arithDepth = 0;
@@ -281,11 +289,15 @@ export class Shell implements ArithHost {
 
   constructor(options: Partial<ShellOptions> = {}) {
     this.options = { ...DEFAULTS, ...options };
+    this.secondsBase = this.options.startTime ?? Date.now();
     const fs = this.fs = options.fileSystem ?? new VirtualFileSystem();
     fs.capacity = this.options.maxFileSystemBytes;
     const user = this.options.user, home = '/home/' + user;
     this.agentFs = fs.as(user);
-    const now = new Date();
+    this.virtualClock = this.options.startTime;
+    if (this.options.randomSeed !== undefined) this.random = BigInt.asUintN(64, BigInt(this.options.randomSeed));
+    fs.clock = () => this.now();
+    const now = new Date(this.now());
     this.installedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - 142 * DAY + (9 * 60 + 13) * 60_000;
     {
       for (const dir of [home, '/tmp', '/var/tmp', '/usr/bin', '/bin', '/usr/local/bin', '/opt', '/etc', '/dev/fd', '/var/log']) fs.mkdir(dir, true);
@@ -359,23 +371,87 @@ export class Shell implements ArithHost {
   register(name: string, handler: CommandHandler, description = '', usage?: string): this {
     this.commands.set(name, { name, description, usage, handler });
     this.builtinNames?.delete(name); // an app command replacing a built-in owns its own --help/--version
-    const shellOnly = this.builtinNames === null && NO_PROGRAM_FILE.has(name);
-    if (!shellOnly && !name.includes('/') && name !== '.' && name !== '..' && name !== ':' && name !== '[' && this.fs.isDirectory('/usr/bin')) {
-      {
-        for (const dir of ['/usr/bin/', '/bin/']) {
-          if (!this.fs.isDirectory(dir)) continue;
-          this.fs.writeText(dir + name, EXECUTABLE_STUB);
-          this.fs.chmod(dir + name, 0o755);
-          this.fs.setModified(dir + name, this.installedAt);
-          // shortcut: a stub is 16 bytes but reports a plausible program size; `wc -c` on it would disagree
-          let h = 17;
-          for (const c of name) h = (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0;
-          this.fs.setReportedSize(dir + name, 14_000 + Math.floor((h % 180_000) / 8) * 8);
-          this.fs.setModified(dir, this.installedAt);
-        }
-      }
-    }
+    this.writeProgramFile(name, this.builtinNames === null);
     return this;
+  }
+
+  private writeProgramFile(name: string, builtin: boolean) {
+    const shellOnly = builtin && NO_PROGRAM_FILE.has(name);
+    if (shellOnly || name.includes('/') || name === '.' || name === '..' || name === ':' || name === '[' || !this.fs.isDirectory('/usr/bin')) return;
+    for (const dir of ['/usr/bin/', '/bin/']) {
+      if (!this.fs.isDirectory(dir)) continue;
+      this.fs.writeText(dir + name, EXECUTABLE_STUB);
+      this.fs.chmod(dir + name, 0o755);
+      this.fs.setModified(dir + name, this.installedAt);
+      // shortcut: a stub is 16 bytes but reports a plausible program size; `wc -c` on it would disagree
+      let h = 17;
+      for (const c of name) h = (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0;
+      this.fs.setReportedSize(dir + name, 14_000 + Math.floor((h % 180_000) / 8) * 8);
+      this.fs.setModified(dir, this.installedAt);
+    }
+  }
+
+  /** @internal The session as a snapshot stores it (see snapshot.ts). Call it between calls. */
+  captureState(): ShellStateData {
+    this.epoch++; // arrays are now shared with the snapshot: copy each before its next write
+    return {
+      cwd: this.cwdPath, variables: new Map(this.environment), attributes: new Map(this.varAttrs), unexported: new Set(this.unexported),
+      arrays: new Map([...this.arrays].map(([k, a]) => [k, { assoc: a.assoc, next: a.next, items: [...a.items] }])),
+      functions: new Map([...this.functions].map(([k, f]) => [k, f.source])), exportedFunctions: new Set(this.exportedFunctions),
+      aliases: new Map(this.aliases), traps: new Map(this.traps),
+      setOptions: this.optionList.filter(([n, on]) => on && SNAPSHOT_SET_OPTIONS.has(n)).map(([n]) => n), ifsUnset: this.ifsUnset, shopts: [...this.shopts],
+      positional: [...this.positional], dirStack: [...this.dirStack], history: [...this.history], lastExitCode: this.lastExitCode,
+      secondsBase: this.secondsBase, lastArg: this.lastArg, pipeStatus: [...this.pipeStatus], getopts: [this.getoptsState.optind, this.getoptsState.pos],
+      jobs: [...this.jobs], lastBackgroundPid: this.lastBg, nextPid: this.nextPid, clock: this.virtualClock, random: this.random,
+    };
+  }
+
+  /** @internal Puts a snapshot's session in place (copies, so the snapshot stays as it was) and lines /usr/bin up with this shell's commands. */
+  applyState(s: ShellStateData) {
+    this.epoch++;
+    this.environment = new Map(s.variables);
+    this.varAttrs = new Map(s.attributes);
+    this.unexported.clear(); for (const n of s.unexported) this.unexported.add(n);
+    this.arrays = new Map([...s.arrays].map(([k, a]) => {
+      const arr = new ShellArray(a.assoc);
+      for (const [key, value] of a.items) arr.set(key, value);
+      if (!a.assoc) arr.next = Math.max(arr.next, a.next);
+      return [k, arr];
+    }));
+    this.functions = new Map([...s.functions].map(([name, body]) => {
+      const c = parse(`${name}() ${body}\n`).items[0].first.commands[0];
+      if (c.k !== 'func') throw new ShellError(`function ${name}: not a function definition`);
+      return [name, { name, body: c.body, source: c.source }];
+    }));
+    this.exportedFunctions.clear(); for (const n of s.exportedFunctions) this.exportedFunctions.add(n);
+    this.aliases = new Map(s.aliases);
+    this.traps = new Map(s.traps);
+    for (const o of SNAPSHOT_SET_OPTIONS) this.setOption(o, s.setOptions.includes(o));
+    this.ifsUnset = s.ifsUnset;
+    this.shopts = new Set(s.shopts);
+    this.positional = [...s.positional];
+    this.dirStack.length = 0; this.dirStack.push(...s.dirStack);
+    this.history.length = 0; this.history.push(...s.history);
+    this.lastExitCode = s.lastExitCode;
+    this.secondsBase = s.secondsBase;
+    this.lastArg = s.lastArg;
+    this.pipeStatus = [...s.pipeStatus];
+    this.getoptsState = { optind: s.getopts[0], pos: s.getopts[1] };
+    this.jobs.clear(); for (const [pid, code] of s.jobs) this.jobs.set(pid, code);
+    this.lastBg = s.lastBackgroundPid;
+    this.nextPid = s.nextPid;
+    // a deterministic shell picks up the time and random state where the snapshot left them; another keeps its own
+    this.virtualNow = s.clock;
+    this.randomState = s.random;
+    this.variableChars = [...this.environment].reduce((n, [k, v]) => n + k.length + v.length, 0)
+      + [...this.arrays.values()].reduce((n, a) => n + [...a.items].reduce((m, [k, v]) => m + k.length + v.length, 0), 0);
+    this.cwdPath = this.fs.isDirectory(s.cwd) ? s.cwd : '/';
+    // program files for exactly this shell's commands: the snapshot may come from a shell (or port) with others
+    for (const dir of ['/usr/bin/', '/bin/'])
+      if (this.fs.isDirectory(dir))
+        for (const name of this.fs.list(dir))
+          if (!this.commands.has(name) && this.fs.isFile(dir + name) && this.fs.readText(dir + name) === EXECUTABLE_STUB) this.fs.delete(dir + name);
+    for (const name of this.commands.keys()) if (!this.fs.isFile('/usr/bin/' + name)) this.writeProgramFile(name, this.builtinNames?.has(name) === true);
   }
 
   /** Exposes schema-described tools as one program: `program TOOL --option value` calls `call` (see tools.ts). */
@@ -461,6 +537,46 @@ export class Shell implements ArithHost {
     for (const a of this.arrays.values()) for (const [k, v] of a.items) total += k.length + v.length;
     this.variableChars = total - replacing + adding;
     if (this.variableChars > max) throw tooLarge('variables in total', max, 'keep big data in files and unset variables you no longer need');
+  }
+
+  /** @internal The machine's time, ms since the epoch (UTC): the virtual clock when `startTime` is set, else the host's. */
+  now(): number { return this.virtualClock ?? Date.now(); }
+
+  /** @internal The virtual clock's time, or undefined when the shell has none; setting it applies only to a shell that has one. */
+  get virtualNow(): number | undefined { return this.virtualClock; }
+  set virtualNow(ms: number | undefined) { if (this.virtualClock !== undefined && ms !== undefined) this.virtualClock = ms; }
+
+  /** @internal The seeded generator's state (splitmix64), or undefined when the shell is not seeded; setting it applies only to a seeded shell. */
+  get randomState(): bigint | undefined { return this.random; }
+  set randomState(s: bigint | undefined) { if (this.random !== undefined && s !== undefined) this.random = BigInt.asUintN(64, s); }
+
+  /** @internal `sleep` on the virtual clock: moves time on (to the deadline of an enclosing `timeout`, which then fires). */
+  sleepVirtual(ms: number) {
+    const now = this.virtualClock!;
+    if (this.virtualDeadline !== undefined && now + ms >= this.virtualDeadline) { this.virtualClock = this.virtualDeadline; throw new VirtualTimeout(); }
+    this.virtualClock = now + ms;
+  }
+
+  /** @internal `timeout` on the virtual clock: runs `body` with the limit in virtual time; null when it timed out. */
+  async withVirtualTimeout(ms: number, body: () => Promise<number>): Promise<number | null> {
+    if (this.virtualClock === undefined) return body();
+    const saved = this.virtualDeadline, mine = this.virtualClock + ms;
+    if (saved === undefined || mine < saved) this.virtualDeadline = mine;
+    try { return await body(); } catch (e) {
+      if (e instanceof VirtualTimeout && this.virtualClock! >= mine) return null;
+      throw e;
+    } finally { this.virtualDeadline = saved; }
+  }
+
+  /** @internal A random number in [0, max): from the seeded generator or Math.random. */
+  nextRandom(max: number): number {
+    if (this.random === undefined) return Math.floor(Math.random() * max);
+    const M = (1n << 64n) - 1n;
+    const state = this.random = (this.random + 0x9E3779B97F4A7C15n) & M;
+    let z = state;
+    z = ((z ^ (z >> 30n)) * 0xBF58476D1CE4E5B9n) & M;
+    z = ((z ^ (z >> 27n)) * 0x94D049BB133111EBn) & M;
+    return Number((z ^ (z >> 31n)) % BigInt(max));
   }
 
   /** @internal Throws when the call's time limit (or a `timeout`) has passed. */
@@ -622,9 +738,9 @@ export class Shell implements ArithHost {
 
   private async execPipeline(p: Pipeline, io: Io): Promise<number> {
     if (p.timed) {
-      const start = Date.now();
+      const start = this.now();
       const status = p.commands.length === 0 ? 0 : await this.execPipeline({ ...p, timed: false }, io);
-      const t = (Date.now() - start) / 1000;
+      const t = (this.now() - start) / 1000;
       io.err.write(p.posixTime ? `real ${t.toFixed(2)}\nuser 0.00\nsys 0.00\n`
         : `\nreal\t${Math.floor(t / 60)}m${(t % 60).toFixed(3)}s\nuser\t0m0.000s\nsys\t0m0.000s\n`);
       return this.lastExitCode = status;
@@ -1243,7 +1359,8 @@ export class Shell implements ArithHost {
     }
     if (!isName(name)) throw new ShellError(`\`${name}': not a valid identifier`);
     this.checkWritable(name);
-    if (name === 'SECONDS' && /^-?\d+$/.test(value)) { this.secondsBase = Date.now() - Number(value) * 1000; return; }
+    if (name === 'RANDOM') { this.random = BigInt.asUintN(64, /^\s*[-+]?\d+\s*$/.test(value) ? BigInt(value.trim()) : 0n); return; }
+    if (name === 'SECONDS' && /^-?\d+$/.test(value)) { this.secondsBase = this.now() - Number(value) * 1000; return; }
     const isArray = this.arrays.has(name);
     value = this.converted(name, value, !append ? null : isArray ? this.getElement(name, '0') : this.environment.get(name) ?? null);
     if (isArray) this.setElement(name, '0', value);
@@ -1298,9 +1415,9 @@ export class Shell implements ArithHost {
       case 'MACHTYPE': return 'x86_64-pc-linux-gnu';
       case 'HOSTTYPE': return 'x86_64';
       case 'LINENO': return String(this.lineno);
-      case 'SECONDS': return String(Math.floor((Date.now() - this.secondsBase) / 1000));
-      case 'EPOCHSECONDS': return String(Math.floor(Date.now() / 1000));
-      case 'EPOCHREALTIME': return (Date.now() / 1000).toFixed(6);
+      case 'SECONDS': return String(Math.floor((this.now() - this.secondsBase) / 1000));
+      case 'EPOCHSECONDS': return String(Math.floor(this.now() / 1000));
+      case 'EPOCHREALTIME': return (this.now() / 1000).toFixed(6);
     }
     return undefined;
   }
@@ -1525,7 +1642,7 @@ export class Shell implements ArithHost {
       case '-': return this.optionFlags;
       case '_': return this.lastArg;
       case 'PWD': return this.cwdPath;
-      case 'RANDOM': return String(Math.floor(Math.random() * 32768));
+      case 'RANDOM': return String(this.nextRandom(32768));
     }
     return this.lookUp(name) ?? '';
   }

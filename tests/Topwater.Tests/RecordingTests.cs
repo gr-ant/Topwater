@@ -224,6 +224,25 @@ public class RecordingTests
     }
 
     [Fact]
+    public async Task Reads_a_recording_made_by_the_typescript_port()
+    {
+        var r = Recording.Load(Path.Combine(AppContext.BaseDirectory, "../../../recordings/from-typescript.jsonl"));
+        Assert.Equal("typescript", r.TopwaterVersion);
+        Assert.True(r.IsDeterministic);
+        Assert.Equal(3, r.Calls.Count);
+        Assert.NotNull(r.Calls[1].SnapshotAfter);
+        var start = r.CreateShell();
+        Assert.Equal("buy milk\nfix bug\n", (await start.RunAsync("cat todo.txt")).Stdout);
+        Assert.Equal("00ff0a80\n", (await start.RunAsync("xxd -p raw.bin")).Stdout);
+        // the TypeScript snapshot's session: functions, exported variables, arrays, aliases and the virtual clock
+        var at1 = await r.ShellAtAsync(1);
+        Assert.Equal("/home/agent/work\nhello cs\ncore\n3 1 2 31\nll is aliased to `ls -l'\n09:00:00\n",
+            (await at1.RunAsync("pwd; greet cs; bash -c 'echo $TEAM'; echo \"${nums[@]} ${ages[ann]}\"; type ll; date +%T")).Stdout);
+        var report = await r.ReplayAsync();
+        Assert.True(report.Matches, report.ToString());
+    }
+
+    [Fact]
     public async Task Replays_on_real_bash_in_docker()
     {
         if (!await DockerTarget.IsAvailableAsync()) return; // skipped without docker

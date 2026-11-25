@@ -1243,7 +1243,7 @@ class Interp {
       case 'rand': return this.rng();
       case 'srand': {
         this.prevSeed = this.seed;
-        this.seed = a.length ? N(0) : Math.floor(Date.now() / 1000);
+        this.seed = a.length ? N(0) : Math.floor(this.ctx.shell.now() / 1000);
         this.rng = mulberry(this.seed);
         return this.prevSeed;
       }

@@ -243,7 +243,7 @@ class Find {
         const spec = arg();
         const unit = tok === '-mmin' ? 1 : 1440, n = Number(spec.replace(/^[+-]/, ''));
         return e => {
-          const age = (Date.now() - fs.stat(e.abs).modified) / 60_000 / unit;
+          const age = (ctx.shell.now() - fs.stat(e.abs).modified) / 60_000 / unit;
           return spec[0] === '-' ? age < n : spec[0] === '+' ? age > n : Math.floor(age) === n;
         };
       }
@@ -398,13 +398,12 @@ export function registerFiles(shell: Shell) {
     if (a.positional.length === 0) throw new ShellError('missing file operand');
     let when: number | undefined;
     const d = a.value('d'), r = a.value('r'), t = a.value('t');
-    if (d !== undefined) when = parseDate(d, Date.now());
+    if (d !== undefined) when = parseDate(d, ctx.shell.now());
     else if (r !== undefined) when = ctx.fs.stat(ctx.resolvePath(r)).modified;
     else if (t !== undefined) {
       const m = /^(?:(\d{2})?(\d{2}))?(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d{2}))?$/.exec(t);
       if (!m) throw new ShellError(`invalid date format '${t}'`);
-      const now = new Date();
-      const year = m[2] ? Number((m[1] ?? (Number(m[2]) < 69 ? '20' : '19')) + m[2]) : now.getUTCFullYear();
+      const year = m[2] ? Number((m[1] ?? (Number(m[2]) < 69 ? '20' : '19')) + m[2]) : new Date(ctx.shell.now()).getUTCFullYear();
       when = Date.UTC(year, Number(m[3]) - 1, Number(m[4]), Number(m[5]), Number(m[6]), Number(m[7] ?? 0));
     }
     let code = 0;
@@ -767,7 +766,7 @@ export function registerFiles(shell: Shell) {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const m = /X{3,}$/.exec(template);
     if (!m) throw new ShellError(`too few X's in template '${template}'`);
-    const name = template.slice(0, m.index) + Array.from({ length: m[0].length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const name = template.slice(0, m.index) + Array.from({ length: m[0].length }, () => chars[ctx.shell.nextRandom(chars.length)]).join('');
     const path = template.includes('/') && a.value('p') === undefined && !a.has('t') ? ctx.resolvePath(name) : norm(a.value('p') ?? '/tmp', name);
     if (!a.has('u')) { if (a.has('d')) { ctx.fs.mkdir(path); ctx.fs.chmod(path, 0o700); } else { ctx.fs.writeText(path, ''); ctx.fs.chmod(path, 0o600); } }
     line(ctx, path);
