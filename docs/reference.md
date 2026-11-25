@@ -14,6 +14,7 @@ show their APIs and list what they don't have yet.
 - [Documents](#documents)
 - [Real host programs](#real-host-programs)
 - [The tool description](#the-tool-description)
+- [Command line and MCP server](#command-line-and-mcp-server)
 - [Snapshots](#snapshots)
 - [Containers](#containers)
 - [Deterministic runs](#deterministic-runs)

@@ -46,8 +46,8 @@ You send the model one tool definition instead of one per function, and it can p
 | | |
 |---|---|
 | **.NET 8+** | `dotnet add package Topwater --prerelease` (add `Topwater.Mcp` for MCP servers, `Topwater.AI` for Microsoft.Extensions.AI, `Topwater.Containers` for Docker) |
-| **Python 3.10+** | `pip install "git+https://github.com/gr-ant/Topwater@python#subdirectory=python"` (preview, not on PyPI yet) |
-| **TypeScript, Node 20+** | `git clone -b typescript https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
+| **Python 3.10+** | `pip install "git+https://github.com/gr-ant/Topwater#subdirectory=python"` (preview, not on PyPI yet) |
+| **TypeScript, Node 20+** | `git clone https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
 
 | **Command line and MCP server** | `dotnet tool install -g Topwater.Cli --prerelease` gives you `topwater` (a shell on the simulated machine) and `topwater mcp` |
 
@@ -112,7 +112,7 @@ An MCP server becomes one program with a subcommand per tool (`github list-issue
 called by alias, never by host, and the model never sees the credential
 (`api get jira /issue/PROJ-123 | jq .fields.status`). The [reference](docs/reference.md) covers each of these in
 detail using the C# API, and each port's README maps it onto its own
-([Python](https://github.com/gr-ant/Topwater/tree/python/python), [TypeScript](https://github.com/gr-ant/Topwater/tree/typescript/typescript)).
+([Python](python/), [TypeScript](typescript/)).
 
 ## What is in the machine
 
@@ -153,7 +153,7 @@ dotnet run --project examples/WebShell    # the same, as a web page on port 8765
 dotnet test                               # C#; also: cd python && python -m pytest, cd typescript && npm test
 ```
 
-For the ports, run `pytest` in `python/` on the `python` branch, and `npm test` in `typescript/` on the `typescript` branch.
+For the ports, run `pytest` in `python/` and `npm test` in `typescript/`. All three run the shared cases in `tests/corpus/`.
 
 `examples/` also has three agents run against Gemini Flash: one triages issues through an MCP server (6 / 6
 checks), one writes a Word document with the real OfficeCLI (5 / 5), and one answers questions over CSV files with
