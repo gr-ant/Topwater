@@ -154,6 +154,7 @@ internal static partial class Builtins
     {
         ("sed", false) => $"can't read {f}: {why}",
         ("sed", true) => $"read error on {f}: {why}",
+        ("grep" or "egrep" or "fgrep", _) => $"{f}: {why}", // grep shows names as given
         ("head" or "tail", false) => $"cannot open {QuoteAlways(f)} for reading: {why}",
         ("head" or "tail" or "uniq", true) => $"error reading {QuoteAlways(f)}: {why}",
         ("tac", false) => $"failed to open {QuoteAlways(f)} for reading: {why}",

@@ -208,6 +208,7 @@ export function cannotRead(cmd: string, f: string, why: string): string {
   const dir = why === 'Is a directory';
   switch (cmd) {
     case 'sed': return dir ? `read error on ${f}: ${why}` : `can't read ${f}: ${why}`;
+    case 'grep': case 'egrep': case 'fgrep': return `${f}: ${why}`; // grep shows names as given
     case 'head': case 'tail': return dir ? `error reading ${quoteAlways(f)}: ${why}` : `cannot open ${quoteAlways(f)} for reading: ${why}`;
     case 'uniq': if (dir) return `error reading ${quoteAlways(f)}: ${why}`; break;
     case 'tac': return dir ? `${quote(f)}: read error: Invalid argument` : `failed to open ${quoteAlways(f)} for reading: ${why}`;
