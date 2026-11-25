@@ -117,9 +117,9 @@ dotnet run --project examples/WebShell    # the same, as a web page on port 8765
 dotnet test
 ```
 
-`examples/` also has three agents run against Gemini Flash: one triages issues through an MCP server (6 / 6
-checks), one writes a Word document with the real OfficeCLI (5 / 5), and a harness runs six everyday tasks
-(11 / 12 solved with the default tool description). These are small samples, not benchmarks.
+`examples/` also has four agents run against Gemini Flash: one triages issues through an MCP server (6 / 6
+checks), one writes a Word document with the real OfficeCLI (5 / 5), one answers questions over CSV files with the
+real DuckDB (8 / 8), and a harness runs six everyday tasks (11 / 12 solved with the default tool description). These are small samples, not benchmarks.
 
 ## License
 
