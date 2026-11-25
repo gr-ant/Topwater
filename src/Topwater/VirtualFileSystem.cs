@@ -38,19 +38,27 @@ public sealed class VirtualFileSystem
         }
         public byte[]? Data; // set for binary files; Content is then unused
         public long? ReportedSize; // what `ls -l` and `stat` show for a program stub, whose real content is a few bytes
+        public long Size; // real bytes held, as counted against the filesystem's capacity
         public byte[] Raw => Data ?? System.Text.Encoding.UTF8.GetBytes(Content);
 
-        public void Store(string? text, byte[]? bytes, bool append)
+        /// <param name="reserve">Called with the change in size before anything changes; throws to refuse the write.</param>
+        public void Store(string? text, byte[]? bytes, bool append, Action<long> reserve)
         {
             if (bytes == null && ByteText.HasEscapes(text)) bytes = ByteText.Encode(text!); // binary that came through a pipe
             if (bytes != null || (append && Data != null))
             {
                 bytes ??= System.Text.Encoding.UTF8.GetBytes(text!);
+                long size = append ? Size + bytes.Length : bytes.Length;
+                reserve(size - Size);
                 Data = append ? [.. Raw, .. bytes] : bytes;
                 Content = "";
+                Size = size;
             }
             else
             {
+                long size = (append ? Size : 0) + System.Text.Encoding.UTF8.GetByteCount(text!);
+                reserve(size - Size);
+                Size = size;
                 if (append)
                 {
                     _appended ??= new System.Text.StringBuilder(Content);
@@ -67,6 +75,24 @@ public sealed class VirtualFileSystem
     public const int DefaultDirMode = 0b111_101_101;  // 0755
 
     readonly Dir _root = new() { Mode = DefaultDirMode };
+
+    /// <summary>Most bytes the files may hold in total; the agent's writes past it fail with "No space left on device".
+    /// Writes from your app are counted but never refused. <see cref="Shell"/> sets it from <see cref="ShellOptions.MaxFileSystemBytes"/>.</summary>
+    public long Capacity { get; set; } = long.MaxValue;
+
+    /// <summary>Bytes all files hold now (what `df` reports as used).</summary>
+    public long UsedBytes { get; private set; }
+
+    /// <summary>Counts a change in stored bytes, refusing growth past <see cref="Capacity"/> for the agent (RunAs set).</summary>
+    void Reserve(long delta, string path)
+    {
+        if (delta > 0 && RunAs != null && UsedBytes + delta > Capacity) throw new ShellException($"{path}: {NoSpace}");
+        UsedBytes += delta;
+    }
+
+    internal const string NoSpace = "No space left on device";
+
+    static long TreeSize(Node n) => n is FileNode f ? f.Size : ((Dir)n).Children.Values.Sum(TreeSize);
 
     // async-local, so the app's own calls stay unrestricted while an agent command is awaiting (and concurrent shells sharing
     // this filesystem don't see each other's user); commands the app registers run inside the agent's flow, as the agent
@@ -222,14 +248,14 @@ public sealed class VirtualFileSystem
         {
             if (existing is not FileNode f) throw new ShellException($"{path}: Is a directory");
             Require(f, 2, path);
-            f.Store(content, data, append);
+            f.Store(content, data, append, d => Reserve(d, path));
             f.Modified = DateTime.Now;
         }
         else
         {
             Require(dir, 2, path);
             var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode };
-            file.Store(content, data, false);
+            file.Store(content, data, false, d => Reserve(d, path));
             dir.Children[name] = file;
         }
         dir.Modified = DateTime.Now;
@@ -308,6 +334,7 @@ public sealed class VirtualFileSystem
         Require(parent, 2, path);
         RequireNotSticky(parent, node, path);
         parent.Children.Remove(GetName(path));
+        UsedBytes -= TreeSize(node);
     }
 
     // shortcut: all or nothing, naming the first entry that can't go; real rm -r removes what it can.
@@ -347,7 +374,7 @@ public sealed class VirtualFileSystem
                 denied(path, n is Dir);
                 return null;
             }
-            if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Owner = RunAs ?? parent.Owner, Mode = f.Mode };
+            if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode };
             var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode };
             foreach (var (k, v) in ((Dir)n).Children)
                 if (Clone(v, path + "/" + k) is { } c) copy.Children[k] = c;
@@ -355,8 +382,12 @@ public sealed class VirtualFileSystem
         }
         if (Clone(node, source) is not { } clone) return;
         // copying onto an existing file writes into it, keeping its owner and mode, as cp does
-        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false); tf.Modified = DateTime.Now; }
-        else parent.Children[GetName(dest)] = clone;
+        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = DateTime.Now; }
+        else
+        {
+            Reserve(TreeSize(clone) - (target == null ? 0 : TreeSize(target)), dest);
+            parent.Children[GetName(dest)] = clone;
+        }
     }
 
     public void Move(string source, string dest)
@@ -375,6 +406,7 @@ public sealed class VirtualFileSystem
         RequireNotSticky(from, node, source);
         if (existing != null) RequireNotSticky(target, existing, dest);
         from.Children.Remove(GetName(source));
+        if (existing != null) UsedBytes -= TreeSize(existing);
         target.Children[GetName(dest)] = node;
     }
 

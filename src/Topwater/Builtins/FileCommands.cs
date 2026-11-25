@@ -190,6 +190,12 @@ internal static partial class Builtins
                         code = 1;
                     });
                 }
+                catch (ShellException e) when (e.Message.EndsWith(VirtualFileSystem.NoSpace))
+                {
+                    ctx.Stderr.WriteLine($"{ctx.Name}: error writing '{shown}': {VirtualFileSystem.NoSpace}");
+                    code = 1;
+                    continue;
+                }
                 catch (ShellException e) when (e.Message.EndsWith("Permission denied") || e.Message.EndsWith("Operation not permitted"))
                 {
                     var why = Typed(e, s, src).Reason;

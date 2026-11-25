@@ -731,9 +731,19 @@ internal static partial class Builtins
         shell.Register("df", ctx =>
         {
             bool h = ctx.Args.Any(x => x.StartsWith('-') && x.Contains('h'));
+            // the disk is the filesystem's capacity and what its files really hold
+            long size = ctx.Fs.Capacity, used = ctx.Fs.UsedBytes, avail = Math.Max(0, size - used);
+            int pct = size == 0 ? 0 : (int)Math.Ceiling(used * 100.0 / size);
+            static string H(long b)
+            {
+                if (b < 1024) return b.ToString();
+                double v = b; int u = 0;
+                do { v /= 1024; u++; } while (Math.Ceiling(v) >= 1024 && u < 4);
+                return (v < 10 ? (Math.Ceiling(v * 10) / 10).ToString("0.0") : Math.Ceiling(v).ToString("0")) + "KMGT"[u - 1]; // df -h rounds up
+            }
             ctx.Stdout.Write(h
-                ? "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        40G  7.8G   30G  21% /\ntmpfs           3.9G     0  3.9G   0% /dev/shm\n"
-                : "Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1       41152736 8123456  31016272  21% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n");
+                ? $"Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1      {H(size),5} {H(used),5} {H(avail),5} {pct,3}% /\ntmpfs           3.9G     0  3.9G   0% /dev/shm\n"
+                : $"Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1      {size / 1024,10} {(used + 1023) / 1024,7} {avail / 1024,9} {pct,3}% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n");
             return 0;
         }, "Report filesystem disk space");
 

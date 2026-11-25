@@ -18,6 +18,9 @@ public sealed class ShellOptions
     public int MaxExtractEntries { get; init; } = 100_000;
     /// <summary>Longest one tool call may run. Past it the call stops with exit code 124 and a note in the tool output; files and variables changed so far are kept.</summary>
     public TimeSpan MaxCallDuration { get; init; } = TimeSpan.FromSeconds(120);
+    /// <summary>Most bytes all files may hold together. The agent's writes past it fail with "No space left on device" (the call goes on);
+    /// your app's own writes are counted but never refused. `df` shows it as the disk size.</summary>
+    public long MaxFileSystemBytes { get; init; } = 128L << 20;
 }
 
 public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
@@ -169,6 +172,7 @@ public sealed partial class Shell
     {
         Options = options ?? new ShellOptions();
         Fs = Options.FileSystem ?? new VirtualFileSystem();
+        Fs.Capacity = Options.MaxFileSystemBytes;
         var user = Options.User;
         var home = "/home/" + user;
         foreach (var dir in new[] { home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log" }) Fs.CreateDirectory(dir, parents: true);
@@ -694,7 +698,7 @@ public sealed partial class Shell
             foreach (var sink in sinks)
             {
                 try { Fs.AppendAllText(sink.Path, sink.ToString()); }
-                catch (ShellException e) { io.Err.WriteLine($"bash: {e.Message}"); }
+                catch (ShellException e) { io.Err.WriteLine($"bash: {e.Message}"); code = 1; }
             }
         }
         return code;
