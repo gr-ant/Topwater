@@ -30,7 +30,7 @@ public static class OpenRouterAgent
             {
                 string command;
                 try { command = JsonNode.Parse(call!["function"]!["arguments"]!.GetValue<string>())?["command"]?.GetValue<string>() ?? ""; }
-                catch (JsonException) { command = ""; }   // malformed arguments: run nothing, the model sees an empty result
+                catch (Exception e) when (e is JsonException or ArgumentException or InvalidOperationException) { command = ""; }   // malformed arguments (bad JSON, a duplicated key): run nothing, the model sees an empty result
                 var result = await shell.RunAsync(command);
                 commands.Add(new AgentCommand(command, result.ExitCode, result.Stdout, result.Stderr));
                 if (verbose)
