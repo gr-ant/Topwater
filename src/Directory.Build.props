@@ -1,8 +1,32 @@
 <Project>
-  <!-- Package metadata shared by Topwater, Topwater.AI and Topwater.Mcp -->
+  <!-- Package metadata and build settings shared by Topwater, Topwater.AI and Topwater.Mcp -->
   <PropertyGroup>
+    <!-- one version for all three; clear the suffix (-p:VersionSuffix=) for a stable release -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>preview.1</VersionSuffix>
+
     <Authors>Grant Miller</Authors>
     <Copyright>Copyright (c) 2026 Grant Miller</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/gr-ant/Topwater</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/gr-ant/Topwater</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>https://github.com/gr-ant/Topwater/releases/tag/v$(VersionPrefix)$(VersionSuffix.Insert(0, '-').TrimEnd('-'))</PackageReleaseNotes>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+
+    <!-- symbols go to nuget.org's symbol server; sources are linked to the GitHub commit -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\assets\brand\topwater_icon_128.png" Pack="true" PackagePath="\icon.png" Visible="false" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

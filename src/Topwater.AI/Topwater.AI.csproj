@@ -6,14 +6,8 @@
     <Nullable>enable</Nullable>
 
     <PackageId>Topwater.AI</PackageId>
-    <Version>0.1.0</Version>
-    <Description>Give a Microsoft.Extensions.AI chat client a Topwater shell as its one `bash` tool: chatOptions.Tools = [shell.AsAIFunction()].</Description>
+    <Description>Give a Microsoft.Extensions.AI chat client a Topwater shell as its one bash tool: chatOptions.Tools = [shell.AsAIFunction()].</Description>
     <PackageTags>agents;llm;tool-use;bash;shell;microsoft-extensions-ai</PackageTags>
-    <PackageProjectUrl>https://github.com/gr-ant/Topwater</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/gr-ant/Topwater</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

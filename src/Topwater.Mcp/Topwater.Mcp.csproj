@@ -6,14 +6,8 @@
     <Nullable>enable</Nullable>
 
     <PackageId>Topwater.Mcp</PackageId>
-    <Version>0.1.0</Version>
     <Description>Mount any MCP server as a command-line program inside a Topwater shell, so the model discovers tools with --help instead of loading every tool definition up front.</Description>
-    <PackageTags>agents;llm;mcp;tool-use;bash;shell</PackageTags>
-    <PackageProjectUrl>https://github.com/gr-ant/Topwater</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/gr-ant/Topwater</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+    <PackageTags>agents;llm;mcp;model-context-protocol;tool-use;bash;shell</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
