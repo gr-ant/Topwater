@@ -29,6 +29,16 @@ public class DeterminismTests
     }
 
     [Fact]
+    public async Task Archive_times_do_not_depend_on_the_host_time_zone()
+    {
+        var sh = Make();
+        var r = await sh.RunAsync("echo x > f; tar czf a.tgz f; tar tzvf a.tgz; zip -q z.zip f; unzip -l z.zip | grep ' f$'; mkdir out; tar xzf a.tgz -C out; unzip -q z.zip -d out2; date -r out/f +%T; date -r out2/f +%T");
+        Assert.Contains("2026-01-02 03:04 f", r.Stdout);
+        Assert.Matches(@"2026-01-02 03:04 +f\n", r.Stdout);
+        Assert.EndsWith("03:04:05\n03:04:04\n", r.Stdout); // zip keeps 2-second precision
+    }
+
+    [Fact]
     public async Task Different_seeds_differ()
     {
         var a = await Make(1).RunAsync("echo $RANDOM $RANDOM; mktemp");

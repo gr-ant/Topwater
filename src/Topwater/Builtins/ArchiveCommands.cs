@@ -288,7 +288,7 @@ internal static partial class Builtins
                 var size = (isFile ? e.Length : 0).ToString(CultureInfo.InvariantCulture);
                 ugWidth = Math.Max(ugWidth, ug.Length + 1 + size.Length); // grows like GNU tar's, so later columns stay aligned
                 var link = e.EntryType switch { TarEntryType.SymbolicLink => " -> " + e.LinkName, TarEntryType.HardLink => " link to " + e.LinkName[linkPrefix.Length..], _ => "" };
-                ctx.Stdout.WriteLine($"{type}{VirtualFileSystem.FormatMode(false, (int)e.Mode)[1..]} {ug}{size.PadLeft(ugWidth - ug.Length)} {e.ModificationTime.LocalDateTime:yyyy-MM-dd HH:mm} {name}{link}");
+                ctx.Stdout.WriteLine($"{type}{VirtualFileSystem.FormatMode(false, (int)e.Mode)[1..]} {ug}{size.PadLeft(ugWidth - ug.Length)} {e.ModificationTime.UtcDateTime:yyyy-MM-dd HH:mm} {name}{link}");
                 continue;
             }
             if (HasDotDot(prefix)) { Fail($"{name}: Member name contains '..'"); continue; }
@@ -315,7 +315,7 @@ internal static partial class Builtins
                         fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
                         fs.WriteAllBytes(target, bytes);
                         fs.Chmod(target, (int)e.Mode & 0x1FF);
-                        fs.SetModifiedTime(target, e.ModificationTime.LocalDateTime);
+                        fs.SetModifiedTime(target, e.ModificationTime.UtcDateTime);
                         break;
                     case TarEntryType.HardLink:
                         var linkParts = e.LinkName[linkPrefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -598,7 +598,7 @@ internal static partial class Builtins
                     fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
                     fs.WriteAllBytes(target, bytes);
                     if ((e.ExternalAttributes >> 16 & 0x1FF) is var mode and not 0) fs.Chmod(target, mode);
-                    fs.SetModifiedTime(target, e.LastWriteTime.DateTime);
+                    fs.SetModifiedTime(target, DateTime.SpecifyKind(e.LastWriteTime.DateTime, DateTimeKind.Utc)); // zip and this machine both keep UTC clock digits
                     if (!quiet) ctx.Stdout.WriteLine($"{(e.CompressedLength == e.Length ? " extracting" : "  inflating")}: {shown,-22}  ");
                 }
                 catch (ShellException ex) when (!ex.Message.Contains("extraction limit"))
