@@ -148,7 +148,8 @@ internal static partial class Builtins
             var listed = new HashSet<string>(StringComparer.Ordinal); // real paths, so -RL stops at a link back up the tree
             void ListDir(string abs, string label)
             {
-                if (a.Has('R') && deref && !listed.Add(fs.RealPath(abs, out _) ?? abs))
+                abs = fs.RealPath(abs, out _) ?? abs; // where it really is, so "." and ".." are the directories themselves
+                if (a.Has('R') && deref && !listed.Add(abs))
                 {
                     ctx.Stderr.WriteLine($"ls: {label}: not listing already-listed directory");
                     code = 2;

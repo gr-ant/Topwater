@@ -65,3 +65,4 @@
 {"id":"symlinks-065","script":"ln -s nowhere dang; echo created > dang; cat nowhere; ln -s nodir/x bad; echo x > bad 2>&1; echo \"rc=$?\"","stdout":"created\nrc=1\n","exitCode":0,"quiet":false}
 {"id":"symlinks-066","script":"ln -s nowhere dang; touch dang; ls nowhere; ln -s nowhere2 d2; mkdir d2 2>&1; echo \"rc=$?\"","stdout":"nowhere\nmkdir: cannot create directory ‘d2’: File exists\nrc=1\n","exitCode":0,"quiet":true}
 {"id":"symlinks-067","script":"touch f; chmod 600 f; ln -s f l; chmod 644 l; stat -c '%a' f; ls -l l | cut -c1-10","stdout":"644\nlrwxrwxrwx\n","exitCode":0,"quiet":true}
+{"id":"symlinks-068","script":"mkdir -p a/b; touch a/b/f; ln -s a/b lb; cd lb; ls -a; ls -ld . .. | cut -c1; find .; stat -c %F . ..; ls ..; rm -r ../b 2>&1; ls -d \"$PWD\"","stdout":".\n..\nf\nd\nd\n.\n./f\ndirectory\ndirectory\nb\n/tmp/w/lb\n","exitCode":0,"quiet":true}

@@ -307,6 +307,9 @@ public sealed class VirtualFileSystem
     public string NormalizePhysical(string cwd, string path)
     {
         var full = path.StartsWith('/') ? path : cwd.TrimEnd('/') + "/" + path;
+        // "." or ".." last names a directory itself, never a link to it (a logical cwd may be reached through one)
+        if (path.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(".") is "." or "..")
+            return RealPath(full, out _) ?? Normalize("/", full);
         if (!full.Split('/').Contains("..")) return Normalize("/", full);
         var p = "/";
         foreach (var seg in full.Split('/', StringSplitOptions.RemoveEmptyEntries))
