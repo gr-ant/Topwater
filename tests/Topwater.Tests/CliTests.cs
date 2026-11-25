@@ -191,11 +191,45 @@ public sealed class CliTests : IDisposable
         Assert.Equal(2, (await Cli("run")).Code);
         Assert.Equal(2, (await Cli("--bogus")).Code);
         Assert.Equal(2, (await Cli("run", "--import", "nocolon", "true")).Code);
-        foreach (var name in new[] { "export", "import", "replay" })
-        {
-            var (code, _, stderr) = await Cli(name);
-            Assert.Equal(1, code);
-            Assert.Contains($"topwater {name}: not available in this build", stderr);
-        }
+        foreach (var name in new[] { "export", "import", "replay" }) Assert.Equal(2, (await Cli(name)).Code);
+        Assert.Contains("--state STATE is required", (await Cli("import", P("x.topwater"))).Err);
+        Assert.Contains("only --timeout and --disk apply", (await Cli("replay", P("x.topwater"), "--state", P("s"))).Err);
+    }
+
+    static string Recordings(string name) => Path.Combine(AppContext.BaseDirectory, "../../../recordings", name);
+
+    [Fact]
+    public async Task ExportImportAndReplayTopwaterFiles()
+    {
+        // export: the machine from the options; import: a file's machine into the state file
+        Assert.Equal(0, (await Cli("run", "--state", P("m.topwater"), "echo hi > f.txt; x=1")).Code);
+        var exported = await Cli("export", "--state", P("m.topwater"), P("copy.topwater"));
+        Assert.Equal((0, $"exported {P("copy.topwater")}\n"), (exported.Code, exported.Out));
+        Assert.Equal(0, (await Cli("import", P("copy.topwater"), "--state", P("other.topwater"))).Code);
+        Assert.Equal("hi\n", (await Cli("run", "--state", P("other.topwater"), "cat f.txt")).Out);
+
+        // an older JSON Lines recording: export converts it, history and all; import takes the machine after its last call
+        var converted = await Cli("export", "--from", Recordings("basics.jsonl"), P("basics.topwater"));
+        Assert.Equal($"exported {P("basics.topwater")} (6 calls)\n", converted.Out);
+        Assert.Equal(6, Recording.Load(P("basics.topwater")).Calls.Count);
+        Assert.Contains("history   6 calls, 3 checkpoints", (await Cli("snapshot", "info", P("basics.topwater"))).Out);
+        Assert.Equal(0, (await Cli("import", Recordings("basics.jsonl"), "--state", P("b.topwater"))).Code);
+        Assert.Equal("north 220.00\n", (await Cli("run", "--state", P("b.topwater"), "head -1 ~/report.txt")).Out);
+        Assert.Contains("has history; --import", (await Cli("export", "--from", P("basics.topwater"), "--import", $"{_dir}:/x", P("y.topwater"))).Err);
+
+        // replay: exit 0 when every call matches, 1 with the report when one doesn't
+        var replay = await Cli("replay", P("basics.topwater"));
+        Assert.Equal(0, replay.Code);
+        Assert.StartsWith("replay on topwater", replay.Out);
+        Assert.Contains("6/6 calls match", replay.Out);
+        var r = Recording.Load(P("basics.topwater"));
+        r.Calls[1] = r.Calls[1] with { Stdout = "changed\n" };
+        r.Save(P("bad.topwater"));
+        var bad = await Cli("replay", P("bad.topwater"));
+        Assert.Equal(1, bad.Code);
+        Assert.Contains("5/6 calls match", bad.Out);
+        Assert.Contains("stdout line 1: expected \"changed\"", bad.Out);
+        File.WriteAllText(P("junk.topwater"), "PK junk");
+        Assert.Contains("not a valid Topwater recording", (await Cli("replay", P("junk.topwater"))).Err);
     }
 }

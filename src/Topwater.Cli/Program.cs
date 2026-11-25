@@ -31,9 +31,9 @@ static class Cli
         ["run"] = new("run [options] \"<command>\"", "run one command, print its output, exit with its exit code", RunCommand),
         ["mcp"] = new("mcp [options]", "serve the machine over stdio as an MCP server with one `bash` tool", McpCommand),
         ["snapshot"] = new("snapshot save|load|info FILE [options]", "write the machine to FILE, open a shell on FILE, or describe FILE", SnapshotCommand),
-        ["export"] = new("export", "export the machine as a container image", null, "container export comes with the Topwater.Containers package"),
-        ["import"] = new("import", "import a container image as a machine", null, "container import comes with the Topwater.Containers package"),
-        ["replay"] = new("replay", "replay a recorded agent run", null, "recorded runs are not part of this build yet"),
+        ["export"] = new("export FILE [options]", "write the machine (and its history, if it has one) to FILE as a .topwater file", ExportCommand),
+        ["import"] = new("import FILE --state STATE", "check FILE and make its machine the --state file", ImportCommand),
+        ["replay"] = new("replay FILE [options]", "re-run a recorded session and report every call that prints something else", ReplayCommand),
     };
 
     const string OptionsHelp = """
@@ -50,7 +50,7 @@ static class Cli
 
     public static string Usage()
     {
-        var lines = Commands.Select(c => $"  topwater {c.Value.Usage,-40} {c.Value.Summary}{(c.Value.Run == null ? " (not available in this build)" : "")}");
+        var lines = Commands.Select(c => $"  topwater {c.Value.Usage,-42} {c.Value.Summary}{(c.Value.Run == null ? " (not available in this build)" : "")}");
         return $"Topwater {McpServerCommand.Version}: a simulated Linux shell for agents. Nothing typed into it reaches this computer.\n\n" +
                $"Usage:\n{string.Join('\n', lines)}\n\n{OptionsHelp}\n";
     }
@@ -245,6 +245,82 @@ static class Cli
         }
     }
 
+    /// <summary>Loads a .topwater file, a snapshot or an older JSON Lines recording as a recording, mapping load errors to <see cref="CliException"/>.</summary>
+    static Recording LoadRecording(string file, ShellOptions limits)
+    {
+        try { return Recording.Load(file, limits); }
+        catch (Exception e) when (e is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException)
+        {
+            throw new CliException(e is FileNotFoundException ? $"{file}: no such file" : $"{file}: {e.Message}");
+        }
+    }
+
+    /// <summary>The machine a file holds: a .topwater file's manifest, or for an older JSON Lines recording the machine after its last call.</summary>
+    static async Task<ShellSnapshot> MachineOf(string file, ShellOptions limits, CancellationToken ct)
+    {
+        var recording = LoadRecording(file, limits);
+        if (recording.Calls.Count == 0) return recording.Start;
+        if (recording.Calls[^1].SnapshotAfter is { } end) return end;
+        return (await recording.ShellAtAsync(recording.Calls.Count - 1, cancellationToken: ct)).Snapshot();
+    }
+
+    static void Write(string path, Action<Stream> save)
+    {
+        var temp = path + ".tmp";
+        try
+        {
+            using (var file = File.Create(temp)) save(file);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new CliException($"{path}: {e.Message}"); }
+    }
+
+    static Task<int> ExportCommand(string[] args, Io io, CancellationToken ct)
+    {
+        var (o, rest, help) = Parse(args);
+        if (help) { io.Out.Write(Usage()); return Task.FromResult(0); }
+        if (rest is not [var file]) throw new CliException("export: expected one FILE, e.g. topwater export --state machine.topwater copy.topwater");
+        // a source with history keeps it, which also turns an older .jsonl recording into a .topwater file
+        var source = o.State is { } s && File.Exists(s) ? s : o.From;
+        if (source != null && LoadRecording(source, o.ToShellOptions()) is { Calls.Count: > 0 } recording)
+        {
+            if (o.Imports.Count > 0) throw new CliException($"export: {source} has history; --import would change the machine without it");
+            Write(file, recording.Save);
+            io.Out.WriteLine($"exported {file} ({recording.Calls.Count} calls)");
+            return Task.FromResult(0);
+        }
+        var machine = Machine.Open(o, io.Err);
+        Write(file, machine.Shell.Save);
+        io.Out.WriteLine($"exported {file}");
+        return Task.FromResult(0);
+    }
+
+    static async Task<int> ImportCommand(string[] args, Io io, CancellationToken ct)
+    {
+        var (o, rest, help) = Parse(args);
+        if (help) { io.Out.Write(Usage()); return 0; }
+        if (rest is not [var file]) throw new CliException("import: expected one FILE, e.g. topwater import run.topwater --state machine.topwater");
+        if (o.State is not { } state) throw new CliException("import: --state STATE is required: the file to write the machine to");
+        if (o.From != null || o.Imports.Count + o.Exports.Count > 0) throw new CliException("import: only --state, --timeout and --disk apply");
+        var snapshot = await MachineOf(file, o.ToShellOptions(), ct);
+        Write(state, snapshot.Save);
+        io.Out.WriteLine($"imported {file} into {state}");
+        return 0;
+    }
+
+    static async Task<int> ReplayCommand(string[] args, Io io, CancellationToken ct)
+    {
+        var (o, rest, help) = Parse(args);
+        if (help) { io.Out.Write(Usage()); return 0; }
+        if (rest is not [var file]) throw new CliException("replay: expected one FILE, e.g. topwater replay run.topwater");
+        if (o.State != null || o.From != null || o.Imports.Count + o.Exports.Count > 0) throw new CliException("replay: only --timeout and --disk apply");
+        var recording = LoadRecording(file, o.ToShellOptions());
+        // a deterministic run must match exactly; another differs in times and random names, which are normalised away
+        var report = await recording.ReplayAsync(new ReplayOptions { Normalize = recording.IsDeterministic ? null : ReplayNormalizers.Volatile }, cancellationToken: ct);
+        io.Out.Write(report.ToString());
+        return report.Matches ? 0 : 1;
+    }
+
     /// <summary>Checks the file the way Load does, then summarises its manifest.</summary>
     internal static string Describe(string file, ShellOptions limits)
     {
@@ -257,6 +333,7 @@ static class Cli
             using var manifest = zip.GetEntry("manifest.json")!.Open();
             var m = JsonDocument.Parse(manifest).RootElement;
             int Count(string name) => m.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Array ? p.GetArrayLength() : 0;
+            var history = zip.GetEntry("history.jsonl") != null ? LoadRecording(file, limits) : null;
             var files = m.GetProperty("files").EnumerateArray().ToList();
             var regular = files.Where(f => f.GetProperty("type").GetString() == "file").ToList();
             long bytes = regular.Sum(f => f.TryGetProperty("size", out var s) ? s.GetInt64() : 0);
@@ -267,7 +344,7 @@ static class Cli
                   files     {regular.Count} files, {files.Count - regular.Count} directories, {bytes} bytes
                   session   {Count("variables")} variables, {Count("functions")} functions, {Count("history")} history entries
 
-                """;
+                """ + (history == null ? "" : $"  history   {history.Calls.Count} calls, {1 + history.Calls.Count(c => c.SnapshotAfter != null)} checkpoints\n");
         }
         catch (Exception e) when (e is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException)
         {
