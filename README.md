@@ -62,6 +62,8 @@ string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");
 ```
 
 Files, variables and the working directory persist between calls. Use one `Shell` per conversation.
+`shell.Snapshot()` / `shell.Restore(snap)` undo a turn, `shell.Fork()` copies the machine, and `shell.Save(stream)` /
+`Shell.Load(stream)` keep it across restarts; see [Snapshots](docs/reference.md#snapshots).
 
 With `Microsoft.Extensions.AI`, add the `Topwater.AI` package and skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
 

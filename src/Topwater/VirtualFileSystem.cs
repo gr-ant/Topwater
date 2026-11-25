@@ -75,7 +75,7 @@ public sealed class VirtualFileSystem
     public const int DefaultFileMode = 0b110_100_100; // 0644
     public const int DefaultDirMode = 0b111_101_101;  // 0755
 
-    readonly Dir _root = new() { Mode = DefaultDirMode };
+    Dir _root = new() { Mode = DefaultDirMode };
 
     /// <summary>Most bytes the files may hold in total; the agent's writes past it fail with "No space left on device".
     /// Writes from your app are counted but never refused. <see cref="Shell"/> sets it from <see cref="ShellOptions.MaxFileSystemBytes"/>.</summary>
@@ -409,6 +409,58 @@ public sealed class VirtualFileSystem
         from.Children.Remove(GetName(source));
         if (existing != null) UsedBytes -= TreeSize(existing);
         target.Children[GetName(dest)] = node;
+    }
+
+    // ---------- snapshots ----------
+
+    /// <summary>One entry as a snapshot sees it: a directory, or a file holding <paramref name="Text"/> or (binary) <paramref name="Data"/>.</summary>
+    internal readonly record struct Entry(string Path, bool IsDirectory, int Mode, string Owner, DateTime Modified, string? Text = null, byte[]? Data = null, long? ReportedSize = null);
+
+    /// <summary>A detached copy of the tree. Contents (strings and byte arrays, never changed in place) are shared, not copied.</summary>
+    internal VirtualFileSystem Clone() => new() { _root = (Dir)CloneNode(_root), UsedBytes = UsedBytes, Capacity = Capacity };
+
+    /// <summary>Replaces this tree with a copy of <paramref name="source"/>'s, keeping <see cref="Capacity"/>.</summary>
+    internal void ReplaceWith(VirtualFileSystem source)
+    {
+        _root = (Dir)CloneNode(source._root);
+        UsedBytes = source.UsedBytes;
+    }
+
+    static Node CloneNode(Node n)
+    {
+        if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, ReportedSize = f.ReportedSize, Size = f.Size, Mode = f.Mode, Owner = f.Owner, Modified = f.Modified };
+        var d = new Dir { Mode = n.Mode, Owner = n.Owner, Modified = n.Modified };
+        foreach (var (name, child) in ((Dir)n).Children) d.Children.Add(name, CloneNode(child));
+        return d;
+    }
+
+    /// <summary>Every entry, parents before children, "/" first.</summary>
+    internal IEnumerable<Entry> Entries()
+    {
+        var stack = new Stack<(string Path, Node Node)>();
+        stack.Push(("/", _root));
+        while (stack.Count > 0)
+        {
+            var (path, n) = stack.Pop();
+            if (n is FileNode f) { yield return new(path, false, f.Mode, f.Owner, f.Modified, f.Data == null ? f.Content : null, f.Data, f.ReportedSize); continue; }
+            yield return new(path, true, n.Mode, n.Owner, n.Modified);
+            foreach (var (name, child) in ((Dir)n).Children.Reverse()) stack.Push((path == "/" ? "/" + name : path + "/" + name, child));
+        }
+    }
+
+    /// <summary>Adds a snapshot entry ("/" sets the root's attributes). Its parent must already be a directory and the name free.</summary>
+    internal void Put(Entry e)
+    {
+        if (e.Path == "/" && !e.IsDirectory) throw new ShellException("/: Not a directory");
+        Node node = e.IsDirectory ? (e.Path == "/" ? _root : new Dir())
+            : new FileNode { Content = e.Text ?? "", Data = e.Data, ReportedSize = e.ReportedSize, Size = e.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(e.Text ?? "") };
+        node.Mode = e.Mode;
+        node.Owner = e.Owner;
+        node.Modified = e.Modified;
+        if (e.Path == "/") return;
+        if (Find(GetParent(e.Path)) is not Dir parent) throw new ShellException($"{e.Path}: parent is not a directory");
+        if (!parent.Children.TryAdd(GetName(e.Path), node)) throw new ShellException($"{e.Path}: File exists");
+        UsedBytes += TreeSize(node);
     }
 
     /// <summary>Changes permission bits. While restricted, only the owner may do this.</summary>

@@ -125,7 +125,7 @@ internal sealed class ShellArray(bool assoc)
     public bool Assoc { get; } = assoc;
     public IDictionary<string, string> Items { get; private init; } = assoc ? new Dictionary<string, string>(StringComparer.Ordinal) : new SortedDictionary<string, string>(new ByIndex());
     /// <summary>The index `+=(x)` appends at: one past the highest index ever set.</summary>
-    public long Next { get; private set; }
+    public long Next { get; set; }
     /// <summary>Which shell state owns this object; a (sub)shell copies an array before changing one it doesn't own.</summary>
     public int Epoch;
 
@@ -167,15 +167,22 @@ public sealed partial class Shell
     readonly Stack<Dictionary<string, (string? Value, string? Attrs)>> _locals = new();
     readonly Stack<Dictionary<string, ShellArray?>> _localArrays = new();
     internal Dictionary<string, ShellArray> Arrays = new(StringComparer.Ordinal);
-    int _epoch;
+    // epochs are unique across all shells, so an array a snapshot or fork shares is never written in place (see Writable)
+    static int s_epochs;
+    static int NextEpoch() => Interlocked.Increment(ref s_epochs);
+    int _epoch = NextEpoch();
     string _cwd = "/";
     int _condDepth;
 
-    public Shell(ShellOptions? options = null)
+    public Shell(ShellOptions? options = null) : this(options ?? new ShellOptions(), null) { }
+
+    /// <param name="forked">The fork's filesystem: when set, the machine isn't seeded and no built-ins are registered (see <see cref="Fork"/>).</param>
+    Shell(ShellOptions options, VirtualFileSystem? forked)
     {
-        Options = options ?? new ShellOptions();
-        Fs = Options.FileSystem ?? new VirtualFileSystem();
+        Options = options;
+        Fs = forked ?? Options.FileSystem ?? new VirtualFileSystem();
         Fs.Capacity = Options.MaxFileSystemBytes;
+        if (forked != null) return;
         var user = Options.User;
         var home = "/home/" + user;
         foreach (var dir in new[] { home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log" }) Fs.CreateDirectory(dir, parents: true);
@@ -316,22 +323,37 @@ public sealed partial class Shell
     {
         _commands[name] = new RegisteredCommand(name, description, usage, handler);
         _builtinNames?.Remove(name); // an app command replacing a built-in owns its own --help/--version
-        bool shellOnly = _builtinNames is null && NoProgramFile.Contains(name);
-        if (!shellOnly && !name.Contains('/') && name is not "." and not ".." and not ":" && Fs.IsDirectory("/usr/bin"))
-        {
-            using var _ = Fs.AsRoot();
-            foreach (var dir in new[] { "/usr/bin/", "/bin/" })
-            {
-                if (!Fs.IsDirectory(dir)) continue;
-                Fs.WriteAllText(dir + name, ExecutableStub);
-                Fs.Chmod(dir + name, Oct("755"));
-                Fs.SetModified(dir + name, InstalledAt);
-                // shortcut: a stub is 16 bytes but reports a plausible program size; `wc -c` on it would disagree
-                Fs.SetReportedSize(dir + name, 14_000 + (uint)name.Aggregate(17, (h, c) => h * 31 + c) % 180_000 / 8 * 8);
-                Fs.SetModified(dir, InstalledAt);
-            }
-        }
+        WriteProgramFile(name);
         return this;
+    }
+
+    void WriteProgramFile(string name)
+    {
+        bool shellOnly = NoProgramFile.Contains(name) && (_builtinNames is null || _builtinNames.Contains(name));
+        if (shellOnly || name.Contains('/') || name is "." or ".." or ":" || !Fs.IsDirectory("/usr/bin")) return;
+        using var _ = Fs.AsRoot();
+        foreach (var dir in new[] { "/usr/bin/", "/bin/" })
+        {
+            if (!Fs.IsDirectory(dir)) continue;
+            Fs.WriteAllText(dir + name, ExecutableStub);
+            Fs.Chmod(dir + name, Oct("755"));
+            Fs.SetModified(dir + name, InstalledAt);
+            // shortcut: a stub is 16 bytes but reports a plausible program size; `wc -c` on it would disagree
+            Fs.SetReportedSize(dir + name, 14_000 + (uint)name.Aggregate(17, (h, c) => h * 31 + c) % 180_000 / 8 * 8);
+            Fs.SetModified(dir, InstalledAt);
+        }
+    }
+
+    /// <summary>After a restore, program files for exactly this shell's commands: the snapshot may come from a shell with others.</summary>
+    void SyncProgramFiles()
+    {
+        using var _ = Fs.AsRoot();
+        foreach (var dir in new[] { "/usr/bin/", "/bin/" })
+            if (Fs.IsDirectory(dir))
+                foreach (var name in Fs.List(dir))
+                    if (!_commands.ContainsKey(name) && Fs.IsFile(dir + name) && Fs.ReadAllText(dir + name) == ExecutableStub) Fs.Delete(dir + name);
+        foreach (var name in _commands.Keys)
+            if (!Fs.IsFile("/usr/bin/" + name)) WriteProgramFile(name);
     }
 
     public Shell Register(string name, Func<CommandContext, int> handler, string description = "", string? usage = null) =>
@@ -510,7 +532,7 @@ public sealed partial class Shell
     // pipeline stage doesn't copy every element just to start
     State SaveState()
     {
-        _epoch++;
+        _epoch = NextEpoch();
         _subshell++;
         return new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps), new(Arrays))
             { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs), VariableChars = _variableChars };
@@ -518,7 +540,7 @@ public sealed partial class Shell
 
     void RestoreState(State s)
     {
-        _epoch++;
+        _epoch = NextEpoch();
         _subshell--;
         (Noglob, Xtrace, Noclobber, _ifsUnset) = s.Flags;
         _variableChars = s.VariableChars; // was a bound for the state coming back

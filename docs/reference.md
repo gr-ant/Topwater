@@ -12,6 +12,7 @@ Everything the simulated machine supports, in one place.
 - [Documents](#documents)
 - [Real host programs](#real-host-programs)
 - [The tool description](#the-tool-description)
+- [Snapshots](#snapshots)
 - [Limits and safety](#limits-and-safety)
 - [Not supported](#not-supported)
 
@@ -327,6 +328,109 @@ Give the model one tool: `BashTool.Name`, `BashTool.Description`,
 The default description tells the model the truth: it is in a sandboxed shell, Python, git and the network are
 not available, and your programs are live. In testing this beat both pretending to be an ordinary machine and
 announcing "this is a simulation" (see the README).
+
+## Snapshots
+
+A snapshot is the whole machine at one moment: every file and the whole session. Use it to undo an agent's bad
+turn, try several approaches from one starting point, build test fixtures once, or keep a conversation's machine
+across restarts.
+
+```csharp
+ShellSnapshot before = shell.Snapshot();   // in memory
+await shell.RunAsync("rm -rf src");
+shell.Restore(before);                     // src is back, and so are variables, cwd, ...
+
+Shell attempt = shell.Fork();              // an independent copy to try something on
+
+using (var file = File.Create("machine.zip")) shell.Save(file);   // or before.Save(file)
+Shell later = Shell.Load(File.OpenRead("machine.zip"));            // built-ins only: register your commands again
+shell.Restore(ShellSnapshot.Load(File.OpenRead("machine.zip"), shell.Options));  // or load into a shell you configured
+```
+
+A snapshot is immutable. Later changes to the shell never reach it, restoring it twice gives the same machine, and a
+fork shares nothing mutable with its parent. Taking one is cheap enough for every turn, because file contents
+(strings and byte arrays, never changed in place) and arrays are shared rather than copied. Arrays are copied the
+next time either side writes to them. Measured with ~3,300 files and 6.7 MB of data, 300 variables, a 20,000-element
+array and 200 history entries (Release, Linux x64): `Snapshot` takes about 5 ms and allocates about 0.5 MB (one
+small object per file and directory, plus copies of the session's dictionaries). `Restore` and `Fork` take about 6 ms.
+`Save` takes 0.3 s and `Load` 0.2 s.
+
+What is captured:
+
+| Part | What |
+|---|---|
+| Files | every file and directory: text or exact bytes, mode (including the sticky bit), owner, modification time, and the size `ls -l` reports for a program stub |
+| Variables | values and `declare` attributes (integer, readonly, nameref, lower/upper case, exported), whether a variable is exported to child shells, indexed and associative arrays (with sparse indices) |
+| Functions | every definition, and which are exported with `export -f` |
+| Session | aliases, working directory, `pushd` stack, `shopt` settings, `set` options, traps, positional parameters, `$?`, `$_`, `PIPESTATUS`, finished background jobs and `$!`, `getopts` position, whether `IFS` is unset, history, the start time behind `SECONDS` |
+
+What is not captured, on purpose:
+
+- **Per-call state.** Function locals, open file descriptors (`exec 3>file`), the time and loop budgets, and anything
+  else that exists only while a call runs. Take snapshots between calls, not from inside a running command.
+- **Your registrations.** Commands from `Register`, `RegisterTools`, `RegisterApi`, MCP mounts and host programs are
+  code, not data. `Restore` keeps the shell's own registrations and puts the `/usr/bin` entries back in line with
+  them. `Fork` shares the registered handlers with the parent, so a stateful handler is used by both (an MCP mount's
+  connection serves both shells). Host programs are not carried into a fork, because they are bound to the parent's
+  files and disk mirror: register them again on the fork. `Load` gives a shell with only the built-ins, so register
+  your commands again, or configure a shell and restore into it as shown above.
+- **`RANDOM`**, which has no seed to save, and the shell's options (`ShellOptions`: limits, user, host name), which
+  belong to whoever creates the shell. Without options, `Shell.Load` uses the snapshot's user and host name.
+
+`Restore` replaces the filesystem object's contents in place. If several shells share one `ShellOptions.FileSystem`,
+they all see the restored files.
+
+### The saved format
+
+`Save` writes a zip file. Zip is self-describing, every platform can open it (`unzip -l machine.zip`), and the
+contents of different files can be read one at a time. It contains:
+
+- `manifest.json`: `"format": "topwater-snapshot"`, `"version": 1`, the creation time, `user`, `hostname` and `cwd`,
+  then `files` and the session. Each file entry has its absolute `path`, `type` (`dir` or `file`), `mode` as octal
+  (`"0644"`), `owner`, `mtime` (UTC, ISO 8601, 100 ns precision), and for files `size`, `binary` (bytes rather than
+  UTF-8 text), an optional `reportedSize` and the `blob` that holds the contents. Parents come before their
+  children. `variables` lists `name`, `value`, `attrs` (the `declare` letters), `exported` and `array` (`assoc`,
+  `next`, `items` as `[key, value]` pairs). `functions` lists `name`, `body` as written, and `exported`. Then
+  `aliases`, `set`, `shopt`, `traps`, `positional`, `dirStack`, `history`, `lastExitCode` and the rest.
+- `blobs/<sha256>`: each distinct file content once, named by its SHA-256. Identical files (all the `/usr/bin` stubs)
+  are stored once, and after loading they share one copy in memory again.
+
+A newer `version` than this Topwater knows fails with `NotSupportedException`: `snapshot format version 2 is newer
+than this version of Topwater supports (1); upgrade Topwater to load it`. Later versions of Topwater are meant to keep
+reading version 1.
+
+### Loading untrusted snapshots
+
+`Load` treats the file as hostile and reads it only into memory. Nothing is written to disk. Anything wrong fails the
+whole load with `InvalidDataException` (`not a valid Topwater snapshot: ...`), and nothing is half-loaded. The limits
+come from the `ShellOptions` you pass (the defaults otherwise):
+
+- The file contents together may hold at most `MaxFileSystemBytes`. A snapshot of a shell whose app wrote more than
+  that (the app's writes are never refused) needs a larger value to load.
+- Files and directories, and zip entries, may number at most `MaxExtractEntries`.
+- Variables and array elements together may hold at most `MaxStringBytes` characters, and so may function bodies.
+- `manifest.json` may be at most 4 × `MaxStringBytes` plus 1 KB per allowed entry. The whole file may be at most
+  twice `MaxFileSystemBytes` plus that, and a stream that can't seek is read only up to that size.
+- Each blob is read only up to the size its entry declares, so a zip bomb stops there. It must then match its size
+  and SHA-256 hash.
+- Paths must be absolute and canonical: no `.` or `..` segments, no empty segments, no trailing `/`, no NUL. A parent
+  must come before its children, and a path may appear only once. Only directories and regular files exist: symlinks,
+  devices and other types are refused. Modes must be octal up to `7777`. Owners, the user and the host name must be
+  plain names, so `"user": "../../etc"` can't steer the home directory.
+- Variable names must be valid identifiers, and indexed arrays must have non-negative integer indices. Each function
+  body is parsed again as `name() body` and must come back as exactly that one function, so a body can't smuggle in
+  extra commands. Exit codes must be 0-255, and `set` options must be ones the shell has.
+
+### Toward real containers
+
+The saved format is meant to become an export to a real Ubuntu 24.04 container. That is why the manifest uses real
+absolute paths, octal modes, owner names, UTC modification times, the user, the host name, the working directory, and
+each variable's exported flag (the environment a process would start with). An exporter needs to write the `files`
+as a tar layer (`docker import`), map owner names to the uid and gid in the snapshot's `/etc/passwd` and `/etc/group`,
+leave out what the simulation invents (`/proc`, `/dev`, the 16-byte program stubs in `/usr/bin` and `/bin`, which a
+real image provides), and set `Env`, `WorkingDir` and `User` in the image config from the exported variables, `cwd`
+and `user`. Shell-session state (functions, aliases, history) could go into the user's `~/.bashrc` or be dropped. The
+registered commands have no container equivalent and would have to be provided as real programs.
 
 ## Limits and safety
 
