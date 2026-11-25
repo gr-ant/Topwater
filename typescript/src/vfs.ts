@@ -374,11 +374,11 @@ export class VirtualFileSystem {
     const clone = (n: Node, path: string): Node | null => {
       if (!permits(n, user, n instanceof Dir ? 5 : 4)) { denied(path, n instanceof Dir); return null; }
       if (n instanceof FileNode) {
-        const f = Object.assign(new FileNode(), { owner, mode: n.mode, size: n.size, data: n.data });
+        const f = Object.assign(new FileNode(), { owner, mode: n.mode, size: n.size, data: n.data, modified: this.store.clock() });
         f.content = n.content;
         return f;
       }
-      const copy = Object.assign(new Dir(), { owner, mode: n.mode });
+      const copy = Object.assign(new Dir(), { owner, mode: n.mode, modified: this.store.clock() });
       for (const [k, v] of (n as Dir).children) { const c = clone(v, path + '/' + k); if (c) copy.children.set(k, c); }
       return copy;
     };

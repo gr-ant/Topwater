@@ -35,6 +35,11 @@ describe('deterministic runs', () => {
     expect((await sh.run('mktemp -d')).stdout).toBe('/tmp/tmp.ymAett9wPp\n');
   });
 
+  it('stamps copies with the virtual clock', async () => {
+    const r = await make().run('mkdir d && touch d/f m && cp -r d d2 && cp m m2 && stat -c %Y d2 d2/f m2 | sort -u');
+    expect(r.stdout).toBe(`${Math.floor(start / 1000)}\n`);
+  });
+
   it('sleeps without waiting', async () => {
     const t0 = Date.now();
     const r = await make().run('sleep 3600; date -u +%H:%M:%S; sleep 1d; date +%F');
