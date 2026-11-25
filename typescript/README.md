@@ -59,26 +59,29 @@ await run(agent, '...');
 
 ## Deterministic runs, snapshots and recordings
 
-These use the C# version's formats, so files move freely between the two:
+Machines and recordings are `.topwater` files (`../spec/topwater-file`), the same in every port, so they move freely
+between them:
 
 ```ts
 import { Shell, ShellSnapshot, Recording, startRecording } from 'topwater';
 
 const shell = new Shell({ startTime: Date.UTC(2026, 10, 25, 9), randomSeed: 1 }); // virtual clock (sleep is instant) and seeded $RANDOM
-const zip = await ShellSnapshot.capture(shell).save();                           // the snapshot zip (docs/reference.md "Snapshots")
-(await ShellSnapshot.load(zip)).restore(new Shell());                            // checked as untrusted, with the same limits
+const file = await ShellSnapshot.capture(shell).save();                          // a .topwater without history: the machine
+(await ShellSnapshot.load(file)).restore(new Shell());                           // checked as untrusted, with the same limits
 
 const { recording, stop } = startRecording(shell, { metadata: { task: 'demo' }, snapshotEvery: 5 });
 await shell.run('ls');
 stop();
-const jsonl = await recording.save();                     // JSON Lines (docs/reference.md "Recordings")
-const again = await Recording.load(jsonl);                // also reads recordings made in .NET
-const afterTurn3 = await again.shellAt(2);                // nearest snapshot, then re-runs the calls after it
-console.log((await again.replay()).differences);
+const bytes = await recording.save();                     // .topwater: the end machine, history.jsonl and checkpoints
+const again = await Recording.load(bytes);                // also any port's .topwater, snapshot zip or old .jsonl recording
+const afterTurn3 = await again.shellAt(2);                // nearest checkpoint, then re-runs the calls after it
+console.log(again.calls[0].files, (await again.replay()).differences);
 ```
 
-A deterministic recording made in .NET re-runs here with the same times, `$RANDOM` values and `mktemp` names; where
-the two ports' commands differ, so does the output.
+A recording's `manifest.json` is the machine after the last call, so `ShellSnapshot.load` opens it as that machine. Each
+call records the shell's clock when it started (`time`) and the paths it added, changed or removed (`files`). A
+deterministic recording made in another port re-runs here with the same times, `$RANDOM` values and `mktemp` names;
+where the ports' commands differ, so does the output.
 
 ## Layout
 
@@ -91,7 +94,7 @@ the two ports' commands differ, so does the output.
 | `src/commands/*.ts` | built-ins and programs (`builtins`, `files`, `text`, `sed`, `awk`, `jq*`, `binary`, `archive`) |
 | `src/inflate.ts`, `src/compress.ts`, `src/md5.ts` | a synchronous inflate, compression via `CompressionStream`, MD5 (no `node:zlib`/`node:crypto`) |
 | `src/tools.ts` | schema-described tools and MCP mounting |
-| `src/snapshot.ts`, `src/recording.ts` | snapshots and recordings in the C# version's file formats |
+| `src/snapshot.ts`, `src/recording.ts` | machines and recordings as `.topwater` files (and loading the older recording format) |
 | `browser/` | the Web Worker host (`worker.ts`), the page-side `TopwaterSession` (`session.ts`), the demo pages (`demo/`: the terminal and the recording viewer) and the viewer's worker (`replay-worker.ts`, `diff.ts`) |
 | `test/corpus.test.ts` | runs the shared cases in `../tests/corpus` (recorded from real bash and GNU tools) |
 
@@ -122,12 +125,12 @@ the two ports' commands differ, so does the output.
 - `dist-browser/worker.js`: a Web Worker that runs a shell; drive it with `TopwaterSession` from `browser/session.ts`.
 - `browser/dist/`: the demo, a folder of static files. Serve it from any static host
   (`python3 -m http.server -d browser/dist`); it makes no requests outside its own folder. `index.html` is a terminal;
-  `replay.html` is the recording viewer: open a `.jsonl` recording (or the bundled sample, recorded in .NET), step
+  `replay.html` is the recording viewer: open a `.topwater` file or an old `.jsonl` recording (or the bundled sample, recorded in .NET), step
   through its turns, see each turn's output, the files as they were after it and a diff of what it changed, and open
   the terminal on the machine as of any turn ("Open a terminal here", which hands the snapshot over through
   `localStorage` to `index.html?fork=...`). A turn's files come from the recording's snapshot after it when there is
   one; otherwise the viewer's worker restores the nearest earlier snapshot and re-runs the calls in between with this
-  port, and says whether each re-run printed what was recorded.
+  port, and says whether each re-run printed what was recorded (for another port's recording it may not: the ports differ).
 
 Run the shell in a worker, not on the page's thread: one JavaScript call (a catastrophically backtracking regex, a long
 synchronous loop inside a command) can't be interrupted from inside, and browsers have no regex-engine fallback flag.

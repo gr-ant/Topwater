@@ -11,7 +11,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 let worker: Worker;
 let nextId = 1;
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-let loaded: { text: string; sidecars: Record<string, Uint8Array>; name: string } | null = null;
+let loaded: { data: Uint8Array; sidecars: Record<string, Uint8Array>; name: string } | null = null;
 
 function startWorker() {
   worker = new Worker(new URL('replay-worker.js', import.meta.url), { type: 'module' });
@@ -36,7 +36,7 @@ function request<T>(msg: Req, transfer: Transferable[] = []): Promise<T> {
       pending.clear();
       startWorker();
       reject(new Error(`rebuilding this turn took longer than ${REQUEST_TIMEOUT_MS / 1000} s, so it was stopped`));
-      if (loaded) await request({ t: 'load', text: loaded.text, sidecars: loaded.sidecars }).catch(() => undefined);
+      if (loaded) await request({ t: 'load', data: loaded.data, sidecars: loaded.sidecars }).catch(() => undefined);
     }, REQUEST_TIMEOUT_MS);
     pending.set(id, {
       resolve: v => { clearTimeout(timer); resolve(v as T); },
@@ -68,11 +68,11 @@ let current = -1;
 let selected: string | null = null;
 const openDirs = new Set<string>();
 
-async function openRecording(text: string, sidecars: Record<string, Uint8Array>, name: string) {
+async function openRecording(data: Uint8Array, sidecars: Record<string, Uint8Array>, name: string) {
   status(`Opening ${name}…`);
   try {
-    const value = await request<LoadedRecording>({ t: 'load', text, sidecars });
-    loaded = { text, sidecars, name };
+    const value = await request<LoadedRecording>({ t: 'load', data, sidecars });
+    loaded = { data, sidecars, name };
     rec = value;
     selected = null;
     openDirs.clear();
@@ -87,18 +87,19 @@ async function openRecording(text: string, sidecars: Record<string, Uint8Array>,
 }
 
 async function openFiles(files: File[]) {
-  const recording = files.find(f => /\.jsonl?$/i.test(f.name)) ?? files.find(f => !/\.zip$/i.test(f.name));
-  if (!recording) { status('Choose a .jsonl recording (and its .zip snapshots, if it keeps them separately).', true); return; }
+  // a .topwater file, or an old .jsonl recording with the .zip snapshots it keeps beside it
+  const recording = files.find(f => /\.(topwater|jsonl?)$/i.test(f.name)) ?? (files.length === 1 ? files[0] : files.find(f => !/\.zip$/i.test(f.name)));
+  if (!recording) { status('Choose a .topwater file (or an old .jsonl recording and its .zip snapshots).', true); return; }
   const sidecars: Record<string, Uint8Array> = {};
   for (const f of files) if (f !== recording) sidecars[f.name] = new Uint8Array(await f.arrayBuffer());
-  await openRecording(await recording.text(), sidecars, recording.name);
+  await openRecording(new Uint8Array(await recording.arrayBuffer()), sidecars, recording.name);
 }
 
 async function openSample() {
   try {
     const res = await fetch('samples/sales-report.jsonl');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await openRecording(await res.text(), {}, 'sales-report.jsonl (sample)');
+    await openRecording(new Uint8Array(await res.arrayBuffer()), {}, 'sales-report.jsonl (sample)');
   } catch (e) { status(`Could not load the sample: ${(e as Error).message}`, true); }
 }
 
@@ -116,9 +117,12 @@ function renderSummary(name: string) {
   add('Machine', `${r.user}@${r.hostname}`);
   add('Recorded by', r.topwater ? `Topwater ${r.topwater}` : 'Topwater');
   // whether a re-run turn matched is checked and shown per turn; this only says what the recording pins down
+  const otherPort = r.topwater !== 'typescript';
   add('Deterministic', r.deterministic
     ? `virtual clock from ${fmtTime(r.startTime!)}, random seed ${r.randomSeed} (each re-run turn says whether it matched the recording)`
     : 'no: recorded on the real clock, so times and random numbers differ when turns are re-run');
+  if (otherPort && r.calls.length)
+    add('Re-run here', 'turns without a snapshot are re-run in this browser by Topwater\'s TypeScript port and compared with what it prints; it was recorded elsewhere, and the ports differ, so the output may too');
   if (r.appCommands.length) add('App commands', `${r.appCommands.join(', ')} (not available here: re-run turns that use them differ)`);
   slider.max = String(r.calls.length);
 }

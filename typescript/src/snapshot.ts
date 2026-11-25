@@ -1,6 +1,7 @@
-// Snapshots in the C# port's saved format (docs/reference.md "Snapshots"): a zip with manifest.json and blobs/<sha256>.
-// A snapshot saved by either port loads in the other. Loading treats the bytes as hostile, with the same limits as C#.
-import { readZip, writeZip, crc32, dosTime, ZipFormatError } from './commands/zipfile.js';
+// Snapshots as .topwater files (spec/topwater-file): a zip with manifest.json and blobs/<sha256>; a recording adds history
+// and checkpoints to the same zip. A file saved by any port loads in the others. Loading treats the bytes as hostile, with
+// the same limits in every port.
+import { readZip, writeZip, crc32, dosTime, ZipFormatError, type ZipEntry } from './commands/zipfile.js';
 import { inflateRaw } from './inflate.js';
 import { deflate } from './compress.js';
 import { parse, ParseError, type Script } from './parser.js';
@@ -79,65 +80,18 @@ export class ShellSnapshot {
 
   // ---------- saving ----------
 
-  /** The snapshot as the C# port's zip: manifest.json plus one blob per distinct content. */
-  async save(): Promise<Uint8Array> {
-    const zip: Parameters<typeof writeZip>[0] = [];
-    const [time, date] = dosTime(Date.now());
-    const add = async (name: string, raw: Uint8Array) =>
-      zip.push({ name, method: 8, flags: 0, crc: crc32(raw), usize: raw.length, time, date, ext: 0, data: await deflate('deflate-raw', raw) });
-    const written = new Set<string>();
-    const files: Record<string, unknown>[] = [];
-    let links = false;
-    for (const e of this.files) {
-      const type = e.isDirectory ? 'dir' : e.linkTarget !== null ? 'symlink' : 'file';
-      const entry: Record<string, unknown> = { path: e.path, type, mode: e.mode.toString(8).padStart(4, '0'), owner: e.owner, mtime: formatTime(e.modified), target: e.linkTarget ?? undefined, link: e.hardLink ?? undefined };
-      links ||= e.linkTarget !== null || e.hardLink !== null;
-      if (type === 'file') {
-        const bytes = e.data ?? enc.encode(e.text ?? '');
-        entry.size = bytes.length;
-        if (e.data) entry.binary = true;
-        if (e.reportedSize != null) entry.reportedSize = e.reportedSize;
-        if (bytes.length > 0) {
-          const blob = await sha256(bytes);
-          entry.blob = blob;
-          if (!written.has(blob)) { written.add(blob); await add('blobs/' + blob, bytes); }
-        }
-      }
-      files.push(entry);
-    }
-    const st = this.state;
-    const names = [...new Set([...st.variables.keys(), ...st.arrays.keys(), ...st.attributes.keys()])].sort(ordinal);
-    const manifest: Record<string, unknown> = {
-      format: FORMAT, version: links ? SNAPSHOT_FORMAT_VERSION : 1, created: formatTime(this.created), user: this.user, hostname: this.hostname, cwd: st.cwd, files,
-      variables: names.map(n => dropEmpty({
-        name: n, value: st.variables.get(n), attrs: st.attributes.get(n), exported: isExported(st, n),
-        array: st.arrays.has(n) ? (a => ({ assoc: a.assoc || undefined, next: a.next || undefined, items: a.items }))(st.arrays.get(n)!) : undefined,
-      })),
-      functions: [...st.functions].map(([name, body]) => dropEmpty({ name, body, exported: st.exportedFunctions.has(name) })),
-      aliases: Object.fromEntries(st.aliases), set: st.setOptions, ifsUnset: st.ifsUnset || undefined, shopt: st.shopts, traps: Object.fromEntries(st.traps),
-      positional: st.positional, dirStack: st.dirStack, history: st.history, lastExitCode: st.lastExitCode || undefined,
-      secondsBase: formatTime(st.secondsBase), lastArg: st.lastArg || undefined, pipeStatus: st.pipeStatus, getopts: st.getopts, jobs: st.jobs,
-      lastBackgroundPid: st.lastBackgroundPid || undefined, nextPid: st.nextPid || undefined,
-      clock: st.clock === undefined ? undefined : formatTime(st.clock), random: st.random?.toString(),
-    };
-    await add('manifest.json', enc.encode(JSON.stringify(dropEmpty(manifest))));
-    return writeZip(zip.reverse()); // manifest first, as C# readers expect nothing in particular but humans like it
-  }
+  /** The snapshot as the C# port's zip: manifest.json plus one blob per distinct content (a .topwater without history). */
+  save(): Promise<Uint8Array> { return writeTopwater([['manifest.json', this]]); }
 
   // ---------- loading ----------
 
   /**
-   * Reads a snapshot saved by either port, treating it as untrusted: `limits`' maxFileSystemBytes, maxStringBytes and
+   * Reads a snapshot saved by any port, or the machine (manifest.json) of any .topwater file, treating it as untrusted: `limits`' maxFileSystemBytes, maxStringBytes and
    * maxExtractEntries bound it (the defaults otherwise), and every path, name, hash and size is checked. Throws
    * SnapshotError for anything malformed, Error("... newer ...") for a newer format version.
    */
   static async load(bytes: Uint8Array, limits: Partial<ShellOptions> = {}): Promise<ShellSnapshot> {
-    const o = { maxFileSystemBytes: 128 << 20, maxStringBytes: 32 << 20, maxExtractEntries: 100_000, ...limits };
-    try { return await read(bytes, o); }
-    catch (e) {
-      if (e instanceof SnapshotError || e instanceof SnapshotVersionError) throw e;
-      throw bad(e instanceof Error ? e.message : String(e));
-    }
+    return openTopwater(bytes, limits).machine('manifest.json');
   }
 }
 
@@ -150,13 +104,78 @@ const check = (v: unknown, shape: RegExp, what: string): string => {
   throw bad(`bad ${what} ${JSON.stringify(v)}`);
 };
 
-async function read(bytes: Uint8Array, o: { maxFileSystemBytes: number; maxStringBytes: number; maxExtractEntries: number }): Promise<ShellSnapshot> {
+type Limits = { maxFileSystemBytes: number; maxStringBytes: number; maxExtractEntries: number };
+
+/** @internal Writes a zip holding the given machines (manifest.json, checkpoints) and text entries, every file content once as blobs/<sha256>. */
+export async function writeTopwater(parts: [name: string, content: ShellSnapshot | string][]): Promise<Uint8Array> {
+  const zip: ZipEntry[] = [], blobs: ZipEntry[] = [];
+  const [time, date] = dosTime(Date.now());
+  const add = async (to: ZipEntry[], name: string, raw: Uint8Array) =>
+    to.push({ name, method: 8, flags: 0, crc: crc32(raw), usize: raw.length, time, date, ext: 0, data: await deflate('deflate-raw', raw) });
+  // checkpoints share most contents (by reference): hash each once
+  const known = new Map<string | Uint8Array, [hash: string, size: number]>(), written = new Set<string>();
+  const content = async (e: VfsEntry) => {
+    const key = e.data ?? e.text ?? '';
+    let found = known.get(key);
+    if (!found) {
+      const bytes = e.data ?? enc.encode(e.text ?? '');
+      found = [bytes.length ? await sha256(bytes) : '', bytes.length];
+      if (bytes.length && !written.has(found[0])) { written.add(found[0]); await add(blobs, 'blobs/' + found[0], bytes); }
+      known.set(key, found);
+    }
+    return found;
+  };
+  for (const [name, part] of parts)
+    await add(zip, name, enc.encode(typeof part === 'string' ? part : JSON.stringify(await manifestOf(part, content))));
+  return writeZip([...zip, ...blobs]);
+}
+
+async function manifestOf(snap: ShellSnapshot, content: (e: VfsEntry) => Promise<[string, number]>): Promise<Record<string, unknown>> {
+  const files: Record<string, unknown>[] = [];
+  let links = false;
+  for (const e of snap.files) {
+    const type = e.isDirectory ? 'dir' : e.linkTarget !== null ? 'symlink' : 'file';
+    const entry: Record<string, unknown> = { path: e.path, type, mode: e.mode.toString(8).padStart(4, '0'), owner: e.owner, mtime: formatTime(e.modified), target: e.linkTarget ?? undefined, link: e.hardLink ?? undefined };
+    links ||= e.linkTarget !== null || e.hardLink !== null;
+    if (type === 'file') {
+      const [blob, size] = await content(e);
+      entry.size = size;
+      if (e.data) entry.binary = true;
+      if (e.reportedSize != null) entry.reportedSize = e.reportedSize;
+      if (size > 0) entry.blob = blob;
+    }
+    files.push(entry);
+  }
+  const st = snap.state;
+  const names = [...new Set([...st.variables.keys(), ...st.arrays.keys(), ...st.attributes.keys()])].sort(ordinal);
+  return dropEmpty({
+    format: FORMAT, version: links ? SNAPSHOT_FORMAT_VERSION : 1, created: formatTime(snap.created), user: snap.user, hostname: snap.hostname, cwd: st.cwd, files,
+    variables: names.map(n => dropEmpty({
+      name: n, value: st.variables.get(n), attrs: st.attributes.get(n), exported: isExported(st, n),
+      array: st.arrays.has(n) ? (a => ({ assoc: a.assoc || undefined, next: a.next || undefined, items: a.items }))(st.arrays.get(n)!) : undefined,
+    })),
+    functions: [...st.functions].map(([name, body]) => dropEmpty({ name, body, exported: st.exportedFunctions.has(name) })),
+    aliases: Object.fromEntries(st.aliases), set: st.setOptions, ifsUnset: st.ifsUnset || undefined, shopt: st.shopts, traps: Object.fromEntries(st.traps),
+    positional: st.positional, dirStack: st.dirStack, history: st.history, lastExitCode: st.lastExitCode || undefined,
+    secondsBase: formatTime(st.secondsBase), lastArg: st.lastArg || undefined, pipeStatus: st.pipeStatus, getopts: st.getopts, jobs: st.jobs,
+    lastBackgroundPid: st.lastBackgroundPid || undefined, nextPid: st.nextPid || undefined,
+    clock: st.clock === undefined ? undefined : formatTime(st.clock), random: st.random?.toString(),
+  });
+}
+
+/**
+ * @internal A .topwater (or snapshot) zip opened as untrusted input under the caller's limits (the defaults otherwise).
+ * A recording may be `sizeFactor` times a snapshot's size cap. Errors are SnapshotError, or SnapshotVersionError for a newer manifest.
+ */
+export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, sizeFactor = 1) {
+  const o: Limits = { maxFileSystemBytes: 128 << 20, maxStringBytes: 32 << 20, maxExtractEntries: 100_000, ...limits };
   const maxManifest = 4 * o.maxStringBytes + 1024 * o.maxExtractEntries;
-  const maxArchive = 2 * o.maxFileSystemBytes + maxManifest;
-  if (bytes.length > maxArchive) throw bad(`the snapshot is larger than ${maxArchive} bytes`);
-  let entries;
-  try { entries = readZip(bytes); } catch (e) { throw bad(e instanceof ZipFormatError ? e.message : 'not a zip file'); }
-  if (entries.length > o.maxExtractEntries + 1) throw bad(`more than ${o.maxExtractEntries} entries (MaxExtractEntries)`);
+  const maxArchive = sizeFactor * (2 * o.maxFileSystemBytes + maxManifest);
+  const entries = guard(() => {
+    if (bytes.length > maxArchive) throw bad(`the file is larger than ${maxArchive} bytes`);
+    // blobs for four file systems, the manifest, history.jsonl and up to 1000 checkpoints
+    try { return readZip(bytes, 4 * o.maxExtractEntries + 1002); } catch (e) { throw bad(e instanceof ZipFormatError ? e.message : 'not a zip file'); }
+  });
   const byName = new Map(entries.map(e => [e.name, e]));
   const open = (name: string, max: number, what: string) => {
     const e = byName.get(name)!;
@@ -164,11 +183,33 @@ async function read(bytes: Uint8Array, o: { maxFileSystemBytes: number; maxStrin
     if (e.method !== 8) throw bad(`${what}: unsupported compression`);
     try { return inflateRaw(e.data, max); } catch { throw bad(`${what} is larger than ${max} bytes or corrupt`); }
   };
-  if (!byName.has('manifest.json')) throw bad('manifest.json is missing');
-  let m: Record<string, any>;
-  try { m = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(open('manifest.json', maxManifest, 'manifest.json'))); }
-  catch (e) { throw e instanceof SnapshotError ? e : bad('manifest.json is not JSON'); }
-  if (!m || typeof m !== 'object' || m.format !== FORMAT) throw bad('manifest.json is not a Topwater snapshot manifest');
+  const blobs: BlobCache = new Map();
+  return {
+    names: [...byName.keys()],
+    has: (name: string) => byName.has(name),
+    /** a UTF-8 entry, at most the manifest cap */
+    text: (name: string) => guard(() => {
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(open(name, maxManifest, name)); }
+      catch (e) { throw e instanceof SnapshotError ? e : bad(`${name} is not UTF-8`); }
+    }),
+    /** manifest.json or a checkpoint, checked like a snapshot */
+    machine: (name: string) => guardAsync(async () => {
+      if (!byName.has(name)) throw bad(`${name} is missing`);
+      let m: Record<string, any>;
+      try { m = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(open(name, maxManifest, name))); }
+      catch (e) { throw e instanceof SnapshotError ? e : bad(`${name} is not JSON`); }
+      return readMachine(m, name, o, blobs, (blob, size) => byName.has(blob) ? open(blob, size, blob) : null);
+    }),
+  };
+}
+
+type BlobCache = Map<string, { content: string | Uint8Array; size: number }>;
+const passThrough = (e: unknown) => e instanceof SnapshotError || e instanceof SnapshotVersionError ? e : bad(e instanceof Error ? e.message : String(e));
+function guard<T>(f: () => T): T { try { return f(); } catch (e) { throw passThrough(e); } }
+async function guardAsync<T>(f: () => Promise<T>): Promise<T> { try { return await f(); } catch (e) { throw passThrough(e); } }
+
+async function readMachine(m: Record<string, any>, name: string, o: Limits, cache: BlobCache, blobBytes: (entry: string, size: number) => Uint8Array | null): Promise<ShellSnapshot> {
+  if (!m || typeof m !== 'object' || m.format !== FORMAT) throw bad(`${name} is not a Topwater snapshot manifest`);
   if (typeof m.version !== 'number') throw bad('no format version');
   if (m.version > SNAPSHOT_FORMAT_VERSION)
     throw new SnapshotVersionError(`snapshot format version ${m.version} is newer than this version of Topwater supports (${SNAPSHOT_FORMAT_VERSION}); upgrade Topwater to load it`);
@@ -185,7 +226,6 @@ async function read(bytes: Uint8Array, o: { maxFileSystemBytes: number; maxStrin
   }
   const files: VfsEntry[] = [];
   const seen = new Set<string>(), dirs = new Set<string>(['/']);
-  const cache = new Map<string, string | Uint8Array>();
   const strict = new TextDecoder('utf-8', { fatal: true });
   for (const f of fileList) {
     const path = f?.path;
@@ -213,16 +253,17 @@ async function read(bytes: Uint8Array, o: { maxFileSystemBytes: number; maxStrin
       else {
         const blob = check(f.blob, BLOB, `${path}: blob`);
         const key = blob + (f.binary ? 'b' : 't');
-        let content = cache.get(key);
-        if (content === undefined) {
-          if (!byName.has('blobs/' + blob)) throw bad(`${path}: blob ${blob} is missing`);
-          const b = open('blobs/' + blob, f.size, 'blob ' + blob);
-          if (b.length !== f.size) throw bad(`${path}: blob ${blob} holds ${b.length} bytes, not ${f.size}`);
-          if (await sha256(b) !== blob) throw bad(`${path}: blob ${blob} doesn't match its hash`);
-          try { content = f.binary ? b.slice() : strict.decode(b); } catch { throw bad(`${path}: text is not valid UTF-8`); }
-          cache.set(key, content);
-        }
-        if (f.binary) data = content as Uint8Array; else text = content as string;
+        let cached = cache.get(key);
+        if (cached === undefined) {
+          const raw = blobBytes('blobs/' + blob, f.size);
+          if (!raw) throw bad(`${path}: blob ${blob} is missing`);
+          if (raw.length !== f.size) throw bad(`${path}: blob ${blob} holds ${raw.length} bytes, not ${f.size}`);
+          if (await sha256(raw) !== blob) throw bad(`${path}: blob ${blob} doesn't match its hash`);
+          let content;
+          try { content = f.binary ? raw.slice() : strict.decode(raw); } catch { throw bad(`${path}: text is not valid UTF-8`); }
+          cache.set(key, cached = { content, size: raw.length });
+        } else if (cached.size !== f.size) throw bad(`${path}: blob ${blob} holds ${cached.size} bytes, not ${f.size}`);
+        if (f.binary) data = cached.content as Uint8Array; else text = cached.content as string;
       }
     } else if (f.type !== 'dir' && f.type !== 'symlink' && f.type !== 'file') throw bad(`${path}: unknown type ${JSON.stringify(f.type)}`);
     if (f.type === 'dir') dirs.add(path);

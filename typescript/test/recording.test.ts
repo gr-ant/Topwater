@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { z } from 'zod';
 import { Shell, ShellSnapshot, SnapshotError, Recording, startRecording } from '../src/index.js';
-import { readZip, writeZip } from '../src/commands/zipfile.js';
+import { buildZip, crc32, readZip, writeZip } from '../src/commands/zipfile.js';
 import { inflateRaw } from '../src/inflate.js';
 
 const fromCSharp = readFileSync(new URL('../../tests/Topwater.Tests/recordings/basics.jsonl', import.meta.url), 'utf8');
@@ -178,57 +179,194 @@ describe('recordings in the C# format', () => {
     stop();
     await sh.run('echo not recorded');
     expect(recording.calls.length).toBe(3);
-    const text = await recording.save();
-    const lines = text.trimEnd().split('\n');
+    // a snapshot after every 2nd call, and always after the last
+    expect(recording.calls.map(c => !!c.snapshot)).toEqual([false, true, true]);
+    expect(recording.calls[0].files).toEqual(['/home/agent/out', '/home/agent/out/n.txt']); // the clock stood still: /home/agent's mtime too
+    expect(recording.calls[1].files).toBeUndefined();
+    expect(recording.calls.map(c => c.time)).toEqual([deterministic.startTime, deterministic.startTime, deterministic.startTime + 5000]);
+    const bytes = await recording.save();
+    expect(readZip(bytes).map(e => e.name).filter(n => !n.startsWith('blobs/'))).toEqual(['manifest.json', 'history.jsonl', 'checkpoints/0.json', 'checkpoints/2.json', 'checkpoints/3.json']);
+    const lines = entryText(bytes, 'history.jsonl').trimEnd().split('\n');
     expect(lines.length).toBe(4);
-    expect(JSON.parse(lines[0])).toMatchObject({ format: 'topwater-recording', version: 1, metadata: { task: 'demo' }, options: { randomSeed: 42, startTime: '2026-03-04T05:06:07.0000000Z' } });
-    expect(JSON.parse(lines[2]).snapshot.embedded).toBeTruthy();
-    const loaded = await Recording.load(text);
+    expect(JSON.parse(lines[0])).toMatchObject({ format: 'topwater-history', version: 1, metadata: { task: 'demo' }, options: { randomSeed: 42, startTime: '2026-03-04T05:06:07.0000000Z' } });
+    expect(JSON.parse(lines[2])).toMatchObject({ index: 1, time: '2026-03-04T05:06:07.0000000Z' });
+    expect(entryText(bytes, 'manifest.json')).toBe(entryText(bytes, 'checkpoints/3.json'));
+    const loaded = await Recording.load(bytes);
+    expect(loaded.calls.map(c => !!c.snapshot)).toEqual([false, true, true]);
+    expect(loaded.calls[0].files).toEqual(recording.calls[0].files);
     expect((await loaded.replay()).matches).toBe(true);
     const at = await loaded.shellAt(2);
     expect((await at.run('echo $x; f 2')).stdout).toBe('7\nf2\n');
     loaded.calls[1] = { ...loaded.calls[1], stdout: 'changed\n' };
     const report = await loaded.replay();
     expect(report.differences.map(d => [d.index, d.field])).toEqual([[1, 'stdout']]);
+    // its manifest is the end machine, for anything that only reads snapshots
+    const end = new Shell();
+    (await ShellSnapshot.load(bytes)).restore(end);
+    expect((await end.run('pwd; f 3; cat out/n.txt')).stdout).toBe('/home/agent\nf3\n2\n');
+  });
+
+  it('opens a snapshot as a recording of no calls', async () => {
+    const sh = new Shell();
+    await sh.run('echo hi > a.txt');
+    const rec = await Recording.load(await ShellSnapshot.capture(sh).save());
+    expect(rec.calls.length).toBe(0);
+    expect((await rec.createShell().run('cat a.txt')).stdout).toBe('hi\n');
   });
 
   it('refuses newer versions and side-car files it cannot open', async () => {
     await expect(Recording.load('{"format":"topwater-recording","version":2}\n')).rejects.toThrow(/newer/);
     await expect(Recording.load('nope\n')).rejects.toThrow(/not a valid Topwater recording/);
     await expect(Recording.load('{"format":"topwater-recording","version":1,"options":{},"start":{"file":"x.snapshots/start.zip"}}\n')).rejects.toThrow(/side-car/);
+    const good = await smallRecording();
+    await expect(Recording.load(editEntry(good, 'history.jsonl', t => t.replace('"version":1', '"version":2')))).rejects.toThrow(/history format version 2 is newer than this version of Topwater supports/);
   });
 
   it('refuses side-car paths that are not plain relative names, before opening anything', async () => {
     let opened = false;
     const open = async () => { opened = true; return new Uint8Array(); };
-    for (const file of ['/etc/x.zip', '../x.zip', 'a/../../x.zip', 'C:x.zip', 'C:\\Windows\\x.zip', 'a\\..\\..\\x.zip', '\\\\server\\share\\x.zip', 'https://evil.example/x.zip', 'file:///etc/x.zip', ''])
-      await expect(Recording.load(JSON.stringify({ format: 'topwater-recording', version: 1, options: {}, start: { file } }) + '\n', open)).rejects.toThrow(/plain relative path|no snapshot/);
+    for (const file of ['/etc/x.zip', '../x.zip', 'a/../../x.zip', 'C:x.zip', 'C:\\Windows\\x.zip', 'a\\..\\..\\x.zip', '\\\\server\\share\\x.zip', 'https://evil.example/x.zip', 'file:///etc/x.zip', '',
+      '%2e%2e/x', '.%2e/x', ' ../x', '\t../x', 'x?y=1', 'x#f', '/etc/x', 'C:x', 'a\\b', 'https://x', '.../x', 'a//b', 'a/'])
+      await expect(Recording.load(JSON.stringify({ format: 'topwater-recording', version: 1, options: {}, start: { file } }) + '\n', open), file).rejects.toThrow(/plain relative path|no snapshot/);
     expect(opened).toBe(false);
+    // and a plain name is passed on as it is
+    const names: string[] = [];
+    const snap = await ShellSnapshot.capture(new Shell()).save();
+    await Recording.load(JSON.stringify({ format: 'topwater-recording', version: 1, options: {}, start: { file: 'rec.snapshots/start-0_1.zip' } }) + '\n', async p => { names.push(p); return snap; });
+    expect(names).toEqual(['rec.snapshots/start-0_1.zip']);
   });
 
   it('takes limits from the file only to lower them', async () => {
-    const header = JSON.parse((await new Recording(ShellSnapshot.capture(new Shell()), {}).save()).split('\n')[0]);
-    Object.assign(header.options, { maxLoopIterations: 1e15, maxCallDurationMs: 1e15, maxFileSystemBytes: 1e15, maxStringBytes: 1e15, maxExtractBytes: -5, maxExtractEntries: 10 });
-    const text = JSON.stringify(header) + '\n';
-    const raised = await Recording.load(text);
+    const options = { maxLoopIterations: 1e15, maxCallDurationMs: 1e15, maxFileSystemBytes: 1e15, maxStringBytes: 1e15, maxExtractBytes: -5, maxExtractEntries: 10 };
     const d = new Shell().options;
-    expect(raised.options).toMatchObject({ maxLoopIterations: d.maxLoopIterations, maxCallDurationMs: d.maxCallDurationMs, maxFileSystemBytes: d.maxFileSystemBytes, maxStringBytes: d.maxStringBytes, maxExtractBytes: 0, maxExtractEntries: 10 });
-    const tight = await Recording.load(text, undefined, { maxLoopIterations: 50 });
-    expect(tight.createShell().options.maxLoopIterations).toBe(50);
+    const bounded = { maxLoopIterations: d.maxLoopIterations, maxCallDurationMs: d.maxCallDurationMs, maxFileSystemBytes: d.maxFileSystemBytes, maxStringBytes: d.maxStringBytes, maxExtractBytes: 0, maxExtractEntries: 10 };
+    const jsonl = JSON.stringify({ format: 'topwater-recording', version: 1, options, start: { embedded: Buffer.from(await ShellSnapshot.capture(new Shell()).save()).toString('base64') } }) + '\n';
+    const topwater = editEntry(await smallRecording(), 'history.jsonl', t => t.replace(/"options":\{[^}]*\}/, `"options":${JSON.stringify(options)}`));
+    for (const file of [jsonl, topwater]) {
+      expect((await Recording.load(file)).options).toMatchObject(bounded);
+      const tight = await Recording.load(file, undefined, { maxLoopIterations: 50 });
+      expect(tight.createShell().options.maxLoopIterations).toBe(50);
+    }
+    // -1: no time limit, which the caller's limit still bounds
+    const unlimited = editEntry(await smallRecording(), 'history.jsonl', t => t.replace(/"maxCallDurationMs":\d+/, '"maxCallDurationMs":-1'));
+    expect((await Recording.load(unlimited)).options.maxCallDurationMs).toBe(d.maxCallDurationMs);
+    expect((await Recording.load(unlimited, undefined, { maxCallDurationMs: Infinity })).options.maxCallDurationMs).toBe(Infinity);
   });
 
-  it('caps the number and total size of snapshots', async () => {
+  it('caps the number and total size of checkpoints', async () => {
     const sh = new Shell({ maxFileSystemBytes: 65536 });
     sh.fs.writeText('/home/agent/big.txt', 'x'.repeat(30000));
     const { recording, stop } = startRecording(sh, { snapshotEvery: 1 });
     for (let i = 0; i < 12; i++) await sh.run('true');
     stop();
-    const lines = (await recording.save()).trimEnd().split('\n');
-    // each snapshot is within the limit, all of them together are not
-    await expect(Recording.load(lines.join('\n'), undefined, { maxFileSystemBytes: 65536 })).rejects.toThrow(/maxFileSystemBytes/);
-    await expect(Recording.load(lines[0] + '\n' + (lines[1] + '\n').repeat(1000))).rejects.toThrow(/more than 1000 snapshots/);
-  }, 60_000);
+    // each checkpoint is within the limit, all of them together are not
+    await expect(Recording.load(await recording.save(), undefined, { maxFileSystemBytes: 65536 })).rejects.toThrow(/maxFileSystemBytes/);
+    const many = new Recording(recording.start, {});
+    for (let i = 0; i < 1000; i++) many.calls.push({ index: i, command: 'true', stdout: '', stderr: '', exitCode: 0, elapsedMs: 0, snapshot: recording.start });
+    await expect(Recording.load(await many.save())).rejects.toThrow(/more than 1000 checkpoints/);
+  }, 120_000);
+
+  it('checks the layout of a .topwater file', async () => {
+    const good = await smallRecording(); // two calls, checkpoints 0 and 2
+    const renamed = (from: string, to: string) => writeZip(readZip(good).map(e => e.name === from ? { ...e, name: to } : e));
+    await expect(Recording.load(renamed('checkpoints/2.json', 'checkpoints/02.json'))).rejects.toThrow(/not a checkpoint name/);
+    await expect(Recording.load(renamed('checkpoints/2.json', 'checkpoints/3.json'))).rejects.toThrow(/after the last call/);
+    await expect(Recording.load(renamed('checkpoints/0.json', 'checkpoints/1.json'))).rejects.toThrow(/checkpoints\/0.json \(the start\) is missing/);
+    await expect(Recording.load(editEntry(good, 'checkpoints/2.json', t => t.replace('"user":"agent"', '"user":"../x"')))).rejects.toThrow(/checkpoints\/2.json: bad user/);
+    // the entry count is read from the end record before any entry is listed: 4 x maxExtractEntries + 1002 at most
+    const crowded = buildZip(Array.from({ length: 1003 }, (_, i) => [`x${i}`, ''] as [string, string]));
+    await expect(ShellSnapshot.load(crowded, { maxExtractEntries: 0 })).rejects.toThrow(/1003 entries, more than 1002/);
+    await expect(Recording.load(crowded, undefined, { maxExtractEntries: 0 })).rejects.toThrow(/1003 entries, more than 1002/);
+  });
+
+  it('the shell\'s files a call touched: added, changed and removed, with links', async () => {
+    const sh = new Shell();
+    await sh.run('echo a > a; echo b > b; ln -s a s');
+    const { recording, stop } = startRecording(sh);
+    await sh.run('echo b > b');      // same text, new mtime? only when the clock moved; the content is the same
+    await sh.run('chmod 600 a; rm s; ln -s b s; ln a h');
+    await sh.run('true');
+    stop();
+    expect(recording.calls[1].files).toEqual(['/home/agent', '/home/agent/a', '/home/agent/h', '/home/agent/s']);
+    expect(recording.calls[2].files).toBeUndefined();
+  });
 });
+
+describe('.topwater files from every port', () => {
+  // from-typescript.topwater: TOPWATER_WRITE_FIXTURES=1 npx vitest run test/recording.test.ts writes it again (from-csharp and
+  // from-python are written by those ports with the same scenario).
+  const scenario = [
+    "mkdir -p work && cd work && printf 'buy milk\\nfix bug\\n' > todo.txt && wc -l todo.txt",
+    'greet() { echo "hi $1"; }; export TEAM=core; nums=(3 1 2); ln -s todo.txt latest; greet you',
+    'rm todo.txt; echo done > out.txt; ls; cat latest; exit 3',
+  ];
+  const dir = new URL('../../tests/Topwater.Tests/recordings/', import.meta.url);
+
+  it.runIf(process.env.TOPWATER_WRITE_FIXTURES)('writes from-typescript.topwater', async () => {
+    const sh = new Shell({ startTime: Date.UTC(2026, 10, 25, 9, 0, 0), randomSeed: 3 });
+    const { recording, stop } = startRecording(sh, { metadata: { source: 'typescript port', task: 'cross-port fixture' }, snapshotEvery: 2 });
+    for (const command of scenario) await sh.run(command);
+    stop();
+    writeFileSync(new URL('from-typescript.topwater', dir), await recording.save());
+  });
+
+  for (const file of ['from-typescript.topwater', 'from-csharp.topwater', 'from-python.topwater']) {
+    it.runIf(existsSync(new URL(file, dir)))(`loads ${file}`, async () => {
+      const bytes = new Uint8Array(readFileSync(new URL(file, dir)));
+      const rec = await Recording.load(bytes);
+      expect(rec.calls.map(c => c.command)).toEqual(scenario);
+      expect(rec.metadata.source).toBeTruthy();
+      expect(rec.calls[2].exitCode).toBe(3);
+      expect(rec.calls[0].files).toEqual(expect.arrayContaining(['/home/agent/work', '/home/agent/work/todo.txt']));
+      expect(rec.calls[2].files).toEqual(expect.arrayContaining(['/home/agent/work/todo.txt', '/home/agent/work/out.txt']));
+      const at1 = await rec.shellAt(1);
+      expect((await at1.run('cd /home/agent/work; greet x; echo $TEAM ${nums[@]}; readlink latest')).stdout).toBe('hi x\ncore 3 1 2\ntodo.txt\n'); // one echo: $TEAM and the array on one line
+      const end = new Shell();
+      (await ShellSnapshot.load(bytes)).restore(end);
+      expect((await end.run('cat /home/agent/work/out.txt')).stdout).toBe('done\n');
+      if (file === 'from-typescript.topwater') {
+        expect(rec.metadata.source).toBe('typescript port');
+        expect(rec.isDeterministic).toBe(true);
+        expect((await rec.replay()).matches).toBe(true);
+      }
+      validate(bytes);
+    });
+  }
+});
+
+/** Entry `name` of a zip, as text. */
+function entryText(zip: Uint8Array, name: string) {
+  const e = readZip(zip).find(x => x.name === name)!;
+  return new TextDecoder().decode(e.method === 0 ? e.data : inflateRaw(e.data));
+}
+/** The zip with entry `name` rewritten (stored). */
+function editEntry(zip: Uint8Array, name: string, edit: (text: string) => string) {
+  const raw = new TextEncoder().encode(edit(entryText(zip, name)));
+  return writeZip(readZip(zip).map(e => e.name === name ? { ...e, method: 0, usize: raw.length, data: raw, crc: crc32(raw) } : e));
+}
+async function smallRecording() {
+  const sh = new Shell(deterministic);
+  const { recording, stop } = startRecording(sh);
+  await sh.run('echo one > a');
+  await sh.run('echo two >> a');
+  stop();
+  return recording.save();
+}
+
+/** Checks a .topwater file's manifest, checkpoints and history lines against the schemas in spec/topwater-file. */
+function validate(zip: Uint8Array) {
+  const spec = (name: string) => JSON.parse(readFileSync(new URL(`../../spec/topwater-file/${name}`, import.meta.url), 'utf8'));
+  const manifest = spec('manifest.schema.json');
+  // zod resolves only local references: give the history schema the manifest's definitions
+  const history = JSON.parse(JSON.stringify(spec('history.schema.json')).replaceAll('manifest.schema.json#/$defs/', '#/$defs/'));
+  history.$defs = { ...manifest.$defs, ...history.$defs };
+  const machine = z.fromJSONSchema(manifest), line = z.fromJSONSchema(history);
+  for (const e of readZip(zip)) {
+    if (e.name === 'manifest.json' || e.name.startsWith('checkpoints/')) expect(machine.safeParse(JSON.parse(entryText(zip, e.name))).error, e.name).toBeUndefined();
+    if (e.name === 'history.jsonl')
+      for (const l of entryText(zip, e.name).trimEnd().split('\n')) expect(line.safeParse(JSON.parse(l)).error, l).toBeUndefined();
+  }
+}
 
 import { diffLines } from '../browser/diff.js';
 

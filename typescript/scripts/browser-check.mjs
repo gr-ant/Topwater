@@ -114,7 +114,8 @@ try {
   await viewer.waitForSelector('#viewer:not([hidden])', { timeout: 30_000 });
   await settled();
   check((await viewer.locator('#timeline li').count()) === 10 && (await pos()) === 'Turn 1 of 9', 'viewer: the sample loads as a timeline of 9 turns plus the start');
-  check((await viewer.locator('#meta').innerText()).includes('compute total sales amount per region'), 'viewer: the summary shows the recorded task');
+  const meta = await viewer.locator('#meta').innerText();
+  check(meta.includes('compute total sales amount per region') && meta.includes('the ports differ'), 'viewer: the summary shows the recorded task, and that turns re-run here may differ from the C# recording');
 
   await viewer.locator('body').press('ArrowRight');
   await viewer.locator('body').press('ArrowRight');
@@ -162,6 +163,14 @@ try {
   await forked.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false');
   const forkOut = await forked.locator('[role="log"]').innerText();
   check(forkOut.includes('Forked from') && forkOut.includes('North 220') && forkOut.includes('archive') && forkOut.includes('more') && !forkOut.includes('notes.txt'), 'viewer: "Open a terminal here" opens the terminal on the machine after turn 6, and commands run on it');
+  // a .topwater file (the cross-port fixture recorded by this port): opens from the file picker
+  await viewer.locator('#file').setInputFiles(join(root, '../tests/Topwater.Tests/recordings/from-typescript.topwater'));
+  await viewer.waitForFunction(() => document.querySelector('#pos')?.textContent === 'Turn 1 of 3', null, { timeout: 30_000 });
+  await settled();
+  await viewer.locator('#timeline button[data-index="1"]').click();
+  await settled();
+  const meta3 = await viewer.locator('#meta').innerText();
+  check(meta3.includes('cross-port fixture') && !meta3.includes('Re-run here') && (await viewer.locator('#turn').innerText()).includes('hi you'), 'viewer: a .topwater file opens, with its turns and metadata');
   check(vErrors.length === 0 && fErrors.length === 0, `viewer: no console errors${vErrors.length + fErrors.length ? ': ' + [...vErrors, ...fErrors].join(' | ') : ''}`);
   await viewer.setViewportSize({ width: 375, height: 800 });
   const vOverflow = await viewer.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

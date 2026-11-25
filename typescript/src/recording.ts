@@ -1,10 +1,12 @@
-// Recordings in the C# port's file format (docs/reference.md "Recordings"): JSON Lines, a header then one line per call,
-// with snapshots embedded (base64 zip) or in side-car files. A recording made by either port loads in the other.
+// Recordings as .topwater files (spec/topwater-file): a zip with the machine after the last call (manifest.json),
+// history.jsonl (a header, then one line per call) and checkpoints/<n>.json, the machine after n calls. All three ports
+// write and read it. The JSON Lines recordings this replaced (snapshots embedded or in side-car files) still load.
 import { DEFAULTS, Shell, type ShellOptions, type ShellResult } from './shell.js';
-import { ShellSnapshot } from './snapshot.js';
+import { ShellSnapshot, SnapshotError, openTopwater, writeTopwater } from './snapshot.js';
+import type { VfsEntry } from './vfs.js';
 
 export const RECORDING_FORMAT_VERSION = 1;
-const FORMAT = 'topwater-recording';
+const FORMAT = 'topwater-recording', HISTORY = 'topwater-history', HISTORY_VERSION = 1;
 /** Most snapshots one recording may hold (the start included). */
 export const MAX_SNAPSHOTS = 1000;
 /** The files of all a recording's snapshots together may hold at most this many times the limits' maxFileSystemBytes. */
@@ -23,6 +25,10 @@ export interface RecordedCall {
   trailer?: string;
   /** wall time; informational, never compared */
   elapsedMs: number;
+  /** the shell's clock (ms) when the call started: the virtual clock on a deterministic shell */
+  time?: number;
+  /** absolute paths the call added, changed or removed, sorted */
+  files?: string[];
   /** the machine right after this call, when the recorder took a snapshot here */
   snapshot?: ShellSnapshot;
 }
@@ -77,102 +83,162 @@ export class Recording {
 
   // ---------- the file ----------
 
-  /** The recording as JSON Lines with every snapshot embedded. */
-  async save(): Promise<string> {
-    const ref = async (s: ShellSnapshot) => ({ embedded: toBase64(await s.save()) });
+  /**
+   * The recording as a .topwater file: manifest.json is the machine after the last call (the newest checkpoint),
+   * checkpoints/0.json the start, checkpoints/<i+1>.json the snapshot after call i.
+   */
+  async save(): Promise<Uint8Array> {
     const o = this.options;
     const header = dropUndefined({
-      format: FORMAT, version: RECORDING_FORMAT_VERSION, created: iso(this.created), topwater: this.topwater,
+      format: HISTORY, version: HISTORY_VERSION, created: iso(this.created), topwater: this.topwater,
       options: dropUndefined({
         user: o.user ?? this.start.user, hostname: o.hostname ?? this.start.hostname, startTime: o.startTime === undefined ? undefined : iso(o.startTime),
         randomSeed: o.randomSeed, maxLoopIterations: o.maxLoopIterations, maxExtractBytes: o.maxExtractBytes, maxExtractEntries: o.maxExtractEntries,
-        maxCallDurationMs: o.maxCallDurationMs, maxFileSystemBytes: o.maxFileSystemBytes, maxStringBytes: o.maxStringBytes,
+        maxCallDurationMs: o.maxCallDurationMs === Infinity ? -1 : o.maxCallDurationMs, maxFileSystemBytes: o.maxFileSystemBytes, maxStringBytes: o.maxStringBytes,
       }),
       appCommands: this.appCommands.length ? this.appCommands : undefined,
       metadata: Object.keys(this.metadata).length ? this.metadata : undefined,
-      start: await ref(this.start),
     });
     const lines = [JSON.stringify(header)];
-    for (const c of this.calls)
+    const checkpoints: [string, ShellSnapshot][] = [['checkpoints/0.json', this.start]];
+    this.calls.forEach((c, i) => {
       lines.push(JSON.stringify(dropUndefined({
         index: c.index, command: c.command, stdout: c.stdout, stderr: c.stderr, exitCode: c.exitCode, trailer: c.trailer,
-        elapsedMs: Math.round(c.elapsedMs * 1000) / 1000, snapshot: c.snapshot ? await ref(c.snapshot) : undefined,
+        elapsedMs: Math.round(c.elapsedMs * 1000) / 1000, time: c.time === undefined ? undefined : iso(c.time), files: c.files?.length ? c.files : undefined,
       })));
-    return lines.join('\n') + '\n';
+      if (c.snapshot) checkpoints.push([`checkpoints/${i + 1}.json`, c.snapshot]);
+    });
+    return writeTopwater([['manifest.json', checkpoints[checkpoints.length - 1][1]], ['history.jsonl', lines.join('\n') + '\n'], ...checkpoints]);
   }
 
   /**
-   * Reads a recording saved by either port. `openSnapshot` opens a side-car snapshot by the relative path the file names;
-   * that is only ever a relative file name (no drive, URL, backslash or ..), and the opener must treat it as nothing else.
-   * Snapshots load as untrusted (see ShellSnapshot.load) under `limits` or the defaults, never limits the file names; the
-   * replay shell's limits are the file's clamped to the same bound, so a recording can lower limits but never raise them.
+   * Reads a .topwater file (by its zip signature; one without history is a recording of no calls) or a JSON Lines
+   * recording of the format this replaced, from either port. Everything in it is checked as untrusted: each machine like
+   * ShellSnapshot.load, under `limits` or the defaults, never limits the file names; the replay shell's limits are the
+   * file's clamped to the same bound, so a recording can lower limits but never raise them. `openSnapshot` opens an old
+   * recording's side-car snapshot by the relative path it names, which is only ever segments of letters, digits, `.`,
+   * `_` and `-` separated by `/` (none of only dots); the opener must treat it as nothing else.
    */
-  static async load(text: string, openSnapshot?: (path: string) => Promise<Uint8Array>, limits: RecordedOptions = {}): Promise<Recording> {
-    const lines = text.split('\n');
-    let h: Record<string, any>;
-    try { h = JSON.parse(lines[0]); } catch { throw bad(lines[0].trim() ? 'the header is not JSON' : 'the file is empty'); }
-    if (!h || typeof h !== 'object' || h.format !== FORMAT) throw bad('the first line is not a topwater-recording header');
-    if (typeof h.version !== 'number' || h.version < 1) throw bad(`unknown format version ${h.version}`);
-    if (h.version > RECORDING_FORMAT_VERSION)
-      throw new Error(`recording format version ${h.version} is newer than this version of Topwater supports (${RECORDING_FORMAT_VERSION}); upgrade Topwater to read it`);
-    const o = h.options;
-    if (!o || typeof o !== 'object') throw bad('options are missing');
-    const num = (v: unknown, what: string) => { if (v == null) return undefined; if (typeof v !== 'number' || !Number.isFinite(v)) throw bad(`bad ${what}`); return v; };
-    const options: RecordedOptions = {
-      user: typeof o.user === 'string' ? o.user : undefined, hostname: typeof o.hostname === 'string' ? o.hostname : undefined,
-      startTime: o.startTime == null ? undefined : time(o.startTime, 'startTime'), randomSeed: num(o.randomSeed, 'randomSeed'),
-      maxLoopIterations: num(o.maxLoopIterations, 'maxLoopIterations'), maxExtractBytes: num(o.maxExtractBytes, 'maxExtractBytes'),
-      maxExtractEntries: num(o.maxExtractEntries, 'maxExtractEntries'), maxCallDurationMs: num(o.maxCallDurationMs, 'maxCallDurationMs'),
-      maxFileSystemBytes: num(o.maxFileSystemBytes, 'maxFileSystemBytes'), maxStringBytes: num(o.maxStringBytes, 'maxStringBytes'),
-    };
-    for (const k of Object.keys(options) as (keyof RecordedOptions)[]) if (options[k] === undefined) delete options[k];
-    const bound = { ...DEFAULTS, ...limits };
-    for (const k of LIMITS) options[k] = Math.min(Math.max(options[k] ?? bound[k], 0), bound[k]);
+  static async load(input: string | Uint8Array, openSnapshot?: (path: string) => Promise<Uint8Array>, limits: RecordedOptions = {}): Promise<Recording> {
+    if (typeof input !== 'string' && input[0] === 0x50 && input[1] === 0x4b) return loadTopwater(input, limits);
+    const lines = (typeof input === 'string' ? input : new TextDecoder().decode(input)).split('\n');
     // each snapshot is capped by the limits; these cap them all together
-    let snapshots = 0, snapshotBytes = 0;
-    const maxSnapshotBytes = MAX_SNAPSHOTS_FILE_SYSTEMS * bound.maxFileSystemBytes;
-    const snap = async (r: any, what: string): Promise<ShellSnapshot> => {
-      if (++snapshots > MAX_SNAPSHOTS) throw bad(`more than ${MAX_SNAPSHOTS} snapshots`);
-      const s = await read(r, what);
-      for (const e of s.entries) snapshotBytes += e.data?.length ?? e.text?.length ?? 0;
-      if (snapshotBytes > maxSnapshotBytes) throw bad(`the snapshots hold more than ${maxSnapshotBytes} bytes of files together (${MAX_SNAPSHOTS_FILE_SYSTEMS} x maxFileSystemBytes)`);
-      return s;
-    };
+    const total = totals(limits);
     const read = async (r: any, what: string): Promise<ShellSnapshot> => {
       if (typeof r?.embedded === 'string') {
         let bytes: Uint8Array;
         try { bytes = fromBase64(r.embedded); } catch { throw bad(`${what}: the embedded snapshot is not base64`); }
-        return ShellSnapshot.load(bytes, limits);
+        return total(await ShellSnapshot.load(bytes, limits));
       }
       if (typeof r?.file === 'string') {
         if (!openSnapshot) throw bad(`${what} is in a side-car file (${r.file}); open it together with the recording`);
-        // no rooted path, drive (C:), URL (x://), backslash or .. segment
-        if (!r.file || r.file.startsWith('/') || /[\\:]/.test(r.file) || r.file.split('/').includes('..'))
-          throw bad(`snapshot path ${r.file} is not a plain relative path inside the recording's directory`);
-        return ShellSnapshot.load(await openSnapshot(r.file), limits);
+        if (!r.file.split('/').every((s: string) => /^[A-Za-z0-9._-]+$/.test(s) && !/^\.+$/.test(s)))
+          throw bad(`snapshot path ${JSON.stringify(r.file)} is not a plain relative path inside the recording's directory`);
+        return total(await ShellSnapshot.load(await openSnapshot(r.file), limits));
       }
       throw bad(`${what} has no snapshot`);
     };
-    const rec = new Recording(await snap(h.start, 'the start'), options);
-    rec.created = h.created == null ? 0 : time(h.created, 'created');
-    rec.topwater = typeof h.topwater === 'string' ? h.topwater : undefined;
-    if (h.metadata && typeof h.metadata === 'object') for (const [k, v] of Object.entries(h.metadata)) if (typeof v === 'string') rec.metadata[k] = v;
-    if (Array.isArray(h.appCommands)) rec.appCommands = h.appCommands.filter((c: unknown): c is string => typeof c === 'string');
-    for (let n = 1; n < lines.length; n++) {
-      if (!lines[n].trim()) continue;
-      let e: Record<string, any>;
-      try { e = JSON.parse(lines[n]); } catch { throw bad(`line ${n + 1} is not JSON`); }
-      if (!e || typeof e.command !== 'string') throw bad(`line ${n + 1} has no command`);
-      rec.calls.push({
-        index: Number.isInteger(e.index) ? e.index : rec.calls.length, command: e.command,
-        stdout: typeof e.stdout === 'string' ? e.stdout : '', stderr: typeof e.stderr === 'string' ? e.stderr : '',
-        exitCode: Number.isInteger(e.exitCode) ? e.exitCode : 0, trailer: typeof e.trailer === 'string' ? e.trailer : undefined,
-        elapsedMs: typeof e.elapsedMs === 'number' ? e.elapsedMs : 0,
-        snapshot: e.snapshot ? await snap(e.snapshot, `call ${e.index}`) : undefined,
-      });
-    }
+    return fromLines(lines, FORMAT, RECORDING_FORMAT_VERSION, limits, h => read(h.start, 'the start'), e => e.snapshot ? read(e.snapshot, `call ${e.index}`) : undefined);
+  }
+}
+
+/** Counts a recording's snapshots and their files' bytes against the caps for all of them together. */
+function totals(limits: RecordedOptions) {
+  let snapshots = 0, bytes = 0;
+  const max = MAX_SNAPSHOTS_FILE_SYSTEMS * (limits.maxFileSystemBytes ?? DEFAULTS.maxFileSystemBytes);
+  return (s: ShellSnapshot) => {
+    if (++snapshots > MAX_SNAPSHOTS) throw bad(`more than ${MAX_SNAPSHOTS} snapshots`);
+    for (const e of s.entries) bytes += e.data?.length ?? e.text?.length ?? 0;
+    if (bytes > max) throw bad(`the snapshots hold more than ${max} bytes of files together (${MAX_SNAPSHOTS_FILE_SYSTEMS} x maxFileSystemBytes)`);
+    return s;
+  };
+}
+
+const CHECKPOINT = /^checkpoints\/(0|[1-9][0-9]{0,8})\.json$/;
+
+async function loadTopwater(bytes: Uint8Array, limits: RecordedOptions): Promise<Recording> {
+  const z = openTopwater(bytes, limits, 4);
+  const end = await z.machine('manifest.json');
+  if (!z.has('history.jsonl')) {
+    const rec = new Recording(end, clamp({ user: end.user, hostname: end.hostname }, limits));
+    rec.created = end.created;
+    rec.topwater = undefined;
     return rec;
   }
+  const lines = z.text('history.jsonl').split('\n');
+  const checkpoints = new Set<number>();
+  const total = totals(limits);
+  const checkpoint = async (n: number) => {
+    try { return total(await z.machine(`checkpoints/${n}.json`)); }
+    catch (e) { throw e instanceof SnapshotError ? bad(`checkpoints/${n}.json: ${e.message.replace(/^not a valid Topwater snapshot: /, '')}`) : e; }
+  };
+  // runs once the header's version is known to be one this reads
+  const start = () => {
+    for (const name of z.names) {
+      if (!name.startsWith('checkpoints/')) continue;
+      const m = CHECKPOINT.exec(name);
+      if (!m) throw bad(`${name} is not a checkpoint name`);
+      checkpoints.add(Number(m[1]));
+    }
+    if (checkpoints.size > MAX_SNAPSHOTS) throw bad(`more than ${MAX_SNAPSHOTS} checkpoints`);
+    if (!checkpoints.has(0)) throw bad('checkpoints/0.json (the start) is missing');
+    return checkpoint(0);
+  };
+  let calls = 0;
+  const rec = await fromLines(lines, HISTORY, HISTORY_VERSION, limits, start, () => { calls++; return checkpoints.has(calls) ? checkpoint(calls) : undefined; });
+  const beyond = [...checkpoints].find(n => n > calls);
+  if (beyond !== undefined) throw bad(`checkpoints/${beyond}.json is after the last call`);
+  return rec;
+}
+
+/** The recording in `lines`: a header line, then one line per call (the old format and history.jsonl alike). */
+async function fromLines(lines: string[], format: string, version: number, limits: RecordedOptions,
+  start: (header: Record<string, any>) => Promise<ShellSnapshot>, after: (line: Record<string, any>) => Promise<ShellSnapshot> | undefined): Promise<Recording> {
+  let h: Record<string, any>;
+  try { h = JSON.parse(lines[0]); } catch { throw bad(lines[0].trim() ? 'the header is not JSON' : 'the file is empty'); }
+  if (!h || typeof h !== 'object' || h.format !== format) throw bad(`the first line is not a ${format} header`);
+  if (typeof h.version !== 'number' || h.version < 1) throw bad(`unknown format version ${h.version}`);
+  if (h.version > version)
+    throw new Error(`${format === FORMAT ? 'recording' : 'history'} format version ${h.version} is newer than this version of Topwater supports (${version}); upgrade Topwater to read it`);
+  const o = h.options;
+  if (!o || typeof o !== 'object') throw bad('options are missing');
+  const num = (v: unknown, what: string) => { if (v == null) return undefined; if (typeof v !== 'number' || !Number.isFinite(v)) throw bad(`bad ${what}`); return v; };
+  const options: RecordedOptions = {
+    user: typeof o.user === 'string' ? o.user : undefined, hostname: typeof o.hostname === 'string' ? o.hostname : undefined,
+    startTime: o.startTime == null ? undefined : time(o.startTime, 'startTime'), randomSeed: num(o.randomSeed, 'randomSeed'),
+    maxLoopIterations: num(o.maxLoopIterations, 'maxLoopIterations'), maxExtractBytes: num(o.maxExtractBytes, 'maxExtractBytes'),
+    maxExtractEntries: num(o.maxExtractEntries, 'maxExtractEntries'), maxCallDurationMs: o.maxCallDurationMs === -1 ? Infinity : num(o.maxCallDurationMs, 'maxCallDurationMs'),
+    maxFileSystemBytes: num(o.maxFileSystemBytes, 'maxFileSystemBytes'), maxStringBytes: num(o.maxStringBytes, 'maxStringBytes'),
+  };
+  for (const k of Object.keys(options) as (keyof RecordedOptions)[]) if (options[k] === undefined) delete options[k];
+  const rec = new Recording(await start(h), clamp(options, limits));
+  rec.created = h.created == null ? 0 : time(h.created, 'created');
+  rec.topwater = typeof h.topwater === 'string' ? h.topwater : undefined;
+  if (h.metadata && typeof h.metadata === 'object') for (const [k, v] of Object.entries(h.metadata)) if (typeof v === 'string') rec.metadata[k] = v;
+  if (Array.isArray(h.appCommands)) rec.appCommands = h.appCommands.filter((c: unknown): c is string => typeof c === 'string');
+  for (let n = 1; n < lines.length; n++) {
+    if (!lines[n].trim()) continue;
+    let e: Record<string, any>;
+    try { e = JSON.parse(lines[n]); } catch { throw bad(`line ${n + 1} is not JSON`); }
+    if (!e || typeof e.command !== 'string') throw bad(`line ${n + 1} has no command`);
+    rec.calls.push({
+      index: Number.isInteger(e.index) ? e.index : rec.calls.length, command: e.command,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '', stderr: typeof e.stderr === 'string' ? e.stderr : '',
+      exitCode: Number.isInteger(e.exitCode) ? e.exitCode : 0, trailer: typeof e.trailer === 'string' ? e.trailer : undefined,
+      elapsedMs: typeof e.elapsedMs === 'number' ? e.elapsedMs : 0,
+      time: e.time == null ? undefined : time(e.time, `line ${n + 1} time`),
+      files: Array.isArray(e.files) ? e.files.filter((f: unknown): f is string => typeof f === 'string') : undefined,
+      snapshot: await after(e),
+    });
+  }
+  return rec;
+}
+
+/** The file's limits, never above the caller's (or the defaults). */
+function clamp(options: RecordedOptions, limits: RecordedOptions): RecordedOptions {
+  const bound = { ...DEFAULTS, ...limits };
+  for (const k of LIMITS) options[k] = Math.min(Math.max(options[k] ?? bound[k], 0), bound[k]);
+  return options;
 }
 
 export interface RecordingOptions {
@@ -189,17 +255,45 @@ export function startRecording(shell: Shell, options: RecordingOptions = {}) {
   recording.appCommands = [...shell.commands.keys()].filter(n => !shell.isBuiltin(n)).sort();
   const every = options.snapshotEvery ?? 0;
   const run = shell.run;
+  let before = recording.start;
   shell.run = async (command, onOutput) => {
-    const t0 = performance.now();
+    const time = shell.now(), t0 = performance.now();
     const r = await run.call(shell, command, onOutput);
     const index = recording.calls.length;
+    // a capture after every call gives the files it touched and keeps the end state; only the last call and every Nth keep theirs
+    const after = ShellSnapshot.capture(shell);
+    const last = recording.calls[index - 1];
+    if (last && !(every > 0 && index % every === 0)) last.snapshot = undefined;
+    const files = changedPaths(before.entries, after.entries);
+    before = after;
     recording.calls.push({
       index, command, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, trailer: r.trailer, elapsedMs: performance.now() - t0,
-      snapshot: every > 0 && (index + 1) % every === 0 ? ShellSnapshot.capture(shell) : undefined,
+      time, files: files.length ? files : undefined, snapshot: after,
     });
     return r;
   };
   return { recording, stop: () => { shell.run = run; } };
+}
+
+/** Paths whose entry was added, removed or changed between two captures, sorted ordinally. */
+function changedPaths(a: readonly VfsEntry[], b: readonly VfsEntry[]): string[] {
+  const old = new Map(a.map(e => [e.path, e]));
+  const out: string[] = [];
+  for (const e of b) {
+    const o = old.get(e.path);
+    old.delete(e.path);
+    if (!o || o.isDirectory !== e.isDirectory || o.mode !== e.mode || o.owner !== e.owner || o.modified !== e.modified || o.linkTarget !== e.linkTarget ||
+      o.hardLink !== e.hardLink || o.reportedSize !== e.reportedSize || o.text !== e.text || !sameBytes(o.data, e.data)) out.push(e.path);
+  }
+  out.push(...old.keys());
+  return out.sort((x, y) => x < y ? -1 : x > y ? 1 : 0);
+}
+
+function sameBytes(x: Uint8Array | null, y: Uint8Array | null) {
+  if (x === y) return true;
+  if (!x || !y || x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
 }
 
 function compare(c: RecordedCall, a: ShellResult, n: (s: string) => string): ReplayDifference[] {
@@ -219,11 +313,6 @@ function time(s: unknown, what: string): number {
   return t;
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-}
 function fromBase64(b64: string): Uint8Array {
   const s = atob(b64);
   const out = new Uint8Array(s.length);

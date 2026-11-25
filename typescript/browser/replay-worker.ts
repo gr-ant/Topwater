@@ -1,4 +1,4 @@
-// Web Worker for the recording viewer: holds one recording and rebuilds the machine as of any turn. A turn's machine
+// Web Worker for the recording viewer: holds one recording (a .topwater file, or an old .jsonl one) and rebuilds the machine as of any turn. A turn's machine
 // comes from the recording's own snapshot when it has one; otherwise from the nearest earlier machine, re-running the
 // calls in between in this (TypeScript) Topwater. Re-running can't be interrupted from inside, so the page terminates
 // this worker if an answer takes too long.
@@ -18,7 +18,7 @@ const VIEWER_LIMITS = { maxFileSystemBytes: 32 << 20, maxStringBytes: 8 << 20, m
 
 const post = (m: ReplayReply, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
 
-async function load(text: string, sidecars: Record<string, Uint8Array>) {
+async function load(data: Uint8Array, sidecars: Record<string, Uint8Array>) {
   states.clear(); reran.clear();
   const byName = (path: string) => {
     const name = path.slice(path.lastIndexOf('/') + 1);
@@ -26,7 +26,7 @@ async function load(text: string, sidecars: Record<string, Uint8Array>) {
     if (!data) throw new Error(`this recording keeps its snapshots in separate files: open ${name} together with it`);
     return Promise.resolve(data);
   };
-  recording = await Recording.load(text, byName, VIEWER_LIMITS);
+  recording = await Recording.load(data, byName, VIEWER_LIMITS);
   states.set(-1, recording.start);
   const calls: CallInfo[] = recording.calls.map(c => ({
     index: c.index, command: c.command, stdout: c.stdout, stderr: c.stderr, exitCode: c.exitCode, trailer: c.trailer, elapsedMs: c.elapsedMs, hasSnapshot: !!c.snapshot,
@@ -138,7 +138,7 @@ self.onmessage = async (ev: MessageEvent<ReplayRequest>) => {
   try {
     let value: unknown, transfer: Transferable[] = [];
     switch (m.t) {
-      case 'load': value = await load(m.text, m.sidecars ?? {}); break;
+      case 'load': value = await load(m.data, m.sidecars ?? {}); break;
       case 'turn': value = await turn(m.index); break;
       case 'file': value = await file(m.index, m.path); break;
       case 'diff': value = await diff(m.index, m.path); break;

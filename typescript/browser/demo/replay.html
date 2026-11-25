@@ -29,7 +29,7 @@
   <section class="intro">
     <h1>Recording viewer</h1>
     <p>Step through a recorded agent session turn by turn: each command and what it returned, the machine's files as they were after that turn, and what the turn changed. From any turn you can open a terminal on that machine and carry on yourself.</p>
-    <p>Recordings are the JSON Lines files Topwater writes (<code>shell.StartRecording()</code> in .NET, <code>startRecording(shell)</code> in TypeScript). Everything happens in this tab; nothing is uploaded.</p>
+    <p>Recordings are the <code>.topwater</code> files Topwater writes (<code>shell.StartRecording()</code> in .NET, <code>startRecording(shell)</code> in TypeScript, <code>shell.start_recording()</code> in Python); older JSON Lines recordings open too. Everything happens in this tab; nothing is uploaded.</p>
   </section>
 
   <section class="loader" aria-label="Open a recording">
@@ -37,8 +37,8 @@
       <button id="open" type="button">Open recording…</button>
       <button id="sample" type="button" class="secondary">Load the sample</button>
     </div>
-    <input id="file" type="file" accept=".jsonl,.zip,.json" multiple hidden>
-    <p class="note">Or drop a <code>.jsonl</code> file anywhere on this page, together with its <code>.zip</code> snapshots if it keeps them in separate files.</p>
+    <input id="file" type="file" accept=".topwater,.jsonl,.zip,.json" multiple hidden>
+    <p class="note">Or drop a <code>.topwater</code> file anywhere on this page (an old <code>.jsonl</code> recording together with its <code>.zip</code> snapshots, if it keeps them in separate files).</p>
     <p id="status" class="status" role="status" aria-live="polite"></p>
   </section>
 

@@ -28,12 +28,14 @@ export function dosTime(ms: number): [time: number, date: number] {
 }
 export const fromDos = (time: number, date: number) => Date.UTC(1980 + (date >> 9), Math.max(0, ((date >> 5) & 15) - 1), date & 31 || 1, time >> 11, (time >> 5) & 63, (time & 31) * 2);
 
-export function readZip(bytes: Uint8Array): ZipEntry[] {
+/** `maxEntries` is checked against the count in the end record, before any entry is read. */
+export function readZip(bytes: Uint8Array, maxEntries = Infinity): ZipEntry[] {
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
   if (eocd < 0) throw new ZipFormatError('no end of central directory');
   const count = v.getUint16(eocd + 10, true);
+  if (count > maxEntries) throw new ZipFormatError(`${count} entries, more than ${maxEntries}`);
   let pos = v.getUint32(eocd + 16, true);
   const entries: ZipEntry[] = [];
   for (let n = 0; n < count; n++) {

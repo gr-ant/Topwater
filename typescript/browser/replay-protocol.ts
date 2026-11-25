@@ -2,7 +2,7 @@
 import type { Hunk } from './diff.js';
 
 export type ReplayRequest =
-  | { t: 'load'; id: number; text: string; sidecars?: Record<string, Uint8Array> }
+  | { t: 'load'; id: number; data: Uint8Array; sidecars?: Record<string, Uint8Array> }
   | { t: 'turn'; id: number; index: number }
   | { t: 'file'; id: number; index: number; path: string }
   | { t: 'diff'; id: number; index: number; path: string }
