@@ -213,7 +213,7 @@ internal sealed class Find
                 double unit = tok == "-mmin" ? 1 : 1440, n = double.Parse(spec.TrimStart('+', '-'), CultureInfo.InvariantCulture);
                 return e =>
                 {
-                    var age = (DateTime.Now - fs.Stat(e.Abs).Modified).TotalMinutes / unit;
+                    var age = (DateTime.UtcNow - fs.Stat(e.Abs).Modified).TotalMinutes / unit;
                     return T(spec[0] == '-' ? age < n : spec[0] == '+' ? age > n : Math.Floor(age) == n);
                 };
             }

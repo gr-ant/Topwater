@@ -988,7 +988,7 @@ internal static partial class Builtins
         }, "Print user and group IDs");
         shell.Register("uptime", ctx =>
         {
-            ctx.Stdout.WriteLine(ctx.Args.Contains("-p") ? "up 3 days, 4 hours, 12 minutes" : $" {DateTime.Now:HH:mm:ss} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01");
+            ctx.Stdout.WriteLine(ctx.Args.Contains("-p") ? "up 3 days, 4 hours, 12 minutes" : $" {DateTime.UtcNow:HH:mm:ss} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01");
             return 0;
         }, "Show how long the system has been running");
         shell.Register("free", ctx =>

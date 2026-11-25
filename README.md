@@ -99,10 +99,14 @@ using var git = shell.RegisterHostCommand("git");
 
 There is no Python, git or open network access unless you add them. The [reference](docs/reference.md) has the full list.
 
+Each command is written from POSIX, the man pages and comparison against the real tool's output — never by copying
+or porting its source — and is checked by differential tests that run the real binary. The command set was audited
+for provenance in November 2026.
+
 ## Safety
 
 The shell is simulated: commands are interpreted in your process and only touch the in-memory filesystem.
-Runaway loops, slow regular expressions and oversized output are cut off.
+Runaway loops, slow regular expressions, oversized output, calls that run too long and runaway memory or disk use are all cut off.
 
 MCP calls and host programs are real. A host program runs with your process's permissions, and Topwater does not
 sandbox it unless you ask: `Launcher = HostSandbox.Bubblewrap()` runs it under bubblewrap, where it can see only its
@@ -117,9 +121,11 @@ dotnet run --project examples/WebShell    # the same, as a web page on port 8765
 dotnet test
 ```
 
-`examples/` also has four agents run against Gemini Flash: one triages issues through an MCP server (6 / 6
-checks), one writes a Word document with the real OfficeCLI (5 / 5), one answers questions over CSV files with the
-real DuckDB (8 / 8), and a harness runs six everyday tasks (11 / 12 solved with the default tool description). These are small samples, not benchmarks.
+`examples/` also has three agents run against Gemini Flash: one triages issues through an MCP server (6 / 6
+checks), one writes a Word document with the real OfficeCLI (5 / 5), and one answers questions over CSV files with
+the real DuckDB (8 / 8). A separate harness runs the same tool against Claude, GPT and others through OpenRouter; on
+its six everyday tasks with the default tool description, Claude Sonnet 5.5 and GPT-5.6 each solved 6 / 6. These are
+small samples, not benchmarks.
 
 ## License
 

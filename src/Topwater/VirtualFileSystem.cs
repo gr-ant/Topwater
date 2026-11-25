@@ -22,7 +22,7 @@ public sealed class VirtualFileSystem
 {
     abstract class Node
     {
-        public DateTime Modified = DateTime.Now;
+        public DateTime Modified = DateTime.UtcNow;
         public string Owner = "root";
         public int Mode;
     }
@@ -250,7 +250,7 @@ public sealed class VirtualFileSystem
             if (existing is not FileNode f) throw new ShellException($"{path}: Is a directory");
             Require(f, 2, path);
             f.Store(content, data, append, d => Reserve(d, path));
-            f.Modified = DateTime.Now;
+            f.Modified = DateTime.UtcNow;
         }
         else
         {
@@ -259,7 +259,7 @@ public sealed class VirtualFileSystem
             file.Store(content, data, false, d => Reserve(d, path));
             dir.Children[name] = file;
         }
-        dir.Modified = DateTime.Now;
+        dir.Modified = DateTime.UtcNow;
     }
 
     /// <summary>Back-dates a path (and optionally everything under it), so system files don't all look brand new.</summary>
@@ -292,7 +292,7 @@ public sealed class VirtualFileSystem
         if (Find(path, out var denied) is { } n)
         {
             Require(n, 2, path);
-            n.Modified = DateTime.Now;
+            n.Modified = DateTime.UtcNow;
         }
         else if (denied) throw new ShellException($"{path}: Permission denied");
         else WriteAllText(path, "");
@@ -310,7 +310,7 @@ public sealed class VirtualFileSystem
         var dir = ParentDir(path);
         Require(dir, 2, path);
         dir.Children[GetName(path)] = new Dir { Owner = RunAs ?? dir.Owner, Mode = DefaultDirMode };
-        dir.Modified = DateTime.Now;
+        dir.Modified = DateTime.UtcNow;
     }
 
     /// <summary>Entry names in a directory, sorted ordinally.</summary>
@@ -383,7 +383,7 @@ public sealed class VirtualFileSystem
         }
         if (Clone(node, source) is not { } clone) return;
         // copying onto an existing file writes into it, keeping its owner and mode, as cp does
-        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = DateTime.Now; }
+        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = DateTime.UtcNow; }
         else
         {
             Reserve(TreeSize(clone) - (target == null ? 0 : TreeSize(target)), dest);

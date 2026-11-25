@@ -96,7 +96,7 @@ public sealed class HostCommand : IDisposable
     // shortcut: a file counts as unchanged while its size and modification time match on both sides, so a same-size
     // rewrite that keeps the timestamp is missed. On disk the program's writes get the kernel's (coarse) clock, while
     // we stamp each synced file with the virtual file's 100ns-precise time, so a program's write can't land on it. In
-    // memory every write sets a fresh DateTime.Now; the gap is `mv` (it keeps the moved file's time) onto a path whose
+    // memory every write sets a fresh DateTime.UtcNow; the gap is `mv` (it keeps the moved file's time) onto a path whose
     // old file had the same size and time, which only the back-dated files of a new Shell share. Compare content if that matters.
     void Remember(string vpath, string real, FileStat st)
     {
