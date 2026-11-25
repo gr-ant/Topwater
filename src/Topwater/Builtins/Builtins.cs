@@ -243,8 +243,15 @@ internal static partial class Builtins
         shell.Register("export", ctx =>
         {
             var sh = ctx.Shell;
-            bool remove = ctx.Args.TakeWhile(a => a.StartsWith('-')).Any(a => a.Contains('n'));
+            var flags = string.Concat(ctx.Args.TakeWhile(a => a.StartsWith('-')));
+            bool remove = flags.Contains('n');
             var args = ctx.Args.SkipWhile(a => a.StartsWith('-')).ToList();
+            if (flags.Contains('f'))
+            {
+                // export -f: functions a child bash also gets
+                foreach (var f in args) if (remove) sh.ExportedFunctions.Remove(f); else if (sh.Functions.ContainsKey(f)) sh.ExportedFunctions.Add(f);
+                return 0;
+            }
             if (args.Count == 0)
             {
                 foreach (var k in sh.Environment.Keys.Concat(sh.Arrays.Keys).Distinct().Order(StringComparer.Ordinal))
@@ -357,20 +364,41 @@ internal static partial class Builtins
         {
             var io = ctx.Io;
             var args = ctx.Args.ToList();
-            bool isBash = ctx.Name is "bash" or "sh";
-            while (isBash && args.Count > 0 && args[0].StartsWith('-') && args[0] != "-c") args.RemoveAt(0); // -e, -x, -l ...
-            if (isBash && args is ["-c", var script, .. var rest])
-                return await ctx.Shell.RunScriptTextAsync(script, io, subshell: true, ctx.CancellationToken, rest.Skip(1).ToList());
+            var sh = ctx.Shell;
+            bool isBash = ctx.Name is "bash" or "sh", command = false;
+            // bash's own options: -c, and -e -u -x -o pipefail ... which the new shell starts with
+            var options = new List<(string Name, bool On)>();
+            int i = 0;
+            for (; isBash && i < args.Count && args[i].Length > 1 && args[i][0] is '-' or '+'; i++)
+            {
+                var f = args[i];
+                if (f == "--") { i++; break; }
+                if (f.StartsWith("--")) continue; // --norc, --noprofile, --login
+                foreach (var c in f[1..])
+                {
+                    if (c == 'c') command = true;
+                    else if (c == 'o' && i + 1 < args.Count) options.Add((args[++i], f[0] == '-'));
+                    else if ("eufxC".Contains(c)) options.Add((c switch { 'e' => "errexit", 'u' => "nounset", 'f' => "noglob", 'x' => "xtrace", _ => "noclobber" }, f[0] == '-'));
+                }
+            }
+            args = args[i..];
+            void Setup() { foreach (var (name, on) in options) sh.SetOption(name, on); }
+            if (command)
+            {
+                if (args.Count == 0) throw new ShellException("-c: option requires an argument", 2);
+                return await sh.RunScriptTextAsync(args[0], io, subshell: true, ctx.CancellationToken, args.Skip(2).ToList(), new(args.ElementAtOrDefault(1) ?? ctx.Name, null, Setup));
+            }
             if (args.Count == 0)
             {
                 if (!isBash) throw new ShellException("filename argument required", 2);
-                return await ctx.Shell.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken);
+                return await sh.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken, [], new(ctx.Name, null, Setup));
             }
             var text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0]));
-            if (!isBash) ctx.Shell.SourceDepth++;
-            try { return await ctx.Shell.RunScriptTextAsync(text, io, subshell: isBash, ctx.CancellationToken, args.Count > 1 || isBash ? args.Skip(1).ToList() : null); }
-            catch (ReturnSignal r) when (!isBash) { return r.Code; }   // `return` in a sourced file ends that file only
-            finally { if (!isBash) ctx.Shell.SourceDepth--; }
+            if (isBash) return await sh.RunScriptTextAsync(text, io, subshell: true, ctx.CancellationToken, args.Skip(1).ToList(), new(args[0], args[0], Setup));
+            sh.SourceDepth++;
+            try { return await sh.RunScriptTextAsync(text, io, subshell: false, ctx.CancellationToken, args.Count > 1 ? args.Skip(1).ToList() : null, sourced: args[0]); }
+            catch (ReturnSignal r) { return r.Code; }   // `return` in a sourced file ends that file only
+            finally { sh.SourceDepth--; }
         };
         shell.Register("bash", runScript, "Run a command string (-c) or script file");
         shell.Register("sh", runScript, "Run a command string (-c) or script file");
@@ -685,7 +713,7 @@ internal static class Printf
         }
         foreach (var c in s)
         {
-            if (!(char.IsAsciiLetterOrDigit(c) || "_./+:,=@%^-".Contains(c))) sb.Append('\\');
+            if (!(char.IsAsciiLetterOrDigit(c) || c > 127 || "_./+:,=@%^-".Contains(c))) sb.Append('\\');
             sb.Append(c);
         }
         return sb.ToString();
@@ -760,11 +788,14 @@ internal static class Printf
     }
 
     /// <summary>bash printf: C conversions, the format is reused while arguments remain; bad numbers are reported in errors.</summary>
+    const char StopMark = '\uE001';
+
     public static string Format(string format, List<string> args, List<string>? errors = null)
     {
         var fmt = Builtins.Unescape(format, keepUnknown: true);
         var sb = new StringBuilder();
         int next = 0;
+        bool stop = false; // a \c in a %b argument ends all output, the rest of the format included
         string Take() { var v = next < args.Count ? args[next] : ""; next++; return v; }
         do
         {
@@ -791,6 +822,8 @@ internal static class Printf
                 var arg = Take();
                 if (conv is 's' or 'b' or 'q' or 'c' or 'T')
                 {
+                    if (stop) return "";
+                    if (conv == 'b' && arg.IndexOf("\\c", StringComparison.Ordinal) is var cut and >= 0) { arg = arg[..cut]; stop = true; return Builtins.Unescape(arg, keepUnknown: true, echo: true) + StopMark; }
                     var text = conv switch
                     {
                         'b' => Builtins.Unescape(arg, keepUnknown: true, echo: true), 'q' => ShellQuote(arg), 'c' => arg.Length > 0 ? arg[..1] : "",
@@ -811,6 +844,7 @@ internal static class Printf
                 if (!fok) errors?.Add($"printf: {arg}: invalid number");
                 return FormatNumber(flags, width, prec, conv, f, 0);
             }));
+            if (stop) { sb.Length = sb.ToString().IndexOf(StopMark); break; }
             if (next == before) break; // format consumed no arguments
         } while (next < args.Count);
         return sb.ToString();

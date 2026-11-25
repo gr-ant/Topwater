@@ -86,6 +86,7 @@ public class BashCompatControlFlow
     [InlineData("f() { :; }; declare -F f; declare -F | head -3; type f | head -1", "f\ndeclare -f f\nf is a function\n", 0, true)]
     [InlineData("unset -f nosuchfn; echo $?; f() { :; }; unset -f f; f 2>/dev/null; echo $?", "0\n127\n", 0, true)]
     [InlineData("x=5; unset x; echo \"[${x-unset}]\"; unset -v x; echo ok", "[unset]\nok\n", 0, true)]
+    [InlineData("time true 2>/dev/null; echo ok", "ok\n", 0, false)]
     [InlineData("while read -r a b; do echo \"$b-$a\"; done <<EOF\n1 one\n2 two\nEOF", "one-1\ntwo-2\n", 0, true)]
     [InlineData("f() { cat; }; f <<< \"here string\"", "here string\n", 0, true)]
     [InlineData("{ echo a; echo b; } | while read l; do echo \"<$l>\"; done", "<a>\n<b>\n", 0, true)]

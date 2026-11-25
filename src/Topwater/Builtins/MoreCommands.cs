@@ -426,6 +426,7 @@ internal static partial class Builtins
             // background jobs ran to completion when they were started: wait just reports their status
             int code = 0;
             var ids = ctx.Args.Where(a => !a.StartsWith('-')).ToList();
+            if (ctx.Args.Contains("-n") && ids.Count == 0) return ctx.Shell.WaitNext();
             if (ids.Count == 0) ctx.Shell.ForgetJobs();
             foreach (var id in ids)
             {

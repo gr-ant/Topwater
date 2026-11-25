@@ -50,7 +50,11 @@ internal sealed class HereDoc(string delimiter, bool expand, bool stripTabs)
     public Word Body { get; set; } = new([new LiteralPart("", true)]);
 }
 
-internal sealed record Redirect(int Fd, string Op, Word? Target, HereDoc? Here);
+internal sealed record Redirect(int Fd, string Op, Word? Target, HereDoc? Here)
+{
+    /// <summary>{name}>file: the shell picks the fd and stores it in this variable.</summary>
+    public string? FdVariable { get; init; }
+}
 
 internal abstract record Command
 {
@@ -80,7 +84,12 @@ internal sealed record ArithCommand(string Expr) : Command;
 /// <summary>[[ ... ]]: operands are words; operators (&amp;&amp; || ! ( ) == ...) are unquoted literal words.</summary>
 internal sealed record CondCommand(List<Word> Items) : Command;
 
-internal sealed record Pipeline(List<Command> Commands, bool Negate);
+internal sealed record Pipeline(List<Command> Commands, bool Negate)
+{
+    /// <summary>`time [-p] pipeline`: report how long it took on the shell's stderr.</summary>
+    public bool Timed { get; init; }
+    public bool PosixTime { get; init; }
+}
 internal sealed record AndOr(Pipeline First, List<(string Op, Pipeline Next)> Rest)
 {
     /// <summary>Ended with `&amp;`: runs (to completion, in order) as a background job in a subshell.</summary>
@@ -153,6 +162,15 @@ internal sealed class Lexer(string s)
                 int j = _i;
                 while (j < s.Length && char.IsDigit(s[j])) j++;
                 if (j < s.Length && s[j] is '>' or '<') { int fd = int.Parse(s[_i..j]); _i = j; tokens.Add(LexRedirect(fd)); return; }
+            }
+            if (c == '{' && s.IndexOf('}', _i) is var brace and > 0 && brace + 1 < s.Length && s[brace + 1] is '>' or '<'
+                && Parser.IsName(s[(_i + 1)..brace]))
+            {
+                var name = s[(_i + 1)..brace];
+                _i = brace + 1;
+                var t = LexRedirect(10);
+                tokens.Add(t with { Redirect = t.Redirect! with { FdVariable = name } });
+                return;
             }
             if (c == '&' && Peek(1) == '>')
             {
@@ -489,7 +507,7 @@ internal sealed class Lexer(string s)
                 _i = j + 1;
             }
             else if (c == '"') { Flush(); _i++; parts.AddRange(LexQuoted('"')); }
-            else if (c == '$' && Peek(1) == '\'' && !inDouble) { Flush(); parts.Add(new LiteralPart(LexAnsiC(), true)); }
+            else if (c == '$' && Peek(1) == '\'') { Flush(); parts.Add(new LiteralPart(LexAnsiC(), true)); }
             else if (c == '$') { Flush(); parts.Add(LexDollar(false)); }
             else if (c == '`') { Flush(); parts.Add(LexBacktick(false)); }
             else { sb.Append(c); _i++; }
@@ -708,6 +726,15 @@ internal sealed class Parser
 
     Pipeline ParsePipeline()
     {
+        bool timed = false, posix = false;
+        if (IsWord("time"))
+        {
+            timed = true;
+            _p++;
+            if (IsWord("-p")) { posix = true; _p++; }
+            if (Cur == null || Cur.Kind == TokenKind.Op && Cur.Op is "\n" or ";" or "&" or "&&" or "||" or ")")
+                return new Pipeline([], false) { Timed = true, PosixTime = posix }; // `time` alone just reports
+        }
         bool negate = false;
         if (IsWord("!")) { negate = true; _p++; }
         var cmds = new List<Command> { ParseCommand() };
@@ -717,7 +744,7 @@ internal sealed class Parser
             SkipNewlines();
             cmds.Add(ParseCommand());
         }
-        return new Pipeline(cmds, negate);
+        return new Pipeline(cmds, negate) { Timed = timed, PosixTime = posix };
     }
 
     Command WithRedirects(Command c)

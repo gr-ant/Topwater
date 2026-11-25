@@ -266,6 +266,10 @@ public sealed partial class Shell
     string _lastArg = "";
     int[] _pipeStatus = [];
     readonly List<string> _funcNames = [];
+    readonly List<string> _sources = [];
+    string _arg0 = "bash";
+    /// <summary>`export -f name`: functions a child bash (bash -c, a script) also gets.</summary>
+    internal HashSet<string> ExportedFunctions { get; } = [];
     readonly Dictionary<int, int> _jobs = [];
     DateTime _secondsBase = DateTime.UtcNow;
     /// <summary>shopt -s names: nullglob, dotglob, globstar.</summary>
@@ -374,12 +378,21 @@ public sealed partial class Shell
         return new ShellResult(stdout.ToString(), stderr.ToString(), code);
     }
 
-    internal async Task<int> RunScriptTextAsync(string text, Io io, bool subshell, CancellationToken ct, List<string>? positional = null)
+    /// <summary>A new bash process (bash -c, bash file, ./script.sh): $0, the file it runs (if any), and its own options (bash -e).</summary>
+    internal sealed record NewProcess(string Arg0, string? File = null, Action? Setup = null);
+
+    /// <param name="process">Set for a new bash process: it sees only exported variables and functions.</param>
+    /// <param name="sourced">The file `source` is running, for BASH_SOURCE.</param>
+    internal async Task<int> RunScriptTextAsync(string text, Io io, bool subshell, CancellationToken ct, List<string>? positional = null,
+        NewProcess? process = null, string? sourced = null)
     {
         Script script;
         try { script = Parser.Parse(text); }
         catch (ParseException e) { io.Err.WriteLine($"bash: {e.Message}"); return 2; }
         if (++_scriptDepth > 100) throw new LimitExceeded("maximum script nesting level exceeded (100)");
+        var savedArg0 = _arg0;
+        int sources = _sources.Count;
+        if ((process?.File ?? sourced) is { } file) _sources.Add(file);
         try
         {
             if (!subshell)
@@ -392,6 +405,7 @@ public sealed partial class Shell
             var saved = SaveState();
             Traps = [];
             io = io with { Out = new SwitchWriter(io.Out), Err = new SwitchWriter(io.Err) }; // `exec >file` in a script ends with it
+            if (process != null) BecomeNewProcess(process);
             if (positional != null) Positional = positional;
             try
             {
@@ -401,7 +415,25 @@ public sealed partial class Shell
             catch (ExitSignal e) { return e.Code; }
             finally { RestoreState(saved); }
         }
-        finally { _scriptDepth--; }
+        finally
+        {
+            _scriptDepth--;
+            _arg0 = savedArg0;
+            _sources.RemoveRange(sources, _sources.Count - sources);
+        }
+    }
+
+    /// <summary>What a child bash inherits: exported variables (not their other attributes) and exported functions, no arrays, aliases or options.</summary>
+    void BecomeNewProcess(NewProcess process)
+    {
+        Environment = Environment.Where(e => HasAttr(e.Key, 'x')).ToDictionary(StringComparer.Ordinal);
+        VarAttrs = Environment.Keys.ToDictionary(k => k, _ => "x", StringComparer.Ordinal);
+        Arrays = new(StringComparer.Ordinal);
+        Aliases = new(StringComparer.Ordinal);
+        Functions = Functions.Where(f => ExportedFunctions.Contains(f.Key)).ToDictionary(StringComparer.Ordinal);
+        Errexit = Pipefail = Nounset = Xtrace = Noglob = Noclobber = false;
+        _arg0 = process.Arg0;
+        process.Setup?.Invoke();
     }
 
     async Task RunExitTrapAsync(Io io, CancellationToken ct)
@@ -482,7 +514,7 @@ public sealed partial class Shell
         return code;
     }
 
-    bool _inErrTrap;
+    bool _inErrTrap, _inDebugTrap;
 
     async Task<int> ExecListPipelineAsync(Pipeline p, bool condition, Io io, CancellationToken ct)
     {
@@ -511,10 +543,22 @@ public sealed partial class Shell
 
     /// <summary>`wait [id]`: the job's exit status (it has already finished), 127 for an unknown id.</summary>
     internal int WaitFor(int pid) => _jobs.Remove(pid, out var code) ? code : 127;
+
+    /// <summary>`wait -n`: the status of the next finished job (the oldest), or 127 when there are none.</summary>
+    internal int WaitNext() => _jobs.Count == 0 ? 127 : WaitFor(_jobs.Keys.Min());
     internal bool IsJob(int pid) => _jobs.ContainsKey(pid);
 
     async Task<int> ExecPipelineAsync(Pipeline p, Io io, CancellationToken ct)
     {
+        if (p.Timed)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            int status = p.Commands.Count == 0 ? 0 : await ExecPipelineAsync(p with { Timed = false }, io, ct);
+            var t = clock.Elapsed;
+            io.Err.Write(p.PosixTime ? FormattableString.Invariant($"real {t.TotalSeconds:0.00}\nuser 0.00\nsys 0.00\n")
+                : FormattableString.Invariant($"\nreal\t{(int)t.TotalMinutes}m{t.TotalSeconds % 60:0.000}s\nuser\t0m0.000s\nsys\t0m0.000s\n"));
+            return LastExitCode = status;
+        }
         if (!p.Negate) return await RunPipelineAsync(p, io, ct);
         _condDepth++; // like a condition, a negated pipeline is exempt from set -e
         int code;
@@ -866,8 +910,13 @@ public sealed partial class Shell
                         : throw new ShellException($"{t}: Bad file descriptor");
                 }
                 else target = await OpenOutputAsync(r, io, ct, path => new FileAppender(Fs, path));
-                foreach (var fd in r.Op.StartsWith('&') ? [1, 2] : new[] { r.Fd })
+                int named = r.FdVariable == null ? r.Fd
+                    : target == null ? (int.TryParse(GetVariable(r.FdVariable), out var open) ? open : -1) // {fd}>&- closes the fd it names
+                    : Enumerable.Range(10, 100).First(n => !Fds.ContainsKey(n));
+                if (r.FdVariable != null && target != null) SetVar(r.FdVariable, named.ToString(CultureInfo.InvariantCulture));
+                foreach (var fd in r.Op.StartsWith('&') ? [1, 2] : new[] { named })
                 {
+                    if (fd < 0) continue;
                     if (fd == 0) io.Stdin.Reset(target is StdinBuffer sb ? sb.ReadAll() : "");
                     else if (fd <= 2) { if ((fd == 1 ? io.Out : io.Err) is SwitchWriter sw) sw.Target = target as TextWriter ?? TextWriter.Null; }
                     else if (target == null) Fds.Remove(fd);
@@ -888,6 +937,14 @@ public sealed partial class Shell
     async Task<int> ExecSimpleAsync(SimpleCommand c, Io io, CancellationToken ct)
     {
         _lineno = c.Line;
+        if (Traps.Count > 0 && !_inDebugTrap && Traps.TryGetValue("DEBUG", out var debug) && debug.Length > 0)
+        {
+            // shortcut: the DEBUG trap runs before simple commands only, not before (( )), [[ ]], for and case
+            _inDebugTrap = true;
+            var status = LastExitCode;
+            try { await RunScriptTextAsync(debug, io, subshell: false, ct); }
+            finally { _inDebugTrap = false; LastExitCode = status; }
+        }
         var words = c.Words;
         bool declaration = words.Count > 1 && IsDeclaration(words[0]);
         if (declaration && !words[0].Is("export") && await DeclareArraysAsync(words, io, ct) is { } rest)
@@ -930,13 +987,20 @@ public sealed partial class Shell
             if (assigned.Count == 0) return await InvokeAsync(argv, io, ct);
 
             // VAR=x cmd: the variable only exists for that command
-            var saved = assigned.ToDictionary(a => a.Name, a => Environment.TryGetValue(a.Name, out var v) ? v : null);
-            foreach (var (k, v, append) in assigned) Environment[k] = append ? Environment.GetValueOrDefault(k) + v : v;
+            var saved = assigned.ToDictionary(a => a.Name, a => (Value: Environment.TryGetValue(a.Name, out var v) ? v : null, Attrs: VarAttrs.GetValueOrDefault(a.Name)));
+            foreach (var (k, v, append) in assigned)
+            {
+                Environment[k] = append ? Environment.GetValueOrDefault(k) + v : v;
+                SetAttrs(k, "x"); // exported to the command
+            }
             try { return await InvokeAsync(argv, io, ct); }
             finally
             {
-                foreach (var (k, v) in saved)
+                foreach (var (k, (v, attrs)) in saved)
+                {
                     if (v == null) Environment.Remove(k); else Environment[k] = v;
+                    if (attrs == null) VarAttrs.Remove(k); else VarAttrs[k] = attrs;
+                }
             }
         }
         finally { _lastArg = argv[^1]; }
@@ -1022,7 +1086,7 @@ public sealed partial class Shell
                 return 126;
             }
         }
-        return await RunScriptTextAsync(text, io, subshell: true, ct, argv.Skip(1).ToList());
+        return await RunScriptTextAsync(text, io, subshell: true, ct, argv.Skip(1).ToList(), new NewProcess(name, name));
     }
 
     async Task<int> CallFunctionAsync(Command body, IReadOnlyList<string> argv, Io io, CancellationToken ct)
@@ -1173,6 +1237,7 @@ public sealed partial class Shell
         IEnumerable<string>? items = name switch
         {
             "FUNCNAME" when _funcNames.Count > 0 => Enumerable.Reverse(_funcNames),
+            "BASH_SOURCE" when _sources.Count > 0 => Enumerable.Reverse(_sources),
             "PIPESTATUS" => _pipeStatus.Select(c => c.ToString(CultureInfo.InvariantCulture)),
             "BASH_VERSINFO" => BashVersInfo,
             _ => null,
@@ -1416,7 +1481,7 @@ public sealed partial class Shell
     internal string GetVariable(string name)
     {
         if (name.Length > 0 && char.IsDigit(name[0]) && int.TryParse(name, out var n))
-            return n == 0 ? "bash" : n <= Positional.Count ? Positional[n - 1] : "";
+            return n == 0 ? _arg0 : n <= Positional.Count ? Positional[n - 1] : "";
         return name switch
         {
             "?" => LastExitCode.ToString(CultureInfo.InvariantCulture),
@@ -1684,10 +1749,19 @@ public sealed partial class Shell
     }
 
     /// <summary>&lt;(cmd): writes cmd's output to /dev/fd/N (removed after the tool call) and returns that path.</summary>
+    /// <summary>$(...) and &lt;(...) run in a subshell that, as in bash, does not inherit set -e (unless shopt inherit_errexit).</summary>
+    async Task<int> RunSubstitutionAsync(string source, Io io, CancellationToken ct)
+    {
+        var errexit = Errexit;
+        if (!Shopts.Contains("inherit_errexit")) Errexit = false;
+        try { return await RunScriptTextAsync(source, io, subshell: true, ct); }
+        finally { Errexit = errexit; }
+    }
+
     async Task<string> ProcessSubstitutionAsync(string source, Io io, CancellationToken ct)
     {
         var output = new StringWriter();
-        await RunScriptTextAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, subshell: true, ct);
+        await RunSubstitutionAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, ct);
         var path = $"/dev/fd/{63 + _procSubCount++}";
         using (Fs.AsRoot()) Fs.WriteAllText(path, output.ToString());
         return path;
@@ -1712,7 +1786,7 @@ public sealed partial class Shell
             }
         }
         var output = new StringWriter();
-        LastExitCode = await RunScriptTextAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, subshell: true, ct);
+        LastExitCode = await RunSubstitutionAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, ct);
         return output.ToString().TrimEnd('\n');
     }
 

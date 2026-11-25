@@ -31,6 +31,7 @@ public class BashCompatParsing
     [InlineData("echo $(( 1 + \n2 ))", "3\n", 0, true)]
     [InlineData("[[ a == a ]]\necho $?", "0\n", 0, true)]
     [InlineData("! true; echo $?; ! false; echo $?", "1\n0\n", 0, true)]
+    [InlineData("time echo timed 2>/dev/null", "timed\n", 0, false)]
     [InlineData("echo \"line1\nline2\"", "line1\nline2\n", 0, true)]
     [InlineData("echo 'multi\nline'", "multi\nline\n", 0, true)]
     [InlineData("a=1 b=2; echo $a $b", "1 2\n", 0, true)]
