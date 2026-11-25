@@ -2,14 +2,17 @@
 // reports how many were solved and how often the model went looking around instead of working.
 //
 //   GEMINI_API_KEY=... dotnet run --project examples/Harness
+//   OPENROUTER_API_KEY=... MODEL=openai/gpt-5 dotnet run --project examples/Harness   (Claude, GPT, ... via OpenRouter)
 //   VARIANTS=plain,restricted,fake REPEAT=2 TASK_IDS=2,4 WORKERS=3 SYSTEM_PROMPT="..."   (all optional)
 //
 // Every run is saved to runs/harness-<time>.json as it goes (LOG=file.json to choose the path).
 using System.Text.RegularExpressions;
 using Topwater;
 
-var key = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
-if (string.IsNullOrEmpty(key)) { Console.Error.WriteLine("set GEMINI_API_KEY"); return 2; }
+var openRouterKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+var key = string.IsNullOrEmpty(openRouterKey) ? Environment.GetEnvironmentVariable("GEMINI_API_KEY") : openRouterKey;
+if (string.IsNullOrEmpty(key)) { Console.Error.WriteLine("set GEMINI_API_KEY or OPENROUTER_API_KEY"); return 2; }
+var model = string.IsNullOrEmpty(openRouterKey) ? Environment.GetEnvironmentVariable("MODEL") ?? "gemini-flash-latest" : OpenRouterAgent.Model;
 
 var descriptions = new Dictionary<string, string>
 {
@@ -75,7 +78,7 @@ int repeat = int.Parse(Environment.GetEnvironmentVariable("REPEAT") ?? "1");
 var taskIds = (Environment.GetEnvironmentVariable("TASK_IDS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(int.Parse).DefaultIfEmpty().ToList();
 if (taskIds is [0]) taskIds = Enumerable.Range(1, tasks.Length).ToList();
 var jobs = (from r in Enumerable.Range(1, repeat) from t in taskIds from v in variants select (variant: v, task: t, rep: r)).ToList();
-Console.WriteLine($"variants={string.Join(",", variants)} tasks={string.Join(",", taskIds)} repeat={repeat} -> {jobs.Count} runs");
+Console.WriteLine($"model={model} variants={string.Join(",", variants)} tasks={string.Join(",", taskIds)} repeat={repeat} -> {jobs.Count} runs");
 
 var results = new List<Result>();
 var logPath = RunLog.NewPath("harness");
@@ -88,14 +91,19 @@ await Task.WhenAll(jobs.Select(async job =>
         var (prompt, check) = tasks[job.task - 1];
         var shell = MakeShell();
         AgentRun run;
-        try { run = await GeminiAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25); }
+        try
+        {
+            run = string.IsNullOrEmpty(openRouterKey)
+                ? await GeminiAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25)
+                : await OpenRouterAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25);
+        }
         catch (Exception e) { run = new AgentRun($"(API error: {e.Message})", []); }
         var result = new Result(job.variant, job.task, job.rep, check(run.Answer, shell), run.Answer, run.Commands, run.Commands.Count(c => probe.IsMatch(c.Command)));
         lock (results)
         {
             results.Add(result);
             // saved after every run, so an interrupted session still leaves its transcripts behind
-            RunLog.Save(logPath, new { systemPrompt = SystemPrompt, results = results.OrderBy(r => r.Variant).ThenBy(r => r.Task).ThenBy(r => r.Rep) });
+            RunLog.Save(logPath, new { model, systemPrompt = SystemPrompt, results = results.OrderBy(r => r.Variant).ThenBy(r => r.Task).ThenBy(r => r.Rep) });
         }
         Console.WriteLine($"  [{job.variant,10}] task {job.task} rep {job.rep}: {(result.Solved ? "PASS" : "FAIL")}  commands={run.Commands.Count,2}  probes={result.Probes}");
     }
