@@ -696,7 +696,10 @@ Container content is untrusted, like `ShellSnapshot.Load`:
 - Every entry name must be canonical (an optional leading `./`, no `..`, `.` or empty segments, no NUL), or the import
   fails with `InvalidDataException`.
 - The selected files together may hold at most `MaxFileSystemBytes` and number at most `MaxExtractEntries` (link
-  copies count).
+  copies count). `/etc/passwd`, the session script and every `/home/*/.bash_history`, read even when not selected,
+  count toward `MaxFileSystemBytes` too.
+- Anything else malformed (a time or owner no snapshot can hold, a broken header) fails with `InvalidDataException`
+  (Python: `InvalidContainerData`).
 - Each entry is read only up to the size its header declares. A session script, `/etc/passwd` or `.bash_history`
   larger than `MaxStringBytes` is not read.
 - The result goes through `ShellSnapshot.Load` with your limits, so all its checks apply: names, modes, variable names,
@@ -705,6 +708,11 @@ Container content is untrusted, like `ShellSnapshot.Load`:
   agent command, never on the host.
 
 Building an image runs the generated `setup.sh` as root inside the image build. That is docker's sandbox, not your host.
+Account and group names from the snapshot reach `setup.sh` only as quoted words; a name starting with `-` (which
+`useradd` would read as an option) is not created and is reported, and its files go in as root's.
+
+**An exported image is agent-authored content.** It holds what the agent wrote: its files and scripts, its `~/.bashrc` and the session script that `~/.bashrc` sources, file modes and owners. Starting a shell in it runs that content. Treat the image as untrusted, and run it with the same care, limits and isolation you would give the agent itself.
+For example `docker run -it --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 512 my-agent`.
 
 The docker tests are marked `[DockerFact]` and skip when docker isn't available.
 
@@ -824,13 +832,15 @@ await using var linux = await DockerTarget.StartAsync(recording.Start, new Docke
 var report = await recording.ReplayAsync(linux, new ReplayOptions { Normalize = ReplayNormalizers.Volatile });
 ```
 
-The container (no network unless `Network = true`) gets the snapshot's host name and user (uid 1000, in place of the
+The container has no network unless `Network = true`, 1 GB of memory and no swap, one CPU, 512 processes, files of at most
+1 GB, no capabilities but `CHOWN`, `DAC_OVERRIDE` and `FOWNER` (which the root setup step needs to write files with their
+owners), and `no-new-privileges`, so a setuid program gains nothing. It gets the snapshot's host name and user (uid 1000, in place of the
 image's `ubuntu`), the files a fresh Topwater machine doesn't have or has differently (with modes, owners and times;
 not `/proc`, `/dev` or the program stubs, which the image provides for real), the variables and the working
 directory. Each call runs as `bash -c` under that user; the working directory, variables and functions are saved after
 each call and restored before the next, so state carries over as in Topwater. Aliases and `set`/`shopt` options
-don't carry over. `DockerTarget.IsAvailableAsync()` tells tests whether to skip. It is a minimal docker-run and tar
-copy, meant to be swapped for the snapshot export in `Topwater.Containers`.
+don't carry over. `DockerTarget.IsAvailableAsync()` tells tests whether to skip. User, owner and variable names go into
+its root setup script quoted, and names no account or variable can have are left out.
 
 `tools/ReplayGaps` uses this to measure Topwater against Linux on many sessions at once: it converts the example
 harness's saved transcripts (`runs/*.json`) and public agent trajectories into recordings, replays each on Topwater

@@ -176,7 +176,12 @@ public static class ContainerImport
             bool file = e.EntryType is TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.ContiguousFile;
             bool selected = path != "/" && Selected(path);
             byte[]? data = null;
-            if (file && Captured(path) && e.Length <= _limits.MaxStringBytes) _captured[path] = data = await ReadAsync(e, e.Length, ct);
+            bool captured = file && Captured(path) && e.Length <= _limits.MaxStringBytes;
+            if (captured) // held whether imported or not (every /home/*/.bash_history), so counted either way
+            {
+                AddBytes(e.Length);
+                _captured[path] = data = await ReadAsync(e, e.Length, ct);
+            }
             if (!selected) return;
             if (++_count > _limits.MaxExtractEntries) throw new InvalidDataException($"more than {_limits.MaxExtractEntries} entries to import (MaxExtractEntries)");
             if (Under(path, "/etc/topwater")) return; // a Topwater export's own files
@@ -193,12 +198,15 @@ public static class ContainerImport
                     _items[path] = new Item(true, mode, e.Uid, mtime, null);
                     break;
                 case var _ when file:
-                    if ((_bytes += e.Length) > _limits.MaxFileSystemBytes) throw new InvalidDataException($"the files to import hold more than {_limits.MaxFileSystemBytes} bytes (MaxFileSystemBytes)");
-                    data ??= await ReadAsync(e, e.Length, ct);
-                    if (!_o.IncludeBinaries && data.AsSpan().StartsWith("\u007fELF"u8))
+                    if (!captured)
+                    {
+                        AddBytes(e.Length);
+                        data = await ReadAsync(e, e.Length, ct);
+                    }
+                    if (!_o.IncludeBinaries && data!.AsSpan().StartsWith("\u007fELF"u8))
                     {
                         _report.Skip(path, "an ELF executable; Topwater can't run it (see IncludeBinaries)");
-                        _bytes -= e.Length;
+                        if (!captured) _bytes -= e.Length;
                         break;
                     }
                     _items[path] = new Item(false, mode, e.Uid, mtime, data);
@@ -215,6 +223,11 @@ public static class ContainerImport
                     _report.Skip(path, $"a {e.EntryType} entry, not a file or directory");
                     break;
             }
+        }
+
+        void AddBytes(long n)
+        {
+            if ((_bytes += n) > _limits.MaxFileSystemBytes) throw new InvalidDataException($"the files to import hold more than {_limits.MaxFileSystemBytes} bytes (MaxFileSystemBytes)");
         }
 
         /// <summary>Reads an entry's data, never more than its header claims.</summary>

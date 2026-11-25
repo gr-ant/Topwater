@@ -86,6 +86,34 @@ public class ContainerTests
         Assert.DoesNotContain("'", inner.Replace("'\\''", ""));            // every quote inside is the escaped '\'' form
     }
 
+    /// <summary>useradd and groupadd would read a name starting with "-" as an option: such names are reported and left out.</summary>
+    [Fact]
+    public void NamesStartingWithADashNeverReachUseraddOrGroupadd()
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/etc/passwd", sh.Fs.ReadAllText("/etc/passwd") + "-ou:x:1500:1500::/home/x:/bin/bash\n");
+        sh.Fs.WriteAllText("/etc/group", sh.Fs.ReadAllText("/etc/group") + "-og:x:1501:\n");
+        sh.Fs.WriteAllText("/srv/f", "x");
+        sh.Fs.SetOwner("/srv/f", "-oo");
+        var ctx = sh.Snapshot().ToBuildContext();
+        Assert.DoesNotMatch("-ou|-og|-oo", ctx.SetupScript);
+        Assert.Subset(ctx.Report.NotCarried.Select(i => i.What).ToHashSet(), new HashSet<string> { "account -ou", "account -og", "owner -oo" });
+        Assert.Equal(0, Read(ctx.Layer)["srv/f"].Uid);
+        Assert.Throws<InvalidOperationException>(() => new Shell(new ShellOptions { User = "-x" }).Snapshot().ToBuildContext());
+    }
+
+    /// <summary>Home, shell and comment go to useradd as quoted words; the working directory to WORKDIR escaped.</summary>
+    [Fact]
+    public async Task PasswdFieldsAndWorkingDirectoryStayData()
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/etc/passwd", sh.Fs.ReadAllText("/etc/passwd") + "eve:x:1500:1500:$(touch /p1):/home/e;touch /p2:/bin/sh `touch /p3`\n");
+        await sh.RunAsync("mkdir -p '/tmp/$(x) \"y\"' && cd '/tmp/$(x) \"y\"'");
+        var ctx = sh.Snapshot().ToBuildContext();
+        Assert.Contains("-d '/home/e;touch /p2' -s '/bin/sh `touch /p3`' -c '$(touch /p1)' eve\n", ctx.SetupScript);
+        Assert.Contains("WORKDIR \"/tmp/\\$(x) \\\"y\\\"\"\n", ctx.Dockerfile);
+    }
+
     /// <summary>/proc, /dev and the /bin command stubs never go into the layer.</summary>
     [Fact]
     public async Task SimulatedPathsAndStubsAreNotExported()
@@ -400,6 +428,43 @@ public class ContainerTests
         var good = Tar(new E("srv/f", new byte[2000])).ToArray();
         var cut = new MemoryStream(good[..(512 + 100)]);
         await Assert.ThrowsAsync<InvalidDataException>(() => Import(cut, changes: ["A /srv/f"]));
+    }
+
+    /// <summary>Every /home/*/.bash_history is read for the history, imported or not, so each counts against MaxFileSystemBytes.</summary>
+    [Fact]
+    public async Task HistoriesCountAgainstTheByteLimit()
+    {
+        var homes = Enumerable.Range(0, 5).Select(i => new E($"home/u{i}/.bash_history", new byte[30_000])).ToArray();
+        var limits = new ShellOptions { MaxFileSystemBytes = 100_000 };
+        await Assert.ThrowsAsync<InvalidDataException>(() => Import(Tar(homes), options: new() { Limits = limits }));
+        await Import(Tar(homes[..2]), options: new() { Limits = limits });
+    }
+
+    /// <summary>A time or owner no snapshot can hold is bad container data, reported as such.</summary>
+    [Theory]
+    [InlineData("mtime", "100000000000000000000")]
+    [InlineData("mtime", "-100000000000000")]
+    [InlineData("uid", "-5")]
+    public async Task BadTimesAndOwnersThrowInvalidData(string key, string value)
+    {
+        // TarWriter writes its own mtime and uid, so the attribute goes in under a stand-in name of the same length and is renamed after
+        var ms = new MemoryStream();
+        using (var w = new TarWriter(ms, TarEntryFormat.Pax, leaveOpen: true))
+            w.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "srv/x", new Dictionary<string, string> { [key[..^1] + "X"] = value }) { DataStream = new MemoryStream([1]) });
+        var bytes = Encoding.Latin1.GetString(ms.ToArray()).Replace(" " + key[..^1] + "X=", " " + key + "=");
+        await Assert.ThrowsAsync<InvalidDataException>(() => Import(new MemoryStream(Encoding.Latin1.GetBytes(bytes)), changes: ["A /srv/x"]));
+    }
+
+    /// <summary>Each link to a directory once copied the directory's entries: 20,000 links took minutes.</summary>
+    [Fact]
+    public async Task ManyDirectoryLinksImportInLinearTime()
+    {
+        const int n = 20_000;
+        var entries = Enumerable.Range(0, n).SelectMany(i => new[] { D($"srv/d{i}"), F($"srv/d{i}/f", "x"), L($"srv/l{i}", $"/srv/d{i}") }).Prepend(D("srv")).ToArray();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var r = await Import(Tar(entries), options: new() { Paths = ["/srv"] });
+        Assert.InRange(watch.Elapsed.TotalSeconds, 0, 120); // was minutes; now a few seconds
+        Assert.Equal("x", (await Restored(r).RunAsync($"cat /srv/l{n - 1}/f")).Stdout);
     }
 
     /// <summary>A symlink loop comes back as the loop it is: following it fails, nothing hangs.</summary>

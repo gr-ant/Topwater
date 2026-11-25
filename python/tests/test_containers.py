@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -106,6 +107,29 @@ class ExportTests(unittest.TestCase):
         self.assertIn("keep='|root|agent|ev'\\''il;touch /x|", ctx.setup_script)
         with self.assertRaises(ValueError):
             to_build_context(sh.snapshot(), "ubuntu:24.04\nRUN touch /pwned")
+
+    def test_names_starting_with_a_dash_never_reach_useradd_or_groupadd(self):
+        # useradd and groupadd would read them as options; they are reported and left out
+        sh = Shell()
+        sh.fs.write_text("/etc/passwd", sh.fs.read_text("/etc/passwd") + "-ou:x:1500:1500::/home/x:/bin/bash\n")
+        sh.fs.write_text("/etc/group", sh.fs.read_text("/etc/group") + "-og:x:1501:\n")
+        sh.fs.write_text("/srv/f", "x")
+        sh.fs.set_owner("/srv/f", "-oo")
+        ctx = to_build_context(sh.snapshot())
+        self.assertFalse(re.search(r"(?m)^.*(-ou|-og|-oo).*$", ctx.setup_script))
+        self.assertTrue({"account -ou", "account -og", "owner -oo"} <= set(whats(ctx.report)))
+        self.assertEqual(0, read_layer(ctx.layer)["srv/f"][0].uid)
+        with self.assertRaises(ValueError):
+            to_build_context(Shell("-x").snapshot())
+
+    def test_passwd_fields_and_working_directory_stay_data(self):
+        # home, shell and comment go to useradd as quoted words; the working directory to WORKDIR escaped
+        sh = Shell()
+        sh.fs.write_text("/etc/passwd", sh.fs.read_text("/etc/passwd") + "eve:x:1500:1500:$(touch /p1):/home/e;touch /p2:/bin/sh `touch /p3`\n")
+        sh.run("""mkdir -p '/tmp/$(x) "y"' && cd '/tmp/$(x) "y"'""")
+        ctx = to_build_context(sh.snapshot())
+        self.assertIn("-d '/home/e;touch /p2' -s '/bin/sh `touch /p3`' -c '$(touch /p1)' eve\n", ctx.setup_script)
+        self.assertIn('WORKDIR "/tmp/\\$(x) \\"y\\""\n', ctx.dockerfile)
 
     def test_simulated_paths_and_stubs_are_not_exported(self):
         sh = Shell()
@@ -305,6 +329,33 @@ class ImportTests(unittest.TestCase):
         good = make_tar(entry("srv/f", bytes(2000))).getvalue()
         with self.assertRaises(InvalidContainerData):
             imported(io.BytesIO(good[:512 + 100]), changes=["A /srv/f"])
+
+    def test_histories_count_against_the_byte_limit(self):
+        # every /home/*/.bash_history is read for the history, imported or not, so each counts
+        homes = [entry(f"home/u{i}/.bash_history", bytes(30_000)) for i in range(5)]
+        with self.assertRaises(InvalidContainerData):
+            imported(make_tar(*homes), options=ImportOptions(limits={"max_file_system_bytes": 100_000}))
+        imported(make_tar(*homes[:2]), options=ImportOptions(limits={"max_file_system_bytes": 100_000}))
+
+    def test_bad_times_and_owners_raise_invalid_container_data(self):
+        for kw in ({"mtime": 10 ** 20}, {"mtime": -10 ** 14}, {"uid": -5}):
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as t:
+                info = tarfile.TarInfo("srv/x")
+                info.size, info.mtime, info.uid = 1, kw.get("mtime", 1700000000), kw.get("uid", 0)
+                t.addfile(info, io.BytesIO(b"x"))
+            buf.seek(0)
+            with self.subTest(kw), self.assertRaises(InvalidContainerData):
+                imported(buf, changes=["A /srv/x"])
+
+    def test_many_directory_links_import_in_linear_time(self):
+        # each link to a directory once copied the directory's entries: 20,000 links took minutes
+        n = 20_000
+        tar = make_tar(D("srv"), *[e for i in range(n) for e in (D(f"srv/d{i}"), F(f"srv/d{i}/f", "x"), L(f"srv/l{i}", f"/srv/d{i}"))])
+        start = time.monotonic()
+        r = imported(tar, options=ImportOptions(paths=("/srv",)))
+        self.assertLess(time.monotonic() - start, 120)  # was over 190 s; now a few seconds
+        self.assertEqual("x", restored(r).run(f"cat /srv/l{n - 1}/f").stdout)
 
     def test_symlink_loop_comes_back(self):
         # as the loop it is: following it fails, nothing hangs

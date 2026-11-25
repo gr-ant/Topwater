@@ -90,8 +90,12 @@ Where Python differs from the reference:
   `Shell.run`), so call it outside a running event loop. Names: `to_build_context`, `build_image`, `from_container`,
   `from_image`, `from_tar(rootfs, ContainerConfig(user, working_dir, env), changes, options)`, `docker_available()`;
   `ImportOptions(paths, include_binaries, restore_session, limits)` where `limits` is a dict of `Shell()` arguments.
-  Archive errors are `InvalidContainerData`, docker failures `ContainerError`. The export quotes
-  the account list in `setup.sh` and refuses a base image name with a line break.
+  Bad container data (a malformed archive, one over a limit, a time or owner no snapshot can hold) raises
+  `InvalidContainerData`, docker failures `ContainerError`. The export quotes every name in `setup.sh`, leaves out
+  account names starting with `-`, and refuses a base image name with a line break.
+- An exported image holds what the agent wrote: its files, scripts and `~/.bashrc` (with the session script it
+  sources), modes and owners. A shell in the image runs that content, so treat the image as untrusted and run it with
+  the same care, limits and isolation as the agent itself.
 - `topwater.mcp` is a small standard-library client for servers spoken to over stdio; `mount_mcp` accepts any object
   with `list_tools()` and `call_tool(name, arguments)` returning MCP's dict shapes, so the official `mcp` SDK adapts in
   a few lines.

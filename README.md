@@ -72,7 +72,9 @@ public class Tools
 ```
 
 Add `Topwater.Mcp` for MCP servers and `Topwater.AI` for Microsoft.Extensions.AI. `Topwater.Containers` turns the machine
-into a Docker image and back, and `Topwater.Replay` replays recordings.
+into a Docker image and back, and `Topwater.Replay` replays recordings. An exported image holds what the agent wrote (its
+files, scripts and `~/.bashrc`, which a shell in the image runs): treat it as untrusted and run it as carefully as the
+agent itself.
 
 ### Python
 
