@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Record a corpus case from the real tools: run SCRIPT in real bash and append its output to tests/corpus/AREA.jsonl.
 
-    python3 tests/corpus/record.py AREA [--local] [--apt PKG,...] [--tags a,b] [--notes TEXT] [--dry-run] SCRIPT
+    python3 tests/corpus/record.py AREA [--local] [--agent] [--apt PKG,...] [--tags a,b] [--notes TEXT] [--dry-run] SCRIPT
 
 By default the script runs in a fresh ubuntu:24.04 docker container (bash 5.2.21, GNU coreutils 9.4), as `bash -c` in an
 empty /tmp/w with TZ=UTC, LC_ALL=C.UTF-8 and no network. --local uses this machine's bash in an empty temp directory.
+--agent runs it as the ordinary user `agent` (uid 1000, owning /tmp/w) like Topwater's shell, instead of root: for
+`ls -l` owners and "Permission denied" cases.
 """
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 
@@ -13,7 +15,7 @@ IMAGE = "ubuntu:24.04"
 TIMEOUT = 120
 
 
-def run(script, local, apt):
+def run(script, local, apt, agent=False):
     env = {"TZ": "UTC", "LC_ALL": "C.UTF-8"}
     if local:
         with tempfile.TemporaryDirectory() as d:
@@ -29,8 +31,13 @@ def run(script, local, apt):
         pkgs = " ".join(apt)
         prep = f"apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {pkgs} >/dev/null 2>&1 && "
     net = [] if apt else ["--network", "none"]
+    start = 'mkdir -p /tmp/w && cd /tmp/w && exec bash -c "$1"'
+    if agent:
+        # the image's uid-1000 user, renamed to match Topwater's
+        start = ("usermod -l agent -d /home/agent -m ubuntu && groupmod -n agent ubuntu && mkdir -p /tmp/w && chown agent: /tmp/w"
+                 ' && cd /tmp/w && exec setpriv --reuid=agent --regid=agent --init-groups env HOME=/home/agent bash -c "$1"')
     cmd = ["docker", "run", "--rm", "-i", *net, *sum((["-e", f"{k}={v}"] for k, v in env.items()), []), IMAGE,
-           "bash", "-c", prep + 'mkdir -p /tmp/w && cd /tmp/w && exec bash -c "$1"', "_", script]
+           "bash", "-c", prep + start, "_", script]
     return subprocess.run(cmd, capture_output=True, timeout=TIMEOUT + (300 if apt else 0))
 
 
@@ -39,6 +46,7 @@ def main():
     p.add_argument("area", help="corpus file name without .jsonl, e.g. quoting")
     p.add_argument("script")
     p.add_argument("--local", action="store_true", help="use this machine's bash instead of docker")
+    p.add_argument("--agent", action="store_true", help="run as the ordinary user agent (uid 1000), not root")
     p.add_argument("--apt", default="", help="comma-separated packages to install in the container first (e.g. bc,zip)")
     p.add_argument("--tags", default="")
     p.add_argument("--notes", default="")
@@ -55,7 +63,9 @@ def main():
     if not a.dry_run and any(c["script"] == a.script for c in cases):
         sys.exit(f"record.py: {a.area} already has this script")
 
-    r = run(a.script, a.local, [x for x in a.apt.split(",") if x])
+    if a.agent and a.local:
+        sys.exit("record.py: --agent needs docker")
+    r = run(a.script, a.local, [x for x in a.apt.split(",") if x], a.agent)
     try:
         stdout = r.stdout.decode("utf-8")
     except UnicodeDecodeError:
