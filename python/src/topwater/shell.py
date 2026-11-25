@@ -18,7 +18,7 @@ from .parser import (
     FunctionDef, GroupCommand, IfCommand, Lexer, Literal, LoopCommand, Parser, ParseError, Pipeline, ProcSub, Script,
     SimpleCommand, Variable, Word, is_cond_binary, is_name, split_subscript, try_assignment,
 )
-from .vfs import ShellError, VirtualFileSystem, get_name, get_parent, normalize, utc_now
+from .vfs import ShellError, UsageException, VirtualFileSystem, get_name, get_parent, normalize, utc_now
 
 _BAD_INT = re.compile(r"invalid literal for int\(\) with base \d+: '(.*)'$", re.S)
 EXECUTABLE_STUB = "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
@@ -1179,7 +1179,11 @@ class Shell:
             return StdinBuffer(await self._expand_single(r.here.body, io_))
         if r.op == "<<<":
             return StdinBuffer(await self._expand_single(r.target, io_) + "\n")
-        return StdinBuffer(self.fs.read_pipe_text(self.resolve(await self._expand_single(r.target, io_))))
+        target = await self._expand_single(r.target, io_)
+        try:
+            return StdinBuffer(self.fs.read_pipe_text(self.resolve(target)))
+        except ShellError as e:
+            raise ShellError(f"{target}: {str(e).rsplit(': ', 1)[-1]}") from None
 
     async def _open_output(self, r, io_: _Io, open_):
         """The writer for > >> >| &> &>>: /dev/null, /dev/stdout, /dev/stderr, or a file made by open_."""
@@ -1376,6 +1380,8 @@ class Shell:
 
             if standard_option(ctx, cmd, argv[1]):
                 return 0
+        from .commands import is_shell_builtin, usage_error
+
         try:
             result = cmd.handler(ctx)
             if inspect.isawaitable(result):
@@ -1383,8 +1389,14 @@ class Shell:
             return int(result or 0)
         except (asyncio.CancelledError, KeyboardInterrupt, _ControlFlow, RecursionError):
             raise
+        except UsageException as e:
+            if is_shell_builtin(self, name):
+                io_.err.write(f"bash: {name}: {e}\n")
+                return 2
+            io_.err.write(usage_error("grep" if name in ("egrep", "fgrep") else name, str(e)))
+            return 2 if name in ("ls", "grep", "egrep", "fgrep", "sort", "diff") else 1
         except ShellError as e:
-            io_.err.write(f"{name}: {e}\n")
+            io_.err.write(f"{'bash: ' if is_shell_builtin(self, name) else ''}{name}: {e}\n")
             return e.exit_code
         except Exception as e:  # a tool crashing must not crash the agent loop
             m = _BAD_INT.match(str(e)) if isinstance(e, ValueError) else None

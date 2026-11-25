@@ -18,6 +18,13 @@ class ShellError(Exception):
         self.exit_code = exit_code
 
 
+class UsageException(ShellError):
+    """A bad command line: printed with GNU's "Try 'cmd --help'" hint; exits 1, or 2 for ls, grep, sort and diff."""
+
+    def __init__(self, message: str):
+        super().__init__(message, 1)
+
+
 @dataclass(frozen=True)
 class FileStat:
     is_dir: bool
@@ -25,6 +32,12 @@ class FileStat:
     modified: datetime
     mode: int  # Unix permission bits, e.g. 0o755
     owner: str
+    links: int = 1  # hard links: 1 for a file; 2 plus one per subdirectory for a directory, as on ext4
+
+    @property
+    def blocks(self) -> int:
+        """512-byte blocks in use, as `stat %b` and `ls -s` count them: whole 4 KiB filesystem blocks."""
+        return (self.size + 4095) // 4096 * 8
 
 
 NO_SPACE = "No space left on device"
@@ -119,6 +132,10 @@ def get_parent(path: str) -> str:
 def format_mode(is_dir: bool, mode: int) -> str:
     """'drwxr-xr-x' style rendering of a mode."""
     chars = ["d" if is_dir else "-"] + [c if mode & (1 << (8 - i)) else "-" for i, c in enumerate("rwxrwxrwx")]
+    if mode & 0o4000:  # setuid
+        chars[3] = "s" if chars[3] == "x" else "S"
+    if mode & 0o2000:  # setgid
+        chars[6] = "s" if chars[6] == "x" else "S"
     if mode & 0o1000:  # sticky bit
         chars[9] = "t" if chars[9] == "x" else "T"
     return "".join(chars)
@@ -175,29 +192,30 @@ class VirtualFileSystem:
         return self._walk(path)[0]
 
     def _walk(self, path: str):
-        """Walks `path`; like Linux, each directory passed through needs search (x) permission, else (None, True)."""
+        """Walks `path`; like Linux, each directory passed through needs search (x) permission. Returns (node, why):
+        why says why a missing node can't be reached: "Permission denied", "Not a directory" or "No such file or directory"."""
         cur = self._root
         user = self.run_as if self._restricted else None
         for seg in normalize("/", path).split("/"):
             if not seg:
                 continue
             if not isinstance(cur, _Dir):
-                return None, False
+                return None, "Not a directory"
             if user is not None and not self._permits(cur, user, 1):
-                return None, True
+                return None, "Permission denied"
             if seg not in cur.children:
-                return None, False
+                return None, "No such file or directory"
             cur = cur.children[seg]
-        return cur, False
+        return cur, ""
 
     @staticmethod
     def _permits(n, user: str | None, bits: int) -> bool:
         return user is None or ((n.mode >> (6 if n.owner == user else 0)) & bits) == bits
 
     def why_missing(self, path: str) -> str:
-        """Why `path` can't be reached: "Permission denied" or "No such file or directory"."""
-        node, denied = self._walk(path)
-        return "Permission denied" if node is None and denied else "No such file or directory"
+        """Why `path` can't be reached: "Permission denied", "Not a directory" or "No such file or directory"."""
+        node, why = self._walk(path)
+        return why if node is None else "No such file or directory"
 
     def _missing(self, path: str) -> ShellError:
         return ShellError(f"{path}: {self.why_missing(path)}")
@@ -208,12 +226,12 @@ class VirtualFileSystem:
 
     def _parent_dir(self, path: str) -> _Dir:
         """The directory an entry is created in, removed from or renamed in; it needs search permission too."""
-        node, denied = self._walk(get_parent(path))
+        node, why = self._walk(get_parent(path))
         if isinstance(node, _Dir):
             self._require(node, 1, path)
             return node
         if node is None:
-            raise ShellError(f"{path}: {'Permission denied' if denied else 'No such file or directory'}")
+            raise ShellError(f"{path}: {why}")
         raise ShellError(f"{path}: Not a directory")
 
     def _allowed(self, n, bit: int) -> bool:
@@ -247,7 +265,7 @@ class VirtualFileSystem:
     def stat(self, path: str) -> FileStat:
         n = self._find(path)
         if isinstance(n, _Dir):
-            return FileStat(True, 4096, n.modified, n.mode, n.owner)
+            return FileStat(True, 4096, n.modified, n.mode, n.owner, 2 + sum(isinstance(c, _Dir) for c in n.children.values()))
         if isinstance(n, _File):
             return FileStat(False, n.reported_size if n.reported_size is not None else len(n.raw()), n.modified, n.mode, n.owner)
         raise self._missing(path)
@@ -339,17 +357,17 @@ class VirtualFileSystem:
         """Sets a modification time (tar and unzip restoring one); as with utime(2), only the owner may."""
         n = self._find(path)
         if n is None:
-            raise ShellError(f"{path}: No such file or directory")
+            raise self._missing(path)
         if self._restricted and n.owner != self.run_as:
             raise ShellError(f"{path}: Operation not permitted")
         n.modified = when
 
     def touch(self, path: str) -> None:
-        n, denied = self._walk(path)
+        n, why = self._walk(path)
         if n is not None:
             self._require(n, 2, path)
             n.modified = utc_now()
-        elif denied:
+        elif why == "Permission denied":
             raise ShellError(f"{path}: Permission denied")
         else:
             self.write_text(path, "")

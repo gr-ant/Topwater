@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from .. import bytetext
-from ..vfs import ShellError
+from ..vfs import ShellError, UsageException
 
 
 class Args:
@@ -38,7 +38,7 @@ class Args:
             if a.startswith("--"):
                 name, eq, inline = a[2:].partition("=")
                 if name not in mapping:
-                    raise ShellError(f"unrecognized option '{a}'", 2)
+                    raise UsageException(f"unrecognized option '{a}'")
                 c = mapping[name]
                 if c in valued:
                     if eq:
@@ -47,7 +47,7 @@ class Args:
                         i += 1
                         r.values[c] = args[i]
                     else:
-                        raise ShellError(f"option '--{name}' requires an argument", 2)
+                        raise UsageException(f"option '--{name}' requires an argument")
                 else:
                     r.flags.add(c)
                 i += 1
@@ -65,10 +65,10 @@ class Args:
                         i += 1
                         r.values[c] = args[i]
                     else:
-                        raise ShellError(f"option requires an argument -- '{c}'", 2)
+                        raise UsageException(f"option requires an argument -- '{c}'")
                     break
                 if c not in flags:
-                    raise ShellError(f"invalid option -- '{c}'", 2)
+                    raise UsageException(f"invalid option -- '{c}'")
                 r.flags.add(c)
             i += 1
         return r
@@ -122,6 +122,63 @@ def write_lines(w, lines) -> None:
         w.write(line + "\n")
 
 
+def usage_error(cmd: str, message: str) -> str:
+    """A bad command line the way GNU tools report one: the problem, then a pointer to --help."""
+    head = f"{cmd}: {message}\n" if message else ""
+    if cmd == "grep":
+        return head + "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
+    if cmd == "diff":
+        return head + "diff: Try 'diff --help' for more information.\n"
+    return head + f"Try '{cmd} --help' for more information.\n"
+
+
+def cannot_read(cmd: str, f: str, why: str) -> str:
+    """The message after "NAME: " when an input file can't be read, worded the way each GNU tool words it."""
+    isdir = why == "Is a directory"
+    if cmd == "sed":
+        return f"read error on {f}: {why}" if isdir else f"can't read {f}: {why}"
+    if cmd in ("head", "tail"):
+        return f"error reading {quote_always(f)}: {why}" if isdir else f"cannot open {quote_always(f)} for reading: {why}"
+    if cmd == "uniq" and isdir:
+        return f"error reading {quote_always(f)}: {why}"
+    if cmd == "tac":
+        return f"{quote(f)}: read error: Invalid argument" if isdir else f"failed to open {quote_always(f)} for reading: {why}"
+    if cmd == "sort":
+        return f"read failed: {quote(f)}: {why}" if isdir else f"cannot read: {quote(f)}: {why}"
+    if cmd == "base64" and isdir:
+        return f"read error: {why}"
+    if cmd in ("grep", "egrep", "fgrep"):
+        return f"{f}: {why}"  # grep prints the name raw
+    return f"{quote(f)}: {why}"
+
+
+def quote(s: str) -> str:
+    """A file name in a GNU message: as is when plain, else shell-quoted like quote_always."""
+    plain = s and s[0] not in "~#" and not any(c < " " or c == "\x7f" or c in " !\"$&'()*;<>?[\\^`|=:" for c in s)
+    return s if plain else quote_always(s)
+
+
+def quote_always(s: str) -> str:
+    """A file name shell-quoted even when plain: 'nope', "it's", 'a'$'\\t''b'."""
+    if any(c < " " or c == "\x7f" for c in s):
+        # each control character becomes its own $'\t' piece between quoted runs
+        out = []
+        for run in re.split("([\x00-\x1f\x7f])", s):
+            if len(run) == 1 and (run < " " or run == "\x7f"):
+                out.append("$'\\" + {"\t": "t", "\n": "n", "\r": "r"}.get(run, f"{ord(run):03o}") + "'")
+            elif run:
+                out.append(quote_always(run))
+        return "".join(out)
+    if "'" in s and not any(c in "\"$`\\!" for c in s):
+        return f'"{s}"'
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def quote_l(s: str) -> str:
+    """A value quoted the way GNU tools quote one in a UTF-8 locale: ‘x’."""
+    return f"‘{s}’"
+
+
 def inputs(ctx, files, on_error, raw: bool = False, quiet: bool = False):
     """Yields (name, text) for each file argument (or stdin when there are none / "-"), reporting missing files
     (unless quiet). With raw, yields the bytes instead (exact for binary files)."""
@@ -137,7 +194,7 @@ def inputs(ctx, files, on_error, raw: bool = False, quiet: bool = False):
             text = (ctx.fs.read_bytes if raw else ctx.fs.read_pipe_text)(ctx.resolve(f))
         except ShellError as e:
             if not quiet:
-                ctx.stderr.write(f"{ctx.name}: {f}: {str(e).rsplit(': ', 1)[-1]}\n")
+                ctx.stderr.write(f"{ctx.name}: {cannot_read(ctx.name, f, str(e).rsplit(': ', 1)[-1])}\n")
             on_error()
             continue
         yield f, text
@@ -556,7 +613,11 @@ async def _run_script(ctx):
             raise ShellError("filename argument required", 2)
         return await sh._run_script_text(ctx.stdin, replace(io_, stdin=StdinBuffer()), subshell=True, positional=[],
                                          process=_NewProcess(ctx.name, None, setup))
-    text = ctx.fs.read_text(ctx.resolve(args[0]))
+    try:
+        text = ctx.fs.read_text(ctx.resolve(args[0]))
+    except ShellError as e:
+        ctx.error(f"bash: {args[0]}: {str(e).rsplit(': ', 1)[-1]}")
+        return 127 if is_bash else 1
     if is_bash:
         return await sh._run_script_text(text, io_, subshell=True, positional=args[1:], process=_NewProcess(args[0], args[0], setup))
     sh.source_depth += 1
@@ -854,7 +915,7 @@ def parse_date(text: str, now: datetime) -> datetime:
     (2026-11-20, 11/20/2026, 20 Nov 2026, Nov 20, 2026, 20261120), times (13:30[:00[.5]], 1pm), zones
     (UTC, Z, EST..., +0100, +01:00), a day of the week, today/now/yesterday/tomorrow, @EPOCH, and relative items
     ("3 days ago", "next week", "+2 hours") applied last. Results are UTC, the simulated machine's zone."""
-    bad = ShellError(f"invalid date '{text}'")
+    bad = ShellError(f"invalid date {quote_l(text)}")
     s = text.strip().lower()
     m = re.fullmatch(r"@(-?\d+(?:\.\d+)?)", s)
     if m:

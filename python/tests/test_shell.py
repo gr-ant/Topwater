@@ -89,7 +89,7 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(1, r.exit_code)
         self.assertEqual("cat: nope.txt: No such file or directory\n", r.stderr)
         self.assertEqual("cat: nope.txt: No such file or directory\n[exit code 1]", r.to_tool_output())
-        self.assertEqual("ls: invalid option -- 'Z'\n", sh.run("ls -Z").stderr)
+        self.assertEqual("ls: invalid option -- 'y'\nTry 'ls --help' for more information.\n", sh.run("ls -y").stderr)
 
     def test_fake_system(self):
         sh = Shell(user="dev", hostname="box")

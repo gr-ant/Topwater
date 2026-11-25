@@ -6,8 +6,8 @@ import re
 
 from .. import bytetext
 from ..shell import CommandContext, glob_to_regex
-from ..vfs import ShellError, normalize
-from . import Args, inputs, split_lines, unescape
+from ..vfs import ShellError, UsageException, normalize
+from . import Args, inputs, quote_l, split_lines, unescape
 
 
 _CLASSES = {
@@ -172,7 +172,7 @@ def _grep(ctx):
     positional = list(a.positional)
     if not patterns:
         if not positional:
-            raise ShellError("usage: grep [OPTION]... PATTERNS [FILE]...", 2)
+            raise UsageException("")
         patterns = [positional.pop(0)]
     # a pattern with newlines is several patterns
     patterns = [p for pat in patterns for p in (pat.split("\n") if pat else [pat])]
@@ -283,6 +283,10 @@ def _head_tail(ctx):
     # shortcut: tail -f/-F print what is there and return instead of following (nothing else writes the file)
     a = Args.parse(Args.numeric_shorthand(ctx.args), "qvfF" if ctx.name == "tail" else "qv", "nc",
                    "lines=n,bytes=c,quiet=q,silent=q,verbose=v" + (",follow=f,retry=F" if ctx.name == "tail" else ""))
+    if a.value("n") is not None:  # a bad count is reported before any file is opened
+        _count_arg(a.value("n"), "lines")
+    if a.value("c") is not None:
+        _count_arg(a.value("c"), "bytes")
     errors = _Errors()
     items = list(inputs(ctx, a.positional, errors, raw=a.value("c") is not None))
     for k, (name, text) in enumerate(items):
@@ -317,7 +321,7 @@ def _count_arg(spec: str, what: str) -> int:
     try:
         return int(spec.lstrip("+-") or "x")
     except ValueError:
-        raise ShellError(f"invalid number of {what}: '{spec}'") from None
+        raise ShellError(f"invalid number of {what}: {quote_l(spec)}") from None
 
 
 def _wc(ctx):
@@ -395,7 +399,7 @@ def _sort(ctx):
     for spec in keys_spec:
         km = re.fullmatch(r"(\d+)(?:\.(\d+))?([a-zA-Z]*)(?:,(\d+)(?:\.(\d+))?([a-zA-Z]*))?", spec)
         if not km or int(km.group(1)) == 0:
-            raise ShellError(f"invalid number at field start: invalid count at start of '{spec}'", 2)
+            raise ShellError(f"invalid number at field start: invalid count at start of {quote_l(spec)}", 2)
         opts = km.group(3) + (km.group(6) or "")
         keys.append((int(km.group(1)), int(km.group(2) or 1), int(km.group(4)) if km.group(4) else None,
                      int(km.group(5) or 0), opts if set(opts) & _SORT_ORDERING else global_opts + opts))
@@ -446,7 +450,11 @@ def _sort(ctx):
         return -c if a.has("r") else c
 
     errors = _Errors()
-    named = list(inputs(ctx, a.positional, errors))
+    named = []
+    for f in a.positional or ["-"]:
+        named += inputs(ctx, [f], errors)
+        if errors.hit:
+            return 2  # sort stops at the first file it can't read
     lines = [line for _, text in named for line in split_lines(text)]
     items = [(line, [key_value(extract(line, k), k[4]) for k in keys]) for line in lines]
     if a.has("c") or a.has("C"):
@@ -473,7 +481,10 @@ def _sort(ctx):
 
 def _uniq(ctx):
     a = Args.parse(ctx.args, "cdui", longs="count=c,repeated=d,unique=u,ignore-case=i")
-    text = ctx.fs.read_text(ctx.resolve(a.positional[0])) if a.positional else ctx.stdin
+    errors = _Errors()
+    text = "".join(t for _, t in inputs(ctx, a.positional[:1], errors))
+    if errors.hit:
+        return 1
     groups: list[list] = []
     for line in split_lines(text):
         same = groups and (groups[-1][0].lower() == line.lower() if a.has("i") else groups[-1][0] == line)
@@ -495,7 +506,7 @@ def _cut(ctx):
         raise ShellError("the delimiter must be a single character")
     chars = a.value("c") or a.value("b")
     if not chars and not a.value("f"):
-        raise ShellError("you must specify a list of bytes, characters, or fields")
+        raise UsageException("you must specify a list of bytes, characters, or fields")
     wanted, open_from = _parse_list(chars or a.value("f"))
     complement = a.has("z")
 
@@ -543,7 +554,9 @@ def _expand_set(spec: str) -> str:
 def _tr(ctx):
     a = Args.parse(ctx.args, "dscC", longs="delete=d,squeeze-repeats=s,complement=c")
     if not a.positional:
-        raise ShellError("missing operand")
+        raise UsageException("missing operand")
+    if len(a.positional) > 2:
+        raise UsageException(f"extra operand {quote_l(a.positional[2])}")
     set1 = _expand_set(a.positional[0])
     set2 = _expand_set(a.positional[1]) if len(a.positional) > 1 else ""
     complement = a.has("c") or a.has("C")
@@ -1262,8 +1275,12 @@ def _sed(ctx):
             try:
                 original = ctx.fs.read_text(path)
             except ShellError as e:
-                ctx.error(f"sed: can't read {f}: {str(e).rsplit(': ', 1)[-1]}")
-                code = 2
+                if ctx.fs.is_dir(path):
+                    ctx.error(f"sed: couldn't edit {f}: not a regular file")
+                    code = 4
+                else:
+                    ctx.error(f"sed: can't read {f}: {str(e).rsplit(': ', 1)[-1]}")
+                    code = 2
                 continue
             buf = io.StringIO()
             quit_code = _sed_execute(cmds, original, buf, quiet, ctx)
@@ -1286,7 +1303,7 @@ def _sed(ctx):
         quit_code = _sed_execute(cmds, joined, ctx.stdout, quiet, ctx)
         if quit_code is not None:
             return quit_code
-    return 2 if errors.hit else 0
+    return 4 if any(f != "-" and ctx.fs.is_dir(ctx.resolve(f)) for f in files) else 2 if errors.hit else 0  # 4: a read error (a directory)
 
 
 def register(shell) -> None:

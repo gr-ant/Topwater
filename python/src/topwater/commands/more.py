@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from .. import arith, bytetext
 from ..convert import file_type
 from ..shell import ExitSignal, LoopControl, ReturnSignal
-from ..vfs import ShellError, format_mode, get_parent, normalize, utc_now
-from . import Args, inputs, is_shell_builtin, printf_format, split_lines, unescape, write_lines
+from ..vfs import ShellError, UsageException, format_mode, get_parent, normalize, utc_now
+from . import Args, inputs, is_shell_builtin, printf_format, quote, quote_l, split_lines, unescape, write_lines
 
 
 class _Errors:
@@ -726,7 +726,7 @@ def _printenv(ctx):
 
 async def _sleep(ctx):
     if not ctx.args:
-        raise ShellError("missing operand")
+        raise UsageException("missing operand")
     total = sum(_duration(a) for a in ctx.args)
     sh = ctx.shell
     # the call's deadline (or a `timeout`) cuts the sleep short
@@ -768,7 +768,7 @@ async def _time(ctx):
 def _basename(ctx):
     a = Args.parse(ctx.args, "az", "s", "multiple=a,suffix=s,zero=z")
     if not a.positional:
-        raise ShellError("missing operand")
+        raise UsageException("missing operand")
     suffix = a.value("s") or (a.positional[1] if not a.has("a") and len(a.positional) == 2 else None)
     names = a.positional if a.has("a") or a.value("s") else a.positional[:1]
     for n in names:
@@ -780,12 +780,13 @@ def _basename(ctx):
 
 
 def _dirname(ctx):
-    if not ctx.args:
-        raise ShellError("missing operand")
-    for n in ctx.args:
+    a = Args.parse(ctx.args, "z", longs="zero=z")
+    if not a.positional:
+        raise UsageException("missing operand")
+    for n in a.positional:
         t = n.rstrip("/")
         i = t.rfind("/")
-        ctx.print("/" if not t else "." if i < 0 else "/" if i == 0 else (t[:i].rstrip("/") or "/"))
+        ctx.stdout.write(("/" if not t else "." if i < 0 else "/" if i == 0 else (t[:i].rstrip("/") or "/")) + ("\0" if a.has("z") else "\n"))
 
 
 def _realpath(ctx):
@@ -796,7 +797,7 @@ def _realpath(ctx):
     for p in a.positional or ["."]:
         path = ctx.resolve(p)
         if not a.has("m") and not ctx.fs.exists(path) and (a.has("e") or ctx.name == "realpath" or not ctx.fs.is_dir(get_parent(path))):
-            ctx.error(f"{ctx.name}: {p}: No such file or directory")
+            ctx.error(f"{ctx.name}: {quote(p)}: {ctx.fs.why_missing(path)}")
             code = 1
             continue
         ctx.print(path)
@@ -823,12 +824,11 @@ def _stat(ctx):
         if a.value("c") is not None:
             values = {
                 "n": p, "s": str(st.size), "F": kind, "a": mode, "A": rwx, "U": user, "G": user, "u": uid, "g": uid,
-                "y": mtime, "Y": str(int(st.modified.replace(tzinfo=timezone.utc).timestamp())), "b": str((st.size + 511) // 512), "%": "%",
+                "y": mtime, "Y": str(int(st.modified.replace(tzinfo=timezone.utc).timestamp())), "b": str(st.blocks), "B": "512", "h": str(st.links), "%": "%",
             }
             ctx.print(re.sub(r"%(.)", lambda m: values.get(m.group(1), m.group(0)), a.value("c")))
             continue
-        blocks = (st.size + 511) // 512 * 8
-        ctx.stdout.write(f"  File: {p}\n  Size: {st.size:<10}\tBlocks: {blocks:<10} IO Block: 4096   {kind}\n"
+        ctx.stdout.write(f"  File: {p}\n  Size: {st.size:<10}\tBlocks: {st.blocks:<10} IO Block: 4096   {kind}\n"
                          f"Access: ({mode:0>4}/{rwx})  Uid: ({uid:>5}/{user:>8})   Gid: ({uid:>5}/{user:>8})\n"
                          f"Modify: {mtime}\nChange: {mtime}\n")
     return code
@@ -941,12 +941,16 @@ def _chmod(ctx):
             changes = True
         elif arg in ("-f", "--silent", "--quiet"):
             quiet = True
+        elif arg.startswith("--") and len(arg) > 2:
+            raise UsageException(f"unrecognized option '{arg}'")
+        elif len(arg) > 1 and arg[0] == "-" and (bad := next((c for c in arg if c not in "-rwxXstugoa+=,01234567"), None)):
+            raise UsageException(f"invalid option -- '{bad}'")
         elif spec is None:
             spec = arg  # may look like an option, e.g. -x or -w
         else:
             files.append(arg)
     if spec is None or not files:
-        raise ShellError("missing operand" if spec is None else f"missing operand after '{spec}'")
+        raise UsageException("missing operand" if spec is None else f"missing operand after {quote_l(spec)}")
     code = 0
 
     def fmt(st, m):
@@ -985,7 +989,7 @@ def _chown(ctx):
     operands = [x for x in ctx.args if not x.startswith("-")]
     files = operands[1:]  # first operand is the owner
     if not files:
-        raise ShellError("missing operand")
+        raise UsageException("missing operand")
     owner = operands[0].split(":")[0]
     code = 0
     for f in files:
@@ -1232,7 +1236,7 @@ def _seq(ctx):
             raise ShellError(f"invalid option -- '{x.lstrip('-')}'")
         i += 1
     if not nums or len(nums) > 3:
-        raise ShellError("missing operand" if not nums else f"extra operand '{nums[3]}'")
+        raise UsageException("missing operand" if not nums else f"extra operand {quote_l(nums[3])}")
     v = [float(x) for x in nums]
     first = v[0] if len(v) > 1 else 1
     step = v[1] if len(v) == 3 else 1
@@ -1260,8 +1264,8 @@ def _diff(ctx):
     a = Args.parse(ctx.args, "uqsiwbBNr", "U", "unified=u,brief=q,report-identical-files=s,ignore-case=i,"
                                                "ignore-all-space=w,ignore-space-change=b,recursive=r")
     if len(a.positional) != 2:
-        raise ShellError(f"missing operand after '{a.positional[-1] if a.positional else 'diff'}'"
-                         if len(a.positional) < 2 else f"extra operand '{a.positional[2]}'", 2)
+        raise UsageException(f"missing operand after '{a.positional[-1] if a.positional else 'diff'}'"
+                             if len(a.positional) < 2 else f"extra operand '{a.positional[2]}'")
 
     def read(p):
         if p == "-":

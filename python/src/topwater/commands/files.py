@@ -1,12 +1,13 @@
 """Filesystem commands: ls cd-free file ops, find, tree."""
 from __future__ import annotations
 
+import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..shell import glob_to_regex
-from ..vfs import NO_SPACE, ShellError, format_mode, get_name, normalize, utc_now
-from . import Args, inputs, split_lines
+from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, normalize, utc_now
+from . import Args, inputs, parse_date, quote_always, quote_l, split_lines
 
 
 def typed(message: str, arg: str, abs_path: str) -> tuple[str, str]:
@@ -18,30 +19,69 @@ def typed(message: str, arg: str, abs_path: str) -> tuple[str, str]:
     return (arg.rstrip("/") + path[len(base):] if path.startswith(base + "/") else path), reason
 
 
+def touch_stamp(t: str, now: datetime) -> datetime | None:
+    """touch -t [[CC]YY]MMDDhhmm[.ss]; a two-digit year 69-99 is 19YY, else 20YY."""
+    m = re.fullmatch(r"(\d{2}|\d{4})?(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d{2}))?", t)
+    if not m:
+        return None
+    y = m.group(1)
+    year = now.year if not y else int(y) if len(y) == 4 else int(y) + (1900 if int(y) >= 69 else 2000)
+    try:
+        return datetime(year, int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6) or 0))
+    except ValueError:
+        return None
+
+
 def _human(n: int) -> str:
+    """ls -h: powers of 1024, rounded up; one decimal below 10 (4.0K, 1.1M), whole numbers above (121K)."""
     if n < 1024:
         return str(n)
-    if n < 1024 * 1024:
-        return f"{n / 1024:.1f}".rstrip("0").rstrip(".") + "K"
-    return f"{n / (1024 * 1024):.1f}".rstrip("0").rstrip(".") + "M"
+    v, u = float(n), -1
+    while True:
+        v /= 1024
+        u += 1
+        if v < 1024 or u >= 5:
+            break
+    tenths = math.ceil(v * 10) / 10
+    if tenths < 10:
+        return f"{tenths:.1f}" + "KMGTPE"[u]
+    v = math.ceil(v)
+    return "1.0" + "KMGTPE"[u + 1] if v >= 1024 and u < 5 else f"{v:.0f}" + "KMGTPE"[u]
 
 
-def _long_entry(ctx, path: str, name: str, human: bool) -> str:
-    st = ctx.fs.stat(path)
-    size = _human(st.size) if human else str(st.size)
-    return f"{format_mode(st.is_dir, st.mode)} 1 {st.owner:<5} {st.owner:<5} {size:>6} {st.modified:%b %d %H:%M} {name}"
+def _ls_date(t: datetime, now: datetime) -> str:
+    """ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times)."""
+    if timedelta(0) <= now - t < timedelta(seconds=15778476):
+        return f"{t:%b} {t.day:2} {t:%H:%M}"
+    return f"{t:%b} {t.day:2}  {t:%Y}"
+
+
+def _long_entries(ctx, entries, human: bool, width_from=()):
+    """ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned).
+    width_from: more paths that count toward the widths (ls sizes the columns for its file operands over all operands)."""
+    now = utc_now()
+
+    def size(st):
+        return _human(st.size) if human else str(st.size)
+
+    rows = [(ctx.fs.stat(p), name) for p, name in entries]
+    if not rows:
+        return []
+    every = [st for st, _ in rows] + [ctx.fs.stat(p) for p in width_from]
+    lw, ow, sw = (max(len(f(st)) for st in every) for f in (lambda st: str(st.links), lambda st: st.owner, size))
+    return [f"{format_mode(st.is_dir, st.mode)} {st.links:>{lw}} {st.owner:<{ow}} {st.owner:<{ow}} {size(st):>{sw}} {_ls_date(st.modified, now)} {name}"
+            for st, name in rows]
 
 
 def _ls(ctx):
-    a = Args.parse(ctx.args, "alhA1dFrtRS", longs="all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R")
+    a = Args.parse(ctx.args, "alhA1dFrtRSZ", longs="all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R")
     paths = a.positional or ["."]
     code = 0
 
-    def show(path, name):
-        text = _long_entry(ctx, path, name, a.has("h")) if a.has("l") else name
-        if a.has("F") and ctx.fs.is_dir(path) and name not in (".", ".."):
-            text += "/"
-        return text
+    def show(entries, width_from=()):
+        named = [(p, n + "/" if a.has("F") and ctx.fs.is_dir(p) and n not in (".", "..") else n) for p, n in entries]
+        for line in _long_entries(ctx, named, a.has("h"), width_from) if a.has("l") else [n for _, n in named]:
+            ctx.print(line)
 
     for p in paths:
         if not ctx.fs.exists(ctx.resolve(p)):
@@ -54,8 +94,7 @@ def _ls(ctx):
         return ps[::-1] if a.has("r") else ps
 
     files = ordered([p for p in paths if ctx.fs.exists(ctx.resolve(p)) and (a.has("d") or not ctx.fs.is_dir(ctx.resolve(p)))])
-    for f in files:
-        ctx.print(show(ctx.resolve(f), f))
+    show([(ctx.resolve(f), f) for f in files], [ctx.resolve(p) for p in paths if p not in files and ctx.fs.exists(ctx.resolve(p))])
     dirs = ordered([p for p in paths if p not in files and ctx.fs.is_dir(ctx.resolve(p))])
     first = [not files]
 
@@ -78,9 +117,9 @@ def _ls(ctx):
         if a.has("r"):
             entries.reverse()
         if a.has("l"):
-            ctx.print(f"total {len(entries) * 4}")
-        for n in entries:
-            ctx.print(show(normalize(path, n), n))
+            kib = sum(ctx.fs.stat(normalize(path, n)).blocks // 2 for n in entries)
+            ctx.print(f"total {_human(kib * 1024) if a.has('h') else kib}")
+        show([(normalize(path, n), n) for n in entries])
         if a.has("R"):
             for n in entries:
                 child = normalize(path, n)
@@ -136,35 +175,53 @@ def _cat(ctx):
 
 
 def _mkdir(ctx):
-    a = Args.parse(ctx.args, "pv", longs="parents=p")
+    a = Args.parse(ctx.args, "pvZ", longs="parents=p,verbose=v")
     if not a.positional:
-        raise ShellError("missing operand")
+        raise UsageException("missing operand")
     code = 0
     for p in a.positional:
         try:
             ctx.fs.mkdir(ctx.resolve(p), a.has("p"))
         except ShellError as e:
-            if str(e).startswith("cannot"):
-                raise
-            ctx.error(f"mkdir: cannot create directory '{p}': {typed(str(e), p, '')[1]}")
+            ctx.error(f"mkdir: cannot create directory {quote_l(p)}: {str(e).rsplit(': ', 1)[-1]}")
             code = 1
     return code
 
 
 def _touch(ctx):
-    # shortcut: -d/-t/-r are accepted but the file just gets the current time; model timestamps if agents rely on them.
+    # shortcut: one modification time per file; -a and -m both set it
     a = Args.parse(ctx.args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h")
     if not a.positional:
-        raise ShellError("missing file operand")
+        raise UsageException("missing file operand")
+    when = None
+    if (reference := a.value("r")) is not None:
+        ref = ctx.resolve(reference)
+        if not ctx.fs.exists(ref):
+            raise ShellError(f"failed to get attributes of {quote_always(reference)}: {ctx.fs.why_missing(ref)}")
+        when = ctx.fs.stat(ref).modified
+    if (d := a.value("d")) is not None:
+        try:
+            when = parse_date(d, (when or utc_now()).replace(tzinfo=timezone.utc)).replace(tzinfo=None)
+        except ShellError:
+            raise ShellError(f"invalid date format {quote_l(d)}") from None
+    if (t := a.value("t")) is not None:
+        when = touch_stamp(t, utc_now())
+        if when is None:
+            raise ShellError(f"invalid date format {quote_l(t)}")
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
         if a.has("c") and not ctx.fs.exists(path):
             continue
         try:
-            ctx.fs.touch(path)
+            if when is None:
+                ctx.fs.touch(path)
+            else:  # an explicit time needs ownership, not write permission
+                if not ctx.fs.exists(path):
+                    ctx.fs.touch(path)
+                ctx.fs.set_modified_time(path, when)
         except ShellError as e:
-            ctx.error(f"touch: cannot touch '{p}': {typed(str(e), p, path)[1]}")
+            ctx.error(f"touch: cannot touch {quote_always(p)}: {typed(str(e), p, path)[1]}")
             code = 1
     return code
 
@@ -173,7 +230,7 @@ def _rm(ctx):
     a = Args.parse(ctx.args, "rRfvd", longs="recursive=r,force=f")
     recursive = a.has("r") or a.has("R")
     if not a.positional and not a.has("f"):
-        raise ShellError("missing operand")
+        raise UsageException("missing operand")
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
@@ -197,21 +254,36 @@ def _rm(ctx):
 
 
 def _rmdir(ctx):
-    for p in ctx.args:
-        path = ctx.resolve(p)
-        if not ctx.fs.is_dir(path):
-            raise ShellError(f"failed to remove '{p}': {'Not a directory' if ctx.fs.exists(path) else ctx.fs.why_missing(path)}")
-        try:
-            ctx.fs.delete(path)
-        except ShellError as e:
-            raise ShellError(f"failed to remove '{p}': {typed(str(e), p, path)[1]}") from None
+    a = Args.parse(ctx.args, "pv", longs="parents=p,verbose=v")
+    if not a.positional:
+        raise UsageException("missing operand")
+    code = 0
+    for arg in a.positional:
+        p = arg.rstrip("/")
+        while p:  # -p: a/b/c, then a/b, then a
+            path = ctx.resolve(p)
+            why = None if ctx.fs.is_dir(path) else "Not a directory" if ctx.fs.exists(path) else ctx.fs.why_missing(path)
+            if why is None:
+                try:
+                    ctx.fs.delete(path)
+                    if a.has("v"):
+                        ctx.print(f"rmdir: removing directory, {quote_always(p)}")
+                except ShellError as e:
+                    why = typed(str(e), p, path)[1]
+            if why is not None:
+                ctx.error(f"rmdir: failed to remove {quote_always(p)}: {why}")
+                code = 1
+                break
+            i = p.rfind("/")
+            p = p[:i].rstrip("/") if a.has("p") and i > 0 else ""
+    return code
 
 
 def _copy_or_move(ctx):
     move = ctx.name == "mv"
-    a = Args.parse(ctx.args, "fvni" if move else "rRfvanp", longs="recursive=r,force=f")
+    a = Args.parse(ctx.args, "fvniZ" if move else "rRfvanpZ", longs="recursive=r,force=f")
     if len(a.positional) < 2:
-        raise ShellError("missing file operand" if not a.positional else f"missing destination file operand after '{a.positional[0]}'")
+        raise UsageException("missing file operand" if not a.positional else f"missing destination file operand after {quote_always(a.positional[0])}")
     *sources, dest_arg = a.positional
     dest = ctx.resolve(dest_arg)
     dest_is_dir = ctx.fs.is_dir(dest)
@@ -312,7 +384,7 @@ class _Find:
             try:
                 names = ctx.fs.listdir(path)
             except ShellError:
-                ctx.error(f"find: '{display}': Permission denied")
+                ctx.error(f"find: {quote_l(display)}: Permission denied")
                 self.denied = True
                 return
             for name in names:
@@ -323,7 +395,7 @@ class _Find:
             for s in starts:
                 path = ctx.resolve(s)
                 if not ctx.fs.exists(path):
-                    ctx.error(f"find: '{s}': No such file or directory")
+                    ctx.error(f"find: {quote_l(s)}: {ctx.fs.why_missing(ctx.resolve(s))}")
                     code = 1
                     continue
                 await walk(path, s, 0, s)

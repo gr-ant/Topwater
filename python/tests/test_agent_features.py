@@ -139,7 +139,7 @@ class AgentFeatureTests(unittest.TestCase):
         self.assertEqual("drwxrwxrwt root\n", out(sh, "stat -c '%A %U' /tmp"))
         self.assertEqual("x\n", out(sh, "echo x > /tmp/f && cat /tmp/f"))
         r = sh.run("find / -name shadow")
-        self.assertEqual((1, "find: '/root': Permission denied\n"), (r.exit_code, r.stderr))
+        self.assertEqual((1, "find: ‘/root’: Permission denied\n"), (r.exit_code, r.stderr))
         # the app itself is unrestricted, and files it creates belong to the directory's owner
         sh.fs.write_text("/etc/app.conf", "mode=prod")
         sh.fs.write_text("/home/agent/notes.txt", "hi")
