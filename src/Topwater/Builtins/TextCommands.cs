@@ -760,7 +760,7 @@ internal static class Sed
                 try { original = ctx.Fs.ReadAllText(path); }
                 catch (ShellException e) { ctx.Stderr.WriteLine($"sed: can't read {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}"); code = 2; continue; }
                 var output = new StringWriter();
-                var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken);
+                var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes);
                 if (suffix.Length > 0)
                     ctx.Fs.WriteAllText(ctx.ResolvePath(suffix.Contains('*') ? suffix.Replace("*", f[(f.LastIndexOf('/') + 1)..]) : f + suffix), original);
                 ctx.Fs.WriteAllText(path, output.ToString());
@@ -773,12 +773,12 @@ internal static class Sed
         if (separate)
         {
             foreach (var t in texts)
-                if (Execute(cmds, t, ctx.Stdout, quiet, ctx.CancellationToken) is { } q) return q;
+                if (Execute(cmds, t, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes) is { } q) return q;
         }
         else
         {
             var joined = string.Concat(texts.Select((t, k) => t.EndsWith('\n') || k == texts.Count - 1 ? t : t + "\n"));
-            if (Execute(cmds, joined, ctx.Stdout, quiet, ctx.CancellationToken) is { } q) return q;
+            if (Execute(cmds, joined, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes) is { } q) return q;
         }
         return error ? 2 : 0;
     }
@@ -1089,7 +1089,7 @@ internal static class Sed
     }
 
     /// <summary>Runs a parsed script over text. Returns the q/Q exit code if the script quit, else null.</summary>
-    static int? Execute(List<Cmd> cmds, string text, TextWriter output, bool quiet, CancellationToken ct)
+    static int? Execute(List<Cmd> cmds, string text, TextWriter output, bool quiet, CancellationToken ct, long maxString)
     {
         var lines = Builtins.SplitLines(text);
         bool trailing = text.EndsWith('\n');
@@ -1126,6 +1126,8 @@ internal static class Sed
             {
                 if (++steps > 10_000_000) throw new ShellException("too many steps (a branch loops forever?)");
                 if ((steps & 1023) == 0) ct.ThrowIfCancellationRequested(); // the call's time limit, or `timeout`
+                if (ps.Length > maxString || hold.Length > maxString)
+                    throw Shell.TooLarge("sed: pattern space", maxString, "process the input in smaller pieces");
                 var c = cmds[pc++];
                 if (!Matches(c, ps, n, idx >= lines.Count))
                 {

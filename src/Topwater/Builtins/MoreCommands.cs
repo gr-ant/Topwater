@@ -332,7 +332,7 @@ internal static partial class Builtins
                 // read -a NAME: every field becomes an element
                 sh.Unset(names[0]);
                 var array = sh.Writable(names[0]);
-                foreach (var field in Shell.SplitFields(line, ifs)) array.Set(array.Next.ToString(), field);
+                foreach (var field in Shell.SplitFields(line, ifs)) { sh.ChargeVariable(names[0], field.Length, 0); array.Set(array.Next.ToString(), field); }
             }
             else if (a.Positional.Count == 0) sh.SetVar("REPLY", line);
             else
@@ -360,7 +360,9 @@ internal static partial class Builtins
             for (long count = 0; (max == 0 || count < max) && input.ReadLine(delim) is { } line;)
             {
                 if (skip > 0) { skip--; continue; }
-                array.Set((index++).ToString(), a.Has('t') || !input.LastTerminated ? line : line + delim);
+                var item = a.Has('t') || !input.LastTerminated ? line : line + delim;
+                sh.ChargeVariable(name, item.Length, 0);
+                array.Set((index++).ToString(), item);
                 count++;
             }
             return Task.FromResult(0);

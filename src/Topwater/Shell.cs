@@ -21,6 +21,9 @@ public sealed class ShellOptions
     /// <summary>Most bytes all files may hold together. The agent's writes past it fail with "No space left on device" (the call goes on);
     /// your app's own writes are counted but never refused. `df` shows it as the disk size.</summary>
     public long MaxFileSystemBytes { get; init; } = 128L << 20;
+    /// <summary>Longest one string may be (a command's buffered output, a variable, an expansion, an awk/sed/jq value), and the most
+    /// all variables may hold together, counted in characters. Past it the call stops with exit code 1 and a note in the tool output.</summary>
+    public long MaxStringBytes { get; init; } = 32L << 20;
 }
 
 public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
@@ -354,8 +357,8 @@ public sealed partial class Shell
     public async Task<ShellResult> RunAsync(string commandLine, CancellationToken cancellationToken = default)
     {
         _history.Add(commandLine);
-        var stdout = new StringWriter();
-        var stderr = new StringWriter();
+        var stdout = new CappedWriter(this);
+        var stderr = new CappedWriter(this);
         int code;
         string? trailer = null;
         var previousUser = Fs.RunAs;
@@ -371,11 +374,11 @@ public sealed partial class Shell
             try { code = await ExecScriptAsync(Parser.Parse(commandLine), io, callToken); }
             finally { await RunExitTrapAsync(io, callToken); }
         }
-        catch (ParseException e) { stderr.WriteLine($"bash: {e.Message}"); code = 2; }
+        catch (ParseException e) { stderr.GetStringBuilder().AppendLine($"bash: {e.Message}"); code = 2; }
         catch (ExitSignal e) { code = e.Code; }
         catch (ReturnSignal e) { code = e.Code; }
         catch (LoopControl) { code = 0; }
-        catch (LimitExceeded e) { stderr.WriteLine($"bash: {e.Message}"); code = 1; trailer = Stopped(e.Message); }
+        catch (LimitExceeded e) { stderr.GetStringBuilder().AppendLine($"bash: {e.Message}"); code = 1; trailer = Stopped(e.Message); }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             code = 124; // what `timeout` exits with
@@ -384,7 +387,7 @@ public sealed partial class Shell
         catch (OperationCanceledException) { throw; }
         catch (Exception e) // an interpreter bug must not take down the host's agent loop
         {
-            stderr.WriteLine($"bash: internal error: {e.GetType().Name}: {e.Message}");
+            stderr.GetStringBuilder().AppendLine($"bash: internal error: {e.GetType().Name}: {e.Message}");
             code = 1;
         }
         finally
@@ -400,6 +403,26 @@ public sealed partial class Shell
         }
         LastExitCode = code;
         return new ShellResult(ByteText.Printable(stdout.ToString()), ByteText.Printable(stderr.ToString()), code) { Trailer = trailer };
+    }
+
+    /// <summary>"32 MB", "512 KB" or "1000 bytes": a limit as messages print it.</summary>
+    internal static string Size(long bytes) => bytes % (1 << 20) == 0 ? $"{bytes >> 20} MB" : bytes % 1024 == 0 ? $"{bytes >> 10} KB" : $"{bytes} bytes";
+
+    internal static LimitExceeded TooLarge(string what, long limit, string instead) => new($"{what} too large (limit {Size(limit)}); {instead}");
+    internal LimitExceeded TooLarge(string what, string instead) => TooLarge(what, Options.MaxStringBytes, instead);
+
+    // an upper bound on the characters variables hold, recounted exactly whenever it passes the limit
+    long _variableChars;
+
+    /// <summary>Called before a variable or element takes a value of <paramref name="adding"/> characters in place of <paramref name="replacing"/>.</summary>
+    internal void ChargeVariable(string name, long adding, long replacing)
+    {
+        long max = Options.MaxStringBytes;
+        if (adding > max) throw TooLarge($"{name}: value", "write the data to a file instead");
+        if ((_variableChars += adding) <= max) return;
+        _variableChars = Environment.Sum(e => (long)e.Key.Length + e.Value.Length)
+            + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length)) - replacing + adding;
+        if (_variableChars > max) throw TooLarge("variables in total", "keep big data in files and unset variables you no longer need");
     }
 
     static string Stopped(string why) =>
@@ -480,6 +503,7 @@ public sealed partial class Shell
     {
         public required (bool Noglob, bool Xtrace, bool Noclobber, bool IfsUnset) Flags { get; init; }
         public required Dictionary<string, string> Attrs { get; init; }
+        public long VariableChars { get; init; }
     }
 
     // arrays are shared with the saved state and copied on first write (see Writable), so a subshell or
@@ -489,7 +513,7 @@ public sealed partial class Shell
         _epoch++;
         _subshell++;
         return new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps), new(Arrays))
-            { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs) };
+            { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs), VariableChars = _variableChars };
     }
 
     void RestoreState(State s)
@@ -497,6 +521,7 @@ public sealed partial class Shell
         _epoch++;
         _subshell--;
         (Noglob, Xtrace, Noclobber, _ifsUnset) = s.Flags;
+        _variableChars = s.VariableChars; // was a bound for the state coming back
         VarAttrs = s.Attrs;
         Arrays = s.Arrays;
         Environment = s.Env;
@@ -606,7 +631,7 @@ public sealed partial class Shell
         {
             bool last = k == p.Commands.Count - 1;
             // shortcut: pipeline stages run one after another with buffered text; stream if huge outputs or infinite producers matter.
-            var output = last ? io.Out : new StringWriter();
+            var output = last ? io.Out : new CappedWriter(this);
             var stage = io with { Stdin = input, Out = output };
             if (p.Commands.Count == 1) code = await ExecCommandAsync(p.Commands[k], stage, ct);
             else if (last)
@@ -633,9 +658,32 @@ public sealed partial class Shell
         return code;
     }
 
-    sealed class FileSink(string path) : StringWriter
+    /// <summary>Buffers a command's output (a pipeline stage, $(...), the call's stdout); past the string limit the call stops.</summary>
+    internal class CappedWriter(Shell shell, long? limit = null) : StringWriter
+    {
+        readonly long _limit = limit ?? shell.Options.MaxStringBytes;
+        protected virtual void Full() => throw shell.TooLarge("output", "write to a file in smaller pieces or filter earlier in the pipeline");
+        void Check(long adding) { if (GetStringBuilder().Length + adding > _limit) Full(); }
+        public override void Write(char value) { Check(1); base.Write(value); }
+        public override void Write(string? value) { Check(value?.Length ?? 0); base.Write(value); }
+        public override void Write(char[] buffer, int index, int count) { Check(count); base.Write(buffer, index, count); }
+        public override void Write(ReadOnlySpan<char> buffer) { Check(buffer.Length); base.Write(buffer); }
+        public override void Write(StringBuilder? value) { Check(value?.Length ?? 0); base.Write(value); }
+        public override void WriteLine(ReadOnlySpan<char> buffer) { Check(buffer.Length + CoreNewLine.Length); base.WriteLine(buffer); }
+        public override void WriteLine(StringBuilder? value) { Check((value?.Length ?? 0) + CoreNewLine.Length); base.WriteLine(value); }
+    }
+
+    /// <summary>A redirect's file: buffered, but written through every megabyte, so the filesystem's cap (not the string limit) bounds it.</summary>
+    sealed class FileSink(Shell shell, string path) : CappedWriter(shell, 1 << 20)
     {
         public string Path { get; } = path;
+
+        protected override void Full()
+        {
+            var text = ToString();
+            GetStringBuilder().Clear(); // dropped even if the disk is full, so a loop writing to a full disk doesn't grow the buffer
+            shell.Fs.AppendAllText(Path, text);
+        }
     }
 
     /// <summary>A file opened by `exec >file`: written through, so later commands in the same call can read it.</summary>
@@ -872,7 +920,7 @@ public sealed partial class Shell
                         io = WithFd(io, r.Fd, dup);
                         break;
                     default: // > >> >| &> &>>
-                        var w = await OpenOutputAsync(r, io, ct, path => { var sink = new FileSink(path); sinks.Add(sink); return sink; });
+                        var w = await OpenOutputAsync(r, io, ct, path => { var sink = new FileSink(this, path); sinks.Add(sink); return sink; });
                         io = r.Op.StartsWith('&') ? io with { Out = w, Err = w } : WithFd(io, r.Fd, w);
                         break;
                 }
@@ -1142,11 +1190,12 @@ public sealed partial class Shell
         catch (ReturnSignal r) { code = r.Code; }
         finally
         {
+            // shadowed values come back without passing ChargeVariable, so they count again
             foreach (var (k, v) in _localArrays.Pop())
-                if (v == null) Arrays.Remove(k); else Arrays[k] = v;
+                if (v == null) Arrays.Remove(k); else { Arrays[k] = v; _variableChars += v.Items.Sum(e => (long)e.Key.Length + e.Value.Length); }
             foreach (var (k, (v, attrs)) in _locals.Pop())
             {
-                if (v == null) Environment.Remove(k); else Environment[k] = v;
+                if (v == null) Environment.Remove(k); else { Environment[k] = v; _variableChars += v.Length; }
                 if (attrs == null) VarAttrs.Remove(k); else VarAttrs[k] = attrs;
             }
             Positional = savedPos;
@@ -1272,6 +1321,7 @@ public sealed partial class Shell
         if (array) SetElement(name, "0", value);
         else
         {
+            ChargeVariable(name, value.Length, Environment.GetValueOrDefault(name)?.Length ?? 0);
             MarkShellVariable(name);
             Environment[name] = value;
         }
@@ -1382,7 +1432,9 @@ public sealed partial class Shell
     internal void SetElement(string name, string subscript, string value)
     {
         var a = Writable(name);
-        a.Set(ArrayKey(a, subscript, name), value);
+        var key = ArrayKey(a, subscript, name);
+        ChargeVariable(name, key.Length + value.Length, a.Get(key) is { } old ? key.Length + old.Length : 0);
+        a.Set(key, value);
     }
 
     /// <summary>unset NAME or unset 'NAME[sub]'; -n (<paramref name="nameref"/>) unsets a nameref itself, not what it names.</summary>
@@ -1761,6 +1813,10 @@ public sealed partial class Shell
             // an empty pattern matches nothing, except at an anchor: ${x/#/pre-} and ${x/%/-post} add to the ends
             if (pat.Length == 0) return mode == '#' ? rep.Replace("$$", "$") + value : mode == '%' ? value + rep.Replace("$$", "$") : value;
             var re = Glob.Cached(mode == '#' ? "^(?:" + pat + ")" : mode == '%' ? "(?:" + pat + ")$" : pat, RegexOptions.Singleline);
+            // ${x//?/$x} grows with the square of x: refuse before building it
+            if (mode == '/' && value.Length + (long)rep.Length * (value.Length + 1) > Options.MaxStringBytes
+                && value.Length + (long)rep.Length * re.Count(value) > Options.MaxStringBytes)
+                throw TooLarge("expansion", "write the data to a file instead");
             return re.Replace(value, rep, mode == '/' ? -1 : 1);
         }
         if (rest[0] is '^' or ',' or '~')
@@ -1824,7 +1880,7 @@ public sealed partial class Shell
 
     async Task<string> ProcessSubstitutionAsync(string source, Io io, CancellationToken ct)
     {
-        var output = new StringWriter();
+        var output = new CappedWriter(this);
         await RunSubstitutionAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, ct);
         var path = $"/dev/fd/{63 + _procSubCount++}";
         using (Fs.AsRoot()) Fs.WriteAllText(path, output.ToString());
@@ -1849,7 +1905,7 @@ public sealed partial class Shell
                 return "";
             }
         }
-        var output = new StringWriter();
+        var output = new CappedWriter(this);
         LastExitCode = await RunSubstitutionAsync(source, io with { Stdin = new StdinBuffer(""), Out = output }, ct);
         return output.ToString().TrimEnd('\n');
     }
@@ -1873,6 +1929,7 @@ public sealed partial class Shell
         {
             var text = await ExpandPartAsync(word.Parts[i], io, ct);
             if (i == 0 && word.Parts[i] is LiteralPart { Quoted: false } && TildePrefix(text) is var (home, length)) text = home + text[length..];
+            if (sb.Length + (long)text.Length > Options.MaxStringBytes) throw TooLarge("expansion", "write the data to a file instead");
             sb.Append(text);
         }
         return sb.ToString();
@@ -1976,6 +2033,7 @@ public sealed partial class Shell
     internal async Task<List<string>> ExpandWordsAsync(IEnumerable<Word> words, Io io, CancellationToken ct)
     {
         var result = new List<string>();
+        long total = 0; // all the words together, so {1..10000}$big can't multiply a big value
         foreach (var word in words.SelectMany(Brace.Expand))
         {
             var fields = new List<Field>();
@@ -1983,6 +2041,7 @@ public sealed partial class Shell
             void End() { if (cur.HasContent) fields.Add(cur); cur = new Field(); }
             void AddText(string s, bool quoted)
             {
+                if ((total += s.Length) > Options.MaxStringBytes) throw TooLarge("expansion", "write the data to a file instead");
                 cur.Text.Append(s);
                 cur.Pattern.Append(quoted ? Glob.Escape(s) : s);
                 if (!quoted && Glob.HasWildcard(s)) cur.HasGlob = true;

@@ -856,6 +856,15 @@ internal static class Jq
         _ => throw new JqError($"Cannot iterate over {ErrType(v)}"),
     };
 
+    // jq runs synchronously on one thread, so the string limit can ride along with it instead of through every call
+    [ThreadStatic] static long t_maxString;
+
+    static T Sized<T>(T value, long size)
+    {
+        if (t_maxString > 0 && size > t_maxString) throw Shell.TooLarge("jq: value", t_maxString, "produce smaller values or stream them with .[]");
+        return value;
+    }
+
     static object? Arith(string op, object? a, object? b)
     {
         switch (op)
@@ -864,8 +873,8 @@ internal static class Jq
                 if (a == null) return b;
                 if (b == null) return a;
                 if (a is double x1 && b is double y1) return x1 + y1;
-                if (a is string s1 && b is string t1) return s1 + t1;
-                if (a is List<object?> l1 && b is List<object?> m1) return l1.Concat(m1).ToList();
+                if (a is string s1 && b is string t1) return Sized(s1, s1.Length + (long)t1.Length) + t1;
+                if (a is List<object?> l1 && b is List<object?> m1) return Sized(l1, 8L * (l1.Count + m1.Count)).Concat(m1).ToList(); // an element costs at least a reference
                 if (a is Dictionary<string, object?> o1 && b is Dictionary<string, object?> p1)
                 {
                     var r = new Dictionary<string, object?>(o1);
@@ -882,7 +891,7 @@ internal static class Jq
                 if ((a is string && b is double) || (b is string && a is double))
                 {
                     var (s, k) = a is string sa ? (sa, (double)b!) : ((string)b!, (double)a!);
-                    return k > 0 ? string.Concat(Enumerable.Repeat(s, (int)Math.Ceiling(k))) : null;
+                    return k > 0 ? string.Concat(Enumerable.Repeat(Sized(s, (long)Math.Min(s.Length * Math.Ceiling(k), long.MaxValue)), (int)Math.Ceiling(k))) : null;
                 }
                 if (a is Dictionary<string, object?> o3 && b is Dictionary<string, object?> p3) return DeepMerge(o3, p3);
                 break;
@@ -2080,6 +2089,7 @@ internal static class Jq
         };
         var unit = flags.Contains('c') ? "" : flags.Contains('t') ? "\t" : indent;
         var interp = new Interpreter(ctx.Shell.Environment, ctx.CancellationToken);
+        t_maxString = ctx.Shell.Options.MaxStringBytes;
         object? last = null;
         bool any = false;
         var output = new List<(bool Err, string Text)>();

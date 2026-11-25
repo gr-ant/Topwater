@@ -125,6 +125,68 @@ public class LimitTests
         Assert.Contains("No space left on device", r.Stderr);
     }
 
+    // ---------- strings ----------
+
+    static Shell SmallStrings() => new(new ShellOptions { MaxStringBytes = 1L << 20 });
+
+    /// <summary>Runs a call that must hit the string limit: exit 1, the message on stderr and in the trailer, then a working shell.</summary>
+    static async Task<ShellResult> HitsStringLimit(Shell sh, string cmd, string message)
+    {
+        var sw = Stopwatch.StartNew();
+        var r = await sh.RunAsync(cmd);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"took {sw.Elapsed}");
+        Assert.Equal(1, r.ExitCode);
+        Assert.Contains("bash: " + message, r.Stderr);
+        var last = r.ToToolOutput().Split('\n')[^1];
+        Assert.StartsWith("[stopped: " + message, last);
+        Assert.EndsWith("Running it again will hit the same limit. Files and variables changed before this point are kept.]", last);
+        Assert.Equal("ok\n", (await sh.RunAsync("echo ok")).Stdout);
+        return r;
+    }
+
+    [Fact]
+    public async Task BashStringDoublingStopsAtTheDefaultLimit() =>
+        await HitsStringLimit(new Shell(), "x=a; while :; do x=$x$x; done 2>/dev/null", "variables in total too large (limit 32 MB)");
+
+    [Theory]
+    [InlineData("awk 'BEGIN { x = \"a\"; while (1) x = x x }' 2>/dev/null", "awk: string too large (limit 1 MB)")]
+    [InlineData("awk 'BEGIN { x = \"ab\"; while (1) gsub(/./, \"&&\", x) }'", "awk: string too large (limit 1 MB)")]
+    [InlineData("echo a | sed ':a; s/.*/&&/; ba' 2>/dev/null", "sed: pattern space too large (limit 1 MB)")]
+    [InlineData("jq -n 'reduce range(100) as $i (\"a\"; . + .)' 2>/dev/null", "jq: value too large (limit 1 MB)")]
+    [InlineData("jq -n 'reduce range(100) as $i ([1]; . + .)'", "jq: value too large (limit 1 MB)")]
+    [InlineData("jq -n '\"ab\" * 1e12'", "jq: value too large (limit 1 MB)")]
+    [InlineData("x=$(printf '%02000d' 0); y=${x//?/$x}", "expansion too large (limit 1 MB)")]
+    [InlineData("m=$(printf '%01000d' 0); echo {1..10000}$m >/dev/null", "expansion too large (limit 1 MB)")]
+    [InlineData("big=$(printf '%0100000d' 0); for ((i = 0; i < 1000000; i++)); do a[i]=$big; done", "variables in total too large (limit 1 MB)")]
+    [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; read -r x < f", "x: value too large (limit 1 MB)")]
+    [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f 2>/dev/null", "output too large (limit 1 MB)")]
+    [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f | wc -c", "output too large (limit 1 MB)")]
+    [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; x=$(cat f)", "output too large (limit 1 MB)")]
+    public async Task StringRecipesStopAtTheConfiguredLimit(string cmd, string message) => await HitsStringLimit(SmallStrings(), cmd, message);
+
+    [Fact]
+    public async Task HugePrintfWidthIsBounded() =>
+        Assert.Equal("10000\n", (await SmallStrings().RunAsync("printf '%0999999999d' 1 | wc -c")).Stdout);
+
+    [Fact]
+    public async Task RedirectsAreBoundedByTheDiskNotTheStringLimit()
+    {
+        var sh = SmallStrings();
+        var r = await sh.RunAsync("awk 'BEGIN { for (i = 0; i < 3000; i++) printf \"%01000d\\n\", 0 }' > f; cat f f > g; wc -c < g");
+        Assert.Equal("6006000\n", r.Stdout);
+        Assert.Equal(0, r.ExitCode);
+    }
+
+    [Fact]
+    public async Task VariablesCanBeRewrittenNearTheLimit()
+    {
+        // x is 600 KB: x=${x}y holds 1.2 MB for a moment but only 600 KB after, so it must not count both
+        var sh = SmallStrings();
+        await sh.RunAsync("kb() { awk -v n=$1 'BEGIN { for (i = 0; i < n; i++) printf \"%01000d\", 0 }'; }");
+        var r = await sh.RunAsync("x=$(kb 600); for i in 1 2 3; do x=${x}y; done; echo ${#x}; unset x; y=$(kb 900); echo ${#y}");
+        Assert.Equal("600003\n900000\n", r.Stdout);
+    }
+
     [Fact]
     public async Task TrailerSurvivesTheOutputCaps()
     {

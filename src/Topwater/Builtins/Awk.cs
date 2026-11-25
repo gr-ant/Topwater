@@ -551,6 +551,8 @@ internal sealed class AwkRunner
         }
     }
 
+    LimitExceeded TooLarge() => Shell.TooLarge("awk: string", _ctx.Shell.Options.MaxStringBytes, "build smaller strings or print as you go");
+
     /// <summary>Runs a loop body; false means `break`.</summary>
     bool Loop(Stmt body)
     {
@@ -637,7 +639,12 @@ internal sealed class AwkRunner
             }
             case MatchN m: return AV.Bool(RegexOf(m.Re).IsMatch(Eval(m.S).ToStr()) != m.Negate);
             case InN i: return AV.Bool(Array(i.Array).ContainsKey(Key(i.Keys)));
-            case ConcatN c: return AV.Str(Str(Eval(c.L)) + Str(Eval(c.R)));
+            case ConcatN c:
+            {
+                var (l, r) = (Str(Eval(c.L)), Str(Eval(c.R)));
+                if (l.Length + (long)r.Length > _ctx.Shell.Options.MaxStringBytes) throw TooLarge();
+                return AV.Str(l + r);
+            }
             case CallN call: return Call(call);
             case UserCallN u: return UserCall(u);
             case GetlineN g: return Getline(g);
@@ -693,6 +700,7 @@ internal sealed class AwkRunner
                 var target = a.Count > 2 ? a[2] : new FieldN(new NumN(0));
                 var src = Get(target).ToStr();
                 int count = 0;
+                long grown = src.Length;
                 var result = re.Replace(src, m =>
                 {
                     count++;
@@ -703,6 +711,7 @@ internal sealed class AwkRunner
                         else if (repl[i] == '&') sb.Append(m.Value);
                         else sb.Append(repl[i]);
                     }
+                    if ((grown += sb.Length - m.Length) > _ctx.Shell.Options.MaxStringBytes) throw TooLarge();
                     return sb.ToString();
                 }, c.Name == "sub" ? 1 : -1);
                 if (count > 0) Set(target, AV.Str(result));
