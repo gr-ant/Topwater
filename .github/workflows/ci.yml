@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
 
+# All three implementations run the shared corpus in tests/corpus.
 jobs:
   dotnet:
     runs-on: ubuntu-latest
@@ -13,3 +14,32 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet test --configuration Release
+
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest
+      - run: python -m pytest -q
+
+  typescript:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

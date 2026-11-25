@@ -1,6 +1,8 @@
 # Topwater reference
 
-Everything the simulated machine supports, in one place.
+Everything the simulated machine supports, in one place. Code samples show the C# library; the Python and TypeScript
+ports behave the same, and [python/README.md](../python/README.md) and [typescript/README.md](../typescript/README.md)
+show their APIs and list what they don't have yet.
 
 - [Shell language](#shell-language)
 - [Built-in programs](#built-in-programs)

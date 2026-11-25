@@ -123,6 +123,10 @@ Each command is written from POSIX, the man pages and comparison against the rea
 or porting its source — and is checked by differential tests that run the real binary. All three implementations
 check themselves against the same recorded outputs. The command set was audited for provenance in November 2026.
 
+The same machine is available for Python ([`python/`](python/README.md)) and TypeScript
+([`typescript/`](typescript/README.md)). All three run one shared corpus of cases recorded from real bash and GNU tools
+([`tests/corpus`](tests/corpus/README.md)), each with a short list of the cases it does not pass yet.
+
 ## Safety
 
 The shell is simulated: commands are interpreted in your process and only touch the in-memory filesystem.
@@ -139,7 +143,7 @@ runs it under bubblewrap, where it can see only its private copy of the agent's 
 ```bash
 dotnet run --project examples/McpShell    # a terminal on the simulated machine
 dotnet run --project examples/WebShell    # the same, as a web page on port 8765
-dotnet test
+dotnet test                               # C#; also: cd python && python -m pytest, cd typescript && npm test
 ```
 
 For the ports, run `pytest` in `python/` on the `python` branch, and `npm test` in `typescript/` on the `typescript` branch.

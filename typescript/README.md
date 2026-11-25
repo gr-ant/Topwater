@@ -43,13 +43,13 @@ A command handler gets a `CommandContext`: `args`, `stdout`/`stderr` writers, `s
 | `src/arith.ts`, `src/glob.ts`, `src/regex.ts`, `src/format.ts`, `src/bytes.ts` | arithmetic, patterns, POSIX regex, printf/strftime, binary-safe text |
 | `src/commands/*.ts` | built-ins and programs (`builtins`, `files`, `text`, `sed`, `awk`, `jq*`, `binary`, `archive`) |
 | `src/tools.ts` | schema-described tools and MCP mounting |
-| `test/compat.test.ts` | the recorded tables from the C# tests (`test/data`, made by `scripts/extract-tests.mjs`) |
+| `test/corpus.test.ts` | runs the shared cases in `../tests/corpus` (recorded from real bash and GNU tools) |
 
-`npm test` runs everything; `node scripts/extract-tests.mjs` refreshes `test/data` from `../tests/Topwater.Tests`.
+`npm test` runs everything. The shared cases live in `../tests/corpus`, not here; known differences are listed with reasons in `../tests/corpus/skip/typescript.json`.
 
 ## Differences from the C# version
 
-- Not ported yet: real host programs (`RegisterHostCommand`), the `[Command]` attribute binder (use `registerTools`
+- Not ported yet: `bc`, snapshots (`Snapshot`/`Restore`/`Fork`/`Save`/`Load`), real host programs (`RegisterHostCommand`), the `[Command]` attribute binder (use `registerTools`
   with a JSON Schema instead), and the Microsoft.Extensions.AI adapter.
 - A single JavaScript regular-expression match cannot be interrupted. Loading the package sets V8's
   `--enable-experimental-regexp-engine-on-excessive-backtracks` flag (process-wide; it changes speed, never results),
