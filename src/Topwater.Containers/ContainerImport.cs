@@ -105,6 +105,7 @@ public static class ContainerImport
         public int Mode = mode, Uid = uid;
         public DateTime Mtime = mtime;
         public byte[]? Data = data;
+        public string? LinkTarget; // a symbolic link: the path it holds
     }
 
     sealed class Importer
@@ -203,7 +204,9 @@ public static class ContainerImport
                     _items[path] = new Item(false, mode, e.Uid, mtime, data);
                     break;
                 case TarEntryType.SymbolicLink:
-                    _links[path] = VirtualFileSystem.Normalize(VirtualFileSystem.GetParent(path), e.LinkName);
+                    // kept as the link it is: it is only a path, resolved in the machine with the agent's permissions
+                    if (e.LinkName is not { Length: > 0 and <= 4096 }) _report.Skip(path, "a symbolic link with an empty or overlong target");
+                    else _items[path] = new Item(false, 0x1FF, e.Uid, mtime, []) { LinkTarget = e.LinkName };
                     break;
                 case TarEntryType.HardLink:
                     _links[path] = Canonical(e.LinkName);
@@ -255,11 +258,15 @@ public static class ContainerImport
             var strict = new UTF8Encoding(false, throwOnInvalidBytes: true);
             foreach (var (path, item) in _items.OrderBy(i => i.Key, StringComparer.Ordinal))
             {
+                // a crafted archive can hold entries below a symbolic link; a real filesystem can't
+                var p = VirtualFileSystem.GetParent(path);
+                while (p != "/" && fs.GetValueOrDefault(p)?.LinkTarget == null) p = VirtualFileSystem.GetParent(p);
+                if (p != "/") { _report.Skip(path, $"below {p}, a symbolic link"); continue; }
                 Ensure(machine, VirtualFileSystem.GetParent(path));
-                if (fs.TryGetValue(path, out var old) && old.IsDirectory != item.IsDirectory) machine.RemoveTree(path);
+                if (fs.TryGetValue(path, out var old) && (old.IsDirectory != item.IsDirectory || item.LinkTarget != null)) machine.RemoveTree(path);
                 bool binary = false;
-                if (!item.IsDirectory) try { strict.GetString(item.Data!); } catch (DecoderFallbackException) { binary = true; }
-                fs[path] = new FileItem(path, item.IsDirectory, item.Mode, Owner(item.Uid), item.Mtime, item.Data, binary);
+                if (!item.IsDirectory && item.LinkTarget == null) try { strict.GetString(item.Data!); } catch (DecoderFallbackException) { binary = true; }
+                fs[path] = new FileItem(path, item.IsDirectory, item.Mode, Owner(item.Uid), item.Mtime, item.Data, binary, LinkTarget: item.LinkTarget);
                 _report._carried.Add(path);
             }
 
@@ -323,22 +330,19 @@ public static class ContainerImport
             machine.Files[dir] = new FileItem(dir, true, 0x1ED, "root", DateTime.UtcNow);
         }
 
-        /// <summary>Symlinks and hard links whose target was imported become copies; the others are skipped.</summary>
+        /// <summary>Hard links whose target was imported become copies of it (a file, or a symbolic link); the others are skipped.</summary>
         void ResolveLinks()
         {
             foreach (var (link, target) in _links)
             {
                 var t = target;
                 for (int hop = 0; hop < 8 && _links.TryGetValue(t, out var next); hop++) t = next;
-                if (!_items.TryGetValue(t, out var item))
+                if (!_items.TryGetValue(t, out var item) || item.IsDirectory)
                 {
-                    _report.Skip(link, $"a link to {target}, which wasn't imported (Topwater has no links)");
+                    _report.Skip(link, $"a hard link to {target}, which wasn't imported");
                     continue;
                 }
-                if (!item.IsDirectory) { _items[link] = item; continue; }
-                var below = _items.Where(i => Under(i.Key, t)).ToList();
-                if ((_count += below.Count) > _limits.MaxExtractEntries) throw new InvalidDataException($"more than {_limits.MaxExtractEntries} entries to import (MaxExtractEntries)");
-                foreach (var (p, i) in below) _items.TryAdd(link + p[t.Length..], i);
+                _items[link] = item;
             }
         }
 

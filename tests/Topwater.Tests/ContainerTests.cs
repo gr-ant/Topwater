@@ -113,6 +113,18 @@ public class ContainerTests
         Assert.Equal(TarEntryType.Directory, layer["home/agent"].EntryType);
     }
 
+    /// <summary>Symbolic links go into the layer as links, other names of a file as hard links to its first.</summary>
+    [Fact]
+    public async Task LinksAreExportedAsLinks()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("cd; echo hi > a; ln -s a l; ln -s /etc/shadow s; ln a h");
+        var layer = Read(sh.Snapshot().ToBuildContext().Layer);
+        Assert.Equal((TarEntryType.SymbolicLink, "a"), (layer["home/agent/l"].EntryType, layer["home/agent/l"].LinkName));
+        Assert.Equal((TarEntryType.SymbolicLink, "/etc/shadow"), (layer["home/agent/s"].EntryType, layer["home/agent/s"].LinkName));
+        Assert.Equal((TarEntryType.HardLink, "home/agent/a"), (layer["home/agent/h"].EntryType, layer["home/agent/h"].LinkName));
+    }
+
     /// <summary>A registered command's stub stays out of the layer and is reported.</summary>
     [Fact]
     public void RegisteredCommandIsReported()
@@ -264,17 +276,21 @@ public class ContainerTests
         Assert.Contains(r.Report.NotCarried, i => i.What.Contains("1BAD"));
     }
 
-    /// <summary>Symlinks to imported files and directories become copies; relative links resolve; others are reported.</summary>
+    /// <summary>Symlinks come back as links, wherever they point (even nowhere, or somewhere the agent can't read); hard links as
+    /// copies; an entry below a link (only a crafted archive has one) is reported, never written through it.</summary>
     [Fact]
-    public async Task SymlinksBecomeCopies()
+    public async Task SymlinksComeBackAsLinks()
     {
         var tar = Tar(D("srv"), F("srv/x", "data"), D("srv/d"), F("srv/d/f", "in dir"), L("srv/abs", "/srv/x"), L("srv/rel", "../srv/x"),
-            L("srv/dl", "/srv/d"), L("srv/gone", "/nowhere"));
-        var r = await Import(tar, changes: ["A /srv", "A /srv/x", "A /srv/d", "A /srv/d/f", "A /srv/abs", "A /srv/rel", "A /srv/dl", "A /srv/gone"]);
+            L("srv/dl", "/srv/d"), L("srv/gone", "/nowhere"), L("srv/etc", "/etc"), F("srv/etc/evil", "x"),
+            new E("srv/hard", null, TarEntryType.HardLink, Link: "srv/x"));
+        var r = await Import(tar, changes: ["A /srv", "A /srv/x", "A /srv/d", "A /srv/d/f", "A /srv/abs", "A /srv/rel", "A /srv/dl", "A /srv/gone", "A /srv/etc",
+            "A /srv/etc/evil", "A /srv/hard"]);
         var sh = Restored(r);
-        Assert.Equal("datadatain dir", (await sh.RunAsync("cat /srv/abs /srv/rel /srv/dl/f")).Stdout);
-        Assert.NotEqual(0, (await sh.RunAsync("test -e /srv/gone")).ExitCode);
-        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/gone");
+        Assert.Equal("datadatain dirdata", (await sh.RunAsync("cat /srv/abs /srv/rel /srv/dl/f /srv/hard")).Stdout);
+        Assert.Equal("/srv/x ../srv/x /srv/d /nowhere /etc\n", (await sh.RunAsync("echo $(readlink /srv/abs /srv/rel /srv/dl /srv/gone /srv/etc)")).Stdout);
+        Assert.False(sh.Fs.Exists("/etc/evil"));
+        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/etc/evil");
     }
 
     /// <summary>ELF files are skipped and reported unless IncludeBinaries.</summary>
@@ -386,12 +402,12 @@ public class ContainerTests
         await Assert.ThrowsAsync<InvalidDataException>(() => Import(cut, changes: ["A /srv/f"]));
     }
 
-    /// <summary>A symlink loop terminates and is reported.</summary>
+    /// <summary>A symlink loop comes back as the loop it is: following it fails, nothing hangs.</summary>
     [Fact]
-    public async Task SymlinkLoopIsReported()
+    public async Task SymlinkLoopComesBack()
     {
         var r = await Import(Tar(L("srv/a", "/srv/b"), L("srv/b", "/srv/a")), changes: ["A /srv/a", "A /srv/b"]);
-        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/a");
-        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/b");
+        var run = await Restored(r).RunAsync("readlink /srv/a; cat /srv/a");
+        Assert.Equal(("/srv/b\n", "cat: /srv/a: Too many levels of symbolic links\n"), (run.Stdout, run.Stderr));
     }
 }

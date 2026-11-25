@@ -27,7 +27,7 @@ public class ContainerDockerTests(ITestOutputHelper output)
         var r = await sh.RunAsync("""
             mkdir -p proj/src && cd proj
             printf 'hello\n' > a.txt; chmod 600 a.txt; printf '#!/bin/sh\necho ran\n' > src/run.sh; chmod 755 src/run.sh
-            touch 'sp ace'
+            touch 'sp ace'; ln -s a.txt alink; ln a.txt ahard
             export EXP='exported $x "q"'; plain='multi
             line'; declare -i n=5; arr=(one 'two words' three); unset 'arr[1]'; declare -A map=([k1]=v1 ['key two']=v2)
             greet() { echo "hi $1 from $(pwd)"; }; export -f greet
@@ -78,6 +78,7 @@ public class ContainerDockerTests(ITestOutputHelper output)
                 cat a.txt; src/run.sh; od -An -tx1 /home/agent/blob.bin; cat /data/report.txt; ls 'sp ace'
                 test -e ~/.profile && echo profile-present || echo profile-gone
                 test -x /bin/ls && test -L /bin && echo real-bin
+                readlink alink; cat alink; stat -c %h a.txt
                 """);
             Assert.Equal("""
                 agent
@@ -96,6 +97,9 @@ public class ContainerDockerTests(ITestOutputHelper output)
                 sp ace
                 profile-gone
                 real-bin
+                a.txt
+                hello
+                2
 
                 """, files);
 
@@ -137,13 +141,13 @@ public class ContainerDockerTests(ITestOutputHelper output)
                 mkdir -p /tmp/work && seq 1 5 > /tmp/work/nums
                 """);
             var result = await ContainerImport.FromContainerAsync(name, new ContainerImportOptions { Paths = ["/var/log"] });
-            Assert.Contains(result.Report.NotCarried, i => i.What == "/home/agent/proj/secret");
+            Assert.DoesNotContain(result.Report.NotCarried, i => i.What == "/home/agent/proj/secret"); // links come back as links
 
             var sh = new Shell(new ShellOptions { User = result.Snapshot.User });
             sh.Restore(result.Snapshot);
             var r = await sh.RunAsync("""
                 whoami; pwd; echo "EXP=$EXP"
-                cat a.txt new.txt calc.txt link.txt; ls src | wc -l; ls secret 2>&1
+                cat a.txt new.txt calc.txt link.txt; ls src | wc -l; readlink secret; cat secret 2>&1
                 sort -rn /tmp/work/nums | head -2; test -s /var/log/dpkg.log && echo dpkg.log came along
                 greet back; ll -d . | cut -c1-10; wc -c < /home/agent/blob.bin
                 """);
@@ -158,7 +162,8 @@ public class ContainerDockerTests(ITestOutputHelper output)
                 hello
                 changed
                 0
-                ls: cannot access 'secret': No such file or directory
+                /etc/shadow
+                cat: secret: No such file or directory
                 5
                 4
                 dpkg.log came along

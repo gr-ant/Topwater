@@ -306,11 +306,16 @@ public static class ContainerExport
                 foreach (var (path, f) in layer)
                 {
                     var a = accounts.GetValueOrDefault(f.Owner) ?? new Account("root", 0, 0, "", "/root", "");
-                    var e = new GnuTarEntry(f.IsDirectory ? TarEntryType.Directory : TarEntryType.RegularFile, path[1..] + (f.IsDirectory ? "/" : ""))
+                    // another name of a file goes in as a hard link when its first name is earlier in the layer, else as a copy
+                    var hard = f.HardLink is { } h && layer.ContainsKey(UsrMerge(h)) && string.CompareOrdinal(UsrMerge(h), path) < 0 ? UsrMerge(h) : null;
+                    var type = f.IsDirectory ? TarEntryType.Directory : hard != null ? TarEntryType.HardLink : f.LinkTarget != null ? TarEntryType.SymbolicLink : TarEntryType.RegularFile;
+                    var e = new GnuTarEntry(type, path[1..] + (f.IsDirectory ? "/" : ""))
                     {
                         Mode = (UnixFileMode)(f.Mode & 0xFFF), Uid = a.Uid, Gid = a.Gid, UserName = a.Name, ModificationTime = f.Mtime,
                     };
-                    if (!f.IsDirectory) e.DataStream = new MemoryStream(f.Data!);
+                    if (type == TarEntryType.HardLink) e.LinkName = hard![1..];
+                    else if (type == TarEntryType.SymbolicLink) e.LinkName = f.LinkTarget!;
+                    else if (type == TarEntryType.RegularFile) e.DataStream = new MemoryStream(f.Data!);
                     tar.WriteEntry(e);
                 }
             return ms.ToArray();

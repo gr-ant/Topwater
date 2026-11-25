@@ -48,7 +48,7 @@ State persists between tool calls: working directory, variables, functions, alia
 
 | Group | Programs |
 |---|---|
-| Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `less` `more` |
+| Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `ln` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `less` `more` |
 | Text | `echo` `printf` `grep` `egrep` `fgrep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `bc` `diff` `nl` `tac` `rev` `paste` `column` `seq` |
 | Documents and binary | `to-markdown` `xxd` `hexdump` `od` `strings` `base64` `md5sum` `sha1sum` `sha256sum` `sha512sum` |
 | Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
@@ -463,11 +463,13 @@ they all see the restored files.
 `Save` writes a zip file. Zip is self-describing, every platform can open it (`unzip -l machine.zip`), and the
 contents of different files can be read one at a time. It contains:
 
-- `manifest.json`: `"format": "topwater-snapshot"`, `"version": 1`, the creation time, `user`, `hostname` and `cwd`,
-  then `files` and the session. Each file entry has its absolute `path`, `type` (`dir` or `file`), `mode` as octal
-  (`"0644"`), `owner`, `mtime` (UTC, ISO 8601, 100 ns precision), and for files `size`, `binary` (bytes rather than
-  UTF-8 text), an optional `reportedSize` and the `blob` that holds the contents. Parents come before their
-  children. `variables` lists `name`, `value`, `attrs` (the `declare` letters), `exported` and `array` (`assoc`,
+- `manifest.json`: `"format": "topwater-snapshot"`, `"version": 1` or `2`, the creation time, `user`, `hostname` and
+  `cwd`, then `files` and the session. Each file entry has its absolute `path`, `type` (`dir`, `file` or `symlink`),
+  `mode` as octal (`"0644"`), `owner`, `mtime` (UTC, ISO 8601, 100 ns precision), for files `size`, `binary` (bytes
+  rather than UTF-8 text), an optional `reportedSize` and the `blob` that holds the contents, and for symlinks the
+  `target` they hold. A file or symlink with several names (hard links) is saved in full under each, and every name
+  after the first adds `link`: the path of its first name, so loading makes them one file again. Parents come before
+  their children. `variables` lists `name`, `value`, `attrs` (the `declare` letters), `exported` and `array` (`assoc`,
   `next`, `items` as `[key, value]` pairs). `functions` lists `name`, `body` as written, and `exported`. Then
   `aliases`, `set`, `shopt`, `traps`, `positional`, `dirStack`, `history`, `lastExitCode` and the rest. A
   deterministic shell adds `clock` (the virtual time, ISO 8601 UTC) and `random` (the generator's state, a decimal
@@ -475,9 +477,10 @@ contents of different files can be read one at a time. It contains:
 - `blobs/<sha256>`: each distinct file content once, named by its SHA-256. Identical files (all the `/usr/bin` stubs)
   are stored once, and after loading they share one copy in memory again.
 
-A newer `version` than this Topwater knows fails with `NotSupportedException`: `snapshot format version 2 is newer
-than this version of Topwater supports (1); upgrade Topwater to load it`. Later versions of Topwater are meant to keep
-reading version 1.
+Version 2 added `symlink` entries and `link`. A machine without links is still saved as version 1, which older
+Topwater reads. A newer `version` than this Topwater knows fails with `NotSupportedException`: `snapshot format
+version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it`. Later versions of
+Topwater are meant to keep reading versions 1 and 2.
 
 ### Loading untrusted snapshots
 
@@ -494,8 +497,11 @@ come from the `ShellOptions` you pass (the defaults otherwise):
 - Each blob is read only up to the size its entry declares, so a zip bomb stops there. It must then match its size
   and SHA-256 hash.
 - Paths must be absolute and canonical: no `.` or `..` segments, no empty segments, no trailing `/`, no NUL. A parent
-  must come before its children, and a path may appear only once. Only directories and regular files exist: symlinks,
-  devices and other types are refused. Modes must be octal up to `7777`. Owners, the user and the host name must be
+  must come before its children, and a path may appear only once. Only directories, regular files and symlinks
+  exist: devices and other types are refused. A parent is found without following symlinks, so no entry lands
+  anywhere but its own path. A symlink's `target` is 1-4096 characters without NUL and may point anywhere, even at
+  itself: it is only resolved later, with the agent's permissions, and 40 links in one lookup fail as on Linux. A
+  `link` must name an earlier file or symlink, never a directory. Modes must be octal up to `7777`. Owners, the user and the host name must be
   plain names, so `"user": "../../etc"` can't steer the home directory.
 - Variable names must be valid identifiers, and indexed arrays must have non-negative integer indices. Each function
   body is parsed again as `name() body` and must come back as exactly that one function, so a body can't smuggle in
@@ -633,9 +639,10 @@ Details:
 
 - **Owners** map through the container's own `/etc/passwd`, read from the export stream even when `/etc` isn't
   imported. An unknown uid becomes the number as the owner name.
-- **Links.** A symlink or hard link whose target is in the imported set becomes a copy. A link to a directory copies
-  its subtree, and chains are followed up to 8 hops. Other links are skipped and reported, as are device files, fifos
-  and other types.
+- **Links.** A symlink comes back as a symlink holding the same target, wherever it points: following it later is
+  subject to the agent's permissions. An entry below a symlink (only a crafted archive has one) is skipped and
+  reported. A hard link whose target is in the imported set becomes a copy; other hard links are skipped and
+  reported, as are device files, fifos and other types.
 - **Simulated paths.** `/proc`, `/sys`, `/dev`, `/run` and docker's `/etc/hostname`, `/etc/hosts` and
   `/etc/resolv.conf` stay Topwater's.
 - **Topwater images.** The hook is stripped from `~/.bashrc`, `~/.bash_history` becomes the shell history,
@@ -658,7 +665,7 @@ Details:
 | User | `USER` | `Config.User` |
 | Host name | not carried: docker sets it at run time, use `--hostname` | not carried: `Limits.Hostname`, default `topwater` |
 | Registered commands | not carried | not applicable |
-| Symlinks | not applicable: Topwater has none | copies, when the target is imported |
+| Symlinks | symlinks; other names of a file as hard links, or copies when the first name isn't exported | symlinks; hard links as copies, when the target is imported |
 | Binaries | stubs are not carried | skipped unless `IncludeBinaries` |
 | Group ownership | each file gets its owner's primary group | dropped: Topwater files have an owner and no group |
 
@@ -939,8 +946,10 @@ most 4 x `MaxFileSystemBytes`. A side-car path must be a plain relative file nam
   session at the defaults, less with lower `MaxFileSystemBytes` and `MaxStringBytes`. The time-limit recipes
   (`sleep 99999`, a shell loop of awk runs, slow regex over many lines) stay under 60 MB.
 - Archives are untrusted. `tar` and `unzip` never write outside the target directory: names with `..` are
-  refused (tar) or cleaned (unzip), leading `/` is dropped, symlinks aren't created and hard links only copy files
-  inside the target. One extraction or decompression stops with an error past 64 MB (`MaxExtractBytes`) or
+  refused (tar) or cleaned (unzip), and leading `/` is dropped. tar extracts symlinks, but like GNU tar it writes
+  nothing below, and hard-links nothing through, a symlink the archive itself created (`Cannot open: Not a
+  directory`), and a member replaces a symlink in its way rather than writing through it. Hard links only reach
+  entries already inside the target. One extraction or decompression stops with an error past 64 MB (`MaxExtractBytes`) or
   100,000 entries (`MaxExtractEntries`). Binary data survives pipes and redirects (`tar czf - . | gzip -l`,
   `gzip -c f > f.gz`); in the tool output it shows as U+FFFD.
 - Tool output is cut at 30,000 characters with a note saying how much was dropped. Error output is cut
@@ -954,7 +963,7 @@ most 4 x `MaxFileSystemBytes`. A side-car path must be a plain relative file nam
 
 Real background jobs (`cmd &` runs to completion before the next command, so `wait` only reports its
 status), job control (`fg`, `bg`, `%1`), `>(...)`, `coproc`, `compgen`/`complete`, `caller`, running shell
-commands from inside `awk` (`print | "cmd"`), symlinks and `ln`, group permissions, and a real `python` or
+commands from inside `awk` (`print | "cmd"`), group permissions, and a real `python` or
 network access. `sleep` really waits, up to the call's time limit (`MaxCallDuration`).
 
 A few shell behaviours differ from bash on purpose or for simplicity: the last command of a pipeline runs

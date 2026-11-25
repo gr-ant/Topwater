@@ -202,7 +202,7 @@ Snapshot and recording files have one format: .NET and TypeScript read each othe
 - **`to-markdown`** for reading Word, Excel, PowerPoint and HTML files.
 
 There is no Python, git or network access unless you add it. A missing command fails with a message that points the
-model at `help`. Background jobs, job control and symlinks are not supported; the
+model at `help`. Background jobs and job control are not supported; the
 [reference](docs/reference.md#not-supported) has the full list.
 
 Each command is written from POSIX, the man pages and comparison against the real tool's output, never by copying

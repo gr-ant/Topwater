@@ -7,12 +7,14 @@ using System.Text.Json.Nodes;
 
 namespace Topwater.Containers;
 
-/// <summary>One file or directory of a snapshot. <see cref="Data"/> is null for a directory.</summary>
-internal sealed record FileItem(string Path, bool IsDirectory, int Mode, string Owner, DateTime Mtime, byte[]? Data = null, bool Binary = false, long? ReportedSize = null)
+/// <summary>One file, directory or symbolic link (<see cref="LinkTarget"/>) of a snapshot. <see cref="Data"/> is null for a directory.
+/// <see cref="HardLink"/>: the path of the same file's earlier name, when it has several.</summary>
+internal sealed record FileItem(string Path, bool IsDirectory, int Mode, string Owner, DateTime Mtime, byte[]? Data = null, bool Binary = false, long? ReportedSize = null,
+    string? LinkTarget = null, string? HardLink = null)
 {
     public bool SameContent(FileItem other) =>
         IsDirectory == other.IsDirectory && Mode == other.Mode && Owner == other.Owner
-        && (IsDirectory || Data.AsSpan().SequenceEqual(other.Data));
+        && LinkTarget == other.LinkTarget && HardLink == other.HardLink && (IsDirectory || Data.AsSpan().SequenceEqual(other.Data));
 }
 
 /// <summary>
@@ -57,7 +59,7 @@ internal sealed class SnapshotData
             }
             files[path] = new FileItem(path, dir, Convert.ToInt32((string)f["mode"]!, 8), (string)f["owner"]!,
                 DateTime.Parse((string)f["mtime"]!, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal),
-                data, (bool?)f["binary"] ?? false, (long?)f["reportedSize"]);
+                data, (bool?)f["binary"] ?? false, (long?)f["reportedSize"], (string?)f["target"], (string?)f["link"]);
         }
         manifest.Remove("files");
         return new SnapshotData { Manifest = manifest, Files = files };
@@ -75,15 +77,19 @@ internal sealed class SnapshotData
         {
             var written = new HashSet<string>(StringComparer.Ordinal);
             var files = new JsonArray();
+            bool links = false;
             foreach (var f in Files.Values)
             {
                 var entry = new JsonObject
                 {
-                    ["path"] = f.Path, ["type"] = f.IsDirectory ? "dir" : "file",
+                    ["path"] = f.Path, ["type"] = f.IsDirectory ? "dir" : f.LinkTarget != null ? "symlink" : "file",
                     ["mode"] = Convert.ToString(f.Mode, 8).PadLeft(4, '0'), ["owner"] = f.Owner,
                     ["mtime"] = f.Mtime.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture),
                 };
-                if (!f.IsDirectory)
+                if (f.LinkTarget != null) entry["target"] = f.LinkTarget;
+                if (f.HardLink != null && Files.TryGetValue(f.HardLink, out var first) && !first.IsDirectory && first.HardLink == null) entry["link"] = f.HardLink; // else its first name is gone: a file of its own
+                links |= entry["target"] != null || entry["link"] != null;
+                if (!f.IsDirectory && f.LinkTarget == null)
                 {
                     entry["size"] = f.Data!.Length;
                     if (f.Binary) entry["binary"] = true;
@@ -100,6 +106,7 @@ internal sealed class SnapshotData
             }
             var manifest = (JsonObject)Manifest.DeepClone();
             manifest["files"] = files;
+            if (links) manifest["version"] = 2; // links need format version 2
             using var m = zip.CreateEntry("manifest.json", CompressionLevel.Fastest).Open();
             using var w = new Utf8JsonWriter(m);
             manifest.WriteTo(w);
