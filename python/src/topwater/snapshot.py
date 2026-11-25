@@ -452,7 +452,7 @@ def format_time(t: datetime) -> str:
     """UTC, ISO 8601, 100 ns digits, as C# writes it. Naive datetimes are UTC."""
     if t.tzinfo is not None:
         t = t.astimezone(timezone.utc).replace(tzinfo=None)
-    return f"{t:%Y-%m-%dT%H:%M:%S}.{t.microsecond:06d}0Z"
+    return f"{t.year:04d}-{t:%m-%dT%H:%M:%S}.{t.microsecond:06d}0Z"   # %Y is not zero-padded below year 1000 on Linux
 
 
 _TIME = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.(\d{1,7}))?)?(Z|[+-]\d\d:?\d\d)?")

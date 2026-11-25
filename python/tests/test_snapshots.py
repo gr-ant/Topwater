@@ -104,6 +104,16 @@ class ForwardOnly(io.RawIOBase):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_a_file_older_than_year_1000_survives_save_and_load(self):
+        from datetime import datetime
+        sh = Shell()
+        sh.fs.write_text("/home/agent/old.txt", "x")
+        sh.fs.set_modified_time("/home/agent/old.txt", datetime(512, 4, 26))
+        buf = io.BytesIO()
+        sh.save(buf)
+        back = Shell.load(buf.getvalue())
+        self.assertEqual(back.fs.stat("/home/agent/old.txt").modified.year, 512)
+
     def test_every_kind_of_state_survives(self):
         expected = setup().run(PROBE).to_tool_output()  # a twin, so probing doesn't touch the shell under test
         for how in ("restore", "restore twice", "fork", "save and load", "forward-only stream", "configured shell", "path"):

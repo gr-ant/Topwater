@@ -90,7 +90,7 @@ Where Python differs from the reference:
   `Shell.run`), so call it outside a running event loop. Names: `to_build_context`, `build_image`, `from_container`,
   `from_image`, `from_tar(rootfs, ContainerConfig(user, working_dir, env), changes, options)`, `docker_available()`;
   `ImportOptions(paths, include_binaries, restore_session, limits)` where `limits` is a dict of `Shell()` arguments.
-  Archive errors are `InvalidContainerData`, docker failures `ContainerError`. Beyond the C# checks, the export quotes
+  Archive errors are `InvalidContainerData`, docker failures `ContainerError`. The export quotes
   the account list in `setup.sh` and refuses a base image name with a line break.
 - `topwater.mcp` is a small standard-library client for servers spoken to over stdio; `mount_mcp` accepts any object
   with `list_tools()` and `call_tool(name, arguments)` returning MCP's dict shapes, so the official `mcp` SDK adapts in
