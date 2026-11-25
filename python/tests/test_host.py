@@ -1,6 +1,7 @@
 """Real host programs exposed as commands (uses the real git; skipped when it isn't installed)."""
 import shutil
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -63,7 +64,13 @@ class HostCommandTests(unittest.TestCase):
         self.addCleanup(real.close)
         out(sh, "mkdir -p proj/d && cd proj && echo in > d/f && echo secret > /tmp/outside && ln -s .. d/up && ln -s / root && "
                 "ln -s /tmp/outside out && ln -s d/f inside && ln -s d dl")
-        r = sh.run("cd ~/proj && realsh -c 'find . | sort; cat inside; find . -type l | wc -l'")
+        # on its own thread with a deadline: a link followed without end must fail the test, not hang the run
+        result = []
+        worker = threading.Thread(target=lambda: result.append(sh.run("cd ~/proj && realsh -c 'find . | sort; cat inside; find . -type l | wc -l'")), daemon=True)
+        worker.start()
+        worker.join(60)
+        self.assertFalse(worker.is_alive(), "the host command did not finish within 60 s")
+        r = result[0]
         self.assertEqual("", r.stderr)
         self.assertEqual(".\n./d\n./d/f\n./inside\nin\n0\n", r.stdout)
         self.assertEqual("..\n/\n/tmp/outside\nd/f\nd\n", out(sh, "cd ~/proj && readlink d/up root out inside dl"))

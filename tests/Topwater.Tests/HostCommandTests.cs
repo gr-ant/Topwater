@@ -71,7 +71,8 @@ public class HostCommandTests
         var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(20) });
         using var real = sh.RegisterHostCommand("realsh", "sh");
         await Out(sh, "mkdir -p proj/d && cd proj && echo in > d/f && echo secret > /tmp/outside && ln -s .. d/up && ln -s / root && ln -s /tmp/outside out && ln -s d/f inside && ln -s d dl");
-        var r = await sh.RunAsync("cd ~/proj && realsh -c 'find . | sort; cat inside; find . -type l | wc -l'");
+        // on its own thread with a deadline: a link followed without end must fail the test, not hang the run
+        var r = await Task.Run(() => sh.RunAsync("cd ~/proj && realsh -c 'find . | sort; cat inside; find . -type l | wc -l'")).WaitAsync(TimeSpan.FromSeconds(60));
         Assert.True(r.Stderr == "", r.Stderr);
         Assert.Equal(".\n./d\n./d/f\n./inside\nin\n0\n", r.Stdout);
         // the program's run leaves the agent's links as they were
