@@ -1,0 +1,84 @@
+{
+ "ShellTests.Syntax": [
+  [
+   "echo hello world",
+   "hello world\n"
+  ],
+  [
+   "echo 'single $HOME' \"double $USER\"",
+   "single $HOME double agent\n"
+  ],
+  [
+   "echo a\\ b \"c\\\"d\"",
+   "a b c\"d\n"
+  ],
+  [
+   "echo -n hi",
+   "hi"
+  ],
+  [
+   "echo -e 'a\\tb'",
+   "a\tb\n"
+  ],
+  [
+   "X=5; echo $X ${X} \"${MISSING:-dflt}\"",
+   "5 5 dflt\n"
+  ],
+  [
+   "echo $(echo inner) `echo tick`",
+   "inner tick\n"
+  ],
+  [
+   "echo \"$(printf 'a  b')\"",
+   "a  b\n"
+  ],
+  [
+   "true && echo yes || echo no",
+   "yes\n"
+  ],
+  [
+   "false && echo yes || echo no",
+   "no\n"
+  ],
+  [
+   "false; echo $?",
+   "1\n"
+  ],
+  [
+   "! false && echo negated",
+   "negated\n"
+  ],
+  [
+   "printf '%s=%03d\\n' a 7 b 42",
+   "a=007\nb=042\n"
+  ],
+  [
+   "echo one # a comment",
+   "one\n"
+  ],
+  [
+   "{ echo a; echo b; } | wc -l",
+   "2\n"
+  ],
+  [
+   "(cd /tmp && pwd); pwd",
+   "/tmp\n/home/agent\n"
+  ],
+  [
+   "echo ~ ~/x",
+   "/home/agent /home/agent/x\n"
+  ],
+  [
+   "A=1 env | grep '^A='; echo \"[$A]\"",
+   "A=1\n[]\n"
+  ],
+  [
+   "bash -c 'echo from bash'",
+   "from bash\n"
+  ],
+  [
+   "[ 3 -gt 2 ] && test -d /tmp && echo ok",
+   "ok\n"
+  ]
+ ]
+}

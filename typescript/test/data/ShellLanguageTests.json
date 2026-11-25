@@ -1,0 +1,22 @@
+{
+ "ShellLanguageTests.RunawayConstructsEnd": [
+  [
+   "trap 'false' ERR; false; echo survived"
+  ],
+  [
+   "trap 'echo d >/dev/null' DEBUG; f() { :; }; f; f; echo survived"
+  ],
+  [
+   "declare -n a=b; declare -n b=a; echo \"[$a]\"; echo survived"
+  ],
+  [
+   "echo {1..10000}{1..10000} >/dev/null; echo survived"
+  ],
+  [
+   "while :; do wait; done; echo survived"
+  ],
+  [
+   "f() { f; }; trap 'echo r >/dev/null' RETURN; f; echo survived"
+  ]
+ ]
+}

@@ -1,0 +1,161 @@
+{
+ "SecondReviewTests.MatchesBash": [
+  [
+   "source ~/.bashrc && echo ok",
+   "ok\n"
+  ],
+  [
+   "echo a; break; echo b",
+   "a\nb\n"
+  ],
+  [
+   "x=$(cat <<EOF\nit's fine\nEOF\n); echo \"$x\"",
+   "it's fine\n"
+  ],
+  [
+   "x=$(cat <<EOF\n1) item\nEOF\n); echo \"$x\"",
+   "1) item\n"
+  ],
+  [
+   "a=5 b=-3; echo $(($a-$b))",
+   "8\n"
+  ],
+  [
+   "echo $((-2**2))",
+   "4\n"
+  ],
+  [
+   "alias cnt='echo a b | wc -w'; cnt",
+   "2\n"
+  ],
+  [
+   "x=outer; f(){ local x; echo \"[$x]\"; }; f",
+   "[]\n"
+  ],
+  [
+   "set -- foo bar baz; echo \"${@:2}\"",
+   "bar baz\n"
+  ],
+  [
+   "echo x | exit 3; echo after",
+   "after\n"
+  ],
+  [
+   "false; $empty; echo $?",
+   "0\n"
+  ],
+  [
+   "echo hi 3>/dev/null",
+   "hi\n"
+  ],
+  [
+   "touch a; sleep 0.02; touch b; [ b -nt a ] && [ a -ot b ] && echo newer",
+   "newer\n"
+  ],
+  [
+   "echo hi > f.txt; grep -r hi f.txt",
+   "hi\n"
+  ],
+  [
+   "mkdir d; echo hi > d/a.txt; echo hi > d/a.log; grep -r --include '*.txt' hi d",
+   "d/a.txt:hi\n"
+  ],
+  [
+   "echo foobar | grep -oP 'foo\\K\\w+'",
+   "bar\n"
+  ],
+  [
+   "awk 'BEGIN{while(i++<25000)printf \"x\";print \"\"}' | cut -c5- | wc -c",
+   "24997\n"
+  ]
+ ],
+ "RunawayTests.StopsInsteadOfHanging": [
+  [
+   "while :; do while :; do :; done; done; echo survived"
+  ],
+  [
+   "f(){ f; f; }; f; echo survived"
+  ],
+  [
+   "x='eval \"$x\"'; eval \"$x\"; echo survived"
+  ],
+  [
+   "printf './a.sh\\n' > a.sh; chmod +x a.sh; ./a.sh; echo survived"
+  ],
+  [
+   "echo a | sed ':a;s/x*/x/;ta'"
+  ],
+  [
+   "jq -n '[range(1e10)] | length'"
+  ],
+  [
+   "jq -n '[1|recurse(.+1)] | length'"
+  ]
+ ],
+ "SchemaMapperReviewTests.SendsWhatWasMeant": [
+  [
+   "t run --tags 123",
+   "{\"tags\":[\"123\"]}"
+  ],
+  [
+   "t run --id abc",
+   "{\"id\":\"abc\"}"
+  ],
+  [
+   "t run --id 7",
+   "{\"id\":7}"
+  ],
+  [
+   "t run --level 1",
+   "{\"level\":\"1\"}"
+  ],
+  [
+   "t run --no-cache=true",
+   "{\"cache\":false}"
+  ],
+  [
+   "t run --title -h",
+   "{\"title\":\"-h\"}"
+  ],
+  [
+   "t run --limit 9 --json '{\"limit\":2,\"title\":\"x\"}'",
+   "{\"limit\":9,\"title\":\"x\"}"
+  ],
+  [
+   "t run --json '{\"tags\":[\"a\"]}' --tags b",
+   "{\"tags\":[\"b\"]}"
+  ]
+ ],
+ "DeepNestingTests.DeepNestingIsAnErrorNotACrash": [
+  [
+   "((",
+   "))",
+   200000
+  ],
+  [
+   "( ",
+   " )",
+   50000
+  ],
+  [
+   "{ ",
+   "; }",
+   50000
+  ],
+  [
+   "if ",
+   "; then :; fi",
+   20000
+  ],
+  [
+   "echo $((",
+   "))",
+   100000
+  ],
+  [
+   "echo $((-",
+   "))",
+   1
+  ]
+ ]
+}

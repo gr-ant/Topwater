@@ -1,0 +1,67 @@
+{
+ "LimitTests.TimeoutInterruptsABuiltInLoop": [
+  [
+   "awk 'BEGIN { while (1) x++ }'"
+  ],
+  [
+   "sed ':a; s/^/x/; ba' <<< x"
+  ],
+  [
+   "jq -n 'last(range(1e12))'"
+  ]
+ ],
+ "LimitTests.StringRecipesStopAtTheConfiguredLimit": [
+  [
+   "awk 'BEGIN { x = \"a\"; while (1) x = x x }' 2>/dev/null",
+   "awk: string too large (limit 1 MB)"
+  ],
+  [
+   "awk 'BEGIN { x = \"ab\"; while (1) gsub(/./, \"&&\", x) }'",
+   "awk: string too large (limit 1 MB)"
+  ],
+  [
+   "echo a | sed ':a; s/.*/&&/; ba' 2>/dev/null",
+   "sed: pattern space too large (limit 1 MB)"
+  ],
+  [
+   "jq -n 'reduce range(100) as $i (\"a\"; . + .)' 2>/dev/null",
+   "jq: value too large (limit 1 MB)"
+  ],
+  [
+   "jq -n 'reduce range(100) as $i ([1]; . + .)'",
+   "jq: value too large (limit 1 MB)"
+  ],
+  [
+   "jq -n '\"ab\" * 1e12'",
+   "jq: value too large (limit 1 MB)"
+  ],
+  [
+   "x=$(printf '%02000d' 0); y=${x//?/$x}",
+   "expansion too large (limit 1 MB)"
+  ],
+  [
+   "m=$(printf '%01000d' 0); echo {1..10000}$m >/dev/null",
+   "expansion too large (limit 1 MB)"
+  ],
+  [
+   "big=$(printf '%0100000d' 0); for ((i = 0; i < 1000000; i++)); do a[i]=$big; done",
+   "variables in total too large (limit 1 MB)"
+  ],
+  [
+   "awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; read -r x < f",
+   "x: value too large (limit 1 MB)"
+  ],
+  [
+   "awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f 2>/dev/null",
+   "output too large (limit 1 MB)"
+  ],
+  [
+   "awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f | wc -c",
+   "output too large (limit 1 MB)"
+  ],
+  [
+   "awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; x=$(cat f)",
+   "output too large (limit 1 MB)"
+  ]
+ ]
+}

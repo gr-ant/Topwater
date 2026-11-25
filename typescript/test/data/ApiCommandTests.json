@@ -1,0 +1,98 @@
+{
+ "Stub.PathsCannotLeaveTheBaseOrTheAllowedPrefixes": [
+  [
+   "https://evil.com/x"
+  ],
+  [
+   "//evil.com/x"
+  ],
+  [
+   "/issue//evil.com"
+  ],
+  [
+   "issue/1"
+  ],
+  [
+   "/\\evil.com/x"
+  ],
+  [
+   "\\\\evil.com\\x"
+  ],
+  [
+   "/issue/1@evil.com"
+  ],
+  [
+   "/issue/../../admin"
+  ],
+  [
+   "/issue/../admin"
+  ],
+  [
+   "/issue/%2e%2e/admin"
+  ],
+  [
+   "/issue/%2E%2E/%2e%2e/admin"
+  ],
+  [
+   "/issue/.%2e/admin"
+  ],
+  [
+   "/issue/%252e%252e/admin"
+  ],
+  [
+   "/issue/..;/admin"
+  ],
+  [
+   "/issue%2f..%2fadmin"
+  ],
+  [
+   "/issue/%zz"
+  ],
+  [
+   "/searchadmin"
+  ],
+  [
+   "/admin?x=/issue/"
+  ],
+  [
+   "/issue/1#frag"
+  ],
+  [
+   "/issue/１"
+  ]
+ ],
+ "Stub.WithoutPrefixesPathsStillCannotClimbAboveTheBase": [
+  [
+   "/x/../../y"
+  ],
+  [
+   "/%2e%2e/other"
+  ],
+  [
+   "/.."
+  ]
+ ],
+ "Stub.TheAgentCannotSetSensitiveHeaders": [
+  [
+   "Authorization: Bearer mine"
+  ],
+  [
+   "X-Api-Key: mine"
+  ],
+  [
+   "Cookie: a=b"
+  ],
+  [
+   "Host: evil.com"
+  ],
+  [
+   "Proxy-Authorization: x"
+  ],
+  [
+   "Transfer-Encoding: chunked"
+  ],
+  [
+   "Content-Length: 5"
+  ]
+ ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "topwater",
+  "version": "0.1.0",
+  "description": "A simulated bash shell for LLM agents: in-process interpreter, in-memory Ubuntu-like filesystem, ~100 standard commands.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "extract-tests": "node scripts/extract-tests.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.7",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

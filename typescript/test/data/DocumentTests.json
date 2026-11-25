@@ -1,0 +1,60 @@
+{
+ "DocumentTests.InspectionMatchesRealTools": [
+  [
+   "xxd s.bin",
+   "00000000: 4865 6c6c 6f2c 2057 6f72 6c64 210a 0001  Hello, World!...\n00000010: 02ff 2062 696e 6172 7909 7374 7566 6620  .. binary.stuff \n00000020: 6865 7265 0a                             here.\n"
+  ],
+  [
+   "xxd -l 8 -s 2 s.bin",
+   "00000002: 6c6c 6f2c 2057 6f72                      llo, Wor\n"
+  ],
+  [
+   "xxd -p s.bin",
+   "48656c6c6f2c20576f726c64210a000102ff2062696e6172790973747566\n6620686572650a\n"
+  ],
+  [
+   "printf abc | xxd",
+   "00000000: 6162 63                                  abc\n"
+  ],
+  [
+   "hexdump -C s.bin",
+   "00000000  48 65 6c 6c 6f 2c 20 57  6f 72 6c 64 21 0a 00 01  |Hello, World!...|\n00000010  02 ff 20 62 69 6e 61 72  79 09 73 74 75 66 66 20  |.. binary.stuff |\n00000020  68 65 72 65 0a                                    |here.|\n00000025\n"
+  ],
+  [
+   "hexdump -C -n 5 s.bin",
+   "00000000  48 65 6c 6c 6f                                    |Hello|\n00000005\n"
+  ],
+  [
+   "hexdump -C z.bin",
+   "00000000  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|\n*\n00000060  00 00 00 00 61 62 63 64  65 66 67 68 69 6a 6b 6c  |....abcdefghijkl|\n00000070  6d 6e 6f 70 71 72 73 74  75 76 77 78 79 7a 80 81  |mnopqrstuvwxyz..|\n00000080\n"
+  ],
+  [
+   "od -c s.bin",
+   "0000000   H   e   l   l   o   ,       W   o   r   l   d   !  \\n  \\0 001\n0000020 002 377       b   i   n   a   r   y  \\t   s   t   u   f   f    \n0000040   h   e   r   e  \\n\n0000045\n"
+  ],
+  [
+   "od -x s.bin",
+   "0000000 6548 6c6c 2c6f 5720 726f 646c 0a21 0100\n0000020 ff02 6220 6e69 7261 0979 7473 6675 2066\n0000040 6568 6572 000a\n0000045\n"
+  ],
+  [
+   "od -An -tx1 s.bin",
+   " 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21 0a 00 01\n 02 ff 20 62 69 6e 61 72 79 09 73 74 75 66 66 20\n 68 65 72 65 0a\n"
+  ],
+  [
+   "od -N 4 -c s.bin",
+   "0000000   H   e   l   l\n0000004\n"
+  ],
+  [
+   "strings s.bin",
+   "Hello, World!\n binary\tstuff here\n"
+  ],
+  [
+   "strings -n 2 z.bin",
+   "abcdefghijklmnopqrstuvwxyz\n"
+  ],
+  [
+   "echo hi there | strings",
+   "hi there\n"
+  ]
+ ]
+}

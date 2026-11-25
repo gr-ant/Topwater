@@ -1,0 +1,36 @@
+{
+ "ToolCommandTests.BadUsageExplainsItselfWithoutCallingTheTool": [
+  [
+   "gh nope",
+   "unknown tool 'nope'"
+  ],
+  [
+   "gh list-issues",
+   "missing required option --repo"
+  ],
+  [
+   "gh list-issues --repo a --limit many",
+   "option --limit expects a whole number, got 'many'"
+  ],
+  [
+   "gh list-issues --repo a --colour red",
+   "unknown option --colour; options are --repo"
+  ],
+  [
+   "gh list-issues --repo",
+   "option --repo needs a value"
+  ],
+  [
+   "gh list-issues a/b",
+   "unexpected argument 'a/b'"
+  ],
+  [
+   "gh list-issues --json '[1]'",
+   "--json must be a JSON object"
+  ],
+  [
+   "gh whoami --x 1",
+   "this tool takes no options"
+  ]
+ ]
+}

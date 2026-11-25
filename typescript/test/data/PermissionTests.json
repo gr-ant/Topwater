@@ -1,0 +1,64 @@
+{
+ "PermissionTests.UnsearchableDirectoryHidesItsEntries": [
+  [
+   "cat /root/notes.txt",
+   "cat: /root/notes.txt: Permission denied\n"
+  ],
+  [
+   "cat /root/missing",
+   "cat: /root/missing: Permission denied\n"
+  ],
+  [
+   "cat < /root/notes.txt",
+   "bash: /root/notes.txt: Permission denied\n"
+  ],
+  [
+   "source /root/notes.txt",
+   "source: /root/notes.txt: Permission denied\n"
+  ],
+  [
+   "cat /root/*",
+   "cat: /root/*: Permission denied\n"
+  ],
+  [
+   "grep -r private /root",
+   "grep: /root: Permission denied\n"
+  ],
+  [
+   "ls /root",
+   "ls: cannot open directory '/root': Permission denied\n"
+  ],
+  [
+   "ls -l /root/notes.txt",
+   "ls: cannot access '/root/notes.txt': Permission denied\n"
+  ],
+  [
+   "stat /root/notes.txt",
+   "stat: cannot statx '/root/notes.txt': Permission denied\n"
+  ],
+  [
+   "cd /root",
+   "bash: cd: /root: Permission denied\n"
+  ],
+  [
+   "cp /root/notes.txt ~/n",
+   "cp: cannot stat '/root/notes.txt': Permission denied\n"
+  ],
+  [
+   "chmod 777 /root/notes.txt",
+   "chmod: cannot access '/root/notes.txt': Permission denied\n"
+  ],
+  [
+   "to-markdown /root/notes.txt",
+   "to-markdown: /root/notes.txt: Permission denied\n"
+  ],
+  [
+   "echo x > /root/notes.txt",
+   "bash: /root/notes.txt: Permission denied\n"
+  ],
+  [
+   "rm /root/notes.txt",
+   "rm: cannot remove '/root/notes.txt': Permission denied\n"
+  ]
+ ]
+}
