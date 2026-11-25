@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from .. import bytetext
 from ..parser import is_name
-from ..vfs import ShellError, UsageException
+from ..vfs import ShellError, UsageException, normalize
 
 
 class Args:
@@ -270,8 +270,9 @@ def _echo(ctx):
 def _cd(ctx):
     env = ctx.shell.env
     args = list(ctx.args)
+    flags = []
     while args and args[0] in ("-L", "-P", "-e", "-@"):
-        args.pop(0)
+        flags.append(args.pop(0))
     if args and args[0] == "--":
         args.pop(0)
     if len(args) > 1:
@@ -282,17 +283,30 @@ def _cd(ctx):
         target = env.get("OLDPWD", ctx.shell.cwd)
     else:
         target = args[0]
-    path = ctx.resolve(target)
+    # like bash: the new directory is the old one's logical path plus the operand, ".." removing a name (-L, the default);
+    # if that isn't a directory, or with -P, the physical path, every symbolic link resolved
+    physical = [f for f in flags if f in ("-L", "-P")][-1:] == ["-P"]
+    path = normalize(ctx.shell.cwd, target)
+    if physical or not ctx.fs.is_dir(path):
+        path = ctx.resolve(target)
     if not ctx.fs.exists(path):
         raise ShellError(f"{target}: {ctx.fs.why_missing(path)}")
     if not ctx.fs.is_dir(path):
         raise ShellError(f"{target}: Not a directory")
     if not ctx.fs.can_execute(path):
         raise ShellError(f"{target}: Permission denied")
+    if physical:
+        path = ctx.fs.real_path(path)[0] or path
     env["OLDPWD"] = ctx.shell.cwd
     ctx.shell.cwd = path
     if args == ["-"]:
         ctx.print(path)
+
+
+def _pwd(ctx):
+    # -P: the physical path, symbolic links resolved; -L (the default): the logical one cd kept
+    physical = [x for x in ctx.args if x in ("-L", "-P")][-1:] == ["-P"]
+    ctx.print((ctx.fs.real_path(ctx.shell.cwd)[0] if physical else None) or ctx.shell.cwd)
 
 
 def _flag_args(args) -> tuple[str, list[str]]:
@@ -434,8 +448,10 @@ def test_unary(shell, op: str, arg: str) -> bool:
         return fs.is_dir(path)
     if op == "-s":
         return fs.is_file(path) and fs.stat(path).size > 0
-    if op in ("-L", "-h", "-b", "-c", "-p", "-S", "-t", "-g", "-u", "-k"):
-        return False  # no links, devices, pipes, sockets, terminals or special bits
+    if op in ("-L", "-h"):
+        return fs.is_symlink(path)
+    if op in ("-b", "-c", "-p", "-S", "-t", "-g", "-u", "-k"):
+        return False  # no devices, pipes, sockets, terminals or special bits
     if op in ("-O", "-G", "-N"):
         return fs.exists(path)
     if op == "-v":
@@ -455,7 +471,7 @@ def newer(sh, left: str, right: str) -> bool:
     return lt is not None and (rt is None or lt > rt)
 
 
-_TEST_BINARY = {"=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"}
+_TEST_BINARY = {"=", "==", "!=", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef"}
 
 
 def _test_binary(sh, left: str, op: str, right: str) -> bool:
@@ -471,6 +487,8 @@ def _test_binary(sh, left: str, op: str, right: str) -> bool:
         return newer(sh, left, right)
     if op == "-ot":
         return newer(sh, right, left)
+    if op == "-ef":
+        return sh.fs.same_file(sh.resolve(left), sh.resolve(right))
     try:
         l, r = int(left.strip()), int(right.strip())
     except ValueError:
@@ -806,7 +824,7 @@ def _register_shell_commands(shell) -> None:
     r("echo", _echo, "Print arguments")
     r("printf", _printf, "Format and print data")
     r("cd", _cd, "Change the working directory")
-    r("pwd", lambda ctx: ctx.print(ctx.shell.cwd), "Print the working directory")
+    r("pwd", _pwd, "Print the working directory")
     r("export", _export, "Set environment variables")
     r("unset", _unset, "Remove variables or functions (-f)")
     r("env", lambda ctx: [ctx.print(f"{k}={ctx.shell.env[k]}") for k in sorted(ctx.shell.env)] and 0, "Print the environment")

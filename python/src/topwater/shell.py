@@ -552,7 +552,8 @@ class Shell:
         self.env["PWD"] = path
 
     def resolve(self, path: str) -> str:
-        return normalize(self._cwd, path)
+        """An absolute path for `path` from the cwd; ".." goes up from where the path really is, past symbolic links, as the kernel resolves it."""
+        return self.fs.normalize_physical(self._cwd, path)
 
     # ---------- registration ----------
 
@@ -2639,6 +2640,8 @@ class _CondEvaluator:
             if op in ("-nt", "-ot"):
                 from .commands import newer
                 return newer(sh, lv, rv) if op == "-nt" else newer(sh, rv, lv)
+            if op == "-ef":
+                return sh.fs.same_file(sh.resolve(lv), sh.resolve(rv))
             a, b = arith.evaluate(sh, lv), arith.evaluate(sh, rv)
             return {"-eq": a == b, "-ne": a != b, "-lt": a < b, "-le": a <= b, "-gt": a > b, "-ge": a >= b}.get(op, False)
         return bool(await sh._expand_single(left, self.io))
@@ -2918,7 +2921,7 @@ def glob_expand(shell: Shell, pattern: str) -> list[str]:
                     for name in shell.fs.listdir(abs_):
                         child = normalize(abs_, name)
                         if dotglob or not name.startswith("."):
-                            if shell.fs.is_dir(child):
+                            if shell.fs.is_dir(child, follow=False):  # like bash, ** does not follow links
                                 stack.append((child, _join(display, name)))
                             elif last:
                                 nxt.append((child, _join(display, name)))
@@ -2939,7 +2942,7 @@ def glob_expand(shell: Shell, pattern: str) -> list[str]:
             else:
                 name = re.sub(r"\\(.)", r"\1", seg)
                 child = normalize(abs_, name)
-                if shell.fs.exists(child):
+                if shell.fs.exists(child, follow=False):
                     nxt.append((child, _join(display, name)))
         current = nxt
     if pattern.endswith("/"):  # `echo */` lists directories only

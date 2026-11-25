@@ -1,7 +1,7 @@
 """tar, gzip/gunzip/zcat, zip/unzip over the virtual filesystem. Archive bytes cross pipes and redirects as bytetext.
 
-Archives are untrusted: extraction never leaves the target directory (no `..`, absolute names are made relative, symlinks
-aren't created since the filesystem has none, hard links copy only files already extracted), and every extraction or
+Archives are untrusted: extraction never leaves the target directory (no `..`, absolute names are made relative, nothing is
+written under or hard-linked through a symbolic link the archive made, hard links only reach entries already there), and every extraction or
 decompression stops with an error past the shell's max_extract_bytes / max_extract_entries (64 MB / 100,000 by default).
 The tar format is read and written here; gzip uses zlib for the deflate stream and zip uses zipfile for the container,
 but names, paths, limits and messages are all this module's.
@@ -232,9 +232,10 @@ def _octal(v: int, width: int) -> bytes:
     return f"{v:0{width - 1}o}".encode()[-(width - 1):] + b"\0"
 
 
-def _tar_header(name: bytes, kind: bytes, mode: int, uid: int, gid: int, size: int, mtime: int, uname: str, gname: str) -> bytes:
+def _tar_header(name: bytes, kind: bytes, mode: int, uid: int, gid: int, size: int, mtime: int, uname: str, gname: str, link: bytes = b"") -> bytes:
     h = bytearray(512)
     h[0:len(name[:100])] = name[:100]
+    h[157:157 + len(link[:100])] = link[:100]  # shortcut: a link name past 100 bytes is cut, no GNU long-link entry
     h[100:108], h[108:116], h[116:124] = _octal(mode, 8), _octal(uid, 8), _octal(gid, 8)
     h[124:136], h[136:148] = _octal(size, 12), _octal(mtime, 12)
     h[148:156] = b" " * 8
@@ -321,17 +322,23 @@ def _tar(ctx):
         verbose = ctx.stderr if archive == "-" else ctx.stdout
         out = io.BytesIO()
         stripped = False
+        linked: list[tuple[str, str]] = []  # (path, member) of files with several names already stored
 
         def add(name: str, path: str) -> None:
             if path == archive_path:
                 return  # the archive itself, as GNU tar skips it
             member = name.lstrip("/")
             try:
-                st = fs.stat(path)
+                st = fs.stat(path, follow=False)  # a symbolic link is stored as one, never followed
                 if st.is_dir:
                     member = member.rstrip("/") + "/"
+                # a file with several names: the first goes in whole, later ones as links to it
+                first = next((m for p, m in linked if fs.same_file(p, path, follow=False)), None) if st.links > 1 and not st.is_dir else None
+                kind = b"5" if st.is_dir else b"1" if first is not None else b"2" if st.is_symlink else b"0"
                 children = fs.listdir(path) if st.is_dir else []
-                body = b"" if st.is_dir else fs.read_bytes(path)
+                body = fs.read_bytes(path) if kind == b"0" else b""
+                if st.links > 1 and first is None and not st.is_dir:
+                    linked.append((path, member))
                 if member != "/":
                     raw = member.encode("utf-8", "surrogateescape")
                     if len(raw) > 100:  # GNU long name: a pseudo-entry carrying the name
@@ -339,7 +346,8 @@ def _tar(ctx):
                         out.write(_pad(raw + b"\0"))
                     mtime = max(0, int(st.modified.replace(tzinfo=_UTC).timestamp()))
                     uid = 0 if st.owner == "root" else 1000
-                    out.write(_tar_header(raw, b"5" if st.is_dir else b"0", st.mode & 0o7777, uid, uid, len(body), mtime, st.owner, st.owner))
+                    link = (first if first is not None else st.link_target or "").encode("utf-8", "surrogateescape")
+                    out.write(_tar_header(raw, kind, st.mode & 0o7777, uid, uid, len(body), mtime, st.owner, st.owner, link))
                     out.write(_pad(body))
                     if a.has("v"):
                         verbose.write(member + "\n")
@@ -353,7 +361,7 @@ def _tar(ctx):
                 stripped = True
                 ctx.stderr.write("tar: Removing leading `/' from member names\n")
             path = normalize(directory, f)
-            if not fs.exists(path):
+            if not fs.exists(path, follow=False):
                 fail(f"{f}: Cannot stat: {_why_missing(fs, path)}")
             else:
                 add(f, path)
@@ -387,6 +395,16 @@ def _tar(ctx):
         raise ShellError("Error is not recoverable: exiting now", 2)
 
     budget = _Budget(ctx.shell, 2)
+    made: set[str] = set()  # symbolic links this extraction created
+
+    def through_made_link(path: str) -> bool:
+        p = get_parent(path)
+        while len(p) > len(directory) and p != "/":
+            if p in made and fs.is_symlink(p):
+                return True
+            p = get_parent(p)
+        return False
+
     wanted = [p.rstrip("/") for p in a.positional]
     found = [False] * len(wanted)
     announced: set[str] = set()
@@ -447,6 +465,12 @@ def _tar(ctx):
                 continue
             if a.has("v"):
                 info.write(name + "\n")
+            # like GNU tar's placeholders for links: nothing lands under (or links to something under) a symbolic link this
+            # archive made, so a crafted member can't use one to write outside the target directory
+            if through_made_link(target):
+                raise ShellError(f"{target}: Not a directory")
+            if e.type != "5" and fs.exists(target, follow=False) and not fs.is_dir(target, follow=False):
+                fs.delete(target)  # a member replaces what is there, never writes through a link
             if e.type == "5":
                 fs.mkdir(target, parents=True)  # shortcut: the archived directory mode isn't restored, so read-only dirs can't block their own contents
             elif e.is_file:
@@ -458,17 +482,18 @@ def _tar(ctx):
             elif e.type == "1":
                 link_parts = [p for p in e.link[len(link_prefix):].split("/") if p]
                 link_target = normalize(directory, "/".join(link_parts[strip:]))
-                # the filesystem has no hard links: copy a file this archive (or the target dir) already holds
-                if len(link_parts) <= strip or not fs.is_file(link_target) or link_target == target:
+                # only to a file this archive (or the target dir) already holds, never through a link it made
+                if (len(link_parts) <= strip or not fs.exists(link_target, follow=False) or fs.is_dir(link_target, follow=False)
+                        or link_target == target or through_made_link(link_target)):
                     fail(f"{name}: Cannot hard link to ‘{'/'.join(link_parts)}’: No such file or directory")
                     continue
-                copy = fs.read_bytes(link_target)
-                budget.charge(len(copy))
                 fs.mkdir(get_parent(target), parents=True)
-                fs.write_bytes(target, copy)
-                fs.chmod(target, fs.stat(link_target).mode)
+                fs.create_hard_link(link_target, target)
             elif e.type == "2":
-                fail(f"{name}: Cannot create symlink to ‘{e.link}’: Operation not supported")
+                fs.mkdir(get_parent(target), parents=True)
+                fs.create_symlink(target, e.link)
+                made.add(target)
+                fs.set_modified_time(target, _utc_naive(e.mtime), follow=False)
             else:
                 fail(f"{name}: Cannot mknod: Operation not permitted")
         except ShellError as ex:
@@ -622,10 +647,11 @@ def _zip(ctx):
         except (zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error):
             raise ShellError(f"\nzip error: Zip file structure invalid ({archive})", 3) from None
     added = 0
+    walking: set[str] = set()  # real paths of the directories being added
 
     def add(name: str, path: str) -> None:
         nonlocal added
-        if path == archive_path:
+        if path == archive_path or not fs.exists(path):  # a dangling link has nothing to store
             return
         st = fs.stat(path)
         entry_name = "/".join(p for p in name.split("/") if p not in ("", ".")) + ("/" if st.is_dir else "")
@@ -645,8 +671,14 @@ def _zip(ctx):
                 how = "stored 0" if stored else f"deflated {(200 * (len(data) - deflated) // len(data) + 1) >> 1}"
                 info.write(f"{'updating' if old else '  adding'}: {entry_name} ({how}%)\n")
         if st.is_dir and (a.has("r") or entry_name == "/"):
+            # zip follows links to directories: one leading back up the tree would never end
+            real = fs.real_path(path)[0]
+            if real is None or real in walking:
+                return
+            walking.add(real)
             for child in fs.listdir(path):
                 add(name.rstrip("/") + "/" + child, path.rstrip("/") + "/" + child)
+            walking.discard(real)
 
     names = a.positional[1:]
     for f in names:

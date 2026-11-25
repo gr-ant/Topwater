@@ -5,6 +5,7 @@ import posixpath
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import NamedTuple
 from datetime import datetime, timezone
 
 from . import bytetext
@@ -32,12 +33,17 @@ class FileStat:
     modified: datetime
     mode: int  # Unix permission bits, e.g. 0o755
     owner: str
-    links: int = 1  # hard links: 1 for a file; 2 plus one per subdirectory for a directory, as on ext4
+    links: int = 1  # hard links: 1 for a file (more after `ln`); 2 plus one per subdirectory for a directory, as on ext4
+    link_target: str | None = None  # for a symbolic link (a stat that didn't follow it): the path it holds; size is that path's length in bytes
+
+    @property
+    def is_symlink(self) -> bool:
+        return self.link_target is not None
 
     @property
     def blocks(self) -> int:
         """512-byte blocks in use, as `stat %b` and `ls -s` count them: whole 4 KiB filesystem blocks."""
-        return (self.size + 4095) // 4096 * 8
+        return 0 if self.is_symlink else (self.size + 4095) // 4096 * 8  # a short link lives in its inode: no blocks
 
 
 NO_SPACE = "No space left on device"
@@ -66,6 +72,7 @@ class _File:
     modified: datetime = field(default_factory=utc_now)
     owner: str = "root"
     mode: int = DEFAULT_FILE_MODE
+    nlink: int = 1  # names this file has (hard links)
     data: bytes | None = None  # set for binary files (written with write_bytes); content is then unused
     appended: list[str] = field(default_factory=list)  # `>>` chunks not yet joined, so append loops stay linear
     size: int = 0  # real bytes held, as counted against the filesystem's capacity
@@ -101,8 +108,39 @@ class _File:
         self.size = size
 
 
+@dataclass
+class _Link:
+    target: str = ""
+    modified: datetime = field(default_factory=utc_now)
+    owner: str = "root"
+    mode: int = 0o777
+    nlink: int = 1
+
+
+class _Spot(NamedTuple):
+    """Where a path leads: the directory holding (or that would hold) its last entry, that entry's name and node (None if
+    absent), its physical path, and why it can't be reached. parent is None when it can't be, and for "/"."""
+    parent: _Dir | None
+    name: str
+    node: object
+    real: str
+    why: str
+
+
+MAX_LINK_HOPS = 40  # symbolic links followed in one lookup before it fails with LOOP, as on Linux
+LOOP = "Too many levels of symbolic links"
+
+
 def _tree_size(n) -> int:
-    return n.size if isinstance(n, _File) else sum(_tree_size(c) for c in n.children.values())
+    return n.size if isinstance(n, _File) else 0 if isinstance(n, _Link) else sum(_tree_size(c) for c in n.children.values())
+
+
+def _unlink(n) -> int:
+    """Drops one name of each node in a tree being removed; returns the bytes freed (a file goes with its last name)."""
+    if isinstance(n, _Dir):
+        return sum(_unlink(c) for c in n.children.values())
+    n.nlink -= 1
+    return n.size if n.nlink <= 0 and isinstance(n, _File) else 0
 
 
 def normalize(cwd: str, path: str) -> str:
@@ -129,9 +167,9 @@ def get_parent(path: str) -> str:
     return posixpath.dirname(normalize("/", path)) or "/"
 
 
-def format_mode(is_dir: bool, mode: int) -> str:
-    """'drwxr-xr-x' style rendering of a mode."""
-    chars = ["d" if is_dir else "-"] + [c if mode & (1 << (8 - i)) else "-" for i, c in enumerate("rwxrwxrwx")]
+def format_mode(is_dir: bool, mode: int, symlink: bool = False) -> str:
+    """'drwxr-xr-x' style rendering of a mode ('l' first for a symbolic link)."""
+    chars = ["l" if symlink else "d" if is_dir else "-"] + [c if mode & (1 << (8 - i)) else "-" for i, c in enumerate("rwxrwxrwx")]
     if mode & 0o4000:  # setuid
         chars[3] = "s" if chars[3] == "x" else "S"
     if mode & 0o2000:  # setgid
@@ -188,33 +226,73 @@ class VirtualFileSystem:
         finally:
             self.run_as = saved
 
-    def _find(self, path: str):
-        return self._walk(path)[0]
+    def _find(self, path: str, follow: bool = True):
+        return self._walk(path, follow).node
 
-    def _walk(self, path: str):
-        """Walks `path`; like Linux, each directory passed through needs search (x) permission. Returns (node, why):
-        why says why a missing node can't be reached: "Permission denied", "Not a directory" or "No such file or directory"."""
-        cur = self._root
+    def _find_why(self, path: str, follow: bool = True):
+        """(node, why): why says why a missing node can't be reached."""
+        spot = self._walk(path, follow)
+        return spot.node, spot.why or "No such file or directory"
+
+    def _walk(self, path: str, follow: bool = True) -> _Spot:
+        """Walks `path`; like Linux, each directory passed through needs search (x) permission, symbolic links in the middle
+        are followed (a relative one from the directory holding it), and the last one only when `follow`. ".." goes up from
+        where the walk really is. A loop fails after 40 links, never hangs."""
         user = self.run_as if self._restricted else None
-        for seg in normalize("/", path).split("/"):
-            if not seg:
+        chain = [("", self._root)]  # the directories walked into, for ".." and the real path
+        todo = path.split("/")[::-1]  # a stack: the next segment is last
+        hops, on_file = 0, False  # on_file: a file was reached with more of the path to go
+
+        def real(name: str) -> str:
+            return "".join("/" + c[0] for c in chain[1:]) + "/" + name
+
+        def fail(why: str) -> _Spot:
+            return _Spot(None, "", None, "", why)
+
+        while todo:
+            seg = todo.pop()
+            if on_file:
+                return fail("Not a directory")
+            if seg in ("", "."):
                 continue
-            if not isinstance(cur, _Dir):
-                return None, "Not a directory"
-            if user is not None and not self._permits(cur, user, 1):
-                return None, "Permission denied"
-            if seg not in cur.children:
-                return None, "No such file or directory"
-            cur = cur.children[seg]
-        return cur, ""
+            d = chain[-1][1]
+            if not self._permits(d, user, 1):
+                return fail("Permission denied")
+            if seg == "..":
+                if len(chain) > 1:
+                    chain.pop()
+                continue
+            final = all(t in ("", ".") for t in todo)
+            bare = not todo  # no trailing slash, which would mean a directory
+            nxt = d.children.get(seg)
+            if nxt is None:
+                return _Spot(d if bare else None, seg, None, real(seg), "No such file or directory") if final else fail("No such file or directory")
+            if isinstance(nxt, _Link) and (not bare or follow):
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    return fail(LOOP)
+                if nxt.target.startswith("/"):
+                    del chain[1:]
+                todo.extend(nxt.target.split("/")[::-1])
+                continue
+            if bare:
+                return _Spot(d, seg, nxt, real(seg), "")
+            if isinstance(nxt, _Dir):
+                chain.append((seg, nxt))
+            else:
+                on_file = True
+        if len(chain) == 1:
+            return _Spot(None, "/", self._root, "/", "")
+        return _Spot(chain[-2][1], chain[-1][0], chain[-1][1], real("")[:-1], "")
 
     @staticmethod
     def _permits(n, user: str | None, bits: int) -> bool:
         return user is None or ((n.mode >> (6 if n.owner == user else 0)) & bits) == bits
 
-    def why_missing(self, path: str) -> str:
-        """Why `path` can't be reached: "Permission denied", "Not a directory" or "No such file or directory"."""
-        node, why = self._walk(path)
+    def why_missing(self, path: str, follow: bool = True) -> str:
+        """Why `path` can't be reached: "Permission denied", "Not a directory", "Too many levels of symbolic links" or
+        "No such file or directory"."""
+        node, why = self._find_why(path, follow)
         return why if node is None else "No such file or directory"
 
     def _missing(self, path: str) -> ShellError:
@@ -224,15 +302,13 @@ class VirtualFileSystem:
         if self._restricted and d.mode & 0o1000 and entry.owner != self.run_as and d.owner != self.run_as:
             raise ShellError(f"{path}: Operation not permitted")
 
-    def _parent_dir(self, path: str) -> _Dir:
-        """The directory an entry is created in, removed from or renamed in; it needs search permission too."""
-        node, why = self._walk(get_parent(path))
-        if isinstance(node, _Dir):
-            self._require(node, 1, path)
-            return node
-        if node is None:
-            raise ShellError(f"{path}: {why}")
-        raise ShellError(f"{path}: Not a directory")
+    def _place(self, path: str) -> _Spot:
+        """Where an entry is created, removed or renamed: its directory (which needs search permission) and name. The last
+        name is not followed, so this is the link itself when it is one."""
+        spot = self._walk(path, follow=False)
+        if spot.parent is None:
+            raise ShellError(f"{path}: {'Device or resource busy' if spot.node is not None else spot.why}")
+        return spot
 
     def _allowed(self, n, bit: int) -> bool:
         return not self._restricted or self._permits(n, self.run_as, bit)
@@ -241,14 +317,18 @@ class VirtualFileSystem:
         if not self._allowed(n, bit):
             raise ShellError(f"{path}: Permission denied")
 
-    def exists(self, path: str) -> bool:
-        return self._find(path) is not None
+    def exists(self, path: str, follow: bool = True) -> bool:
+        """follow=False: a symbolic link counts itself (lstat), even one whose target is missing."""
+        return self._find(path, follow) is not None
 
-    def is_dir(self, path: str) -> bool:
-        return isinstance(self._find(path), _Dir)
+    def is_dir(self, path: str, follow: bool = True) -> bool:
+        return isinstance(self._find(path, follow), _Dir)
 
-    def is_file(self, path: str) -> bool:
-        return isinstance(self._find(path), _File)
+    def is_file(self, path: str, follow: bool = True) -> bool:
+        return isinstance(self._find(path, follow), _File)
+
+    def is_symlink(self, path: str) -> bool:
+        return isinstance(self._find(path, follow=False), _Link)
 
     def can_read(self, path: str) -> bool:
         n = self._find(path)
@@ -262,13 +342,80 @@ class VirtualFileSystem:
         n = self._find(path)
         return n is not None and self._allowed(n, 1)
 
-    def stat(self, path: str) -> FileStat:
-        n = self._find(path)
+    def same_file(self, a: str, b: str, follow: bool = True) -> bool:
+        """Whether two paths lead to the same file or directory (`test -ef`): through hard or symbolic links."""
+        n = self._find(a, follow)
+        return n is not None and n is self._find(b, follow)
+
+    def stat(self, path: str, follow: bool = True) -> FileStat:
+        """follow=False: a symbolic link's own status (lstat), with link_target set."""
+        n, why = self._find_why(path, follow)
         if isinstance(n, _Dir):
             return FileStat(True, 4096, n.modified, n.mode, n.owner, 2 + sum(isinstance(c, _Dir) for c in n.children.values()))
         if isinstance(n, _File):
-            return FileStat(False, n.reported_size if n.reported_size is not None else len(n.raw()), n.modified, n.mode, n.owner)
-        raise self._missing(path)
+            return FileStat(False, n.reported_size if n.reported_size is not None else len(n.raw()), n.modified, n.mode, n.owner, n.nlink)
+        if isinstance(n, _Link):
+            return FileStat(False, len(n.target.encode("utf-8", "surrogatepass")), n.modified, n.mode, n.owner, n.nlink, n.target)
+        raise ShellError(f"{path}: {why}")
+
+    def read_link(self, path: str) -> str:
+        """The path a symbolic link holds (`readlink`); "Invalid argument" for anything else."""
+        n, why = self._find_why(path, follow=False)
+        if isinstance(n, _Link):
+            return n.target
+        raise ShellError(f"{path}: {why if n is None else 'Invalid argument'}")
+
+    def real_path(self, path: str, existing: bool = True) -> tuple[str | None, str]:
+        """(physical absolute path with every symbolic link resolved, why): `realpath`, `pwd -P`. With existing False the last
+        name may be missing (`readlink -f`). The path is None, with why, when it can't be resolved."""
+        spot = self._walk(path)
+        ok = spot.node is not None or (not existing and spot.parent is not None)
+        return (spot.real if ok else None), spot.why or "No such file or directory"
+
+    def normalize_physical(self, cwd: str, path: str) -> str:
+        """Like normalize, but ".." leaves where the path so far really is, after its symbolic links, as the kernel resolves
+        it (the shell's cwd itself stays logical, as bash keeps it)."""
+        full = path if path.startswith("/") else cwd.rstrip("/") + "/" + path
+        # "." or ".." last names a directory itself, never a link to it (a logical cwd may be reached through one)
+        if ([s for s in path.split("/") if s] or ["."])[-1] in (".", ".."):
+            return self.real_path(full)[0] or normalize("/", full)
+        if ".." not in full.split("/"):
+            return normalize("/", full)
+        p = "/"
+        for seg in full.split("/"):
+            if seg in ("", "."):
+                continue
+            p = get_parent(self.real_path(p)[0] or p) if seg == ".." else "/" + seg if p == "/" else p + "/" + seg
+        return p
+
+    def create_symlink(self, path: str, target: str) -> None:
+        """Creates a symbolic link at `path` holding `target` (`ln -s`), which need not exist."""
+        if not target:
+            raise ShellError(f"{path}: No such file or directory")
+        spot = self._place(path)
+        if spot.node is not None:
+            raise ShellError(f"{path}: File exists")
+        self._require(spot.parent, 2, path)
+        spot.parent.children[spot.name] = _Link(target, owner=self.run_as or spot.parent.owner)
+        spot.parent.modified = utc_now()
+
+    def create_hard_link(self, existing: str, path: str, follow: bool = False) -> None:
+        """Gives `existing` a second name, `path` (`ln`). With follow a symbolic link is followed, else linked itself. Like
+        Linux with protected_hardlinks, the agent may only link files it owns or can read and write."""
+        node, why = self._find_why(existing, follow)
+        if node is None:
+            raise ShellError(f"{existing}: {why}")
+        if isinstance(node, _Dir):
+            raise ShellError(f"{existing}: hard link not allowed for directory")
+        spot = self._place(path)
+        if spot.node is not None:
+            raise ShellError(f"{path}: File exists")
+        self._require(spot.parent, 2, path)
+        if self._restricted and node.owner != self.run_as and not self._allowed(node, 6):
+            raise ShellError(f"{path}: Operation not permitted")
+        node.nlink += 1
+        spot.parent.children[spot.name] = node
+        spot.parent.modified = utc_now()
 
     def read_text(self, path: str) -> str:
         n = self._read(path)
@@ -319,9 +466,10 @@ class VirtualFileSystem:
         path = normalize("/", path)
         if path == "/dev/null" and self._find(path) is not None:
             return
-        d = self._parent_dir(path)
-        name = get_name(path)
-        existing = d.children.get(name)
+        spot = self._walk(path)  # through a symbolic link, even a dangling one: its target is written or created
+        d, name, existing = spot.parent, spot.name, spot.node
+        if d is None:
+            raise ShellError(f"{path}: {'Is a directory' if existing is not None else spot.why}")
         if existing is not None:
             if not isinstance(existing, _File):
                 raise ShellError(f"{path}: Is a directory")
@@ -353,17 +501,17 @@ class VirtualFileSystem:
         if isinstance(n, _File):
             n.reported_size = size
 
-    def set_modified_time(self, path: str, when: datetime) -> None:
+    def set_modified_time(self, path: str, when: datetime, follow: bool = True) -> None:
         """Sets a modification time (tar and unzip restoring one); as with utime(2), only the owner may."""
-        n = self._find(path)
+        n, why = self._find_why(path, follow)
         if n is None:
-            raise self._missing(path)
+            raise ShellError(f"{path}: {why}")
         if self._restricted and n.owner != self.run_as:
             raise ShellError(f"{path}: Operation not permitted")
         n.modified = when
 
     def touch(self, path: str) -> None:
-        n, why = self._walk(path)
+        n, why = self._find_why(path)
         if n is not None:
             self._require(n, 2, path)
             n.modified = utc_now()
@@ -374,43 +522,44 @@ class VirtualFileSystem:
 
     def mkdir(self, path: str, parents: bool = False) -> None:
         path = normalize("/", path)
-        existing = self._find(path)
-        if existing is not None:
-            if parents and isinstance(existing, _Dir):
+        if self._find(path, follow=False) is not None:  # a symbolic link counts, even a dangling one
+            if parents and self.is_dir(path):
                 return
             raise ShellError(f"cannot create directory '{path}': File exists")
         if parents and not self.exists(get_parent(path)):
             self.mkdir(get_parent(path), True)
-        d = self._parent_dir(path)
+        spot = self._place(path)
+        d = spot.parent
         self._require(d, 2, path)
-        d.children[get_name(path)] = _Dir(owner=self.run_as or d.owner)
+        d.children[spot.name] = _Dir(owner=self.run_as or d.owner)
         d.modified = utc_now()
 
     def listdir(self, path: str) -> list[str]:
-        n = self._find(path)
+        n, why = self._find_why(path)
         if isinstance(n, _Dir):
             self._require(n, 4, path)
             return sorted(n.children)
-        if isinstance(n, _File):
-            raise ShellError(f"{path}: Not a directory")
-        raise self._missing(path)
+        raise ShellError(f"{path}: {why if n is None else 'Not a directory'}")
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        """Removes an entry (a symbolic link itself, never what it leads to); recursive for a directory with entries,
+        whose links are removed, not followed."""
         path = normalize("/", path)
         if path == "/":
             raise ShellError("it is dangerous to operate recursively on '/'")
-        n = self._find(path)
+        n, why = self._find_why(path, follow=False)
         if n is None:
-            raise self._missing(path)
+            raise ShellError(f"{path}: {why}")
         if isinstance(n, _Dir) and n.children and not recursive:
             raise ShellError(f"{path}: Directory not empty")
-        parent = self._parent_dir(path)
+        spot = self._place(path)
+        parent = spot.parent
         if isinstance(n, _Dir):
             self._require_tree_removable(n, path)
         self._require(parent, 2, path)
         self._require_not_sticky(parent, n, path)
-        del parent.children[get_name(path)]
-        self.used_bytes -= _tree_size(n)
+        del parent.children[spot.name]
+        self.used_bytes -= _unlink(n)
 
     # shortcut: all or nothing, naming the first entry that can't go; real rm -r removes what it can.
     def _require_tree_removable(self, d: _Dir, path: str) -> None:
@@ -424,24 +573,40 @@ class VirtualFileSystem:
             if isinstance(child, _Dir):
                 self._require_tree_removable(child, f"{path}/{name}")
 
-    def copy(self, source: str, dest: str, denied=None) -> None:
+    def copy(self, source: str, dest: str, denied=None, follow_top: bool = True, follow_all: bool = False, broken=None) -> None:
         """Copies a file or tree. Entries the user can't read are passed to `denied(path, is_dir)` and skipped, like
-        `cp -r`; without a callback the whole copy fails."""
+        `cp -r`; without a callback the whole copy fails. follow_top: copy what `source` leads to when it is a symbolic link
+        (cp without -r, or -H), rather than the link. follow_all: copy what every link in the tree leads to (cp -L); a link
+        back into a directory being copied goes to `broken(path, "cyclic")`, one leading nowhere to `broken(path, reason)`
+        (None to raise)."""
         source, dest = normalize("/", source), normalize("/", dest)
-        n = self._find(source)
+        n, why = self._find_why(source, follow_top or follow_all)
         if n is None:
-            raise self._missing(source)
-        if isinstance(n, _Dir) and (dest + "/").startswith(source + "/"):
+            raise ShellError(f"{source}: {why}")
+        place = self._place(dest)
+        if isinstance(n, _Dir) and (place.real + "/").startswith(self.real_path(source)[0] + "/"):
             raise ShellError(f"cannot copy a directory, '{source}', into itself, '{dest}'")
-        target = self._find(dest)
-        if isinstance(target, _Dir) and isinstance(n, _File):
+        target = self._find(dest) if isinstance(place.node, _Link) else place.node  # a file is copied through a link onto its target
+        if isinstance(target, _Dir) and not isinstance(n, _Dir):
             raise ShellError(f"{dest}: Is a directory")
-        parent = self._parent_dir(dest)
+        parent = place.parent
         self._require(target if target is not None else parent, 2, dest)
         user = self.run_as if self._restricted else None
         owner = self.run_as or parent.owner
+        copying: set[int] = set()  # directories on the way down, so -L can't loop
 
         def clone(node, p: str):
+            if isinstance(node, _Link):
+                if not follow_all:
+                    return _Link(node.target, owner=owner, mode=node.mode)
+                to, reason = self._find_why(p)
+                if to is None or (isinstance(to, _Dir) and id(to) in copying):
+                    reason = reason if to is None else "cyclic"
+                    if broken is None:
+                        raise ShellError(f"{p}: {reason}")
+                    broken(p, reason)
+                    return None
+                node = to
             if not self._permits(node, user, 5 if isinstance(node, _Dir) else 4):
                 if denied is None:
                     raise ShellError(f"{p}: Permission denied")
@@ -450,9 +615,11 @@ class VirtualFileSystem:
             if isinstance(node, _File):
                 return _File(node.text(), owner=owner, mode=node.mode, data=node.data, size=node.size)
             c = _Dir(owner=owner, mode=node.mode)
+            copying.add(id(node))
             for k, v in node.children.items():
                 if (cc := clone(v, f"{p}/{k}")) is not None:
                     c.children[k] = cc
+            copying.discard(id(node))
             return c
 
         copied = clone(n, source)
@@ -462,31 +629,39 @@ class VirtualFileSystem:
             target.store(copied.raw(), False, lambda delta: self._reserve(delta, dest))
             target.modified = utc_now()
         else:
-            self._reserve(_tree_size(copied) - (0 if target is None else _tree_size(target)), dest)
-            parent.children[get_name(dest)] = copied
+            old = place.node
+            old_size = 0 if old is None else _tree_size(old)
+            self._reserve(_tree_size(copied) - old_size, dest)
+            if old is not None:
+                self.used_bytes += old_size - _unlink(old)
+            parent.children[place.name] = copied
 
     def move(self, source: str, dest: str) -> None:
+        """Renames an entry; a symbolic link is moved itself, and a link at `dest` is replaced, not followed."""
         source, dest = normalize("/", source), normalize("/", dest)
-        n = self._find(source)
+        n, why = self._find_why(source, follow=False)
         if n is None:
-            raise self._missing(source)
-        if (dest + "/").startswith(source + "/"):
+            raise ShellError(f"{source}: {why}")
+        origin, to = self._place(source), self._place(dest)
+        # by real paths: through a link, a directory could otherwise be moved into itself and cut off from the tree
+        if (to.real + "/").startswith(origin.real + "/"):
             raise ShellError(f"cannot move '{source}' to a subdirectory of itself, '{dest}'")
-        existing = self._find(dest)
+        existing, target = to.node, to.parent
         if isinstance(existing, _Dir):
             raise ShellError(f"{dest}: Is a directory")
-        target, origin = self._parent_dir(dest), self._parent_dir(source)
-        self._require(origin, 2, source)
+        if existing is n:
+            return  # two hard links of one file: rename(2) leaves both
+        self._require(origin.parent, 2, source)
         self._require(target, 2, dest)
-        if isinstance(n, _Dir) and origin is not target:
+        if isinstance(n, _Dir) and origin.parent is not target:
             self._require(n, 2, source)  # its ".." entry changes
-        self._require_not_sticky(origin, n, source)
+        self._require_not_sticky(origin.parent, n, source)
         if existing is not None:
             self._require_not_sticky(target, existing, dest)
-        del origin.children[get_name(source)]
+        del origin.parent.children[origin.name]
         if existing is not None:
-            self.used_bytes -= _tree_size(existing)
-        target.children[get_name(dest)] = n
+            self.used_bytes -= _unlink(existing)
+        target.children[to.name] = n
 
     def chmod(self, path: str, mode: int) -> None:
         """Changes permission bits. While restricted, only the owner may do this."""
@@ -516,25 +691,55 @@ class VirtualFileSystem:
     # ---------- snapshots (see snapshot.py) ----------
 
     def entries(self):
-        """Every path, parents first: (path, is_dir, mode, owner, modified, text, data, reported_size). Contents are immutable str/bytes."""
+        """Every path, parents first: (path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link).
+        link_target: a symbolic link's path; hard_link: an earlier entry's path that this one is another name of (it still
+        carries the content). Contents are immutable str/bytes."""
+        first: dict[int, str] = {}  # where each hard-linked node was seen first
         stack = [("/", self._root)]
         while stack:
             path, n = stack.pop()
+            hard = None
+            if not isinstance(n, _Dir) and n.nlink > 1 and first.setdefault(id(n), path) != path:
+                hard = first[id(n)]
             if isinstance(n, _File):
-                yield path, False, n.mode, n.owner, n.modified, n.text() if n.data is None else None, n.data, n.reported_size
+                yield path, False, n.mode, n.owner, n.modified, n.text() if n.data is None else None, n.data, n.reported_size, None, hard
                 continue
-            yield path, True, n.mode, n.owner, n.modified, None, None, None
+            if isinstance(n, _Link):
+                yield path, False, n.mode, n.owner, n.modified, None, None, None, n.target, hard
+                continue
+            yield path, True, n.mode, n.owner, n.modified, None, None, None, None, None
             for name in reversed(list(n.children)):
                 stack.append(("/" + name if path == "/" else f"{path}/{name}", n.children[name]))
 
     def replace_all(self, entries) -> None:
-        """Replaces every file with `entries` (as entries() gives them, parents first): a snapshot restore."""
+        """Replaces every file with `entries` (as entries() gives them, parents first): a snapshot restore. An entry's parent
+        is reached without symbolic links, so an entry can't land anywhere but its own path."""
         root, used = _Dir(), 0
-        for path, is_dir, mode, owner, modified, text, data, reported_size in entries:
+
+        def plain(path: str):
+            cur = root
+            for seg in filter(None, path.split("/")):
+                cur = cur.children.get(seg) if isinstance(cur, _Dir) else None
+            return cur
+
+        for path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link in entries:
+            if path != "/" and not isinstance(parent := plain(path.rsplit("/", 1)[0]), _Dir):
+                raise ShellError(f"{path}: parent is not a directory")
+            if hard_link is not None:
+                same = plain(hard_link)
+                if same is None or isinstance(same, _Dir):
+                    raise ShellError(f"{path}: hard link to {hard_link}, which is not an earlier file")
+                if get_name(path) in parent.children:
+                    raise ShellError(f"{path}: File exists")
+                same.nlink += 1
+                parent.children[get_name(path)] = same
+                continue
             if is_dir:
                 node = root if path == "/" else _Dir()
             elif path == "/":
                 raise ShellError("/: Not a directory")
+            elif link_target is not None:
+                node = _Link(link_target)
             else:
                 node = _File(text or "", data=data, reported_size=reported_size)
                 node.size = len(data) if data is not None else len(node.content.encode("utf-8", "surrogatepass"))
@@ -542,11 +747,6 @@ class VirtualFileSystem:
             node.mode, node.owner, node.modified = mode, owner, modified
             if path == "/":
                 continue
-            parent = root
-            for seg in path.split("/")[1:-1]:
-                parent = parent.children.get(seg) if isinstance(parent, _Dir) else None
-            if not isinstance(parent, _Dir):
-                raise ShellError(f"{path}: parent is not a directory")
             name = get_name(path)
             if name in parent.children:
                 raise ShellError(f"{path}: File exists")

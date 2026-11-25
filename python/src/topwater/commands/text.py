@@ -393,6 +393,8 @@ def _grep(ctx):
             errors()
             continue
 
+        above = {ctx.fs.real_path(path)[0] or path}  # the directories being walked
+
         def walk(d, display):
             try:
                 names = ctx.fs.listdir(d)
@@ -404,9 +406,19 @@ def _grep(ctx):
             for name in names:
                 child = normalize(d, name)
                 child_display = name if display == "." and implicit_dot else display.rstrip("/") + "/" + name
+                if not a.has("R") and ctx.fs.is_symlink(child):
+                    continue  # -r skips links it meets; -R follows them
                 if ctx.fs.is_dir(child):
-                    if not any(r.match(name) for r in exclude_dir):
-                        walk(child, child_display)
+                    if any(r.match(name) for r in exclude_dir):
+                        continue
+                    real = ctx.fs.real_path(child)[0]
+                    if real is None or real in above:
+                        if not a.has("s"):
+                            ctx.error(f"grep: {child_display}: warning: recursive directory loop")
+                        continue
+                    above.add(real)
+                    walk(child, child_display)
+                    above.discard(real)
                 elif (not include or any(r.match(name) for r in include)) and not any(r.match(name) for r in exclude):
                     files.append(child_display)
 

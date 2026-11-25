@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from .. import arith, bytetext
 from ..convert import file_type
 from ..shell import ExitSignal, LoopControl, ReturnSignal
-from ..vfs import ShellError, UsageException, format_mode, get_parent, normalize, utc_now
-from . import Args, inputs, is_shell_builtin, printf_format, quote, quote_l, split_lines, unescape, write_lines
+from ..vfs import ShellError, UsageException, format_mode, normalize, utc_now
+from . import Args, inputs, is_shell_builtin, printf_format, quote, quote_always, quote_l, split_lines, unescape, write_lines
 
 
 class _Errors:
@@ -794,17 +794,35 @@ def _dirname(ctx):
 
 
 def _realpath(ctx):
-    a = Args.parse(ctx.args, "fesmqnz", longs="canonicalize=f,canonicalize-existing=e,canonicalize-missing=m")
-    if ctx.name == "readlink" and not (a.has("f") or a.has("e") or a.has("m")):
-        return 1  # nothing is a symlink
+    a = Args.parse(ctx.args, "fesmqnzvLP", longs="canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,no-symlinks=s,quiet=q,"
+                                                 "no-newline=n,zero=z,verbose=v,logical=L,physical=P")
+    readlink = ctx.name == "readlink"
+    plain = readlink and not (a.has("f") or a.has("e") or a.has("m"))
+    report = a.has("v") if readlink else not a.has("q")  # readlink is silent about failures unless -v; realpath reports them unless -q
+    if not a.positional and readlink:
+        raise UsageException("missing operand")
+    end = "\0" if a.has("z") else "" if readlink and a.has("n") and len(a.positional) == 1 else "\n"
     code = 0
     for p in a.positional or ["."]:
         path = ctx.resolve(p)
-        if not a.has("m") and not ctx.fs.exists(path) and (a.has("e") or ctx.name == "realpath" or not ctx.fs.is_dir(get_parent(path))):
-            ctx.error(f"{ctx.name}: {quote(p)}: {ctx.fs.why_missing(path)}")
+        why = ""
+        if plain:
+            try:
+                result = ctx.fs.read_link(path)
+            except ShellError as e:
+                result, why = None, str(e).rsplit(": ", 1)[-1]
+        elif not readlink and a.has("s"):
+            result = normalize(ctx.shell.cwd, p)  # -s: no links resolved
+        else:
+            result, why = ctx.fs.real_path(path, existing=a.has("e"))
+            if result is None and a.has("m"):
+                result = path
+        if result is None:
+            if report:
+                ctx.error(f"{ctx.name}: {quote(p)}: {why}")
             code = 1
             continue
-        ctx.print(path)
+        ctx.stdout.write(result + end)
     return code
 
 
@@ -814,25 +832,27 @@ def _stat(ctx):
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
-        if not ctx.fs.exists(path):
-            ctx.error(f"stat: cannot statx '{p}': {ctx.fs.why_missing(path)}")
+        follow = a.has("L")
+        if not ctx.fs.exists(path, follow):
+            ctx.error(f"stat: cannot statx '{p}': {ctx.fs.why_missing(path, follow)}")
             code = 1
             continue
-        st = ctx.fs.stat(path)
-        kind = "directory" if st.is_dir else "regular empty file" if st.size == 0 else "regular file"
+        st = ctx.fs.stat(path, follow)
+        kind = "symbolic link" if st.is_symlink else "directory" if st.is_dir else "regular empty file" if st.size == 0 else "regular file"
+        named = f"{quote_always(p)} -> {quote_always(st.link_target)}" if st.is_symlink else quote_always(p)
         mode = f"{st.mode:03o}"
-        rwx = format_mode(st.is_dir, st.mode)
+        rwx = format_mode(st.is_dir, st.mode, st.is_symlink)
         user = st.owner
         uid = "0" if user == "root" else "1000"
         mtime = st.modified.strftime("%Y-%m-%d %H:%M:%S.%f000 +0000")
         if a.value("c") is not None:
             values = {
-                "n": p, "s": str(st.size), "F": kind, "a": mode, "A": rwx, "U": user, "G": user, "u": uid, "g": uid,
+                "n": p, "N": named, "s": str(st.size), "F": kind, "a": mode, "A": rwx, "U": user, "G": user, "u": uid, "g": uid,
                 "y": mtime, "Y": str(int(st.modified.replace(tzinfo=timezone.utc).timestamp())), "b": str(st.blocks), "B": "512", "h": str(st.links), "%": "%",
             }
             ctx.print(re.sub(r"%(.)", lambda m: values.get(m.group(1), m.group(0)), a.value("c")))
             continue
-        ctx.stdout.write(f"  File: {p}\n  Size: {st.size:<10}\tBlocks: {st.blocks:<10} IO Block: 4096   {kind}\n"
+        ctx.stdout.write(f"  File: {p}{' -> ' + st.link_target if st.is_symlink else ''}\n  Size: {st.size:<10}\tBlocks: {st.blocks:<10} IO Block: 4096   {kind}\n"
                          f"Access: ({mode:0>4}/{rwx})  Uid: ({uid:>5}/{user:>8})   Gid: ({uid:>5}/{user:>8})\n"
                          f"Modify: {mtime}\nChange: {mtime}\n")
     return code
@@ -854,8 +874,8 @@ def _du(ctx):
         return f"{kb / 1048576:.1f}".rstrip("0").rstrip(".") + "G"
 
     def walk(path, display, depth):
-        if not ctx.fs.is_dir(path):
-            kb = (ctx.fs.stat(path).size + 4095) // 4096 * 4
+        if not ctx.fs.is_dir(path, follow=False):
+            kb = ctx.fs.stat(path, follow=False).blocks // 2
             if (a.has("a") and depth <= max_depth) or depth == 0:
                 ctx.print(f"{fmt(kb)}\t{display}")
             return kb
@@ -867,7 +887,7 @@ def _du(ctx):
     code, grand = 0, 0
     for p in a.positional or ["."]:
         path = ctx.resolve(p)
-        if not ctx.fs.exists(path):
+        if not ctx.fs.exists(path, follow=False):
             ctx.error(f"du: cannot access '{p}': No such file or directory")
             code = 1
             continue

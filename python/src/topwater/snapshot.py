@@ -16,7 +16,9 @@ from .parser import FunctionDef, ParseError, Parser
 from .shell import SNAPSHOT_SET_OPTIONS, ShellArray
 from .vfs import normalize
 
-FORMAT_VERSION = 1
+# Version 2 added symbolic links (type "symlink" with a "target") and hard links (a "link" naming the entry's first path); a
+# snapshot without links is still written as version 1, so older Topwater can load it.
+FORMAT_VERSION = 2
 _FORMAT = "topwater-snapshot"
 _INVALID = "not a valid Topwater snapshot: "
 _DEFAULT_LIMITS = {"max_file_system_bytes": 128 << 20, "max_string_bytes": 32 << 20, "max_extract_entries": 100_000}
@@ -45,7 +47,7 @@ class ShellSnapshot:
 
     @property
     def entries(self) -> tuple:
-        """The files, parents first: (path, is_dir, mode, owner, modified, text, data, reported_size)."""
+        """The files, parents first: (path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link)."""
         return self._entries
 
     @property
@@ -59,9 +61,13 @@ class ShellSnapshot:
         with zipfile.ZipFile(file, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
             written: set[str] = set()
             files = []
-            for path, is_dir, mode, owner, modified, text, data, reported_size in self._entries:
-                entry = {"path": path, "type": "dir" if is_dir else "file", "mode": f"{mode:04o}", "owner": owner, "mtime": format_time(modified)}
-                if not is_dir:
+            links = False
+            for path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link in self._entries:
+                kind = "dir" if is_dir else "file" if link_target is None else "symlink"
+                entry = {"path": path, "type": kind, "mode": f"{mode:04o}", "owner": owner, "mtime": format_time(modified)}
+                _put(entry, target=link_target, link=hard_link)
+                links |= link_target is not None or hard_link is not None
+                if kind == "file":
                     binary = data is not None
                     if not binary:
                         try:
@@ -76,9 +82,9 @@ class ShellSnapshot:
                             written.add(blob)
                             zf.writestr("blobs/" + blob, data)
                 files.append(entry)
-            zf.writestr("manifest.json", _dumps(self._manifest(files)))
+            zf.writestr("manifest.json", _dumps(self._manifest(files, 2 if links else 1)))
 
-    def _manifest(self, files: list) -> dict:
+    def _manifest(self, files: list, version: int) -> dict:
         st = self._state
         variables = []
         for n in sorted(set(st["variables"]) | set(st["arrays"]) | set(st["attributes"])):
@@ -87,7 +93,7 @@ class ShellSnapshot:
             _put(v, value=st["variables"].get(n), attrs=st["attributes"].get(n), exported=_is_exported(st, n),
                  array=None if a is None else _put({}, assoc=a.assoc, next=a.next, items=[[k, x] for k, x in a.pairs()]))
             variables.append(v)
-        m = {"format": _FORMAT, "version": FORMAT_VERSION, "created": format_time(self.created), "user": self.user,
+        m = {"format": _FORMAT, "version": version, "created": format_time(self.created), "user": self.user,
              "hostname": self.hostname, "cwd": st["cwd"], "files": files, "variables": variables,
              "functions": [_put({"name": n, "body": f.source}, exported=n in st["exported_functions"]) for n, f in st["functions"].items()],
              "aliases": st["aliases"], "set": list(st["set"])}
@@ -247,7 +253,7 @@ def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict) -> list:
             total += size
         if total > o["max_file_system_bytes"]:
             raise SnapshotError(f"the files hold more than {o['max_file_system_bytes']} bytes (MaxFileSystemBytes)")
-    entries, seen, dirs = [], set(), {"/"}
+    entries, seen, dirs, earlier = [], set(), {"/"}, set()  # earlier: the files and links so far, which a hard link may name
     cache: dict[tuple[str, bool], object] = {}  # identical contents load once and are shared, as in memory
     for f in files:
         path = f.get("path")
@@ -260,7 +266,12 @@ def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict) -> list:
         mtime = parse_time(f.get("mtime"), path + ": mtime")
         kind = f.get("type")
         text = data = reported = None
-        if kind == "file":
+        link, target = f.get("link"), f.get("target")
+        if link is not None and (not isinstance(link, str) or not 0 < len(link) <= 4096 or link[0] != "/" or normalize("/", link) != link or kind == "dir"):
+            raise SnapshotError(f"{path}: bad link {json.dumps(link)}")
+        if (kind == "symlink" and not (isinstance(target, str) and 0 < len(target) <= 4096)) or (isinstance(target, str) and "\0" in target):
+            raise SnapshotError(f"{path}: bad symlink target")
+        if kind == "file" and link is None:  # another name of a file shares the first one's content
             if path == "/":
                 raise SnapshotError("/: Not a directory")
             size, binary = _int(f.get("size"), "size"), f.get("binary") is True
@@ -289,16 +300,20 @@ def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict) -> list:
                     data = content
                 else:
                     text = content
-        elif kind != "dir":
+        elif kind not in ("dir", "file", "symlink"):
             raise SnapshotError(f"{path}: unknown type {json.dumps(kind)}")
         if path in seen:
             raise SnapshotError(f"{path}: File exists")
         seen.add(path)
         if path != "/" and (path.rsplit("/", 1)[0] or "/") not in dirs:
             raise SnapshotError(f"{path}: parent is not a directory")
+        if link is not None and link not in earlier:
+            raise SnapshotError(f"{path}: hard link to {link}, which is not an earlier file")
         if kind == "dir":
             dirs.add(path)
-        entries.append((path, kind == "dir", int(mode, 8), owner, mtime, text, data, reported))
+        else:
+            earlier.add(path)
+        entries.append((path, kind == "dir", int(mode, 8), owner, mtime, text, data, reported, target if kind == "symlink" else None, link))
     return entries
 
 

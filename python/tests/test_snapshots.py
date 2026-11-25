@@ -237,7 +237,8 @@ class SnapshotTests(unittest.TestCase):
         sh.fs.write_text("/home/agent/b", "same")
         zf = zipfile.ZipFile(io.BytesIO(save(sh)))
         m = json.loads(zf.read("manifest.json"))
-        self.assertEqual(("topwater-snapshot", FORMAT_VERSION), (m["format"], m["version"]))
+        self.assertEqual(("topwater-snapshot", 1), (m["format"], m["version"]))  # no links: written as version 1, which older Topwater reads
+        self.assertEqual(2, FORMAT_VERSION)
         fs = {f["path"]: f for f in m["files"]}
         a = fs["/home/agent/a"]
         self.assertEqual(("0644", "agent"), (a["mode"], a["owner"]))
@@ -266,6 +267,13 @@ echo setup done
         # tests/Topwater.Tests/snapshots/from-csharp.zip: Topwater.Cli run --state from-csharp.zip "<SETUP>"
         sh = Shell.load(FIXTURES / "from-csharp.zip")
         self.assertEqual(self.CROSS_EXPECTED, sh.run(self.CROSS_PROBE).stdout)
+
+    def test_a_snapshot_with_links_saved_by_csharp_loads(self):
+        # tests/Topwater.Tests/snapshots/links-from-csharp.zip (format version 2); see ASnapshotWithLinksLoads in SnapshotTests.cs
+        sh = Shell.load(FIXTURES / "links-from-csharp.zip")
+        r = sh.run("pwd; readlink l etc dang s/self ../loop1 sl2; cat l s/self/self/../f; stat -c '%h %F' f h sl2; echo more >> h; cat f; cat ../loop1 2>&1")
+        self.assertEqual("/home/agent/d\nf\n/etc\nnowhere\n.\nloop2\nf\nhi\nhi\n2 regular file\n2 regular file\n2 symbolic link\nhi\nmore\n"
+                         "cat: ../loop1: Too many levels of symbolic links\n", r.stdout)
 
     def test_python_saves_what_the_csharp_fixture_holds(self):
         # from-python.zip, which the C# tests load, is this shell saved; the same probe gives the same answer here
@@ -304,10 +312,10 @@ echo setup done
 
     def test_a_newer_format_version_is_refused_clearly(self):
         def edit(m):
-            m["version"], m["files"] = 2, "changed shape"
+            m["version"], m["files"] = 3, "changed shape"
         with self.assertRaises(SnapshotVersionError) as e:
             ShellSnapshot.load(self.tamper(Shell(), edit))
-        self.assertEqual("snapshot format version 2 is newer than this version of Topwater supports (1); upgrade Topwater to load it",
+        self.assertEqual("snapshot format version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it",
                          str(e.exception))
 
     def test_not_a_snapshot_is_refused(self):
@@ -332,7 +340,8 @@ echo setup done
         def file(**kv):
             return self.tamper(sh, lambda m: self.entry(m, "/home/agent/x").update(**kv))
 
-        self.assertIn('unknown type "symlink"', self.rejected(file(type="symlink")))
+        self.assertIn('unknown type "socket"', self.rejected(file(type="socket")))
+        self.assertIn("bad symlink target", self.rejected(file(type="symlink")))
         self.assertIn("bad mode", self.rejected(file(mode="9999")))
         self.assertIn("owner", self.rejected(file(owner="../root")))
         self.assertIn("mtime", self.rejected(file(mtime="yesterday")))
@@ -347,6 +356,46 @@ echo setup done
         self.assertIn("unknown set option", self.rejected(self.tamper(sh, lambda m: m.update(set=["restricted"]))))
         self.assertIn("exit codes", self.rejected(self.tamper(sh, lambda m: m.update(lastExitCode=300))))
         self.assertIn("bad alias", self.rejected(self.tamper(sh, lambda m: m.update(aliases={"a b": "x"}))))
+
+    def test_links_survive_save_load_fork_and_restore(self):
+        sh = Shell()
+        sh.run("mkdir -p d/s; echo hi > d/f; ln -s f d/l; ln -s /etc d/etc; ln -s nowhere d/dang; ln -s . d/s/self; ln -s loop2 loop1; "
+               "ln -s loop1 loop2; ln d/f d/h; ln -s f d/sl; ln d/sl d/sl2")
+        data = save(sh)
+        m = json.loads(zipfile.ZipFile(io.BytesIO(data)).read("manifest.json"))
+        self.assertEqual(2, m["version"])
+        self.assertEqual(("symlink", "f"), (self.entry(m, "/home/agent/d/l")["type"], self.entry(m, "/home/agent/d/l")["target"]))
+        self.assertEqual("/home/agent/d/f", self.entry(m, "/home/agent/d/h")["link"])
+        probe = ("readlink d/l d/etc d/dang loop1; cat d/l d/s/self/self/../f; stat -c '%h %F' d/f d/h d/sl2; echo more >> d/h; cat d/f; "
+                 "cat loop1 2>&1")
+        want = ("f\n/etc\nnowhere\nloop2\nhi\nhi\n2 regular file\n2 regular file\n2 symbolic link\nhi\nmore\n"
+                "cat: loop1: Too many levels of symbolic links\n")
+        for copy in (Shell.load(data), sh.fork()):
+            self.assertEqual(want, copy.run(probe).stdout)
+        snap = sh.snapshot()
+        sh.run("rm -r d loop1")
+        sh.restore(snap)
+        self.assertEqual(want, sh.run(probe).stdout)
+
+    def test_links_in_a_snapshot_are_checked(self):
+        sh = Shell()
+        sh.fs.mkdir("/home/agent/d")
+        sh.fs.create_symlink("/home/agent/l", "/etc")  # before x: entries come in creation order, so x is the later one
+        sh.fs.write_text("/home/agent/x", "x")
+
+        def edit(which, **kv):
+            return self.tamper(sh, lambda m: self.entry(m, which).update(**kv))
+
+        # an entry can't be put through a link (it would land in /etc), nor be a hard link to a directory, a later or a missing entry
+        self.assertIn("parent is not a directory", self.rejected(edit("/home/agent/x", path="/home/agent/l/x")))
+        self.assertIn("not an earlier file", self.rejected(edit("/home/agent/x", link="/home/agent/d")))
+        self.assertIn("not an earlier file", self.rejected(edit("/home/agent/x", link="/home/agent/missing")))
+        self.assertIn("not an earlier file", self.rejected(edit("/home/agent/l", link="/home/agent/x")))
+        self.assertIn("bad link", self.rejected(edit("/home/agent/x", link="../etc/passwd")))
+        self.assertIn("bad symlink target", self.rejected(edit("/home/agent/l", target="a\0b")))
+        self.assertIn("bad symlink target", self.rejected(edit("/home/agent/l", target="a" * 4097)))
+        # a link to anywhere, even a loop, loads: it is only a path, resolved later with the agent's permissions
+        self.assertEqual("l", Shell.load(edit("/home/agent/l", target="l")).fs.read_link("/home/agent/l"))
 
     def test_blobs_must_match_their_size_and_hash(self):
         sh = Shell()

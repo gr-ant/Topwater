@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from ..shell import glob_to_regex
-from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, normalize, utc_now
+from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, get_parent, normalize, utc_now
 from . import Args, inputs, parse_date, quote_always, quote_l, split_lines, strftime
 
 
@@ -86,7 +86,7 @@ def _block_size(st, human: bool) -> str:
     return _human(st.blocks * 512) if human else str(st.blocks // 2)
 
 
-def _long_entries(ctx, entries, human: bool, width_from=(), style: str | None = None, blocks: bool = False):
+def _long_entries(ctx, entries, human: bool, width_from=(), style: str | None = None, blocks: bool = False, follow: bool = False, classify=None):
     """ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned).
     width_from: more paths that count toward the widths (ls sizes the columns for its file operands over all operands)."""
     now = utc_now()
@@ -94,79 +94,124 @@ def _long_entries(ctx, entries, human: bool, width_from=(), style: str | None = 
     def size(st):
         return _human(st.size) if human else str(st.size)
 
-    rows = [(ctx.fs.stat(p), name) for p, name in entries]
+    rows = [(ctx.fs.stat(p, follow), name, p) for p, name in entries]
     if not rows:
         return []
-    every = [st for st, _ in rows] + [ctx.fs.stat(p) for p in width_from]
+    every = [st for st, _, _ in rows] + [ctx.fs.stat(p, follow) for p in width_from]
     lw, ow, sw = (max(len(f(st)) for st in every) for f in (lambda st: str(st.links), lambda st: st.owner, size))
     bw = max(len(_block_size(st, human)) for st in every)
-    return [(_block_size(st, human).rjust(bw) + " " if blocks else "")
-            + f"{format_mode(st.is_dir, st.mode)} {st.links:>{lw}} {st.owner:<{ow}} {st.owner:<{ow}} {size(st):>{sw}} {_ls_date(st.modified, now, style)} {name}"
-            for st, name in rows]
+    out = []
+    for st, name, p in rows:
+        # a link shows where it points; -F marks that target's type
+        if st.is_symlink:
+            name += " -> " + st.link_target + (classify(ctx.fs.stat(p)) if classify and ctx.fs.exists(p) else "")
+        elif classify:
+            name += classify(st)
+        out.append((_block_size(st, human).rjust(bw) + " " if blocks else "")
+                   + f"{format_mode(st.is_dir, st.mode, st.is_symlink)} {st.links:>{lw}} {st.owner:<{ow}} {st.owner:<{ow}} {size(st):>{sw}} {_ls_date(st.modified, now, style)} {name}")
+    return out
 
 
 def _ls(ctx):
     # \x01: --time-style=STYLE, \x02: --full-time
-    a = Args.parse(ctx.args, "alhA1dFrtRSZsk\x02", "\x01",
-                   "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\x01,full-time=\x02")
+    a = Args.parse(ctx.args, "alhA1dFrtRSZskLH\x02", "\x01",
+                   "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\x01,full-time=\x02,"
+                   "dereference=L,dereference-command-line=H")
     paths = a.positional or ["."]
-    lng, human, blocks = a.has("l") or a.has("\x02"), a.has("h"), a.has("s")
+    lng, human, blocks, deref, fs = a.has("l") or a.has("\x02"), a.has("h"), a.has("s"), a.has("L"), ctx.fs
     style = "full-iso" if a.has("\x02") else _time_style(a.value("\x01")) if lng and a.value("\x01") is not None else None
     code = 0
 
-    def show(entries, width_from=()):
-        named = [(p, n + "/" if a.has("F") and ctx.fs.is_dir(p) and n not in (".", "..") else n) for p, n in entries]
+    def classify(st):  # -F: what each kind of entry gets; a link itself gets @ (unless -L follows it)
+        return "/" if st.is_dir else "@" if st.is_symlink else "*" if st.mode & 0o111 else ""
+
+    def show(entries, follow, width_from=()):
         if lng:
-            lines = _long_entries(ctx, named, human, width_from, style, blocks)
-        elif blocks:
-            sizes = [_block_size(ctx.fs.stat(p), human) for p, _ in named]
-            lines = [sz.rjust(max(map(len, sizes))) + " " + n for sz, (_, n) in zip(sizes, named)]
+            lines = _long_entries(ctx, entries, human, width_from, style, blocks, follow, classify if a.has("F") else None)
         else:
-            lines = [n for _, n in named]
+            named = [(p, n + (classify(fs.stat(p, follow)) if a.has("F") and fs.exists(p, follow) else "")) for p, n in entries]
+            if blocks:
+                sizes = [_block_size(fs.stat(p, follow and fs.exists(p)), human) for p, _ in named]
+                lines = [sz.rjust(max(map(len, sizes))) + " " + n for sz, (_, n) in zip(sizes, named)]
+            else:
+                lines = [n for _, n in named]
         for line in lines:
             ctx.print(line)
 
+    # a link named on the command line is followed to a directory, unless -l, -d or -F shows the link itself
+    def follow_operand(p):
+        return deref or a.has("H") or p.endswith("/") or not (lng or a.has("d") or a.has("F"))
+
+    def exists(p):
+        return fs.exists(ctx.resolve(p), deref or p.endswith("/"))
+
+    def stat_of(p):
+        return fs.stat(ctx.resolve(p), deref or a.has("H") or p.endswith("/"))
+
     for p in paths:
-        if not ctx.fs.exists(ctx.resolve(p)):
-            ctx.error(f"ls: cannot access '{p}': {ctx.fs.why_missing(ctx.resolve(p))}")
+        if not exists(p):
+            ctx.error(f"ls: cannot access '{p}': {fs.why_missing(ctx.resolve(p), deref or p.endswith('/'))}")
             code = 2
     def ordered(ps):  # operands are listed like directory entries: byte order (C locale), or by -t / -S, reversed by -r
         ps = sorted(ps, key=lambda p: p.encode("utf-8", "surrogateescape"))
-        if a.has("t"): ps = sorted(ps, key=lambda p: ctx.fs.stat(ctx.resolve(p)).modified, reverse=True)
-        if a.has("S"): ps = sorted(ps, key=lambda p: ctx.fs.stat(ctx.resolve(p)).size, reverse=True)
+        if a.has("t"): ps = sorted(ps, key=lambda p: stat_of(p).modified, reverse=True)
+        if a.has("S"): ps = sorted(ps, key=lambda p: stat_of(p).size, reverse=True)
         return ps[::-1] if a.has("r") else ps
 
-    files = ordered([p for p in paths if ctx.fs.exists(ctx.resolve(p)) and (a.has("d") or not ctx.fs.is_dir(ctx.resolve(p)))])
-    show([(ctx.resolve(f), f) for f in files], [ctx.resolve(p) for p in paths if p not in files and ctx.fs.exists(ctx.resolve(p))])
-    dirs = ordered([p for p in paths if p not in files and ctx.fs.is_dir(ctx.resolve(p))])
+    files = ordered([p for p in paths if exists(p) and (a.has("d") or not fs.is_dir(ctx.resolve(p), follow_operand(p)))])
+    groups: dict[bool, list[str]] = {}
+    for f in files:
+        groups.setdefault(follow_operand(f), []).append(f)
+    for follow, group in groups.items():
+        show([(ctx.resolve(f), f) for f in group], follow, [ctx.resolve(p) for p in paths if p not in files and exists(p)])
+    dirs = ordered([p for p in paths if p not in files and fs.is_dir(ctx.resolve(p))])
     first = [not files]
+    listed: set[str] = set()  # real paths, so -RL stops at a link back up the tree
 
     def list_dir(path, label):
+        nonlocal code
+        path = fs.real_path(path)[0] or path  # where it really is, so "." and ".." are the directories themselves
+        if a.has("R") and deref:
+            if path in listed:
+                ctx.error(f"ls: {label}: not listing already-listed directory")
+                code = 2
+                return
+            listed.add(path)
         if len(paths) > 1 or a.has("R"):
             ctx.print(("" if first[0] else "\n") + label + ":")
         first[0] = False
-        if not ctx.fs.can_read(path):
+        if not fs.can_read(path):
             ctx.error(f"ls: cannot open directory '{label}': Permission denied")
-            nonlocal code
             code = 2
             return
-        entries = [n for n in ctx.fs.listdir(path) if a.has("a") or a.has("A") or not n.startswith(".")]
+        entries = [n for n in fs.listdir(path) if a.has("a") or a.has("A") or not n.startswith(".")]
+        if deref and lng:
+            # shortcut: GNU also lists such an entry as "l????????? ? ..."; it is left out
+            for n in [n for n in entries if not fs.exists(normalize(path, n))]:
+                ctx.error(f"ls: cannot access '{label.rstrip('/')}/{n}': {fs.why_missing(normalize(path, n))}")
+                code = 1
+                entries.remove(n)
+
+        def st(n):
+            child = normalize(path, n)
+            return fs.stat(child, deref and fs.exists(child))
+
         if a.has("t"):
-            entries.sort(key=lambda n: ctx.fs.stat(normalize(path, n)).modified, reverse=True)
+            entries.sort(key=lambda n: st(n).modified, reverse=True)
         if a.has("S"):
-            entries.sort(key=lambda n: ctx.fs.stat(normalize(path, n)).size, reverse=True)
+            entries.sort(key=lambda n: st(n).size, reverse=True)
         if a.has("a"):
             entries = [".", ".."] + entries
         if a.has("r"):
             entries.reverse()
         if lng or blocks:
-            kib = sum(ctx.fs.stat(normalize(path, n)).blocks // 2 for n in entries)
+            kib = sum(st(n).blocks // 2 for n in entries)
             ctx.print(f"total {_human(kib * 1024) if human else kib}")
-        show([(normalize(path, n), n) for n in entries])
+        show([(normalize(path, n), n) for n in entries], deref)
         if a.has("R"):
             for n in entries:
                 child = normalize(path, n)
-                if n not in (".", "..") and ctx.fs.is_dir(child):
+                if n not in (".", "..") and fs.is_dir(child, deref):
                     list_dir(child, label.rstrip("/") + "/" + n)
 
     for d in dirs:
@@ -257,7 +302,9 @@ def _touch(ctx):
         if a.has("c") and not ctx.fs.exists(path):
             continue
         try:
-            if when is None:
+            if a.has("h") and ctx.fs.is_symlink(path):
+                ctx.fs.set_modified_time(path, when or utc_now(), follow=False)
+            elif when is None:
                 ctx.fs.touch(path)
             else:  # an explicit time needs ownership, not write permission
                 if not ctx.fs.exists(path):
@@ -277,13 +324,13 @@ def _rm(ctx):
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
-        if not ctx.fs.exists(path):
-            why = ctx.fs.why_missing(path)
+        if not ctx.fs.exists(path, follow=False):
+            why = ctx.fs.why_missing(path, follow=False)
             if not a.has("f") or why != "No such file or directory":
                 ctx.error(f"rm: cannot remove '{p}': {why}")
                 code = 1
             continue
-        if ctx.fs.is_dir(path) and not recursive and not a.has("d"):
+        if ctx.fs.is_dir(path, follow=p.endswith("/")) and not recursive and not a.has("d"):
             ctx.error(f"rm: cannot remove '{p}': Is a directory")
             code = 1
             continue
@@ -305,7 +352,7 @@ def _rmdir(ctx):
         p = arg.rstrip("/")
         while p:  # -p: a/b/c, then a/b, then a
             path = ctx.resolve(p)
-            why = None if ctx.fs.is_dir(path) else "Not a directory" if ctx.fs.exists(path) else ctx.fs.why_missing(path)
+            why = None if ctx.fs.is_dir(path, follow=False) else "Not a directory" if ctx.fs.exists(path, follow=False) else ctx.fs.why_missing(path)
             if why is None:
                 try:
                     ctx.fs.delete(path)
@@ -341,7 +388,9 @@ def _copy_into_itself(ctx, src: str, to: str, created: set[str]) -> bool:
 
 def _copy_or_move(ctx):
     move = ctx.name == "mv"
-    a = Args.parse(ctx.args, "fvniZ" if move else "rRfvanpZ", longs="recursive=r,force=f")
+    a = Args.parse(ctx.args, "fvniZ" if move else "rRfvanpZLPHd", longs="recursive=r,force=f,dereference=L,no-dereference=P")
+    # cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
+    follow_top = not move and not (a.has("P") or a.has("d") or a.has("a")) and (a.has("L") or a.has("H") or not (a.has("r") or a.has("R")))
     if len(a.positional) < 2:
         raise UsageException("missing file operand" if not a.positional else f"missing destination file operand after {quote_always(a.positional[0])}")
     *sources, dest_arg = a.positional
@@ -357,19 +406,27 @@ def _copy_or_move(ctx):
     code = 0
     for s in sources:
         src = ctx.resolve(s)
-        if not ctx.fs.exists(src):
-            ctx.error(f"{ctx.name}: cannot stat '{s}': {ctx.fs.why_missing(src)}")
+        if not ctx.fs.exists(src, follow_top):
+            ctx.error(f"{ctx.name}: cannot stat '{s}': {ctx.fs.why_missing(src, follow_top)}")
             code = 1
             continue
-        if not move and ctx.fs.is_dir(src) and not (a.has("r") or a.has("R") or a.has("a")):
+        if not move and ctx.fs.is_dir(src, follow_top) and not (a.has("r") or a.has("R") or a.has("a")):
             ctx.error(f"cp: -r not specified; omitting directory '{s}'")
             code = 1
             continue
         target = normalize(dest, get_name(src)) if dest_is_dir else dest
+        if target == src or not move and follow_top and ctx.fs.same_file(src, target):
+            ctx.error(f"{ctx.name}: '{s}' and '{dest_arg}' are the same file")
+            code = 1
+            continue
+        if not move and ctx.fs.is_file(src, follow_top) and ctx.fs.is_symlink(target) and not ctx.fs.exists(target):
+            ctx.error(f"cp: not writing through dangling symlink '{dest_arg.rstrip('/') + '/' + get_name(src) if dest_is_dir else dest_arg}'")
+            code = 1
+            continue
         if target == "/dev/null" and not move:
             continue  # copying to /dev/null discards the data
         shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
-        src_dir = ctx.fs.is_dir(src)
+        src_dir = ctx.fs.is_dir(src, follow_top)
         qs, qd = quote_always(s), quote_always(shown)
         if target == src:
             clash = f"{qs} and {qd} are the same file"
@@ -401,9 +458,20 @@ def _copy_or_move(ctx):
             ctx.error(f"cp: cannot access '{shown}': Permission denied" if is_dir else f"cp: cannot open '{shown}' for reading: Permission denied")
             nonlocal_code[0] = 1
 
+        def broken(p, why, s=s, src=src):
+            shown = typed(p + ": ", s, src)[0]
+            ctx.error(f"cp: cannot copy cyclic symbolic link '{shown}'" if why == "cyclic" else f"cp: cannot stat '{shown}': {why}")
+            nonlocal_code[0] = 1
+
         try:
-            ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied)
+            ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied, follow_top, a.has("L"), broken)
         except ShellError as e:
+            shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
+            if " into itself, " in str(e) or " to a subdirectory of itself, " in str(e):
+                ctx.error(f"mv: cannot move '{s}' to a subdirectory of itself, '{shown}'" if move
+                          else f"cp: cannot copy a directory, '{s}', into itself, '{shown}'")
+                code = 1
+                continue
             if str(e).endswith(NO_SPACE):
                 ctx.error(f"{ctx.name}: error writing '{shown}': {NO_SPACE}")
                 code = 1
@@ -421,6 +489,82 @@ def _copy_or_move(ctx):
     return code
 
 
+def _ln(ctx):
+    a = Args.parse(ctx.args, "sfnvTrLPb", "t", "symbolic=s,force=f,no-dereference=n,no-target-directory=T,target-directory=t,verbose=v,"
+                                               "relative=r,logical=L,physical=P")
+    fs, sym, ops, t_opt = ctx.fs, a.has("s"), list(a.positional), a.value("t")
+    into = t_opt
+    if t_opt is None and not a.has("T") and (len(ops) > 2 or len(ops) == 2 and fs.is_dir(ctx.resolve(ops[-1]), not a.has("n"))):
+        into = ops[-1]
+    if not ops or (len(ops) == 1 and a.has("T") and into is None):
+        raise UsageException("missing file operand" if not ops else f"missing destination file operand after {quote_always(ops[0])}")
+    if into is not None and t_opt is None:
+        ops = ops[:-1]
+    if into is not None and not fs.is_dir(ctx.resolve(into)):
+        exists = fs.exists(ctx.resolve(into))
+        raise ShellError(f"failed to access {quote_always(into)}: {fs.why_missing(ctx.resolve(into))}" if t_opt is not None and not exists
+                         else f"target {quote_always(into)} is not a directory" if exists else f"target {quote_always(into)}: No such file or directory")
+    # (what the link points to, the link's name): `ln f` links into ".", `ln f d` into d when it is a directory
+    if into is not None or len(ops) == 1:
+        pairs = [(t, (into.rstrip("/") + "/" if into is not None else "") + get_name(t)) for t in ops]
+    else:
+        pairs = [(ops[0], ops[1])]
+    code = 0
+    for target, name in pairs:
+        shown = "./" + name if into is None and len(ops) == 1 else name
+        path, src = ctx.resolve(name), ctx.resolve(target)
+
+        def fail(why, arrow=True):
+            tail = "" if not arrow else (" -> ''" if not target else "") if sym else " => " + quote_always(target)
+            return f"ln: failed to create {'symbolic' if sym else 'hard'} link {quote_always(shown)}{tail}: {why}"
+
+        try:
+            if not sym and not fs.exists(src, a.has("L")):
+                ctx.error(f"ln: failed to access {quote_always(target)}: {fs.why_missing(src, a.has('L'))}")
+                code = 1
+                continue
+            if not sym and fs.is_dir(src):
+                ctx.error(f"ln: {target}: hard link not allowed for directory")
+                code = 1
+                continue
+            if fs.exists(path, follow=False):
+                if not a.has("f"):
+                    ctx.error(fail("File exists", arrow=False))
+                    code = 1
+                    continue
+                if fs.is_dir(path, follow=False):
+                    ctx.error(f"ln: {name}: cannot overwrite directory")
+                    code = 1
+                    continue
+                if fs.same_file(path, normalize(get_parent(path), target) if sym else src):
+                    ctx.error(f"ln: {quote_always(target)} and {quote_always(name)} are the same file")
+                    code = 1
+                    continue
+                fs.delete(path)
+            if not sym:
+                fs.create_hard_link(src, path, a.has("L"))
+            else:
+                stored = target
+                if a.has("r") and target:
+                    # -r: from the link's real directory to the target's real path
+                    to = (fs.real_path(src, existing=False)[0] or src).split("/")[1:]
+                    d = get_parent(path)
+                    frm = (fs.real_path(d)[0] or d).split("/")[1:]
+                    to, frm = [x for x in to if x], [x for x in frm if x]
+                    common = 0
+                    while common < min(len(to), len(frm)) and to[common] == frm[common]:
+                        common += 1
+                    stored = "/".join([".."] * (len(frm) - common) + to[common:]) or "."
+                fs.create_symlink(path, stored)
+            if a.has("v"):
+                ctx.print(f"{quote_always(shown)} {'->' if sym else '=>'} {quote_always(target)}")
+        except ShellError as e:
+            why = str(e).rsplit(": ", 1)[-1]
+            ctx.error(fail(why, arrow=why != "File exists"))
+            code = 1
+    return code
+
+
 class _Find:
     """find with real expressions: ( ) ! -not -a -o, tests, and actions (-print -print0 -exec -delete)."""
 
@@ -432,6 +576,7 @@ class _Find:
         self.has_action = False
         self.denied = False
         self.deletes: list[str] = []
+        self.above: list[tuple[str, str]] = []  # (real path, display) of the directories being walked, so -L stops at a link back up
         self.batches: list[tuple[list[str], list[str]]] = []
         self.prune = False
 
@@ -441,6 +586,12 @@ class _Find:
     async def run(self) -> int:
         ctx = self.ctx
         args = list(ctx.args)
+        # -P (the default) never follows symbolic links, -H only those named as starting points, -L all of them
+        options = []
+        while args and args[0] in ("-P", "-H", "-L"):
+            options.append(args.pop(0))
+        mode = options[-1][1] if options else "P"
+        fs = ctx.fs
         starts = []
         while args and not args[0].startswith("-") and args[0] not in ("!", "("):
             starts.append(args.pop(0))
@@ -454,30 +605,39 @@ class _Find:
         if self.p < len(args):
             raise ShellError(f"unexpected `{args[self.p]}'")
 
-        async def walk(path, display, depth, start):
+        async def walk(path, display, depth, start, follow):
             self.prune = False
-            if depth >= self.min_depth and await expr((path, get_name(path), display, depth, start)) and not self.has_action:
+            is_dir = fs.is_dir(path, follow)
+            real = (fs.real_path(path)[0] or path) if is_dir and follow else path
+            if is_dir and follow and (loop := next((d for r, d in self.above if r == real), None)) is not None:
+                ctx.error(f"find: File system loop detected; {quote_l(display)} is part of the same file system loop as {quote_l(loop)}.")
+                self.denied = True
+                return
+            if depth >= self.min_depth and await expr((path, get_name(path), display, depth, start, follow)) and not self.has_action:
                 ctx.print(display)
-            if self.prune or depth >= self.max_depth or not ctx.fs.is_dir(path):
+            if self.prune or depth >= self.max_depth or not is_dir:
                 return
             try:
-                names = ctx.fs.listdir(path)
+                names = fs.listdir(path)
             except ShellError:
                 ctx.error(f"find: {quote_l(display)}: Permission denied")
                 self.denied = True
                 return
+            self.above.append((real, display))
             for name in names:
-                await walk(normalize(path, name), display + name if display.endswith("/") else display + "/" + name, depth + 1, start)
+                await walk(normalize(path, name), display + name if display.endswith("/") else display + "/" + name, depth + 1, start, mode == "L")
+            self.above.pop()
 
         code = 0
         try:
             for s in starts:
                 path = ctx.resolve(s)
-                if not ctx.fs.exists(path):
-                    ctx.error(f"find: {quote_l(s)}: {ctx.fs.why_missing(ctx.resolve(s))}")
+                follow = mode != "P" or s.endswith("/")
+                if not fs.exists(path, follow) and not fs.exists(path, follow=False):
+                    ctx.error(f"find: {quote_l(s)}: {fs.why_missing(path, follow)}")
                     code = 1
                     continue
-                await walk(path, s, 0, s)
+                await walk(path, s, 0, s, follow)
         except _FindQuit:
             pass
         for cmd, paths in self.batches:
@@ -486,8 +646,8 @@ class _Find:
         if self.denied:
             code = 1
         for path in sorted(self.deletes, key=len, reverse=True):
-            if ctx.fs.exists(path):
-                ctx.fs.delete(path, recursive=True)
+            if fs.exists(path, follow=False):
+                fs.delete(path, recursive=True)
         return code
 
     def parse_or(self):
@@ -550,6 +710,14 @@ class _Find:
                 return fn(e[0], e[1], e[2])
             return run
 
+        def pred_e(fn):
+            async def run(e):
+                return fn(e)
+            return run
+
+        def stat(e):  # what a link leads to when following, unless it leads nowhere (then the link, as find -L does)
+            return _find_stat(fs, e[0], e[5])
+
         if tok in ("-name", "-iname"):
             rx = glob_to_regex(arg(), ignore_case=tok == "-iname")
             return pred(lambda p, n, d: bool(rx.match(n)))
@@ -559,11 +727,12 @@ class _Find:
         if tok == "-regex":
             rx = re.compile("(?:" + arg() + r")\Z")
             return pred(lambda p, n, d: bool(rx.match(d)))
-        if tok == "-type":
+        if tok in ("-type", "-xtype"):
             t = arg()
             if t not in ("f", "d", "l"):
-                raise ShellError(f"Unknown argument to -type: {t}")
-            return pred(lambda p, n, d: t != "l" and fs.is_dir(p) == (t == "d"))
+                raise ShellError(f"Unknown argument to {tok}: {t}")
+            # -xtype: the other view of a link (what it leads to under -P, the link itself under -L)
+            return pred_e(lambda e: _find_type(stat(e if tok == "-type" else e[:5] + (not e[5],))) == t)
         if tok in ("-maxdepth", "-mindepth"):
             v = int(arg())
             if tok == "-maxdepth":
@@ -577,16 +746,16 @@ class _Find:
                 raise ShellError(f"invalid argument `{spec}' to `{tok}'")
             unit, num = (60 if tok == "-mmin" else 86400), float(spec.lstrip("+-"))
 
-            def age_ok(p, n, d):
-                age = (utc_now() - fs.stat(p).modified).total_seconds() / unit
+            def age_ok(e):
+                age = (utc_now() - stat(e).modified).total_seconds() / unit
                 return age < num if spec[0] == "-" else age > num if spec[0] == "+" else int(age) == num
-            return pred(age_ok)
+            return pred_e(age_ok)
         if tok == "-newer":
             reference = arg()
             if not fs.exists(ctx.resolve(reference)):
                 raise ShellError(f"{quote_l(reference)}: {fs.why_missing(ctx.resolve(reference))}")
             ref = fs.stat(ctx.resolve(reference)).modified
-            return pred(lambda p, n, d: fs.stat(p).modified > ref)
+            return pred_e(lambda e: stat(e).modified > ref)
         if tok == "-size":
             spec = arg()
             m = re.fullmatch(r"([+-]?)(\d+)([cwbkMG]?)", spec)
@@ -597,14 +766,15 @@ class _Find:
             unit = {"c": 1, "w": 2, "k": 1024, "M": 1 << 20, "G": 1 << 30}.get(m.group(3), 512)
             num = int(m.group(2))
 
-            def size_ok(p, n, d):
-                if fs.is_dir(p):
+            def size_ok(e):
+                st = stat(e)
+                if st.is_dir:
                     return False
-                size = (fs.stat(p).size + unit - 1) // unit
+                size = (st.size + unit - 1) // unit
                 return size > num if m.group(1) == "+" else size < num if m.group(1) == "-" else size == num
-            return pred(size_ok)
+            return pred_e(size_ok)
         if tok == "-empty":
-            return pred(lambda p, n, d: not fs.listdir(p) if fs.is_dir(p) else fs.stat(p).size == 0)
+            return pred_e(lambda e: not fs.listdir(e[0]) if stat(e).is_dir else not stat(e).is_symlink and stat(e).size == 0)
         if tok in ("-true", "-false"):
             return pred(lambda p, n, d: tok == "-true")
         if tok in ("-print", "-print0"):
@@ -662,10 +832,18 @@ _FIND_TIME = {"Y": "%Y", "m": "%m", "d": "%d", "H": "%H", "M": "%M", "S": "%S.00
               "F": "%Y-%m-%d", "+": "%Y-%m-%d+%H:%M:%S.0000000000", "a": "%a", "b": "%b", "y": "%y", "D": "%m/%d/%y", "R": "%H:%M"}
 
 
+def _find_stat(fs, path: str, follow: bool):
+    return fs.stat(path, follow and fs.exists(path))
+
+
+def _find_type(st) -> str:
+    return "l" if st.is_symlink else "d" if st.is_dir else "f"
+
+
 def _find_printf(fmt: str, e, fs) -> str:
     """find -printf: %p %f %h %P %s %d %y %m %M %u %g %k %t %T@ %Tk ... with optional width, plus \\n \\t \\0 escapes."""
-    path, name, display, depth, start = e
-    st = fs.stat(path)
+    path, name, display, depth, start, follow = e
+    st = _find_stat(fs, path, follow)
     out: list[str] = []
     i, n = 0, len(fmt)
     while i < n:
@@ -702,8 +880,8 @@ def _find_printf(fmt: str, e, fs) -> str:
                 "p": display, "f": base if depth == 0 else name,
                 "h": (display.rsplit("/", 1)[0] or "/") if "/" in display.rstrip("/") else ".",
                 "P": display[len(start):].lstrip("/") if depth else "", "H": start, "s": str(st.size), "d": str(depth),
-                "y": "d" if st.is_dir else "f", "Y": "d" if st.is_dir else "f", "m": format(st.mode & 0o7777, "o"),
-                "M": format_mode(st.is_dir, st.mode), "u": st.owner, "g": st.owner, "n": "1",
+                "y": _find_type(st), "Y": _find_type(_find_stat(fs, path, True)), "l": st.link_target or "", "m": format(st.mode & 0o7777, "o"),
+                "M": format_mode(st.is_dir, st.mode, st.is_symlink), "u": st.owner, "g": st.owner, "n": str(st.links),
                 "k": str((st.size + 4095) // 4096 * 4), "b": str((st.size + 4095) // 4096 * 8),
             }
             value = values.get(d, "%" + d)
@@ -729,12 +907,12 @@ def _tree(ctx):
 
     def walk(d, prefix, depth):
         entries = [n for n in ctx.fs.listdir(d) if (a.has("a") or not n.startswith("."))
-                   and (not a.has("d") or ctx.fs.is_dir(normalize(d, n)))]
+                   and (not a.has("d") or ctx.fs.is_dir(normalize(d, n), follow=False))]
         for i, name in enumerate(entries):
             last = i == len(entries) - 1
             child = normalize(d, name)
-            out.append(prefix + ("└── " if last else "├── ") + name + "\n")
-            if ctx.fs.is_dir(child):
+            out.append(prefix + ("└── " if last else "├── ") + name + (" -> " + ctx.fs.read_link(child) if ctx.fs.is_symlink(child) else "") + "\n")
+            if ctx.fs.is_dir(child, follow=False):
                 counts["dirs"] += 1
                 if depth < max_depth:
                     walk(child, prefix + ("    " if last else "│   "), depth + 1)
@@ -758,5 +936,6 @@ def register(shell) -> None:
     r("rmdir", _rmdir, "Remove empty directories")
     r("cp", _copy_or_move, "Copy files and directories")
     r("mv", _copy_or_move, "Move or rename files")
+    r("ln", _ln, "Make links between files (-s symbolic, -f replace)")
     r("find", _find, "Search for files")
     r("tree", _tree, "Show a directory tree")

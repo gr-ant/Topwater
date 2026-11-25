@@ -856,7 +856,7 @@ class Lexer:
 
 _RESERVED = {"then", "elif", "else", "fi", "do", "done", "esac", "}", "in"}
 _CMD_START = {"then", "do", "else", "elif", "if", "while", "until", "{", "!", "time"}
-COND_BINARY = {"==", "=", "!=", "=~", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"}
+COND_BINARY = {"==", "=", "!=", "=~", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot", "-ef"}
 
 
 def _is_name(s: str) -> bool:
