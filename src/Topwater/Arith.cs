@@ -27,26 +27,7 @@ internal sealed class Arith
     public static long Eval(Shell sh, string expr, int depth = 0)
     {
         if (depth > 20) throw new ShellException($"{expr}: expression recursion level exceeded");
-        expr = Regex.Replace(expr, @"\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?", m => sh.GetVariable(m.Groups[1].Value));
-        if (expr.Contains('['))
-        {
-            // arr[i]++, arr[i] += n, arr[key] = n as the whole expression (counting with an associative array)
-            if (ElementAssign.Match(expr) is { Success: true } m)
-            {
-                string name = m.Groups[1].Value, sub = m.Groups[2].Value, op = m.Groups[3].Value;
-                long old = Eval(sh, sh.GetElement(name, sub) ?? "0", depth + 1);
-                long operand = op is "++" or "--" ? 1 : Eval(sh, m.Groups[4].Value, depth + 1);
-                long updated = op switch
-                {
-                    "=" => operand, "++" or "+=" => old + operand, "--" or "-=" => old - operand, "*=" => old * operand,
-                    _ => operand == 0 ? throw new ShellException($"{expr}: division by 0") : op == "/=" ? old / operand : old % operand,
-                };
-                sh.SetElement(name, sub, updated.ToString(CultureInfo.InvariantCulture));
-                return op is "++" or "--" ? old : updated;
-            }
-            // elsewhere an element is read: its value, or 0 when unset
-            expr = ElementRead.Replace(expr, e => sh.GetElement(e.Groups[1].Value, e.Groups[2].Value) is { Length: > 0 } v ? $"({v})" : "0");
-        }
+        if (expr.Contains('$')) expr = Dollar.Replace(expr, m => sh.GetVariable(m.Groups[1].Value));
         var tokens = Tokenize(expr);
         if (tokens.Count == 0) return 0;
         var a = new Arith(sh, expr, tokens) { _depth = depth };
@@ -57,8 +38,7 @@ internal sealed class Arith
 
     int _depth;
 
-    static readonly Regex ElementRead = new(@"([A-Za-z_][A-Za-z0-9_]*)\[([^\[\]]+)\]");
-    static readonly Regex ElementAssign = new(@"^\s*([A-Za-z_][A-Za-z0-9_]*)\[([^\[\]]+)\]\s*(\+\+|--|[-+*/%]?=(?!=))\s*(.*)$", RegexOptions.Singleline);
+    static readonly Regex Dollar = new(@"\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?");
 
     static List<string> Tokenize(string s)
     {
@@ -70,6 +50,15 @@ internal sealed class Arith
             {
                 int j = i;
                 while (j < s.Length && (char.IsLetterOrDigit(s[j]) || s[j] == '_' || s[j] == '#')) j++;
+                // name[subscript] is one operand, so an element can be read, assigned and incremented anywhere
+                if (j < s.Length && s[j] == '[' && char.IsLetter(s[i]) || j < s.Length && s[j] == '[' && s[i] == '_')
+                {
+                    int depth = 0;
+                    for (; j < s.Length; j++)
+                        if (s[j] == '[') depth++;
+                        else if (s[j] == ']' && --depth == 0) { j++; break; }
+                    if (depth > 0) throw new ShellException($"{s}: syntax error: bad array subscript");
+                }
                 tokens.Add(s[i..j]);
                 i = j;
                 continue;
@@ -90,14 +79,17 @@ internal sealed class Arith
     bool Accept(string s) { if (Peek != s) return false; _p++; return true; }
     static bool IsIdent(string s) => char.IsLetter(s[0]) || s[0] == '_';
 
+    /// <summary>A variable or name[sub] element as a number: empty or unset is 0, other text is evaluated as an expression.</summary>
     long Var(string name)
     {
-        var v = _sh.GetVariable(name).Trim();
+        int open = name.IndexOf('[');
+        var v = (open < 0 ? _sh.GetVariable(name) : _sh.GetElement(name[..open], name[(open + 1)..^1]) ?? "").Trim();
         if (v.Length == 0) return 0;
-        return long.TryParse(v, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var n) ? n : Eval(_sh, v, _depth + 1);
+        // a value like 010 or 0x1f is a literal in its base, as if it were written in the expression
+        return v.TrimStart('-', '+') is not ['0', _, ..] && long.TryParse(v, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var n) ? n : Eval(_sh, v, _depth + 1);
     }
 
-    void Set(string name, long v) => _sh.Environment[name] = v.ToString(CultureInfo.InvariantCulture);
+    void Set(string name, long v) => _sh.SetVar(name, v.ToString(CultureInfo.InvariantCulture));
 
     long Comma(bool ev)
     {

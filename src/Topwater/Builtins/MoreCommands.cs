@@ -26,10 +26,94 @@ internal static partial class Builtins
         return 0;
     }
 
+    static bool EndsWithEscape(string line) => line.Length - line.TrimEnd('\\').Length is var n && n % 2 == 1;
+
+    /// <summary>
+    /// `read a b c`: the fields for each name. The last name gets the rest of the line less trailing IFS whitespace,
+    /// and a single trailing IFS delimiter is dropped when the rest is just one field ("x,y," gives b=y, as in bash).
+    /// </summary>
+    static List<string> ReadFields(string line, string ifs, int count)
+    {
+        var ws = string.Concat(" \t\n".Where(ifs.Contains)).ToCharArray();
+        bool IsWs(char c) => Array.IndexOf(ws, c) >= 0;
+        var fields = new List<string>();
+        int i = 0;
+        while (i < line.Length && IsWs(line[i])) i++;
+        for (; fields.Count < count - 1 && i < line.Length;)
+        {
+            int start = i;
+            while (i < line.Length && !ifs.Contains(line[i])) i++;
+            fields.Add(line[start..i]);
+            while (i < line.Length && IsWs(line[i])) i++;
+            if (i < line.Length && ifs.Contains(line[i]) && !IsWs(line[i])) { i++; while (i < line.Length && IsWs(line[i])) i++; }
+        }
+        string TrimWs(string t) => ws.Length == 0 ? t : t.TrimEnd(ws); // TrimEnd() with no characters would trim all whitespace
+        var rest = TrimWs(line[i..]);
+        if (rest.Length > 0 && ifs.Contains(rest[^1]) && !IsWs(rest[^1]) && TrimWs(rest[..^1]).IndexOfAny(ifs.ToCharArray()) < 0) rest = TrimWs(rest[..^1]);
+        if (i < line.Length || fields.Count < count) fields.Add(rest);
+        return fields;
+    }
+
+    static readonly HashSet<string> ShellKeywords = ["if", "then", "else", "elif", "fi", "case", "esac", "for", "select", "while", "until", "do", "done", "in", "function", "time", "{", "}", "!", "[[", "]]", "coproc"];
+
+    /// <summary>`type NAME` / `command -V NAME`: what the name runs, or false (with a message) when nothing.</summary>
+    internal static bool Describe(CommandContext ctx, string a, bool all)
+    {
+        var sh = ctx.Shell;
+        if (sh.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"{a} is aliased to `{v}'");
+        else if (ShellKeywords.Contains(a)) ctx.Stdout.WriteLine($"{a} is a shell keyword");
+        else if (sh.Functions.TryGetValue(a, out var f)) ctx.Stdout.WriteLine($"{a} is a function\n{a} () \n{f.Source}");
+        else if (IsShellBuiltin(sh, a)) ctx.Stdout.WriteLine($"{a} is a shell builtin");
+        else if (sh.Commands.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is /usr/bin/{a}");
+        else { ctx.Stderr.WriteLine($"bash: type: {a}: not found"); return false; }
+        return true;
+    }
+
+    /// <summary>declare -f / -F: function definitions (as written) or names.</summary>
+    static int PrintFunctions(CommandContext ctx, List<string> names, bool namesOnly)
+    {
+        var fns = ctx.Shell.Functions;
+        int code = 0;
+        foreach (var n in names.Count == 0 ? [.. fns.Keys.Order(StringComparer.Ordinal)] : names)
+        {
+            if (!fns.TryGetValue(n, out var f)) { code = 1; continue; }
+            ctx.Stdout.WriteLine(namesOnly ? (names.Count == 0 ? $"declare -f {n}" : n) : $"{n} () \n{f.Source}");
+        }
+        return code;
+    }
+
+    /// <summary>A variable's attribute letters in bash's order (a A i n r t x l u).</summary>
+    internal static string AttributeFlags(Shell sh, string name)
+    {
+        var attrs = sh.VarAttrs.GetValueOrDefault(name, "");
+        sh.Arrays.TryGetValue(name, out var array);
+        return string.Concat("aAinrtxlu".Where(c => c == 'a' ? array is { Assoc: false } : c == 'A' ? array is { Assoc: true } : attrs.Contains(c)));
+    }
+
+    /// <summary>`declare -p NAME`: a line that recreates the variable when evaluated; null when there is no such variable.</summary>
+    internal static string? DeclareLine(Shell sh, string name)
+    {
+        var flags = AttributeFlags(sh, name);
+        var head = $"declare -{(flags.Length == 0 ? "-" : flags)} {name}";
+        static string Quote(string v) => v.Any(c => c < 32 || c == 127) ? Printf.ShellQuote(v)
+            : "\"" + v.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("$", "\\$").Replace("`", "\\`") + "\"";
+        if (sh.Arrays.TryGetValue(name, out var a))
+        {
+            if (a.Items.Count == 0) return head + "=()";
+            var items = a.Items.Select(kv => $"[{(a.Assoc && !kv.Key.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') ? Quote(kv.Key) : kv.Key)}]={Quote(kv.Value)}");
+            return head + "=(" + (a.Assoc ? string.Concat(items.Select(i => i + " ")) : string.Join(' ', items)) + ")";
+        }
+        return sh.Environment.TryGetValue(name, out var value) ? head + "=" + Quote(value) : flags.Length > 0 ? head : null;
+    }
+
     static void RegisterScriptingCommands(Shell shell)
     {
         shell.Register("exit", (Func<CommandContext, int>)(ctx => throw new ExitSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255)), "Exit the shell");
-        shell.Register("return", (Func<CommandContext, int>)(ctx => throw new ReturnSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255)), "Return from a function");
+        shell.Register("return", (Func<CommandContext, int>)(ctx =>
+        {
+            if (!ctx.Shell.InFunction && ctx.Shell.SourceDepth == 0) throw new ShellException("can only `return' from a function or sourced script", 2);
+            throw new ReturnSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255);
+        }), "Return from a function");
         shell.Register("break", (Func<CommandContext, int>)(ctx => LoopJump(ctx, true)), "Exit a loop");
         shell.Register("continue", (Func<CommandContext, int>)(ctx => LoopJump(ctx, false)), "Next loop iteration");
 
@@ -44,31 +128,50 @@ internal static partial class Builtins
 
         shell.Register("trap", ctx =>
         {
-            // EXIT actions run when the tool call or script ends; other signals never arrive here
+            // EXIT runs when the tool call or script ends, ERR after a failing command, RETURN as a function returns;
+            // other signals never arrive here
             var args = ctx.Args.Where(a => a != "--").ToList();
             var traps = ctx.Shell.Traps;
-            if (args.Count == 0 || args is ["-p"])
+            static string Name(string sig)
             {
-                foreach (var (sig, action) in traps) ctx.Stdout.WriteLine($"trap -- '{action}' {sig}");
+                var name = sig.ToUpperInvariant();
+                if (name.StartsWith("SIG")) name = name[3..];
+                return name == "0" ? "EXIT" : name;
+            }
+            if (args.Count == 0 || args[0] == "-p")
+            {
+                var only = args.Skip(1).Select(Name).ToHashSet();
+                foreach (var (sig, action) in traps)
+                    if (only.Count == 0 || only.Contains(sig)) ctx.Stdout.WriteLine($"trap -- {Shell.QuoteValue(action)} {sig}");
                 return 0;
             }
             if (args[0] == "-l") { ctx.Stdout.WriteLine(" 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 9) SIGKILL\t15) SIGTERM"); return 0; }
             var (act, signals) = args.Count == 1 ? (null, args) : (args[0], args.Skip(1).ToList());
             foreach (var sig in signals)
-            {
-                var name = sig.ToUpperInvariant();
-                if (name.StartsWith("SIG")) name = name[3..];
-                if (name == "0") name = "EXIT";
-                if (act is null or "-") traps.Remove(name);
-                else traps[name] = act;
-            }
+                if (act is null or "-") traps.Remove(Name(sig)); else traps[Name(sig)] = act;
             return 0;
-        }, "Run a command when the shell exits (EXIT)");
+        }, "Run a command when the shell exits (EXIT), a command fails (ERR) or a function returns (RETURN)");
 
         shell.Register("shopt", ctx =>
         {
-            string[] known = ["dotglob", "expand_aliases", "extglob", "failglob", "globstar", "inherit_errexit", "lastpipe", "nocaseglob", "nullglob"];
+            string[] known = ["assoc_expand_once", "autocd", "cdable_vars", "cdspell", "checkhash", "checkjobs", "checkwinsize", "cmdhist",
+                "complete_fullquote", "direxpand", "dirspell", "dotglob", "execfail", "expand_aliases", "extdebug", "extglob", "extquote",
+                "failglob", "force_fignore", "globasciiranges", "globskipdots", "globstar", "gnu_errfmt", "histappend", "histreedit",
+                "histverify", "hostcomplete", "huponexit", "inherit_errexit", "interactive_comments", "lastpipe", "lithist",
+                "localvar_inherit", "localvar_unset", "login_shell", "mailwarn", "no_empty_cmd_completion", "nocaseglob", "nocasematch",
+                "noexpand_translation", "nullglob", "patsub_replacement", "progcomp", "progcomp_alias", "promptvars", "restricted_shell",
+                "shift_verbose", "sourcepath", "varredir_close", "xpg_echo"];
             var a = Args.Parse(ctx.Args, "supqo");
+            if (a.Has('o'))
+            {
+                // shopt -o: the set -o options
+                foreach (var n in a.Positional)
+                    if (!ctx.Shell.SetOption(n, a.Has('s')) && (a.Has('s') || a.Has('u'))) throw new ShellException($"{n}: invalid option name");
+                if (a.Has('s') || a.Has('u')) return 0;
+                foreach (var (n, on) in ctx.Shell.OptionList)
+                    if (a.Positional.Count == 0 || a.Positional.Contains(n)) ctx.Stdout.WriteLine($"{n,-15}\t{(on ? "on" : "off")}");
+                return 0;
+            }
             var names = a.Positional.Count > 0 ? a.Positional.ToList() : known.ToList();
             if (a.Has('s') || a.Has('u'))
             {
@@ -82,102 +185,357 @@ internal static partial class Builtins
             int code = 0;
             foreach (var n in names)
             {
+                if (!known.Contains(n)) { ctx.Stderr.WriteLine($"shopt: {n}: invalid shell option name"); code = 1; continue; }
                 bool on = ctx.Shell.Shopts.Contains(n);
                 if (code == 0 && !on) code = 1;
                 if (!a.Has('q')) ctx.Stdout.WriteLine($"{n,-15}\t{(on ? "on" : "off")}");
             }
             return code;
-        }, "Set shell options (nullglob, dotglob, globstar)");
+        }, "Set shell options (nullglob, dotglob, globstar, extglob, nocasematch ...)");
 
         shell.Register("set", ctx =>
         {
             var args = ctx.Args.ToList();
+            var sh = ctx.Shell;
             if (args.Count == 0)
             {
-                foreach (var (k, v) in ctx.Shell.Environment.OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}");
+                foreach (var (k, v) in sh.Environment.OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}");
                 return 0;
             }
             int i = 0;
             for (; i < args.Count; i++)
             {
                 var a = args[i];
-                if (a == "--") { i++; ctx.Shell.Positional = args.Skip(i).ToList(); return 0; }
+                if (a == "--") { i++; sh.Positional = args.Skip(i).ToList(); return 0; }
+                if (a == "-") { i++; break; }
                 if (a.Length < 2 || a[0] is not ('-' or '+')) break;
                 bool on = a[0] == '-';
                 foreach (var c in a[1..])
                 {
-                    if (c == 'e') ctx.Shell.Errexit = on;
-                    else if (c == 'u') ctx.Shell.Nounset = on;
-                    else if (c == 'o')
+                    if (c == 'o')
                     {
-                        var opt = i + 1 < args.Count ? args[++i] : throw new ShellException("-o: option name required", 2);
-                        if (opt == "pipefail") ctx.Shell.Pipefail = on;
-                        else if (opt == "errexit") ctx.Shell.Errexit = on;
-                        else if (opt == "nounset") ctx.Shell.Nounset = on;
-                        // xtrace, noclobber...: accepted, not enforced (bash-like, simplified)
+                        if (i + 1 >= args.Count)
+                        {
+                            // set -o / set +o alone: list the options (as commands for +o)
+                            foreach (var (n, value) in sh.OptionList)
+                                ctx.Stdout.WriteLine(on ? $"{n,-15}\t{(value ? "on" : "off")}" : $"set {(value ? '-' : '+')}o {n}");
+                            continue;
+                        }
+                        var opt = args[++i];
+                        if (!sh.SetOption(opt, on)) throw new ShellException($"{opt}: invalid option name", 2);
                     }
+                    else if ("eufxC".Contains(c)) sh.SetOption(c switch { 'e' => "errexit", 'u' => "nounset", 'f' => "noglob", 'x' => "xtrace", _ => "noclobber" }, on);
+                    else if (!"abhkmnpvBEHPT".Contains(c)) throw new ShellException($"{a[0]}{c}: invalid option", 2); // accepted, no effect here
                 }
             }
-            if (i < args.Count) ctx.Shell.Positional = args.Skip(i).ToList();
+            if (i < args.Count) sh.Positional = args.Skip(i).ToList();
             return 0;
-        }, "Set shell options (-e, -o pipefail) or positional parameters");
+        }, "Set shell options (-e, -u, -x, -f, -C, -o pipefail) or positional parameters");
 
         CommandHandler declare = ctx =>
         {
-            bool local = ctx.Name == "local";
-            foreach (var a in ctx.Args.Where(a => !a.StartsWith('-') && !a.StartsWith('+')))
+            var sh = ctx.Shell;
+            string on = ctx.Name == "readonly" ? "r" : "", off = "", listOnly = "";
+            bool print = false, functions = false, functionNames = false, global = false;
+            var names = new List<string>();
+            foreach (var a in ctx.Args)
             {
-                int eq = a.IndexOf('=');
-                var name = eq > 0 ? a[..eq] : a;
-                var value = eq > 0 ? a[(eq + 1)..] : null;
-                if (local || ctx.Name is "declare" or "typeset" && ctx.Shell.InFunction) ctx.Shell.DeclareLocal(name, value);
-                else ctx.Shell.Environment[name] = value ?? ctx.Shell.Environment.GetValueOrDefault(name, "");
+                if (names.Count > 0 || a.Length < 2 || a[0] is not ('-' or '+') || a == "--") { if (a != "--" || names.Count > 0) names.Add(a); continue; }
+                foreach (var c in a[1..])
+                    switch (c)
+                    {
+                        case 'p': print = true; break;
+                        case 'f': functions = true; break;
+                        case 'F': functionNames = true; break;
+                        case 'g': global = true; break;
+                        case 'a' or 'A': listOnly += c; break; // arrays were declared before the built-in ran
+                        case 't': break;
+                        case 'i' or 'r' or 'x' or 'l' or 'u' or 'n': if (a[0] == '-') on += c; else off += c; break;
+                        default: throw new ShellException($"-{c}: invalid option", 2);
+                    }
             }
-            return Task.FromResult(0);
+            if (functions || functionNames) return Task.FromResult(PrintFunctions(ctx, names, functionNames));
+            if (names.Count == 0)
+            {
+                // declare / declare -p / readonly / declare -x ...: list what has those attributes
+                foreach (var n in sh.Environment.Keys.Concat(sh.Arrays.Keys).Distinct().Order(StringComparer.Ordinal))
+                    if ((on + listOnly).All(c => AttributeFlags(sh, n).Contains(c)) && DeclareLine(sh, n) is { } line)
+                        ctx.Stdout.WriteLine(print || on.Length + listOnly.Length > 0 ? line : $"{n}={(sh.Arrays.ContainsKey(n) ? line[(line.IndexOf('=') + 1)..] : Printf.ShellQuote(sh.Environment[n]))}");
+                return Task.FromResult(0);
+            }
+            int code = 0;
+            if (print)
+            {
+                foreach (var n in names)
+                    if (DeclareLine(sh, n) is { } line) ctx.Stdout.WriteLine(line);
+                    else { ctx.Stderr.WriteLine($"bash: {ctx.Name}: {n}: not found"); code = 1; }
+                return Task.FromResult(code);
+            }
+            bool local = ctx.Name == "local" || ctx.Name is "declare" or "typeset" && sh.InFunction && !global;
+            foreach (var arg in names)
+            {
+                int eq = arg.IndexOf('=');
+                bool append = eq > 0 && arg[eq - 1] == '+';
+                var name = eq > 0 ? arg[..(append ? eq - 1 : eq)] : arg;
+                var value = eq > 0 ? arg[(eq + 1)..] : null;
+                try
+                {
+                    if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException($"`{arg}': not a valid identifier");
+                    if (local) sh.DeclareLocal(name, null); // shortcut: `local x` is empty here, unset in bash
+                    if (on.Contains('n'))
+                    {
+                        // a nameref holds the name of the variable it stands for
+                        sh.SetAttrs(name, "n");
+                        if (value != null) sh.Environment[name] = value;
+                        continue;
+                    }
+                    var target = sh.Resolve(name);
+                    sh.SetAttrs(target, on.Replace("r", ""), off);
+                    if (value != null) sh.SetVar(name, value, append);
+                    else if (!sh.Environment.ContainsKey(target) && !sh.Arrays.ContainsKey(target)) sh.Environment[target] = "";
+                    if (on.Contains('r')) sh.SetAttrs(target, "r");
+                }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"bash: {ctx.Name}: {e.Message}"); code = 1; }
+            }
+            return Task.FromResult(code);
         };
         shell.Register("local", declare, "Declare function-local variables");
-        shell.Register("declare", declare, "Declare variables");
-        shell.Register("typeset", declare, "Declare variables");
-        shell.Register("readonly", declare, "Declare variables (not enforced)");
+        shell.Register("declare", declare, "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)");
+        shell.Register("typeset", declare, "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)");
+        shell.Register("readonly", declare, "Make variables read-only");
 
         shell.Register("read", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "rsea", "ptdnu");
+            var a = Args.Parse(ctx.Args, "rsea", "ptdnuNi");
+            var sh = ctx.Shell;
             var names = a.Positional.Count > 0 ? a.Positional : ["REPLY"];
+            var input = ctx.StdinBuffer;
+            if (a.Value('u') is { } u && u != "0")
+                input = int.TryParse(u, out var fd) && sh.InputFd(fd) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
             var delim = a.Value('d') is { } dv ? (dv.Length == 0 ? '\0' : dv[0]) : '\n';
-            var line = ctx.ReadLine(delim);
-            var env = ctx.Shell.Environment;
-            if (line == null) { foreach (var n in names) env[n] = ""; return 1; }
+            string? line;
+            if (a.Value('N') is { } exact) line = input.ReadChars(int.Parse(exact), null);
+            else if (a.Value('n') is { } upTo) line = input.ReadChars(int.Parse(upTo), delim);
+            else
+            {
+                line = input.ReadLine(delim);
+                // without -r, a backslash at the end of a line joins it to the next one
+                while (!a.Has('r') && line != null && input.LastTerminated && delim == '\n' && EndsWithEscape(line) && input.ReadLine() is { } more)
+                    line = line[..^1] + more;
+            }
+            if (line == null) { foreach (var n in names) sh.SetVar(n, ""); return 1; }
             if (!a.Has('r')) line = System.Text.RegularExpressions.Regex.Replace(line, @"\\(.)", "$1");
+            var ifs = sh.Ifs;
             if (a.Has('a'))
             {
                 // read -a NAME: every field becomes an element
-                ctx.Shell.Unset(names[0]);
-                var array = ctx.Shell.Writable(names[0]);
-                foreach (var field in Shell.SplitFields(line, env.GetValueOrDefault("IFS", " \t\n"))) array.Set(array.Next.ToString(), field);
+                sh.Unset(names[0]);
+                var array = sh.Writable(names[0]);
+                foreach (var field in Shell.SplitFields(line, ifs)) array.Set(array.Next.ToString(), field);
             }
-            else if (a.Positional.Count == 0) env["REPLY"] = line;
+            else if (a.Positional.Count == 0) sh.SetVar("REPLY", line);
             else
             {
-                var fields = Shell.SplitFields(line, env.GetValueOrDefault("IFS", " \t\n"), names.Count);
-                for (int i = 0; i < names.Count; i++) env[names[i]] = i < fields.Count ? fields[i] : "";
+                var fields = ReadFields(line, ifs, names.Count);
+                for (int i = 0; i < names.Count; i++) sh.SetVar(names[i], i < fields.Count ? fields[i] : "");
             }
             // like bash, a final line with no trailing newline is still assigned, but read reports end of input
-            return ctx.LastLineTerminated ? 0 : 1;
+            return input.LastTerminated ? 0 : 1;
         }, "Read a line from stdin into variables");
 
         CommandHandler mapfile = ctx =>
         {
-            var a = Args.Parse(ctx.Args, "t", "dnsuCc");
+            var a = Args.Parse(ctx.Args, "t", "dnsuCcO");
+            var sh = ctx.Shell;
             var name = a.Positional.Count > 0 ? a.Positional[0] : "MAPFILE";
-            ctx.Shell.Unset(name);
-            var array = ctx.Shell.Writable(name);
-            while (ctx.ReadLine() is { } line)
-                array.Set(array.Next.ToString(), a.Has('t') || !ctx.LastLineTerminated ? line : line + "\n");
+            var input = ctx.StdinBuffer;
+            if (a.Value('u') is { } u && u != "0")
+                input = int.TryParse(u, out var fd) && sh.InputFd(fd) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
+            var delim = a.Value('d') is { } dv ? (dv.Length == 0 ? '\0' : dv[0]) : '\n';
+            long max = a.Value('n') is { } n ? long.Parse(n) : 0, skip = a.Value('s') is { } sk ? long.Parse(sk) : 0;
+            long index = a.Value('O') is { } origin ? long.Parse(origin) : 0;
+            if (a.Value('O') == null) sh.Unset(name); // -O keeps what the array already holds
+            var array = sh.Writable(name);
+            for (long count = 0; (max == 0 || count < max) && input.ReadLine(delim) is { } line;)
+            {
+                if (skip > 0) { skip--; continue; }
+                array.Set((index++).ToString(), a.Has('t') || !input.LastTerminated ? line : line + delim);
+                count++;
+            }
             return Task.FromResult(0);
         };
         shell.Register("mapfile", mapfile, "Read lines from stdin into an array (-t drops the newlines)");
         shell.Register("readarray", mapfile, "Read lines from stdin into an array (-t drops the newlines)");
+
+        shell.Register("getopts", ctx =>
+        {
+            if (ctx.Args.Count < 2) throw new ShellException("usage: getopts optstring name [arg ...]", 2);
+            var sh = ctx.Shell;
+            string spec = ctx.Args[0], name = ctx.Args[1];
+            var args = ctx.Args.Count > 2 ? ctx.Args.Skip(2).ToList() : sh.Positional;
+            bool silent = spec.StartsWith(':');
+            int optind = int.TryParse(sh.GetVariable("OPTIND"), out var oi) && oi > 0 ? oi : 1;
+            // where we are inside a group of options like -abc; restarts when the script resets OPTIND
+            int pos = sh.GetoptsState.Optind == optind ? sh.GetoptsState.Pos : 1;
+            int Done(int code, string result)
+            {
+                sh.SetVar(name, result);
+                sh.GetoptsState = (optind, pos);
+                sh.SetVar("OPTIND", optind.ToString());
+                return code;
+            }
+            if (optind > args.Count) return Done(1, "?");
+            var arg = args[optind - 1];
+            if (pos == 1)
+            {
+                if (arg == "--") { optind++; return Done(1, "?"); }
+                if (arg.Length < 2 || arg[0] != '-') return Done(1, "?");
+            }
+            char c = arg[pos];
+            int at = c == ':' ? -1 : spec.IndexOf(c);
+            if (++pos >= arg.Length) { optind++; pos = 1; }
+            if (at < 0)
+            {
+                if (silent) sh.SetVar("OPTARG", c.ToString());
+                else { ctx.Stderr.WriteLine($"{sh.GetVariable("0")}: illegal option -- {c}"); sh.Unset("OPTARG"); }
+                return Done(0, "?");
+            }
+            if (at + 1 >= spec.Length || spec[at + 1] != ':') { sh.Unset("OPTARG"); return Done(0, c.ToString()); }
+            if (pos > 1) { sh.SetVar("OPTARG", arg[pos..]); optind++; pos = 1; }
+            else if (optind <= args.Count) sh.SetVar("OPTARG", args[optind++ - 1]);
+            else if (silent) { sh.SetVar("OPTARG", c.ToString()); return Done(0, ":"); }
+            else
+            {
+                ctx.Stderr.WriteLine($"{sh.GetVariable("0")}: option requires an argument -- {c}");
+                sh.Unset("OPTARG");
+                return Done(0, "?");
+            }
+            return Done(0, c.ToString());
+        }, "Parse command-line options");
+
+        shell.Register("exec", async ctx =>
+        {
+            // exec with only redirections is handled by the shell; with a command, the command's status ends the shell
+            var args = ctx.Args.SkipWhile(a => a is "-c" or "-l").ToList();
+            if (args.Count == 0) return 0;
+            throw new ExitSignal(await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true));
+        }, "Replace the shell with a command, or redirect the shell's own input and output");
+
+        shell.Register("wait", ctx =>
+        {
+            // background jobs ran to completion when they were started: wait just reports their status
+            int code = 0;
+            var ids = ctx.Args.Where(a => !a.StartsWith('-')).ToList();
+            if (ids.Count == 0) ctx.Shell.ForgetJobs();
+            foreach (var id in ids)
+            {
+                if (id.StartsWith('%')) { code = 0; continue; }
+                if (!int.TryParse(id, out var pid)) { ctx.Stderr.WriteLine($"bash: wait: `{id}': not a pid or valid job spec"); code = 2; continue; }
+                code = ctx.Shell.WaitFor(pid);
+                if (code == 127) ctx.Stderr.WriteLine($"bash: wait: pid {pid} is not a child of this shell");
+            }
+            return code;
+        }, "Wait for background jobs (they run to completion when started)");
+        shell.Register("jobs", _ => 0, "List background jobs (none are ever still running)");
+        shell.Register("disown", _ => 0, "Forget background jobs");
+
+        shell.Register("kill", ctx =>
+        {
+            if (ctx.Args is ["-l", ..]) { ctx.Stdout.WriteLine(" 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 9) SIGKILL\t15) SIGTERM"); return 0; }
+            int signal = 15, code = 0;
+            var targets = new List<string>();
+            for (int i = 0; i < ctx.Args.Count; i++)
+            {
+                var a = ctx.Args[i];
+                if (a is "-s" or "-n" && i + 1 < ctx.Args.Count) { a = "-" + ctx.Args[++i]; }
+                if (a.StartsWith('-') && targets.Count == 0)
+                {
+                    var sig = a[1..].ToUpperInvariant().Replace("SIG", "");
+                    signal = int.TryParse(sig, out var num) ? num : sig switch { "HUP" => 1, "INT" => 2, "QUIT" => 3, "KILL" => 9, "TERM" => 15, _ => 15 };
+                    continue;
+                }
+                targets.Add(a);
+            }
+            if (targets.Count == 0) throw new ShellException("usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]", 2);
+            foreach (var t in targets)
+            {
+                if (t == "4242") { if (signal != 0) throw new ExitSignal(128 + signal); continue; } // the shell itself
+                ctx.Stderr.WriteLine(t.StartsWith('%') ? $"bash: kill: {t}: no such job" : $"bash: kill: ({t}) - No such process");
+                code = 1;
+            }
+            return code;
+        }, "Send a signal to a process (background jobs have always finished already)");
+
+        shell.Register("hash", ctx =>
+        {
+            int code = 0;
+            foreach (var n in ctx.Args.Where(a => !a.StartsWith('-')))
+                if (!ctx.Shell.Commands.ContainsKey(n)) { ctx.Stderr.WriteLine($"bash: hash: {n}: not found"); code = 1; }
+            return code;
+        }, "Remember command locations");
+
+        shell.Register("builtin", ctx => ctx.Args.Count == 0 ? Task.FromResult(0)
+            : IsShellBuiltin(ctx.Shell, ctx.Args[0]) ? ctx.Shell.InvokeAsync(ctx.Args, ctx.Io, ctx.CancellationToken, skipFunctions: true)
+            : throw new ShellException($"{ctx.Args[0]}: not a shell builtin"), "Run a shell builtin, bypassing a function of the same name");
+
+        string Dirs(Shell sh)
+        {
+            var home = sh.Environment.GetValueOrDefault("HOME", "");
+            string Short(string d) => home.Length > 1 && (d == home || d.StartsWith(home + "/")) ? "~" + d[home.Length..] : d;
+            return string.Join(' ', new[] { sh.Cwd }.Concat(sh.DirStack).Select(Short));
+        }
+        int ChangeDir(CommandContext ctx, string dir)
+        {
+            var abs = ctx.ResolvePath(dir);
+            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{dir}: No such file or directory");
+            ctx.Shell.Environment["OLDPWD"] = ctx.Shell.Cwd;
+            ctx.Shell.Cwd = abs;
+            return 0;
+        }
+        shell.Register("pushd", ctx =>
+        {
+            var sh = ctx.Shell;
+            var args = ctx.Args.Where(a => a != "-n").ToList();
+            var old = sh.Cwd;
+            if (args.Count == 0)
+            {
+                if (sh.DirStack.Count == 0) throw new ShellException("no other directory");
+                ChangeDir(ctx, sh.DirStack[0]);
+                sh.DirStack[0] = old;
+            }
+            else { ChangeDir(ctx, args[0]); sh.DirStack.Insert(0, old); }
+            ctx.Stdout.WriteLine(Dirs(sh));
+            return 0;
+        }, "Change directory, remembering the old one");
+        shell.Register("popd", ctx =>
+        {
+            var sh = ctx.Shell;
+            if (sh.DirStack.Count == 0) throw new ShellException("directory stack empty");
+            ChangeDir(ctx, sh.DirStack[0]);
+            sh.DirStack.RemoveAt(0);
+            ctx.Stdout.WriteLine(Dirs(sh));
+            return 0;
+        }, "Return to the directory pushd left");
+        shell.Register("dirs", ctx =>
+        {
+            if (ctx.Args.Contains("-c")) { ctx.Shell.DirStack.Clear(); return 0; }
+            var line = Dirs(ctx.Shell);
+            if (ctx.Args.Any(a => a is "-p" or "-v"))
+            {
+                var all = line.Split(' ');
+                for (int i = 0; i < all.Length; i++) ctx.Stdout.WriteLine(ctx.Args.Contains("-v") ? $"{i,2}  {all[i]}" : all[i]);
+            }
+            else ctx.Stdout.WriteLine(line);
+            return 0;
+        }, "Show the directory stack");
+
+        shell.Register("ulimit", ctx =>
+        {
+            if (ctx.Args.Any(a => !a.StartsWith('-'))) return 0; // setting a limit: accepted
+            ctx.Stdout.WriteLine(ctx.Args.Contains("-n") ? "1024" : ctx.Args.Contains("-s") ? "8192" : ctx.Args.Contains("-c") ? "0" : "unlimited");
+            return 0;
+        }, "Show resource limits");
+        shell.Register("times", ctx => { ctx.Stdout.Write("0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n"); return 0; }, "Show the shell's CPU times");
 
         shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken), "Run arguments as a shell command");
 
@@ -191,14 +549,15 @@ internal static partial class Builtins
 
         shell.Register("command", async ctx =>
         {
-            var args = ctx.Args.ToList();
+            var args = ctx.Args.SkipWhile(a => a == "-p").ToList();
             bool describe = args.Count > 0 && args[0] is "-v" or "-V";
-            if (!describe) return args.Count == 0 ? 0 : await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken);
+            if (!describe) return args.Count == 0 ? 0 : await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true);
             int code = 0;
             foreach (var n in args.Skip(1))
             {
+                if (args[0] == "-V") { if (!Describe(ctx, n, false)) code = 1; continue; }
                 if (ctx.Shell.Aliases.TryGetValue(n, out var al)) ctx.Stdout.WriteLine($"alias {n}='{al}'");
-                else if (ctx.Shell.Functions.ContainsKey(n) || IsShellBuiltin(ctx.Shell, n)) ctx.Stdout.WriteLine(n);
+                else if (ShellKeywords.Contains(n) || ctx.Shell.Functions.ContainsKey(n) || IsShellBuiltin(ctx.Shell, n)) ctx.Stdout.WriteLine(n);
                 else if (ctx.Shell.Commands.ContainsKey(n)) ctx.Stdout.WriteLine($"/usr/bin/{n}");
                 else code = 1;
             }

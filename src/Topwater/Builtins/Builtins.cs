@@ -216,7 +216,7 @@ internal static partial class Builtins
             var errors = new List<string>();
             var text = Printf.Format(args[0], args.Skip(1).ToList(), errors);
             if (variable == null) ctx.Stdout.Write(text);
-            else ctx.Shell.Environment[variable] = text;
+            else ctx.Shell.SetVar(variable, text);
             foreach (var e in errors) ctx.Stderr.WriteLine(e);
             return errors.Count > 0 ? 1 : 0;
         }, "Format and print data");
@@ -242,27 +242,49 @@ internal static partial class Builtins
 
         shell.Register("export", ctx =>
         {
-            var args = ctx.Args.Where(a => a != "-p").ToList();
+            var sh = ctx.Shell;
+            bool remove = ctx.Args.TakeWhile(a => a.StartsWith('-')).Any(a => a.Contains('n'));
+            var args = ctx.Args.SkipWhile(a => a.StartsWith('-')).ToList();
             if (args.Count == 0)
             {
-                foreach (var (k, v) in ctx.Shell.Environment.OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"declare -x {k}=\"{v}\"");
+                foreach (var k in sh.Environment.Keys.Concat(sh.Arrays.Keys).Distinct().Order(StringComparer.Ordinal))
+                    if (sh.HasAttr(k, 'x') && DeclareLine(sh, k) is { } line) ctx.Stdout.WriteLine(line);
                 return 0;
             }
+            int code = 0;
             foreach (var a in args)
             {
                 int eq = a.IndexOf('=');
-                if (eq > 0) ctx.Shell.Environment[a[..eq]] = a[(eq + 1)..];
-                else ctx.Shell.Environment.TryAdd(a, "");
+                bool append = eq > 0 && a[eq - 1] == '+';
+                var name = eq > 0 ? a[..(append ? eq - 1 : eq)] : a;
+                try
+                {
+                    if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException($"`{a}': not a valid identifier");
+                    if (eq > 0) sh.SetVar(name, a[(eq + 1)..], append);
+                    else if (!sh.Arrays.ContainsKey(sh.Resolve(name))) sh.Environment.TryAdd(sh.Resolve(name), "");
+                    if (remove) sh.SetAttrs(sh.Resolve(name), "", "x"); else sh.SetAttrs(sh.Resolve(name), "x");
+                }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"bash: export: {e.Message}"); code = 1; }
             }
-            return 0;
+            return code;
         }, "Set environment variables");
 
-        shell.Register("unset", ctx =>
+        shell.Register("unset", async ctx =>
         {
-            bool functions = ctx.Args.Contains("-f");
-            foreach (var a in ctx.Args.Where(a => !a.StartsWith('-')))
-                if (functions) ctx.Shell.Functions.Remove(a); else ctx.Shell.Unset(a);
-            return 0;
+            var flags = string.Concat(ctx.Args.TakeWhile(a => a.StartsWith('-')));
+            int code = 0;
+            foreach (var arg in ctx.Args.SkipWhile(a => a.StartsWith('-')))
+            {
+                try
+                {
+                    var a = await ctx.Shell.ExpandSubscriptAsync(arg, ctx.Io, ctx.CancellationToken);
+                    // with neither -v nor -f, a name that is no variable but a function unsets the function
+                    if (flags.Contains('f') || !flags.Contains('v') && !ctx.Shell.IsVariableSet(a) && ctx.Shell.Functions.ContainsKey(a)) ctx.Shell.Functions.Remove(a);
+                    else ctx.Shell.Unset(a, nameref: flags.Contains('n'));
+                }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"bash: unset: {e.Message}"); code = 1; }
+            }
+            return code;
         }, "Remove variables or functions (-f)");
 
         shell.Register("env", ctx =>
@@ -312,18 +334,14 @@ internal static partial class Builtins
             {
                 if (opts.Has('t') || opts.Has('p') || opts.Has('P'))
                 {
-                    var kind = ctx.Shell.Aliases.ContainsKey(a) ? "alias" : ctx.Shell.Functions.ContainsKey(a) ? "function"
+                    var kind = ctx.Shell.Aliases.ContainsKey(a) ? "alias" : ShellKeywords.Contains(a) ? "keyword" : ctx.Shell.Functions.ContainsKey(a) ? "function"
                         : IsShellBuiltin(ctx.Shell, a) ? "builtin" : ctx.Shell.Commands.ContainsKey(a) ? "file" : null;
                     if (kind == null) { code = 1; continue; }
                     if (opts.Has('t')) ctx.Stdout.WriteLine(kind);
                     else if (kind == "file" || (opts.Has('P') && ctx.Shell.Commands.ContainsKey(a))) ctx.Stdout.WriteLine($"/usr/bin/{a}");
                     continue;
                 }
-                if (ctx.Shell.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"{a} is aliased to `{v}'");
-                else if (ctx.Shell.Functions.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is a function");
-                else if (IsShellBuiltin(ctx.Shell, a)) ctx.Stdout.WriteLine($"{a} is a shell builtin");
-                else if (ctx.Shell.Commands.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is /usr/bin/{a}");
-                else { ctx.Stderr.WriteLine($"type: {a}: not found"); code = 1; }
+                if (!Describe(ctx, a, opts.Has('a'))) code = 1;
             }
             return code;
         }, "Describe a command");
@@ -349,8 +367,10 @@ internal static partial class Builtins
                 return await ctx.Shell.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken);
             }
             var text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0]));
+            if (!isBash) ctx.Shell.SourceDepth++;
             try { return await ctx.Shell.RunScriptTextAsync(text, io, subshell: isBash, ctx.CancellationToken, args.Count > 1 || isBash ? args.Skip(1).ToList() : null); }
             catch (ReturnSignal r) when (!isBash) { return r.Code; }   // `return` in a sourced file ends that file only
+            finally { if (!isBash) ctx.Shell.SourceDepth--; }
         };
         shell.Register("bash", runScript, "Run a command string (-c) or script file");
         shell.Register("sh", runScript, "Run a command string (-c) or script file");
@@ -518,7 +538,10 @@ internal static class Test
             "-f" => fs.IsFile(path),
             "-d" => fs.IsDirectory(path),
             "-s" => fs.IsFile(path) && fs.Stat(path).Size > 0,
-            "-L" => false,
+            "-L" or "-h" or "-b" or "-c" or "-p" or "-S" or "-t" or "-g" or "-u" or "-k" => false, // no links, devices, pipes, sockets, terminals or special bits
+            "-O" or "-G" or "-N" => fs.Exists(path),
+            "-v" => shell.IsVariableSet(arg),
+            "-o" => shell.OptionList.Any(o => o.Name == arg && o.On),
             _ => throw new ShellException($"{op}: unary operator expected", 2),
         };
     }
@@ -608,7 +631,7 @@ internal static class Test
 
 internal static class Printf
 {
-    static readonly System.Text.RegularExpressions.Regex Spec = new(@"%([-0 +#]*)(\*|\d*)(?:\.(\*|\d*))?([sdifxXoceEgGbq%])");
+    static readonly System.Text.RegularExpressions.Regex Spec = new(@"%([-0 +#]*)(\*|\d*)(?:\.(\*|\d*))?(?:\(([^)]*)\))?([sdiufxXoceEgGbqT%])");
     static readonly System.Text.RegularExpressions.Regex ShellSafe = new(@"^[A-Za-z0-9_./+:,=@%^-]+$");
     static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
 
@@ -748,8 +771,10 @@ internal static class Printf
             int before = next;
             sb.Append(Spec.Replace(fmt, m =>
             {
-                char conv = m.Groups[4].Value[0];
+                char conv = m.Groups[5].Value[0];
                 if (conv == '%') return "%";
+                if (conv == 'u') conv = 'd';
+                if (m.Groups[4].Success != (conv == 'T')) return m.Value;
                 var flags = m.Groups[1].Value;
                 int width = 0;
                 if (m.Groups[2].Value == "*")
@@ -764,9 +789,15 @@ internal static class Printf
                     prec = m.Groups[3].Value == "*" ? (int)Math.Clamp(CInteger(Take()).Value, 0, 10_000)
                         : m.Groups[3].Value.Length > 0 ? (int)Math.Min(long.Parse(m.Groups[3].Value, Inv), 10_000) : 0;
                 var arg = Take();
-                if (conv is 's' or 'b' or 'q' or 'c')
+                if (conv is 's' or 'b' or 'q' or 'c' or 'T')
                 {
-                    var text = conv switch { 'b' => Builtins.Unescape(arg, keepUnknown: true, echo: true), 'q' => ShellQuote(arg), 'c' => arg.Length > 0 ? arg[..1] : "", _ => arg };
+                    var text = conv switch
+                    {
+                        'b' => Builtins.Unescape(arg, keepUnknown: true, echo: true), 'q' => ShellQuote(arg), 'c' => arg.Length > 0 ? arg[..1] : "",
+                        // %(fmt)T: a time in seconds since the epoch; -1 or nothing is now (UTC, like the rest of this machine)
+                        'T' => Builtins.Strftime(arg is "" or "-1" or "-2" ? DateTime.UtcNow : DateTime.UnixEpoch.AddSeconds(CInteger(arg).Value), m.Groups[4].Value),
+                        _ => arg,
+                    };
                     if (prec is { } p && p < text.Length && conv != 'c') text = text[..p];
                     return flags.Contains('-') ? text.PadRight(width) : text.PadLeft(width);
                 }

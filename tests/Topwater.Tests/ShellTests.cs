@@ -118,7 +118,7 @@ public class ShellTests
         Assert.Equal(2, r.ExitCode);
         Assert.Contains("unexpected EOF", r.Stderr);
 
-        r = await Run(sh, "select f in a b; do echo $f; done");
+        r = await Run(sh, "coproc cat");
         Assert.Equal(2, r.ExitCode);
         Assert.Contains("not supported", r.Stderr);
 

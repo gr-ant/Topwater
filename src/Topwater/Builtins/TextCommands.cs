@@ -6,7 +6,7 @@ namespace Topwater;
 
 internal static partial class Builtins
 {
-    static readonly Dictionary<string, string> PosixClasses = new()
+    internal static readonly Dictionary<string, string> PosixClasses = new()
     {
         ["alpha"] = "a-zA-Z", ["digit"] = "0-9", ["alnum"] = "a-zA-Z0-9", ["upper"] = "A-Z", ["lower"] = "a-z", ["space"] = @" \t\n\r\f\v",
         ["blank"] = @" \t", ["punct"] = @"!-/:-@\[-`{-~", ["xdigit"] = "0-9A-Fa-f", ["cntrl"] = @"\x00-\x1f\x7f", ["print"] = @"\x20-\x7e",

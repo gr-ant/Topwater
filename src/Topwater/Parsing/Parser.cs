@@ -12,6 +12,8 @@ internal sealed record CommandSubPart(string Source, bool Quoted) : WordPart(Quo
 internal sealed record ArithPart(string Expr, bool Quoted) : WordPart(Quoted);
 /// <summary>&lt;(cmd): replaced by the path of a file holding cmd's output.</summary>
 internal sealed record ProcSubPart(string Source) : WordPart(true);
+/// <summary>Unquoted text that came out of an expansion (the word of ${x:-a b}): it is split and globbed like one.</summary>
+internal sealed record ExpandedTextPart(string Text) : WordPart(false);
 /// <summary>The (a b c) of name=(a b c): its source text, expanded when the assignment runs.</summary>
 internal sealed record ArrayLiteralPart(string Source) : WordPart(false);
 
@@ -54,26 +56,45 @@ internal abstract record Command
 {
     public List<Redirect> Redirects { get; init; } = [];
 }
-internal sealed record SimpleCommand(List<Assignment> Assignments, List<Word> Words) : Command;
+internal sealed record SimpleCommand(List<Assignment> Assignments, List<Word> Words) : Command
+{
+    public int Line { get; init; }
+}
 internal sealed record GroupCommand(Script Body, bool Subshell) : Command;
 internal sealed record IfCommand(List<(Script Cond, Script Body)> Branches, Script? Else) : Command;
 internal sealed record LoopCommand(Script Cond, Script Body, bool Until) : Command;
-internal sealed record ForCommand(string Var, List<Word>? Items, Script Body) : Command;
+internal sealed record ForCommand(string Var, List<Word>? Items, Script Body) : Command
+{
+    /// <summary>A select menu rather than a for loop.</summary>
+    public bool Select { get; init; }
+}
 internal sealed record ArithForCommand(string Init, string Cond, string Step, Script Body) : Command;
-internal sealed record CaseCommand(Word Subject, List<(List<Word> Patterns, Script Body)> Clauses) : Command;
-internal sealed record FunctionDef(string Name, Command Body) : Command;
+/// <summary>Terminator is ";;", ";&amp;" (fall through to the next body) or ";;&amp;" (keep testing patterns).</summary>
+internal sealed record CaseCommand(Word Subject, List<(List<Word> Patterns, Script Body, string Terminator)> Clauses) : Command;
+internal sealed record FunctionDef(string Name, Command Body) : Command
+{
+    /// <summary>The body as written, for `declare -f`.</summary>
+    public string Source { get; init; } = "";
+}
 internal sealed record ArithCommand(string Expr) : Command;
 /// <summary>[[ ... ]]: operands are words; operators (&amp;&amp; || ! ( ) == ...) are unquoted literal words.</summary>
 internal sealed record CondCommand(List<Word> Items) : Command;
 
 internal sealed record Pipeline(List<Command> Commands, bool Negate);
-internal sealed record AndOr(Pipeline First, List<(string Op, Pipeline Next)> Rest);
+internal sealed record AndOr(Pipeline First, List<(string Op, Pipeline Next)> Rest)
+{
+    /// <summary>Ended with `&amp;`: runs (to completion, in order) as a background job in a subshell.</summary>
+    public bool Background { get; init; }
+}
 internal sealed record Script(List<AndOr> Items);
 
 internal enum TokenKind { Word, Op, Redirect, Arith }
 
 internal sealed record Token(TokenKind Kind, string Op = "", Word? Word = null, Redirect? Redirect = null)
 {
+    public int Line { get; init; }
+    public int Start { get; init; }
+    public int End { get; init; }
     public override string ToString() => Kind switch
     {
         TokenKind.Word => Word!.ToString(),
@@ -91,6 +112,15 @@ internal sealed class Lexer(string s)
 
     char Peek(int o = 0) => _i + o < s.Length ? s[_i + o] : '\0';
 
+    int _linePos, _line = 1;
+
+    /// <summary>The 1-based line of position pos; positions only move forward, so this counts incrementally.</summary>
+    int LineAt(int pos)
+    {
+        for (; _linePos < pos && _linePos < s.Length; _linePos++) if (s[_linePos] == '\n') _line++;
+        return _line;
+    }
+
     public List<Token> Lex()
     {
         var tokens = new List<Token>();
@@ -99,14 +129,30 @@ internal sealed class Lexer(string s)
             while (Peek() is ' ' or '\t' or '\r') _i++;
             if (Peek() == '\\' && Peek(1) == '\n') { _i += 2; continue; }
             if (_i >= s.Length) break;
+            int count = tokens.Count, start = _i;
+            LexOne(tokens);
+            if (tokens.Count > count) tokens[count] = tokens[count] with { Line = LineAt(start), Start = start, End = _i };
+        }
+        ReadHereDocBodies(); // heredoc on the last line with no trailing newline: body is empty
+        return tokens;
+    }
+
+    /// <summary>True where a word can be an assignment: at the start of a command or after another assignment.</summary>
+    static bool CommandPosition(List<Token> tokens) =>
+        tokens.Count == 0 || tokens[^1].Kind is TokenKind.Op or TokenKind.Arith
+        || tokens[^1].Word is { } w && (Parser.TryAssignment(w) != null || w.UnquotedLiteral is "then" or "do" or "else" or "elif" or "if" or "while" or "until" or "{" or "!" or "time");
+
+    void LexOne(List<Token> tokens)
+    {
+        {
             char c = s[_i];
-            if (c == '#') { while (_i < s.Length && s[_i] != '\n') _i++; continue; }
-            if (c == '\n') { _i++; tokens.Add(new(TokenKind.Op, "\n")); ReadHereDocBodies(); continue; }
+            if (c == '#') { while (_i < s.Length && s[_i] != '\n') _i++; return; }
+            if (c == '\n') { _i++; tokens.Add(new(TokenKind.Op, "\n")); ReadHereDocBodies(); return; }
             if (char.IsDigit(c))
             {
                 int j = _i;
                 while (j < s.Length && char.IsDigit(s[j])) j++;
-                if (j < s.Length && s[j] is '>' or '<') { int fd = int.Parse(s[_i..j]); _i = j; tokens.Add(LexRedirect(fd)); continue; }
+                if (j < s.Length && s[j] is '>' or '<') { int fd = int.Parse(s[_i..j]); _i = j; tokens.Add(LexRedirect(fd)); return; }
             }
             if (c == '&' && Peek(1) == '>')
             {
@@ -114,32 +160,38 @@ internal sealed class Lexer(string s)
                 bool append = Peek() == '>';
                 if (append) _i++;
                 tokens.Add(new(TokenKind.Redirect, Redirect: new(1, append ? "&>>" : "&>", null, null)));
-                continue;
+                return;
             }
             if (tokens.Count > 0 && tokens[^1] is { Kind: TokenKind.Word } prev && prev.Word!.Is("=~"))
             {
                 tokens.Add(new(TokenKind.Word, Word: LexWord(regex: true)));
-                continue;
+                return;
             }
-            if (c == '<' && Peek(1) == '(') { tokens.Add(new(TokenKind.Word, Word: LexWord())); continue; }
-            if (c is '>' or '<') { tokens.Add(LexRedirect(c == '>' ? 1 : 0)); continue; }
+            if (c == '<' && Peek(1) == '(') { tokens.Add(new(TokenKind.Word, Word: LexWord())); return; }
+            if (c == '>' && Peek(1) == '(') throw new ParseException("process substitution >(...) is not supported by this shell (write to a file, then read it)");
+            if (c is '>' or '<') { tokens.Add(LexRedirect(c == '>' ? 1 : 0)); return; }
             if (c == '(' && Peek(1) == '(' && FindArithClose(_i + 2) is var close and >= 0)
             {
                 tokens.Add(new(TokenKind.Arith, s[(_i + 2)..close]));
                 _i = close + 2;
-                continue;
+                return;
+            }
+            if (c == ';' && Peek(1) == '&' || c == ';' && Peek(1) == ';' && Peek(2) == '&') // case fall-through terminators
+            {
+                var op = Peek(1) == '&' ? ";&" : ";;&";
+                _i += op.Length;
+                tokens.Add(new(TokenKind.Op, op));
+                return;
             }
             if ((c == '&' && Peek(1) == '&') || (c == '|' && Peek(1) == '|') || (c == ';' && Peek(1) == ';'))
             {
                 _i += 2;
                 tokens.Add(new(TokenKind.Op, new string(c, 2)));
-                continue;
+                return;
             }
-            if (c is '|' or '&' or ';' or '(' or ')') { _i++; tokens.Add(new(TokenKind.Op, c.ToString())); continue; }
-            tokens.Add(new(TokenKind.Word, Word: LexWord()));
+            if (c is '|' or '&' or ';' or '(' or ')') { _i++; tokens.Add(new(TokenKind.Op, c.ToString())); return; }
+            tokens.Add(new(TokenKind.Word, Word: LexWord(subscript: CommandPosition(tokens))));
         }
-        ReadHereDocBodies(); // heredoc on the last line with no trailing newline: body is empty
-        return tokens;
     }
 
     /// <summary>Index of the "))" closing an arithmetic expression whose body starts at k, or -1.</summary>
@@ -166,6 +218,7 @@ internal sealed class Lexer(string s)
             if (string.CompareOrdinal(s, _i, "<<<", 0, 3) == 0) op = "<<<";
             else if (string.CompareOrdinal(s, _i, "<<-", 0, 3) == 0) op = "<<-";
             else if (Peek(1) == '<') op = "<<";
+            else if (Peek(1) == '&') op = "<&";
             else op = "<";
         }
         else if (Peek(1) == '>') op = ">>";
@@ -173,7 +226,6 @@ internal sealed class Lexer(string s)
         else if (Peek(1) == '|') op = ">|";
         else op = ">";
         _i += op.Length;
-        if (op == ">|") op = ">";
 
         if (op is "<<" or "<<-")
         {
@@ -182,7 +234,7 @@ internal sealed class Lexer(string s)
             var w = LexWord();
             var doc = new HereDoc(string.Concat(w.Parts.OfType<LiteralPart>().Select(p => p.Text)), !w.Parts.Any(p => p.Quoted), op == "<<-");
             _pending.Add(doc);
-            return new(TokenKind.Redirect, Redirect: new(0, "<<", null, doc));
+            return new(TokenKind.Redirect, Redirect: new(fd, "<<", null, doc));
         }
         return new(TokenKind.Redirect, Redirect: new(fd, op, null, null));
     }
@@ -208,12 +260,40 @@ internal sealed class Lexer(string s)
         _pending.Clear();
     }
 
+    /// <summary>
+    /// At the start of an assignment word name[sub]=, the index of the subscript's closing bracket (bash lets the
+    /// subscript hold spaces there: a[i + 1]=x); otherwise -1.
+    /// </summary>
+    int SubscriptEnd()
+    {
+        int k = _i;
+        if (k >= s.Length || !(char.IsLetter(s[k]) || s[k] == '_')) return -1;
+        while (k < s.Length && (char.IsLetterOrDigit(s[k]) || s[k] == '_')) k++;
+        if (k >= s.Length || s[k] != '[') return -1;
+        for (int depth = 0; k < s.Length; k++)
+        {
+            switch (s[k])
+            {
+                case '\\': k++; break;
+                case '\'': k = s.IndexOf('\'', k + 1); if (k < 0) return -1; break;
+                case '"': for (k++; k < s.Length && s[k] != '"'; k++) if (s[k] == '\\') k++; break;
+                case '\n': return -1;
+                case '[': depth++; break;
+                case ']':
+                    if (--depth > 0) break;
+                    return k + 1 < s.Length && (s[k + 1] == '=' || s[k + 1] == '+' && k + 2 < s.Length && s[k + 2] == '=') ? k : -1;
+            }
+        }
+        return -1;
+    }
+
     /// <param name="regex">Lexes the right side of [[ x =~ re ]], where ( ) | &lt; &gt; are part of the word.</param>
-    Word LexWord(bool regex = false)
+    /// <param name="subscript">The word is in command position, where name[a b]=v is one assignment word.</param>
+    Word LexWord(bool regex = false, bool subscript = false)
     {
         var parts = new List<WordPart>();
         var lit = new StringBuilder();
-        int depth = 0;
+        int depth = 0, subscriptEnd = subscript ? SubscriptEnd() : -1;
         void Flush() { if (lit.Length > 0) { parts.Add(new LiteralPart(lit.ToString(), false)); lit.Clear(); } }
 
         while (_i < s.Length)
@@ -237,13 +317,22 @@ internal sealed class Lexer(string s)
                 _i = end + 1;
                 continue;
             }
+            // extglob: @(a|b) !(x) *(x) +(x) ?(x) are one word; only `!(` at the start of a command is not
+            if (c == '(' && !regex && lit.Length > 0 && lit[^1] is '@' or '!' or '*' or '+' or '?' && !(subscript && parts.Count == 0 && lit.ToString() == "!"))
+            {
+                int end = FindClose(_i + 1);
+                lit.Append(s, _i, end + 1 - _i);
+                _i = end + 1;
+                continue;
+            }
             if (regex && c is '(' or ')')
             {
                 depth += c == '(' ? 1 : -1;
                 if (depth < 0) break;
             }
             if (c is ' ' or '\t' or '\r' or '\n' or '|' or '&' or ';' or '(' or ')' or '<' or '>'
-                && !(regex && (c is '(' or ')' or '|' or '<' or '>' || (depth > 0 && c is ' ' or '\t')))) break;
+                && !(regex && (c is '(' or ')' or '|' or '<' or '>' || (depth > 0 && c is ' ' or '\t')))
+                && !(_i < subscriptEnd && c is ' ' or '\t')) break;
             switch (c)
             {
                 case '\\':
@@ -312,6 +401,7 @@ internal sealed class Lexer(string s)
                     while (j < s.Length && j < i + 2 && IsOct(s[j])) j++;
                     sb.Append((char)(Convert.ToInt32(s[(i - 1)..j], 8) & 0xFF));
                     i = j;
+                    if (sb[^1] == '\0') SkipToQuote(ref i, sb);
                     break;
                 case 'x' or 'u' or 'U':
                     int limit = n == 'x' ? 2 : n == 'u' ? 4 : 8, k = i;
@@ -320,6 +410,7 @@ internal sealed class Lexer(string s)
                     long code = Convert.ToInt64(s[i..k], 16);
                     sb.Append(code <= 0x10FFFF && code is < 0xD800 or > 0xDFFF ? char.ConvertFromUtf32((int)code) : "\uFFFD");
                     i = k;
+                    if (code == 0) SkipToQuote(ref i, sb);
                     break;
                 case 'c' when i < s.Length:
                     sb.Append((char)(char.ToUpperInvariant(s[i]) ^ 0x40));
@@ -331,6 +422,13 @@ internal sealed class Lexer(string s)
         if (i >= s.Length) throw new ParseException("unexpected EOF while looking for matching `''");
         _i = i + 1;
         return sb.ToString();
+
+        // bash strings cannot hold a NUL: $'a\0b' is just "a"
+        void SkipToQuote(ref int at, StringBuilder text)
+        {
+            text.Length--;
+            while (at < s.Length && s[at] != '\'') at += s[at] == '\\' ? 2 : 1;
+        }
     }
 
     /// <summary>Double-quoted text (terminator '"') or a heredoc body / ${...} argument (terminator null).</summary>
@@ -362,6 +460,45 @@ internal sealed class Lexer(string s)
         return parts;
     }
 
+    /// <summary>
+    /// The word inside ${x op word}. Quotes and backslashes in it quote (so "$v" in a pattern is literal); inside an
+    /// outer "...", a ' is an ordinary character. Parts are Quoted only where the word itself quotes them.
+    /// </summary>
+    public List<WordPart> LexParamWord(bool inDouble)
+    {
+        var parts = new List<WordPart>();
+        var sb = new StringBuilder();
+        void Flush() { if (sb.Length > 0) { parts.Add(new LiteralPart(sb.ToString(), false)); sb.Clear(); } }
+        while (_i < s.Length)
+        {
+            char c = s[_i];
+            if (c == '\\' && _i + 1 < s.Length)
+            {
+                char n = s[_i + 1];
+                if (n == '\n') { _i += 2; continue; }
+                // in double quotes only \$ \` \" \\ \} escape (and \& in a replacement); elsewhere any character does
+                if (inDouble && n is not ('$' or '`' or '"' or '\\' or '}' or '&')) { sb.Append(c); _i++; continue; }
+                Flush(); parts.Add(new LiteralPart(n.ToString(), true)); _i += 2;
+            }
+            else if (c == '\'' && !inDouble)
+            {
+                Flush();
+                int j = s.IndexOf('\'', _i + 1);
+                if (j < 0) throw new ParseException("unexpected EOF while looking for matching `''");
+                parts.Add(new LiteralPart(s[(_i + 1)..j], true));
+                _i = j + 1;
+            }
+            else if (c == '"') { Flush(); _i++; parts.AddRange(LexQuoted('"')); }
+            else if (c == '$' && Peek(1) == '\'' && !inDouble) { Flush(); parts.Add(new LiteralPart(LexAnsiC(), true)); }
+            else if (c == '$') { Flush(); parts.Add(LexDollar(false)); }
+            else if (c == '`') { Flush(); parts.Add(LexBacktick(false)); }
+            else { sb.Append(c); _i++; }
+        }
+        Flush();
+        if (parts.Count == 0) parts.Add(new LiteralPart("", false));
+        return parts;
+    }
+
     WordPart LexDollar(bool quoted)
     {
         char n = Peek(1);
@@ -377,6 +514,17 @@ internal sealed class Lexer(string s)
             var src = s[(_i + 2)..close];
             _i = close + 1;
             return new CommandSubPart(src, quoted);
+        }
+        if (n == '[') // $[expr]: the old spelling of $((expr))
+        {
+            int depth = 0, k = _i + 1;
+            for (; k < s.Length; k++)
+                if (s[k] == '[') depth++;
+                else if (s[k] == ']' && --depth == 0) break;
+            if (k >= s.Length) throw new ParseException("unexpected EOF while looking for matching `]'");
+            var expr = s[(_i + 2)..k];
+            _i = k + 1;
+            return new ArithPart(expr, quoted);
         }
         if (n == '{')
         {
@@ -400,7 +548,7 @@ internal sealed class Lexer(string s)
             _i = j;
             return new VariablePart(name, quoted);
         }
-        if (n is '?' or '$' or '#' or '!' or '@' or '*' || char.IsDigit(n))
+        if (n is '?' or '$' or '#' or '!' or '@' or '*' or '-' || char.IsDigit(n))
         {
             _i += 2;
             return new VariablePart(n.ToString(), quoted);
@@ -426,9 +574,28 @@ internal sealed class Lexer(string s)
     /// <summary>Index of the ')' closing a $( whose body starts at <paramref name="k"/>.</summary>
     int FindClose(int k)
     {
-        int depth = 1;
+        int depth = 1, from = k;
+        // a case statement's patterns end in an unmatched ')': 0 = awaiting `in`, 1 = in patterns, 2 = in a body
+        var cases = new Stack<int>();
+        bool Keyword(int at, string w) => string.CompareOrdinal(s, at, w, 0, w.Length) == 0 && (at == from || " \t\n;|&()".Contains(s[at - 1]))
+            && (at + w.Length >= s.Length || " \t\n;|&()".Contains(s[at + w.Length]));
         for (; k < s.Length; k++)
         {
+            if (char.IsLetter(s[k]))
+            {
+                if (Keyword(k, "case")) cases.Push(0);
+                else if (cases.Count > 0 && cases.Peek() == 0 && Keyword(k, "in")) { cases.Pop(); cases.Push(1); }
+                else if (cases.Count > 0 && Keyword(k, "esac")) cases.Pop();
+                else { while (k + 1 < s.Length && char.IsLetterOrDigit(s[k + 1])) k++; continue; }
+                while (k + 1 < s.Length && char.IsLetter(s[k + 1])) k++;
+                continue;
+            }
+            if (cases.Count > 0 && cases.Peek() == 1 && s[k] is '(' or ')')
+            {
+                if (s[k] == ')') { cases.Pop(); cases.Push(2); }
+                continue;
+            }
+            if (cases.Count > 0 && cases.Peek() == 2 && s[k] == ';' && k + 1 < s.Length && s[k + 1] is ';' or '&') { cases.Pop(); cases.Push(1); k++; continue; }
             switch (s[k])
             {
                 case '\\': k++; break;
@@ -475,13 +642,14 @@ internal sealed class Parser
     static readonly HashSet<string> CondBinary = ["==", "=", "!=", "=~", "<", ">", "-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-nt", "-ot"];
 
     readonly List<Token> _t;
+    readonly string _src;
     int _p;
 
-    Parser(List<Token> tokens) => _t = tokens;
+    Parser(List<Token> tokens, string source) { _t = tokens; _src = source; }
 
     public static Script Parse(string source)
     {
-        var p = new Parser(new Lexer(source).Lex());
+        var p = new Parser(new Lexer(source).Lex(), source);
         var script = p.ParseScript();
         if (p._p < p._t.Count) throw p.Unexpected();
         return script;
@@ -516,7 +684,8 @@ internal sealed class Parser
         {
             while (IsOp("\n") || IsOp(";") || IsOp("&")) _p++;
             if (Cur == null || AtTerminator(terms)) break;
-            items.Add(ParseAndOr());
+            var item = ParseAndOr();
+            items.Add(IsOp("&") ? item with { Background = true } : item);
             if (Cur == null || IsOp("\n") || IsOp(";") || IsOp("&")) continue;
             if (AtTerminator(terms)) break;
             throw Unexpected();
@@ -581,12 +750,14 @@ internal sealed class Parser
                 case "case": return WithRedirects(ParseCase());
                 case "function": return ParseFunction(true);
                 case "[[": return WithRedirects(ParseCond());
-                case "select": throw new ParseException("'select' is not supported by this shell");
+                case "select": return WithRedirects(ParseFor(select: true));
+                case "coproc": throw new ParseException("'coproc' is not supported by this shell");
             }
             if (Reserved.Contains(kw) || kw == "}") throw Unexpected();
             if (At(1) is { Kind: TokenKind.Op, Op: "(" } && At(2) is { Kind: TokenKind.Op, Op: ")" }) return ParseFunction(false);
         }
 
+        int line = Cur?.Line ?? 0;
         var assignments = new List<Assignment>();
         var words = new List<Word>();
         var redirects = new List<Redirect>();
@@ -600,28 +771,36 @@ internal sealed class Parser
             words.Add(w);
         }
         if (words.Count == 0 && assignments.Count == 0 && redirects.Count == 0) throw Unexpected();
-        return new SimpleCommand(assignments, words) { Redirects = redirects };
+        return new SimpleCommand(assignments, words) { Redirects = redirects, Line = line };
+    }
+
+    /// <summary>A compound command's list, which bash requires to hold at least one command (`if; then` is an error).</summary>
+    Script ParseList(params string[] terms)
+    {
+        var list = ParseScript(terms);
+        if (list.Items.Count == 0 && Cur != null) throw Unexpected();
+        return list;
     }
 
     IfCommand ParseIf()
     {
         _p++; // if
         var branches = new List<(Script, Script)>();
-        var cond = ParseScript("then");
+        var cond = ParseList("then");
         Expect("then");
-        branches.Add((cond, ParseScript("elif", "else", "fi")));
+        branches.Add((cond, ParseList("elif", "else", "fi")));
         Script? elseBody = null;
         while (true)
         {
             if (IsWord("elif"))
             {
                 _p++;
-                cond = ParseScript("then");
+                cond = ParseList("then");
                 Expect("then");
-                branches.Add((cond, ParseScript("elif", "else", "fi")));
+                branches.Add((cond, ParseList("elif", "else", "fi")));
                 continue;
             }
-            if (IsWord("else")) { _p++; elseBody = ParseScript("fi"); }
+            if (IsWord("else")) { _p++; elseBody = ParseList("fi"); }
             break;
         }
         Expect("fi");
@@ -631,17 +810,17 @@ internal sealed class Parser
     LoopCommand ParseWhile(bool until)
     {
         _p++;
-        var cond = ParseScript("do");
+        var cond = ParseList("do");
         Expect("do");
-        var body = ParseScript("done");
+        var body = ParseList("done");
         Expect("done");
         return new LoopCommand(cond, body, until);
     }
 
-    Command ParseFor()
+    Command ParseFor(bool select = false)
     {
-        _p++; // for
-        if (Cur is { Kind: TokenKind.Arith } arith)
+        _p++; // for / select
+        if (!select && Cur is { Kind: TokenKind.Arith } arith)
         {
             _p++;
             var parts = arith.Op.Split(';');
@@ -666,7 +845,7 @@ internal sealed class Parser
         Expect("do");
         var body = ParseScript("done");
         Expect("done");
-        return new ForCommand(name, items, body);
+        return new ForCommand(name, items, body) { Select = select };
     }
 
     CaseCommand ParseCase()
@@ -677,7 +856,7 @@ internal sealed class Parser
         SkipNewlines();
         Expect("in");
         SkipNewlines();
-        var clauses = new List<(List<Word>, Script)>();
+        var clauses = new List<(List<Word>, Script, string)>();
         while (!IsWord("esac"))
         {
             if (Cur == null) throw new ParseException("syntax error: unexpected end of file (expected `esac')");
@@ -693,10 +872,11 @@ internal sealed class Parser
             }
             if (!IsOp(")")) throw Unexpected();
             _p++;
-            var body = ParseScript(";;", "esac");
-            if (IsOp(";;")) _p++;
+            var body = ParseScript(";;", ";&", ";;&", "esac");
+            var terminator = Cur is { Kind: TokenKind.Op, Op: ";;" or ";&" or ";;&" } t ? t.Op : ";;";
+            if (Cur is { Kind: TokenKind.Op, Op: ";;" or ";&" or ";;&" }) _p++;
             SkipNewlines();
-            clauses.Add((patterns, body));
+            clauses.Add((patterns, body, terminator));
         }
         _p++; // esac
         return new CaseCommand(subject, clauses);
@@ -715,7 +895,9 @@ internal sealed class Parser
         }
         SkipNewlines();
         if (Cur == null) throw new ParseException("syntax error: unexpected end of file");
-        return new FunctionDef(name, ParseCommand());
+        int start = Cur.Start;
+        var body = ParseCommand();
+        return new FunctionDef(name, body) { Source = _src[start..Math.Max(start, _t[_p - 1].End)].TrimEnd() };
     }
 
     CondCommand ParseCond()
@@ -799,9 +981,8 @@ internal sealed class Parser
         if (w.Parts is [_, ArrayLiteralPart literal] && eq == first.Text.Length - 1)
             return new Assignment(name, new Word([])) { Elements = literal.Source, Append = append };
         var rest = new List<WordPart>();
-        if (append) rest.Add(new VariablePart(name, true)); // VAR+=x  ==  VAR="$VAR"x
         if (eq + 1 < first.Text.Length) rest.Add(new LiteralPart(first.Text[(eq + 1)..], false));
         rest.AddRange(w.Parts.Skip(1));
-        return new Assignment(name, new Word(rest));
+        return new Assignment(name, new Word(rest)) { Append = append };
     }
 }
