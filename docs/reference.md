@@ -238,7 +238,7 @@ sizes and install dates. Shell built-ins such as `cd` and `eval` are not listed 
 
 ## Documents
 
-`to-markdown FILE...` turns Word, Excel, PowerPoint, PDF, HTML, CSV and JSON files into Markdown, so the agent
+`to-markdown FILE...` turns Word, Excel, PowerPoint, HTML, CSV and JSON files into Markdown, so the agent
 can search them with `grep` like any text. From your app:
 
 ```csharp
@@ -253,7 +253,7 @@ string text = MarkdownConverter.ToMarkdown(bytes, "report.xlsx");
 | `.pptx` | each slide's title, text, tables and speaker notes |
 | `.html` | headings, lists, links, tables, code; scripts, styles and navigation dropped |
 | `.csv` `.tsv` `.json` | a table, or a formatted code block |
-| `.pdf` | text, using the `pdftotext` program if it is installed on your machine |
+| `.pdf` | not converted: parsing PDF needs a native program, and running one on agent-supplied bytes would reach your machine. To support PDFs, attach the real one: `shell.RegisterHostCommand("pdftotext")` (optionally under bubblewrap); the agent then runs `pdftotext -layout FILE.pdf -` |
 
 No extra packages are needed. Images, charts, footnotes and merged cells are skipped, and Excel dates come
 out as serial numbers. Only files are byte-exact; data sent through a pipe is treated as text.

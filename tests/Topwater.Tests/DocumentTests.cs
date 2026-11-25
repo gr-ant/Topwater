@@ -344,22 +344,9 @@ public class DocumentTests
         finally { MarkdownConverter.MaxUncompressedBytes = saved; }
     }
 
-    [Fact]
-    public void PdfMissingTool()
-    {
-        var saved = MarkdownConverter.FindPdfToText;
-        MarkdownConverter.FindPdfToText = () => null;
-        try { Assert.Matches("pdftotext.*poppler-utils", Assert.Throws<ShellException>(() => Md(TinyPdf("hi"), "x.pdf")).Message); }
-        finally { MarkdownConverter.FindPdfToText = saved; }
-    }
-
-    [Fact]
-    public void PdfWithPdftotext()
-    {
-        if (MarkdownConverter.FindPdfToText() == null) return; // pdftotext not installed
-        Assert.Contains("Hello PDF revenue", Md(TinyPdf("Hello PDF revenue"), "x.pdf"));
-        Assert.Contains("pdftotext failed", Assert.Throws<ShellException>(() => Md("%PDF-1.4 garbage"u8.ToArray(), "x.pdf")).Message);
-    }
+    [Fact] // PDF needs a native parser, so it is never run on agent-supplied bytes; the host can attach pdftotext itself
+    public void PdfIsNotConverted() =>
+        Assert.Contains("pdftotext -layout", Assert.Throws<ShellException>(() => Md(TinyPdf("hi"), "x.pdf")).Message);
 
     // ---------- to-markdown ----------
 

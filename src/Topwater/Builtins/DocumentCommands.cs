@@ -30,6 +30,6 @@ internal static partial class Builtins
             if (a.Value('o') is { } output) ctx.Fs.WriteAllText(ctx.ResolvePath(output), text);
             else ctx.Stdout.Write(text);
             return code;
-        }, "Convert documents (docx, xlsx, pptx, pdf, html, csv, json) to Markdown on stdout (-o FILE to save)");
+        }, "Convert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save)");
     }
 }

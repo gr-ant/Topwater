@@ -95,7 +95,7 @@ using var git = shell.RegisterHostCommand("git");
 - A shell language: pipes, redirects, loops, functions, arrays, heredocs, scripts.
 - About 100 standard commands, including `grep`, `sed`, `awk`, `jq` and `find`.
 - An in-memory filesystem laid out like Ubuntu, with a regular user who cannot `sudo`.
-- `to-markdown` for reading Word, Excel, PowerPoint, PDF and HTML files.
+- `to-markdown` for reading Word, Excel, PowerPoint and HTML files.
 
 There is no Python, git or open network access unless you add them. The [reference](docs/reference.md) has the full list.
 

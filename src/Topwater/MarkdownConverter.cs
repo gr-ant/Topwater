@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Text;
@@ -12,22 +11,16 @@ using System.Xml.Linq;
 namespace Topwater;
 
 /// <summary>
-/// Document-to-Markdown conversion (docx, xlsx, pptx, html, csv/tsv, json, md/txt, pdf) with no dependencies.
-/// Everything is in-process except PDF, which runs the host's <c>pdftotext</c> (poppler-utils) if it is installed:
-/// the only place the library starts a process. Malformed input throws <see cref="ShellException"/>, never anything else.
+/// Document-to-Markdown conversion (docx, xlsx, pptx, html, csv/tsv, json, md/txt) with no dependencies, all in-process.
+/// PDF is not converted: that needs a native parser, so a host that wants it attaches the real program
+/// (<c>shell.RegisterHostCommand("pdftotext")</c>). Malformed input throws <see cref="ShellException"/>, never anything else.
 /// Mirrors python/src/topwater/convert.py.
 /// </summary>
 public static class MarkdownConverter
 {
     /// <summary>Zip-bomb guard: total bytes read out of one archive.</summary>
     public static long MaxUncompressedBytes { get; set; } = 100L * 1024 * 1024;
-    public const int PdfTimeoutSeconds = 30;
-    const string Supported = ".docx, .xlsx, .pptx, .pdf, .html, .htm, .csv, .tsv, .json, .md, .txt";
-
-    /// <summary>Returns the pdftotext executable path, or null when it isn't installed. Replaceable for tests.</summary>
-    public static Func<string?> FindPdfToText { get; set; } = () =>
-        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .SelectMany(d => new[] { Path.Combine(d, "pdftotext"), Path.Combine(d, "pdftotext.exe") }).FirstOrDefault(File.Exists);
+    const string Supported = ".docx, .xlsx, .pptx, .html, .htm, .csv, .tsv, .json, .md, .txt";
 
     static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     static readonly XNamespace S = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -677,33 +670,7 @@ public static class MarkdownConverter
         catch (JsonException e) { throw new ShellException($"not a valid json file ({e.Message})"); }
     }
 
-    static string Pdf(byte[] data)
-    {
-        var exe = FindPdfToText() ?? throw new ShellException("PDF conversion needs the pdftotext program (poppler-utils) installed on the host");
-        // Fixed arguments only; the document goes in on stdin.
-        var psi = new ProcessStartInfo(exe) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        foreach (var arg in new[] { "-layout", "-", "-" }) psi.ArgumentList.Add(arg);
-        using var p = Process.Start(psi) ?? throw new ShellException("pdftotext could not be started");
-        var stdout = new MemoryStream();
-        var readOut = p.StandardOutput.BaseStream.CopyToAsync(stdout);
-        var readErr = p.StandardError.ReadToEndAsync();
-        var write = Task.Run(() =>
-        {
-            try { p.StandardInput.BaseStream.Write(data); p.StandardInput.Close(); }
-            catch (IOException) { } // pdftotext may exit before reading everything
-        });
-        if (!p.WaitForExit(PdfTimeoutSeconds * 1000))
-        {
-            try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            throw new ShellException($"pdftotext timed out after {PdfTimeoutSeconds} seconds");
-        }
-        Task.WaitAll(readOut, readErr, write);
-        if (p.ExitCode != 0)
-        {
-            var detail = readErr.Result.Trim().Split('\n');
-            throw new ShellException($"pdftotext failed: {(detail[^1].Length > 0 ? detail[^1].Trim() : $"exit code {p.ExitCode}")}");
-        }
-        var text = Encoding.UTF8.GetString(stdout.ToArray()).Replace("\f", "\n\n");
-        return string.Join('\n', text.Split('\n').Select(l => l.TrimEnd())).Trim('\n') + "\n";
-    }
+    // no in-process PDF parser; running a native one on agent-supplied bytes would reach the host
+    static string Pdf(byte[] data) => throw new ShellException(
+        "PDF is not supported by to-markdown; if a `pdftotext` program is listed in `help`, run: pdftotext -layout FILE.pdf -");
 }
