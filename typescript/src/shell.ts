@@ -402,8 +402,11 @@ export class Shell implements ArithHost {
 
   // ---------- execution ----------
 
-  /** Runs one tool call: the model's command line. Never throws for anything the command does. */
-  async run(commandLine: string): Promise<ShellResult> {
+  /**
+   * Runs one tool call: the model's command line. Never throws for anything the command does.
+   * `onOutput`, if given, sees each write as it happens (for showing output live); the result still has all of it.
+   */
+  async run(commandLine: string, onOutput?: (text: string, stream: 'stdout' | 'stderr') => void): Promise<ShellResult> {
     this.history.push(commandLine);
     const stdout = new BufferWriter(this.options.maxStringBytes);
     const stderr = new BufferWriter(this.options.maxStringBytes);
@@ -412,7 +415,8 @@ export class Shell implements ArithHost {
     this.totalIterations = this.scriptDepth = this.callDepth = this.arithDepth = 0;
     const callDeadline: Deadline = { at: Date.now() + this.options.maxCallDurationMs };
     this.deadline = callDeadline;
-    const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(stdout), err: new SwitchWriter(stderr) };
+    const tee = (w: Writer, stream: 'stdout' | 'stderr'): Writer => onOutput ? { write(t) { w.write(t); onOutput(printable(t), stream); } } : w;
+    const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(tee(stdout, 'stdout')), err: new SwitchWriter(tee(stderr, 'stderr')) };
     const raw = (s: string) => { stderr.clear; (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
       // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout

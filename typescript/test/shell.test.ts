@@ -9,6 +9,23 @@ async function out(sh: Shell, cmd: string) {
 }
 
 describe('shell', () => {
+  it('reports output live to onOutput, in order, and still returns all of it', async () => {
+    const seen: string[] = [];
+    const r = await new Shell().run('echo a; echo b >&2; echo c | tr c C', (t, s) => seen.push(`${s}:${t}`));
+    expect(seen).toEqual(['stdout:a\n', 'stderr:b\n', 'stdout:C\n']);
+    expect(r.stdout).toBe('a\nC\n');
+  });
+
+  it('views of one filesystem share files but not the acting user', async () => {
+    const sh = new Shell();
+    const agent = sh.fs.as('agent');
+    agent.writeText('/home/agent/up.txt', 'x');
+    expect(sh.fs.stat('/home/agent/up.txt').owner).toBe('agent');
+    expect(() => agent.writeText('/etc/x', 'y')).toThrow(/Permission denied/);
+    expect(sh.fs.runAs).toBeNull();
+    expect(sh.fs.usedBytes).toBe(agent.usedBytes);
+  });
+
   it('keeps the filesystem across calls', async () => {
     const sh = new Shell();
     await out(sh, 'mkdir -p proj/src && cd proj');
