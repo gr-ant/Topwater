@@ -3,9 +3,10 @@
 // relative, symlinks are not created, hard links copy only a file already extracted), and one extraction or
 // decompression stops past ctx.shell.options.maxExtractBytes / maxExtractEntries.
 
-import * as zlib from 'node:zlib';
 import { Args, ShellError, reason, type CommandContext } from '../command.js';
-import { decodeBytes, encodeText } from '../bytes.js';
+import { concatBytes, decodeBytes, encodeText } from '../bytes.js';
+import { InflateError, OutputLimitError, gunzip, inflateRaw } from '../inflate.js';
+import { deflate } from '../compress.js';
 import { VirtualFileSystem } from '../vfs.js';
 import { globRegex } from '../glob.js';
 import type { Shell } from '../shell.js';
@@ -32,19 +33,19 @@ class Budget {
 const isGzip = (d: Uint8Array) => d.length >= 2 && d[0] === 0x1f && d[1] === 0x8b;
 const bytesOf = (text: string) => encodeText(text);
 const writeBinary = (ctx: CommandContext, data: Uint8Array) => ctx.stdout.write(decodeBytes(data));
-const concat = (parts: Uint8Array[]) => Buffer.concat(parts);
+const concat = concatBytes;
 
 /** Inflates with a cap on the output, so a bomb never allocates more than the budget. */
 function inflate(kind: 'gunzip' | 'raw', data: Uint8Array, budget: Budget): Uint8Array | { error: string } {
   try {
-    const out = (kind === 'gunzip' ? zlib.gunzipSync : zlib.inflateRawSync)(data, { maxOutputLength: Math.max(1, budget.bytes) });
+    const out = (kind === 'gunzip' ? gunzip : inflateRaw)(data, Math.max(1, budget.bytes));
     budget.charge(out.length);
     return out;
   } catch (e) {
-    const code = (e as { code?: string }).code;
-    if (code === 'ERR_BUFFER_TOO_LARGE') throw budget.limit();
-    if (code === 'Z_BUF_ERROR') return { error: 'unexpected end of file' };
-    if (/data check|crc/i.test((e as Error).message)) return { error: 'invalid compressed data--crc error' };
+    if (e instanceof OutputLimitError) throw budget.limit();
+    if (!(e instanceof InflateError)) throw e;
+    if (e.kind === 'eof') return { error: 'unexpected end of file' };
+    if (e.kind === 'crc') return { error: 'invalid compressed data--crc error' };
     return { error: 'invalid compressed data--format violated' };
   }
 }
@@ -211,7 +212,7 @@ function* readTar(data: Uint8Array): Generator<TarEntry> {
 const TAR_USAGE = "\nTry 'tar --help' or 'tar --usage' for more information.";
 const isFileType = (t: string) => t === '0' || t === '7';
 
-function tar(ctx: CommandContext): number {
+async function tar(ctx: CommandContext): Promise<number> {
   let args = [...ctx.args];
   if (args.length > 0 && args[0].length > 0 && args[0][0] !== '-') {
     // old style: `tar czf out.tgz dir`, where f and C take the words after the bundle, in order
@@ -245,7 +246,7 @@ function tar(ctx: CommandContext): number {
   if (a.has('c')) return create();
   return readArchive();
 
-  function create(): number {
+  async function create(): Promise<number> {
     if (a.positional.length === 0) throw new ShellError('Cowardly refusing to create an empty archive' + TAR_USAGE, 2);
     const archivePath = archive === '-' ? null : ctx.resolvePath(archive);
     const verbose = archive === '-' ? ctx.stderr : ctx.stdout;
@@ -279,7 +280,7 @@ function tar(ctx: CommandContext): number {
     let bytes: Uint8Array = concat(parts);
     // GNU tar's default blocking factor: 20 records
     bytes = concat([bytes, new Uint8Array((10240 - bytes.length % 10240) % 10240)]);
-    if (a.has('z')) bytes = zlib.gzipSync(bytes);
+    if (a.has('z')) bytes = await deflate('gzip', bytes);
     if (archivePath === null) writeBinary(ctx, bytes);
     else {
       try { fs.writeBytes(archivePath, bytes); } catch (e) {
@@ -407,21 +408,19 @@ function gzipOverhead(d: Uint8Array): number {
 
 const ratio = (compressed: number, uncompressed: number) => uncompressed === 0 ? '0.0' : ((uncompressed - compressed) * 100 / uncompressed).toFixed(1);
 
-function gzip(ctx: CommandContext): number {
-  try { return gzipRun(ctx); } catch (e) {
+async function gzip(ctx: CommandContext): Promise<number> {
+  try { return await gzipRun(ctx); } catch (e) {
     if (!(e instanceof ExtractLimit)) throw e;
     ctx.stderr.write(`gzip: ${e.message}\n`);
     return e.exitCode;
   }
 }
 
-function gzipRun(ctx: CommandContext): number {
+async function gzipRun(ctx: CommandContext): Promise<number> {
   const a = Args.parse(ctx.args, 'cdkflvqtn123456789', '',
     'stdout=c,to-stdout=c,decompress=d,uncompress=d,keep=k,force=f,list=l,verbose=v,quiet=q,test=t,no-name=n,fast=1,best=9');
   const decompress = ctx.name !== 'gzip' || a.has('d') || a.has('t') || a.has('l');
   const toStdout = ctx.name === 'zcat' || a.has('c');
-  const digit = [...'123456789'].find(d => a.has(d));
-  const level = digit ? Number(digit) : 6;
   const fs = ctx.fs;
   const budget = new Budget(ctx.shell.options, 1);
   let code = 0;
@@ -460,7 +459,7 @@ function gzipRun(ctx: CommandContext): number {
     const shown = f === '-' ? 'stdin' : f;
 
     if (!decompress) {
-      const packed = zlib.gzipSync(data, { level });
+      const packed = await deflate('gzip', data);
       if (f === '-' || toStdout) { writeBinary(ctx, packed); continue; }
       if (f.endsWith('.gz')) { if (!a.has('q')) ctx.stderr.write(`gzip: ${f} already has .gz suffix -- unchanged\n`); continue; }
       if (fs.exists(path + '.gz') && !a.has('f')) { warn(`${f}.gz already exists;\tnot overwritten`); continue; }
@@ -506,7 +505,7 @@ function gzipRun(ctx: CommandContext): number {
 
 // ---------- zip ----------
 
-function zip(ctx: CommandContext): number {
+async function zip(ctx: CommandContext): Promise<number> {
   const a = Args.parse(ctx.args, 'rq0123456789', '', 'recurse-paths=r,quiet=q');
   const fs = ctx.fs;
   if (a.positional.length === 0) throw new ShellError('\nzip error: Nothing to do! (no archive given)', 12);
@@ -514,7 +513,6 @@ function zip(ctx: CommandContext): number {
   if (archive !== '-' && !VirtualFileSystem.getName(archive).includes('.')) archive += '.zip';
   const archivePath = archive === '-' ? null : ctx.resolvePath(archive);
   const info = archivePath === null ? ctx.stderr : ctx.stdout;
-  const level = [...'123456789'].find(d => a.has(d));
   let entries: ZipEntry[] = [];
   if (archivePath !== null && fs.isFile(archivePath)) {
     try { entries = readZip(fs.readBytes(archivePath)); } catch (e) {
@@ -523,13 +521,13 @@ function zip(ctx: CommandContext): number {
     }
   }
   let added = 0;
-  const add = (name: string, path: string) => {
+  const add = async (name: string, path: string): Promise<void> => {
     if (path === archivePath) return;
     const st = fs.stat(path);
     const entryName = name.split('/').filter(p => p !== '' && p !== '.').join('/') + (st.isDirectory ? '/' : '');
     if (entryName !== '/') {
       const data = st.isDirectory ? new Uint8Array(0) : fs.readBytes(path);
-      const deflated = data.length === 0 ? Buffer.alloc(0) : zlib.deflateRawSync(data, { level: level ? Number(level) : 6 });
+      const deflated = data.length === 0 ? new Uint8Array(0) : await deflate('deflate-raw', data);
       const stored = a.has('0') || deflated.length === 0 || deflated.length >= data.length;
       const old = entries.findIndex(e => e.name === entryName);
       if (old >= 0) entries.splice(old, 1);
@@ -546,11 +544,11 @@ function zip(ctx: CommandContext): number {
       }
     }
     if (st.isDirectory && (a.has('r') || entryName === '/'))
-      for (const child of fs.list(path)) add(name.replace(/\/+$/, '') + '/' + child, path.replace(/\/+$/, '') + '/' + child);
+      for (const child of fs.list(path)) await add(name.replace(/\/+$/, '') + '/' + child, path.replace(/\/+$/, '') + '/' + child);
   };
   const names = a.positional.slice(1);
   for (const f of names) if (!fs.exists(ctx.resolvePath(f)) && !a.has('q')) info.write(`\tzip warning: name not matched: ${f}\n`);
-  for (const f of names) if (fs.exists(ctx.resolvePath(f))) add(f, ctx.resolvePath(f));
+  for (const f of names) if (fs.exists(ctx.resolvePath(f))) await add(f, ctx.resolvePath(f));
   if (added === 0) {
     const hint = a.has('r') ? `try: zip -r ${archive} . -i ${names.join(' ')}` : archive;
     info.write(`\nzip error: Nothing to do! (${hint})\n`);
