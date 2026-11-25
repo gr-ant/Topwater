@@ -1,0 +1,8 @@
+<Project>
+  <!-- Package metadata shared by Topwater, Topwater.AI and Topwater.Mcp -->
+  <PropertyGroup>
+    <Authors>Grant Miller</Authors>
+    <Copyright>Copyright (c) 2026 Grant Miller</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+</Project>

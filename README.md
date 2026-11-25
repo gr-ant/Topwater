@@ -123,4 +123,4 @@ real DuckDB (8 / 8), and a harness runs six everyday tasks (11 / 12 solved with 
 
 ## License
 
-No license has been chosen yet.
+MIT. See [LICENSE](LICENSE).

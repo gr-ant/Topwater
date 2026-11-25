@@ -491,3 +491,6 @@ python/dist/
 
 # Saved transcripts from the examples
 runs/
+
+# Product team agents: roles, discussions, decisions (local only)
+.team/
