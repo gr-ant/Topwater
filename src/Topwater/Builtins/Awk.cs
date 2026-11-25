@@ -341,6 +341,7 @@ internal sealed class AwkRunner
         var main = rules.Where(r => r.Kind == "main").ToList();
         while (_input.MoveNext())
         {
+            _ctx.CancellationToken.ThrowIfCancellationRequested(); // slow patterns over many records: the call's time limit
             _vars["NR"] = AV.Num(_vars["NR"].ToNum() + 1);
             _vars["FNR"] = AV.Num(_vars["FNR"].ToNum() + 1);
             SetRecord(_input.Current);

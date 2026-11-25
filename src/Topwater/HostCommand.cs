@@ -353,9 +353,9 @@ public sealed class HostCommand : IDisposable
             byte[] Snapshot(MemoryStream ms) { lock (ms) return ms.ToArray(); }
             var (outText, errText) = (Clean(Snapshot(outBuf)), Clean(Snapshot(errBuf)));
             foreach (var ws in _shared) Import(ws, before[ws], ctx.Stderr);
-            ctx.CancellationToken.ThrowIfCancellationRequested();
             ctx.Stdout.Write(outText);
             ctx.Stderr.Write(errText);
+            ctx.CancellationToken.ThrowIfCancellationRequested(); // after writing: the call's time limit keeps what the program printed
             if (timedOut)
             {
                 ctx.Stderr.WriteLine($"{_name}: timed out after {_o.Timeout.TotalSeconds:0.#}s");

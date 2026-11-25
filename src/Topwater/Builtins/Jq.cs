@@ -1291,7 +1291,7 @@ internal static class Jq
 
     // ---------- interpreter ----------
 
-    sealed class Interpreter(IReadOnlyDictionary<string, string> env)
+    sealed class Interpreter(IReadOnlyDictionary<string, string> env, CancellationToken ct)
     {
         static Dictionary<string, object?> With(Dictionary<string, object?> vs, string name, object? value) => new(vs) { [name] = value };
 
@@ -1304,6 +1304,7 @@ internal static class Jq
         void Step()
         {
             if (++_steps > 20_000_000) throw new JqError("too many steps (possible infinite loop)");
+            if ((_steps & 1023) == 0) ct.ThrowIfCancellationRequested(); // the call's time limit, or `timeout`
             System.Runtime.CompilerServices.RuntimeHelpers.EnsureSufficientExecutionStack();
         }
 
@@ -2078,7 +2079,7 @@ internal static class Jq
             ["__loc__"] = new Dictionary<string, object?> { ["file"] = "<stdin>", ["line"] = 1.0 },
         };
         var unit = flags.Contains('c') ? "" : flags.Contains('t') ? "\t" : indent;
-        var interp = new Interpreter(ctx.Shell.Environment);
+        var interp = new Interpreter(ctx.Shell.Environment, ctx.CancellationToken);
         object? last = null;
         bool any = false;
         var output = new List<(bool Err, string Text)>();

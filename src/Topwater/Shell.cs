@@ -16,10 +16,15 @@ public sealed class ShellOptions
     public long MaxExtractBytes { get; init; } = 64L << 20;
     /// <summary>Most entries one tar or unzip run may extract or list.</summary>
     public int MaxExtractEntries { get; init; } = 100_000;
+    /// <summary>Longest one tool call may run. Past it the call stops with exit code 124 and a note in the tool output; files and variables changed so far are kept.</summary>
+    public TimeSpan MaxCallDuration { get; init; } = TimeSpan.FromSeconds(120);
 }
 
 public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
 {
+    /// <summary>Set when a safety limit ended the call: a bracketed note that <see cref="ToToolOutput"/> always shows last, never cut.</summary>
+    public string? Trailer { get; init; }
+
     /// <summary>Formats the result as the text returned to the model from the bash tool.</summary>
     public string ToToolOutput(int maxChars = 30_000)
     {
@@ -27,6 +32,7 @@ public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
         static string Clip(string s, int max) => s.Length <= max ? s : s[..max] + $"\n... [output truncated, {s.Length - max} more characters]\n";
         var text = Clip(Stdout, maxChars) + Clip(Stderr, Math.Max(1, maxChars / 6));
         if (ExitCode != 0) text += (text.Length == 0 || text.EndsWith('\n') ? "" : "\n") + $"[exit code {ExitCode}]";
+        if (Trailer != null) text += (text.Length == 0 || text.EndsWith('\n') ? "" : "\n") + Trailer;
         return text.Length == 0 ? "(no output)" : text;
     }
 }
@@ -347,21 +353,30 @@ public sealed partial class Shell
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         int code;
+        string? trailer = null;
         var previousUser = Fs.RunAs;
         _totalIterations = _scriptDepth = 0;
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(Options.MaxCallDuration);
+        var callToken = budget.Token; // everything below, built-ins included, sees the call's time limit
         Fs.RunAs = Options.User; // the agent's commands run as a regular user
         var io = new Io(new StdinBuffer(""), new SwitchWriter(stdout), new SwitchWriter(stderr));
         try
         {
             // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
-            try { code = await ExecScriptAsync(Parser.Parse(commandLine), io, cancellationToken); }
-            finally { await RunExitTrapAsync(io, cancellationToken); }
+            try { code = await ExecScriptAsync(Parser.Parse(commandLine), io, callToken); }
+            finally { await RunExitTrapAsync(io, callToken); }
         }
         catch (ParseException e) { stderr.WriteLine($"bash: {e.Message}"); code = 2; }
         catch (ExitSignal e) { code = e.Code; }
         catch (ReturnSignal e) { code = e.Code; }
         catch (LoopControl) { code = 0; }
-        catch (LimitExceeded e) { stderr.WriteLine($"bash: {e.Message}"); code = 1; }
+        catch (LimitExceeded e) { stderr.WriteLine($"bash: {e.Message}"); code = 1; trailer = Stopped(e.Message); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            code = 124; // what `timeout` exits with
+            trailer = Stopped($"this call exceeded the {Seconds(Options.MaxCallDuration)} time limit; split the work into shorter calls");
+        }
         catch (OperationCanceledException) { throw; }
         catch (Exception e) // an interpreter bug must not take down the host's agent loop
         {
@@ -380,8 +395,13 @@ public sealed partial class Shell
             _procSubCount = 0;
         }
         LastExitCode = code;
-        return new ShellResult(ByteText.Printable(stdout.ToString()), ByteText.Printable(stderr.ToString()), code);
+        return new ShellResult(ByteText.Printable(stdout.ToString()), ByteText.Printable(stderr.ToString()), code) { Trailer = trailer };
     }
+
+    static string Stopped(string why) =>
+        $"[stopped: {why}. Running it again will hit the same limit. Files and variables changed before this point are kept.]";
+
+    internal static string Seconds(TimeSpan t) => $"{t.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} s";
 
     /// <summary>A new bash process (bash -c, bash file, ./script.sh): $0, the file it runs (if any), and its own options (bash -e).</summary>
     internal sealed record NewProcess(string Arg0, string? File = null, Action? Setup = null);
@@ -734,8 +754,11 @@ public sealed partial class Shell
     {
         ct.ThrowIfCancellationRequested();
         // nested loops multiply, so one tool call also has a total budget (10x the single-loop cap)
-        if (++n > Options.MaxLoopIterations || ++_totalIterations > Options.MaxLoopIterations * 10L)
-            throw new LimitExceeded($"loop aborted after {Options.MaxLoopIterations} iterations");
+        const string instead = "process the whole input with one command (awk, sed, xargs) instead of a shell loop";
+        if (++n > Options.MaxLoopIterations)
+            throw new LimitExceeded($"loop aborted after {Options.MaxLoopIterations} iterations (the limit for one loop); {instead}");
+        if (++_totalIterations > Options.MaxLoopIterations * 10L)
+            throw new LimitExceeded($"loop aborted after {Options.MaxLoopIterations * 10L} iterations in this call (the limit for all loops in one call); {instead}");
     }
 
     async Task<int> ExecLoopAsync(LoopCommand l, Io io, CancellationToken ct)
