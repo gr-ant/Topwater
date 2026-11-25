@@ -1,0 +1,369 @@
+using System.Formats.Tar;
+using System.Text;
+using Topwater.Containers;
+
+namespace Topwater.Tests;
+
+/// <summary>Snapshot to Docker build context and rootfs tar to snapshot, without docker.</summary>
+public class ContainerTests
+{
+    record E(string Name, byte[]? Data = null, TarEntryType Type = TarEntryType.RegularFile, int Uid = 1000, int Mode = 420, string? Link = null);
+
+    static E F(string name, string text, int uid = 1000) => new(name, Encoding.UTF8.GetBytes(text), Uid: uid);
+    static E D(string name, int uid = 1000) => new(name.TrimEnd('/') + "/", null, TarEntryType.Directory, uid, 493);
+    static E L(string name, string target) => new(name, null, TarEntryType.SymbolicLink, Link: target);
+
+    static MemoryStream Tar(params E[] entries)
+    {
+        var ms = new MemoryStream();
+        using (var w = new TarWriter(ms, TarEntryFormat.Pax, leaveOpen: true))
+            foreach (var e in entries)
+            {
+                var t = new PaxTarEntry(e.Type, e.Name) { Uid = e.Uid, Mode = (UnixFileMode)e.Mode, ModificationTime = DateTimeOffset.FromUnixTimeSeconds(1700000000) };
+                if (e.Link != null) t.LinkName = e.Link;
+                if (e.Data != null) t.DataStream = new MemoryStream(e.Data);
+                w.WriteEntry(t);
+            }
+        ms.Position = 0;
+        return ms;
+    }
+
+    static Dictionary<string, TarEntry> Read(byte[] layer)
+    {
+        var map = new Dictionary<string, TarEntry>();
+        using var r = new TarReader(new MemoryStream(layer));
+        while (r.GetNextEntry(copyData: true) is { } e) map[e.Name.TrimEnd('/')] = e;
+        return map;
+    }
+
+    static string Text(TarEntry e) => new StreamReader(e.DataStream!).ReadToEnd();
+
+    static async Task<ContainerImportResult> Import(MemoryStream tar, ContainerConfig? config = null, string[]? changes = null, ContainerImportOptions? options = null) =>
+        await ContainerImport.FromTarAsync(tar, config ?? new ContainerConfig("agent", "/home/agent"), changes, options);
+
+    static Shell Restored(ContainerImportResult r)
+    {
+        var sh = new Shell(new ShellOptions { User = r.Snapshot.User });
+        sh.Restore(r.Snapshot);
+        return sh;
+    }
+
+    // ---------- export: files ----------
+
+    /// <summary>A fresh machine exports nothing of the user's: only the Topwater bookkeeping files.</summary>
+    [Fact]
+    public void FreshMachineLayerHoldsOnlyBookkeeping()
+    {
+        var ctx = new Shell().Snapshot().ToBuildContext();
+        Assert.Equal(["etc/topwater", "etc/topwater/paths", "etc/topwater/session.sh"], Read(ctx.Layer).Keys.Order());
+    }
+
+    /// <summary>/proc, /dev and the /bin command stubs never go into the layer.</summary>
+    [Fact]
+    public async Task SimulatedPathsAndStubsAreNotExported()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("echo x > /tmp/t; echo hi > ~/a.txt");
+        var names = Read(sh.Snapshot().ToBuildContext().Layer).Keys.ToList();
+        Assert.DoesNotContain(names, n => n.StartsWith("proc") || n.StartsWith("dev") || n.StartsWith("usr/bin") || n.StartsWith("bin"));
+        Assert.Contains("tmp/t", names);
+    }
+
+    /// <summary>A new file lands with its mode, owner ids, mtime and parent directory.</summary>
+    [Fact]
+    public async Task NewFileKeepsModeOwnerAndMtime()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("echo hi > ~/a.txt; chmod 600 ~/a.txt");
+        var secs = long.Parse((await sh.RunAsync("stat -c %Y ~/a.txt")).Stdout.Trim());
+        var layer = Read(sh.Snapshot().ToBuildContext().Layer);
+        var e = layer["home/agent/a.txt"];
+        Assert.Equal((UnixFileMode)384, e.Mode);
+        Assert.Equal((1000, 1000), (e.Uid, e.Gid));
+        Assert.Equal(secs, e.ModificationTime.ToUnixTimeSeconds());
+        Assert.Equal("hi\n", Text(e));
+        Assert.Equal(TarEntryType.Directory, layer["home/agent"].EntryType);
+    }
+
+    /// <summary>A registered command's stub stays out of the layer and is reported.</summary>
+    [Fact]
+    public void RegisteredCommandIsReported()
+    {
+        var sh = new Shell();
+        sh.Register("mytool", ctx => 0);
+        var ctx = sh.Snapshot().ToBuildContext();
+        Assert.DoesNotContain("usr/bin/mytool", Read(ctx.Layer).Keys);
+        Assert.Contains(ctx.Report.NotCarried, i => i.What == "registered commands" && i.Why.Contains("mytool"));
+    }
+
+    /// <summary>A deleted default file is reported and removed by the setup script.</summary>
+    [Fact]
+    public async Task DeletedDefaultFileIsRemovedInSetup()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("rm ~/.profile");
+        var ctx = sh.Snapshot().ToBuildContext();
+        Assert.Contains("/home/agent/.profile", ctx.Report.Deleted);
+        Assert.Matches(@"rm -rf -- .*/home/agent/\.profile", ctx.SetupScript);
+    }
+
+    /// <summary>Account and Docker-managed files are reported, not copied.</summary>
+    [Fact]
+    public void AccountAndDockerManagedFilesAreNotCopied()
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/etc/passwd", "root:x:0:0::/root:/bin/bash\n");
+        sh.Fs.WriteAllText("/etc/hostname", "other\n");
+        var ctx = sh.Snapshot().ToBuildContext();
+        var names = Read(ctx.Layer).Keys;
+        Assert.DoesNotContain("etc/passwd", names);
+        Assert.DoesNotContain("etc/hostname", names);
+        Assert.Contains(ctx.Report.NotCarried, i => i.What == "/etc/passwd");
+        Assert.Contains(ctx.Report.NotCarried, i => i.What == "/etc/hostname");
+    }
+
+    /// <summary>A host-written /bin file lands under usr/bin (usrmerge).</summary>
+    [Fact]
+    public void BinFileIsMergedIntoUsrBin()
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/bin/x", "#!/bin/sh\n");
+        var layer = Read(sh.Snapshot().ToBuildContext().Layer);
+        Assert.Contains("usr/bin/x", layer.Keys);
+        Assert.DoesNotContain("bin/x", layer.Keys);
+    }
+
+    /// <summary>An owner missing from /etc/passwd gets the next uid, a useradd line and a report item.</summary>
+    [Fact]
+    public void UnknownOwnerGetsAccount()
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/srv/f", "x");
+        sh.Fs.SetOwner("/srv/f", "bob");
+        var ctx = sh.Snapshot().ToBuildContext();
+        Assert.Equal(1001, Read(ctx.Layer)["srv/f"].Uid);
+        Assert.Matches(@"useradd .*-u 1001 .*bob", ctx.SetupScript);
+        Assert.Contains(ctx.Report.NotCarried, i => i.What == "owner bob");
+    }
+
+    // ---------- export: Dockerfile ----------
+
+    /// <summary>FROM, ENV (only changes, escaped), WORKDIR and USER.</summary>
+    [Fact]
+    public async Task DockerfileHasBaseEnvWorkdirUser()
+    {
+        var sh = new Shell(new ShellOptions { User = "dev" });
+        await sh.RunAsync("""export EXP='a $b "c"'; mkdir -p /tmp/w; cd /tmp/w""");
+        var df = sh.Snapshot().ToBuildContext().Dockerfile;
+        Assert.Contains("FROM ubuntu:24.04\n", df);
+        Assert.Contains("ENV EXP=\"a \\$b \\\"c\\\"\"\n", df);
+        Assert.DoesNotContain("ENV PATH", df);
+        Assert.Contains("WORKDIR \"/tmp/w\"\n", df);
+        Assert.EndsWith("USER dev\n", df);
+        Assert.Contains("FROM debian:12\n", sh.Snapshot().ToBuildContext("debian:12").Dockerfile);
+    }
+
+    // ---------- export: session script ----------
+
+    /// <summary>The generated rc is valid bash that recreates the state in a fresh shell.</summary>
+    [Fact]
+    public async Task SessionScriptRecreatesState()
+    {
+        var sh = new Shell();
+        var r = await sh.RunAsync("""
+            plain=val; declare -i n=5; arr=(a b c d); unset 'arr[1]'
+            declare -A map=(['key two']=v2); nl=$'one\ntwo'
+            greet() { echo "hi $1"; }; export -f greet
+            alias ll='ls -l'; shopt -s nullglob
+            """);
+        Assert.Equal(0, r.ExitCode);
+        var ctx = sh.Snapshot().ToBuildContext();
+        Assert.Contains("unalias -a\n", ctx.SessionScript);
+        Assert.Contains("$'one\\ntwo'", ctx.SessionScript);
+
+        var fresh = new Shell();
+        var load = await fresh.RunAsync(ctx.SessionScript);
+        Assert.Equal(0, load.ExitCode);
+        var probe = (await fresh.RunAsync("""
+            declare -p plain n arr map nl; type greet; alias ll; shopt nullglob
+            """)).ToToolOutput();
+        Assert.Contains("plain=\"val\"", probe);
+        Assert.Contains("declare -i n=\"5\"", probe);
+        Assert.Contains("[0]=\"a\"", probe); Assert.Contains("[3]=\"d\"", probe); Assert.DoesNotContain("[1]=", probe);
+        Assert.True(probe.Contains("key two") && probe.Contains("v2"), probe);
+        Assert.Contains("greet is a function", probe);
+        Assert.Contains("alias ll='ls -l'", probe);
+        Assert.Contains("nullglob", probe);
+        Assert.Equal("one\ntwo", (await fresh.RunAsync("printf %s \"$nl\"")).Stdout);
+    }
+
+    // ---------- import ----------
+
+    /// <summary>Only changed paths and options.Paths are imported; the default machine still works.</summary>
+    [Fact]
+    public async Task ImportsOnlySelectedPaths()
+    {
+        var tar = Tar(D("home/agent"), F("home/agent/x.txt", "one two\nthree\n"), F("home/agent/skip.txt", "no"), D("srv"), F("srv/s.txt", "s"), F("opt/o.txt", "o"));
+        var r = await Import(tar, changes: ["A /home/agent", "A /home/agent/x.txt"], options: new() { Paths = ["/srv"] });
+        var sh = Restored(r);
+        Assert.Equal("one two\nthree\n", (await sh.RunAsync("cat ~/x.txt")).Stdout);
+        Assert.Equal("2 3 14", string.Join(' ', (await sh.RunAsync("wc < ~/x.txt")).Stdout.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim());
+        Assert.Equal(0, (await sh.RunAsync("test -f /srv/s.txt")).ExitCode);
+        Assert.NotEqual(0, (await sh.RunAsync("test -e ~/skip.txt || test -e /opt/o.txt")).ExitCode);
+        Assert.Contains("ls", (await sh.RunAsync("ls /usr/bin")).Stdout);
+        Assert.Contains("/home/agent/x.txt", r.Report.Carried);
+    }
+
+    /// <summary>Owners come from the tar's /etc/passwd even when it isn't a change; unknown uids stay numbers.</summary>
+    [Fact]
+    public async Task OwnersMapThroughPasswd()
+    {
+        var tar = Tar(F("etc/passwd", "carol:x:1234:1234::/home/carol:/bin/bash\n"), F("srv/a", "a", uid: 1234), F("srv/b", "b", uid: 4321));
+        var r = await Import(tar, changes: ["A /srv/a", "A /srv/b"]);
+        var sh = Restored(r);
+        Assert.Equal("carol\n4321\n", (await sh.RunAsync("stat -c '%U' /srv/a /srv/b")).Stdout);
+    }
+
+    /// <summary>User, working directory and env come from the config; a numeric user maps via passwd.</summary>
+    [Fact]
+    public async Task ConfigSetsUserWorkdirEnv()
+    {
+        var tar = Tar(F("etc/passwd", "carol:x:1234:1234::/home/carol:/bin/bash\n"));
+        var r = await Import(tar, new ContainerConfig("1234", "/srv/w", ["FOO=bar", "1BAD=x"]));
+        Assert.Equal("carol", r.Snapshot.User);
+        var sh = Restored(r);
+        Assert.Equal("/srv/w\nbar\n", (await sh.RunAsync("pwd; printenv FOO")).Stdout);
+        Assert.Contains(r.Report.NotCarried, i => i.What.Contains("1BAD"));
+    }
+
+    /// <summary>Symlinks to imported files and directories become copies; relative links resolve; others are reported.</summary>
+    [Fact]
+    public async Task SymlinksBecomeCopies()
+    {
+        var tar = Tar(D("srv"), F("srv/x", "data"), D("srv/d"), F("srv/d/f", "in dir"), L("srv/abs", "/srv/x"), L("srv/rel", "../srv/x"),
+            L("srv/dl", "/srv/d"), L("srv/gone", "/nowhere"));
+        var r = await Import(tar, changes: ["A /srv", "A /srv/x", "A /srv/d", "A /srv/d/f", "A /srv/abs", "A /srv/rel", "A /srv/dl", "A /srv/gone"]);
+        var sh = Restored(r);
+        Assert.Equal("datadatain dir", (await sh.RunAsync("cat /srv/abs /srv/rel /srv/dl/f")).Stdout);
+        Assert.NotEqual(0, (await sh.RunAsync("test -e /srv/gone")).ExitCode);
+        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/gone");
+    }
+
+    /// <summary>ELF files are skipped and reported unless IncludeBinaries.</summary>
+    [Fact]
+    public async Task ElfSkippedUnlessIncluded()
+    {
+        byte[] elf = [0x7f, (byte)'E', (byte)'L', (byte)'F', 1, 2, 3];
+        var changes = new[] { "A /srv/prog" };
+        var r = await Import(Tar(new E("srv/prog", elf)), changes: changes);
+        Assert.DoesNotContain("/srv/prog", r.Report.Carried);
+        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/prog");
+
+        var kept = await Import(Tar(new E("srv/prog", elf)), changes: changes, options: new() { IncludeBinaries = true });
+        Assert.Contains("/srv/prog", kept.Report.Carried);
+        Assert.Equal(elf, Restored(kept).Fs.ReadAllBytes("/srv/prog"));
+    }
+
+    /// <summary>"D" lines delete default files; invalid UTF-8 comes back byte-exact.</summary>
+    [Fact]
+    public async Task DeletesAndKeepsInvalidUtf8()
+    {
+        byte[] raw = [0xff, 0xfe, (byte)'a', 0xc3, 0x28, 0];
+        var r = await Import(Tar(new E("srv/raw", raw)), changes: ["A /srv/raw", "D /home/agent/.profile"]);
+        Assert.Contains("/home/agent/.profile", r.Report.Deleted);
+        var sh = Restored(r);
+        Assert.NotEqual(0, (await sh.RunAsync("test -e ~/.profile")).ExitCode);
+        Assert.Equal(raw, sh.Fs.ReadAllBytes("/srv/raw"));
+    }
+
+    /// <summary>Without docker: the exported layer, read back as a container's filesystem, gives the machine back
+    /// (files, ~/.bashrc without the hook, the session, history).</summary>
+    [Fact]
+    public async Task ExportedLayerReadBackGivesTheMachineBack()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("echo hi > ~/a.txt; echo '# mine' >> ~/.bashrc; greet() { echo \"hi $1\"; }; alias ll='ls -l'; x=1; mkdir -p /tmp/w");
+        await sh.RunAsync("cd /tmp/w");
+        var ctx = sh.Snapshot().ToBuildContext();
+        var layer = Read(ctx.Layer);
+        var changes = Text(layer["etc/topwater/paths"]).Split('\n'); // docker diff's format, which an import also reads from the image
+        layer["etc/topwater/paths"].DataStream!.Position = 0;
+        var rootfs = new MemoryStream();
+        using (var w = new TarWriter(rootfs, TarEntryFormat.Pax, leaveOpen: true))
+        {
+            w.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "etc/passwd") { DataStream = new MemoryStream("root:x:0:0::/root:/bin/bash\nagent:x:1000:1000::/home/agent:/bin/bash\n"u8.ToArray()) });
+            foreach (var e in layer.Values) w.WriteEntry(e);
+        }
+        rootfs.Position = 0;
+        var r = await ContainerImport.FromTarAsync(rootfs, new ContainerConfig("agent", "/tmp/w"), changes);
+
+        var back = Restored(r);
+        Assert.Equal(sh.Fs.ReadAllText("/home/agent/.bashrc"), back.Fs.ReadAllText("/home/agent/.bashrc"));
+        Assert.False(back.Fs.Exists("/etc/topwater"));
+        Assert.False(back.Fs.Exists("/home/agent/.bash_history"));
+        Assert.Equal(sh.History, back.History);
+        Assert.Equal("agent", back.Fs.Stat("/home/agent/a.txt").Owner);
+        const string probe = "pwd; cat ~/a.txt; greet you; alias ll; declare -p x";
+        Assert.Equal((await sh.RunAsync(probe)).Stdout, (await back.RunAsync(probe)).Stdout);
+    }
+
+    // ---------- hostile input ----------
+
+    /// <summary>Non-canonical entry names throw.</summary>
+    [Theory]
+    [InlineData("../etc/x")]
+    [InlineData("home/../../x")]
+    [InlineData("a//b")]
+    [InlineData("/abs")]
+    [InlineData("a/./b")]
+    public async Task NonCanonicalNamesThrow(string name) =>
+        await Assert.ThrowsAsync<InvalidDataException>(() => Import(Tar(F(name, "x")), changes: ["A /a/b"]));
+
+    /// <summary>A leading "./" is what some tools write; it is fine.</summary>
+    [Fact]
+    public async Task LeadingDotSlashIsAccepted()
+    {
+        var r = await Import(Tar(F("./srv/x", "ok")), changes: ["A /srv/x"]);
+        Assert.Contains("/srv/x", r.Report.Carried);
+    }
+
+    /// <summary>Selected bytes over MaxFileSystemBytes throw.</summary>
+    [Fact]
+    public async Task TooManyBytesThrows()
+    {
+        var limits = new ShellOptions { MaxFileSystemBytes = 1000 };
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            Import(Tar(new E("srv/big", new byte[2000])), changes: ["A /srv/big"], options: new() { Limits = limits }));
+    }
+
+    /// <summary>More selected entries than MaxExtractEntries throw.</summary>
+    [Fact]
+    public async Task TooManyEntriesThrows()
+    {
+        var limits = new ShellOptions { MaxExtractEntries = 3 };
+        var files = Enumerable.Range(0, 10).Select(i => F($"srv/f{i}", "x")).ToArray();
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            Import(Tar(files), options: new() { Paths = ["/srv"], Limits = limits }));
+    }
+
+    /// <summary>Garbage is not a tar; a header claiming more data than present is truncated.</summary>
+    [Fact]
+    public async Task MalformedArchivesThrow()
+    {
+        var garbage = new MemoryStream(Enumerable.Range(0, 2048).Select(i => (byte)(i * 7 + 13)).ToArray());
+        await Assert.ThrowsAsync<InvalidDataException>(() => Import(garbage, changes: ["A /x"]));
+
+        var good = Tar(new E("srv/f", new byte[2000])).ToArray();
+        var cut = new MemoryStream(good[..(512 + 100)]);
+        await Assert.ThrowsAsync<InvalidDataException>(() => Import(cut, changes: ["A /srv/f"]));
+    }
+
+    /// <summary>A symlink loop terminates and is reported.</summary>
+    [Fact]
+    public async Task SymlinkLoopIsReported()
+    {
+        var r = await Import(Tar(L("srv/a", "/srv/b"), L("srv/b", "/srv/a")), changes: ["A /srv/a", "A /srv/b"]);
+        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/a");
+        Assert.Contains(r.Report.NotCarried, i => i.What == "/srv/b");
+    }
+}

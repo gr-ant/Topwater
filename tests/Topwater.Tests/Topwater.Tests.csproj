@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\src\Topwater\Topwater.csproj" />
     <ProjectReference Include="..\..\src\Topwater.Mcp\Topwater.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Topwater.AI\Topwater.AI.csproj" />
+    <ProjectReference Include="..\..\src\Topwater.Containers\Topwater.Containers.csproj" />
   </ItemGroup>
 
 </Project>
