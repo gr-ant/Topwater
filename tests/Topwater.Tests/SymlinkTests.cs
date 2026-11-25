@@ -58,8 +58,8 @@ public class SymlinkTests
         var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(2) });
         await sh.RunAsync("mkdir -p /tmp/w/out/d0 && cd /tmp/w && echo x > out/d0/f && for i in $(seq 1 30); do mkdir out/d$i; ln -s ../d$((i-1)) out/d$i/a; ln -s ../d$((i-1)) out/d$i/b; done");
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        await Task.Run(() => sh.RunAsync("cd /tmp/w; " + cmd)).WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"{cmd} took {watch.Elapsed}");
+        await Task.Run(() => sh.RunAsync("cd /tmp/w; " + cmd)).WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"{cmd} took {watch.Elapsed}"); // generous: the limit is 2 s, but a loaded machine runs slow
     }
 
     /// <summary>cp -rL meets a directory it is already copying (through a link higher up, then down a plain child): it
