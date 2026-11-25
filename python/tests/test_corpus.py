@@ -29,7 +29,7 @@ def _params():
 @pytest.mark.parametrize("case", list(_params()))
 def test_case(case):
     sh = Shell()
-    sh.run("mkdir -p /tmp/w && cd /tmp/w")
+    sh.run("mkdir -p /tmp/w && cd /tmp/w && hash -r")
     if case.get("setup"):
         sh.run(case["setup"])
     r = sh.run(case["script"])

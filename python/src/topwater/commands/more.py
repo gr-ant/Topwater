@@ -193,22 +193,30 @@ SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "case", "esac", "for", "se
                   "function", "time", "{", "}", "!", "[[", "]]", "coproc"}
 
 
-def describe(ctx, a: str) -> bool:
+def describe(ctx, a: str, all_: bool = False) -> bool:
     """`type NAME` / `command -V NAME`: what the name runs, or False (with a message) when nothing."""
     sh = ctx.shell
+    lines = []
     if a in sh.aliases:
-        ctx.print(f"{a} is aliased to `{sh.aliases[a]}'")
-    elif a in SHELL_KEYWORDS:
-        ctx.print(f"{a} is a shell keyword")
-    elif a in sh.functions:
-        ctx.print(f"{a} is a function\n{a} () \n{sh.functions[a].source}")
-    elif is_shell_builtin(sh, a):
-        ctx.print(f"{a} is a shell builtin")
-    elif a in sh.commands:
-        ctx.print(f"{a} is /usr/bin/{a}")
-    else:
+        lines.append(f"{a} is aliased to `{sh.aliases[a]}'")
+    if a in SHELL_KEYWORDS:
+        lines.append(f"{a} is a shell keyword")
+    if a in sh.functions:
+        lines.append(f"{a} is a function\n{a} () \n{sh.functions[a].source}")
+    if is_shell_builtin(sh, a):
+        lines.append(f"{a} is a shell builtin")
+    if all_:
+        lines += [f"{a} is {p}" for p in sh.locate_all(a)]
+    elif not lines:
+        found = sh.locate(a)
+        if found:
+            p, hashed = found
+            lines.append(f"{a} is hashed ({'' if p.startswith(('/', './')) else './'}{p})" if hashed else f"{a} is {p}")
+    if not lines:
         ctx.error(f"{ctx.shell.err_prefix}type: {a}: not found")
         return False
+    for line in lines if all_ else lines[:1]:
+        ctx.print(line)
     return True
 
 
@@ -597,10 +605,55 @@ def _kill(ctx):
 
 
 def _hash(ctx):
-    code = 0
-    for n in ctx.args:
-        if not n.startswith("-") and n not in ctx.shell.commands:
-            ctx.error(f"{ctx.shell.err_prefix}hash: {n}: not found")
+    sh = ctx.shell
+    sh.sync_hashed()
+    args = list(ctx.args)
+    code = i = 0
+    show = delete = False
+    path = None
+    while i < len(args) and len(args[i]) > 1 and args[i][0] == "-":
+        if args[i] == "--":
+            i += 1
+            break
+        for ch in args[i][1:]:
+            if ch == "r":
+                sh.hashed.clear()
+            elif ch == "t":
+                show = True
+            elif ch == "d":
+                delete = True
+            elif ch == "p":
+                if i + 1 >= len(args):
+                    raise UsageException("-p: option requires an argument")
+                i += 1
+                path = args[i]
+                break
+            elif ch != "l":
+                raise UsageException(f"-{ch}: invalid option")
+        i += 1
+    names = args[i:]
+    if i == 0 and not names:
+        if not sh.hashed:
+            ctx.print("hash: hash table empty")
+        else:
+            ctx.print("hits\tcommand\n" + "".join(f"{h[1]:4}\t{h[0]}\n" for h in sh.hashed.values()), end="")
+    for n in names:
+        hashed = sh.hash_lookup(n) if show else None
+        if hashed is not None:
+            ctx.print(f"{n}\t{hashed}" if len(names) > 1 else hashed)
+        elif delete and sh.hashed.pop(n, None) is not None:
+            pass
+        elif path is not None:
+            sh.hashed[n] = [path, 0]
+        elif show or delete or "/" in n:
+            ctx.error(f"{sh.err_prefix}hash: {n}: not found")
+            code = 1
+        elif is_shell_builtin(sh, n) or n in sh.functions or sh.is_unfiled(n):
+            pass
+        elif sh.search_path_all(n):
+            sh.hashed[n] = [sh.search_path_all(n)[0], 0]
+        else:
+            ctx.error(f"{sh.err_prefix}hash: {n}: not found")
             code = 1
     return code
 
@@ -706,8 +759,8 @@ async def _command(ctx):
             ctx.print(f"alias {n}='{sh.aliases[n]}'")
         elif n in SHELL_KEYWORDS or n in sh.functions or is_shell_builtin(sh, n):
             ctx.print(n)
-        elif n in sh.commands:
-            ctx.print(f"/usr/bin/{n}")
+        elif found := sh.locate(n):
+            ctx.print(found[0])
         else:
             code = 1
     return code

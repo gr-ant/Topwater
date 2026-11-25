@@ -386,10 +386,11 @@ def _which(ctx):
     for a in ctx.args:
         if a.startswith("-"):
             continue
-        if a in ctx.shell.commands:
-            ctx.print(f"/usr/bin/{a}")
-        else:
+        found = ctx.shell.locate_all(a)
+        if not found:
             code = 1
+        for p in found if "-a" in ctx.args else found[:1]:
+            ctx.print(p)
     return code
 
 
@@ -414,15 +415,21 @@ def _type(ctx):
         sh = ctx.shell
         if opts.has("t") or opts.has("p") or opts.has("P"):
             kind = ("alias" if a in sh.aliases else "keyword" if a in SHELL_KEYWORDS else "function" if a in sh.functions
-                    else "builtin" if is_shell_builtin(sh, a) else "file" if a in sh.commands else None)
+                    else "builtin" if is_shell_builtin(sh, a) else None)
+            paths: list[str] = []
+            if kind is None or opts.has("P"):
+                found = sh.locate(a)
+                paths = sh.locate_all(a) if opts.has("a") else [found[0]] if found else []
+            kind = kind or ("file" if paths else None)
             if kind is None:
                 code = 1
             elif opts.has("t"):
                 ctx.print(kind)
-            elif kind == "file" or (opts.has("P") and a in sh.commands):
-                ctx.print(f"/usr/bin/{a}")
+            else:
+                for p in paths:
+                    ctx.print(p)
             continue
-        if not describe(ctx, a):
+        if not describe(ctx, a, opts.has("a")):
             code = 1
     return code
 

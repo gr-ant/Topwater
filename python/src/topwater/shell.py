@@ -415,6 +415,8 @@ class Shell:
         self.history: list[str] = []
         self.aliases: dict[str, str] = {}
         self.functions: dict[str, FunctionDef] = {}
+        self.hashed: dict[str, list] = {}  # bash's hash table: name -> [path found on PATH, lookups since]
+        self._hashed_for: str | None = None  # the PATH the table was filled from: any change to PATH empties it
         self.positional: list[str] = []
         self.errexit = self.pipefail = self.nounset = self.noglob = self.xtrace = self.noclobber = False
         self.shopts: set[str] = set(_DEFAULT_SHOPTS)
@@ -606,6 +608,7 @@ class Shell:
         /usr/bin entries); the snapshot is unchanged and can be restored again."""
         self.fs.replace_all(snapshot.entries)
         self._apply_state(snapshot.state)
+        self.hashed = {}  # the restored machine's programs may be elsewhere
 
     def fork(self) -> "Shell":
         """A new shell with a copy of this machine that shares nothing mutable with it. It shares the registered command
@@ -842,6 +845,7 @@ class Shell:
         self.aliases = {}
         self.functions = {k: v for k, v in self.functions.items() if k in self.exported_functions}
         self.errexit = self.pipefail = self.nounset = self.xtrace = self.noglob = self.noclobber = False
+        self.hashed = {}
         self._arg0 = process.arg0
         if process.setup:
             process.setup()
@@ -863,13 +867,14 @@ class Shell:
         self._subshell += 1
         return (self._cwd, dict(self.env), dict(self.aliases), dict(self.functions), self.positional, self.errexit, self.pipefail,
                 self.nounset, set(self.shopts), dict(self.traps), dict(self.arrays),
-                (self.noglob, self.xtrace, self.noclobber, self._ifs_unset), dict(self.var_attrs), self._variable_chars)
+                (self.noglob, self.xtrace, self.noclobber, self._ifs_unset), dict(self.var_attrs), self._variable_chars,
+                {k: list(v) for k, v in self.hashed.items()})
 
     def _restore_state(self, saved) -> None:
         self._epoch += 1
         self._subshell -= 1
         (cwd, self.env, self.aliases, self.functions, self.positional, self.errexit, self.pipefail, self.nounset, self.shopts,
-         self.traps, self.arrays, flags, self.var_attrs, self._variable_chars) = saved
+         self.traps, self.arrays, flags, self.var_attrs, self._variable_chars, self.hashed) = saved
         self.noglob, self.xtrace, self.noclobber, self._ifs_unset = flags
         self._cwd = cwd if self.fs.is_dir(cwd) else "/"
 
@@ -1388,6 +1393,22 @@ class Shell:
                 name = get_name(path)
             else:
                 return await self._run_script_file(name, path, argv, io_)
+        else:
+            from .commands import is_shell_builtin
+
+            if not is_shell_builtin(self, name) and not self.is_unfiled(name):
+                found = self.hash_lookup(name)
+                if found is None:
+                    found = self.search_path(name)
+                    if found is None:
+                        io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n" if not self.env.get("PATH")
+                                      else f"{argv[0]}: command not found (run 'help' to list available commands)\n")
+                        return 127
+                    self.hashed[name] = [found, 1]
+                registered = self.stub_command(found)
+                if registered is None:
+                    return await self._run_script_file(found, self.resolve(found), [found, *argv[1:]], io_)
+                name = registered
         cmd = self.commands.get(name)
         if cmd is None:
             io_.err.write(f"{argv[0]}: command not found (run 'help' to list available commands)\n")
@@ -1434,14 +1455,110 @@ class Shell:
             return 126
         text = self.fs.read_text(path)
         if text.startswith(EXECUTABLE_STUB[:4]):
+            stub = self.stub_command(path)
+            if stub is not None:
+                return await self._invoke([stub, *argv[1:]], io_, skip_functions=True)
             io_.err.write(f"{self.err_prefix}{name}: cannot execute binary file\n")
             return 126
         if text.startswith("#!"):
-            interp = text[2:].split("\n", 1)[0].strip()
-            if not re.search(r"(^|/|\s)(ba)?sh(\s|$)", interp):
-                io_.err.write(f"{self.err_prefix}{name}: {interp.split(' ')[0]}: bad interpreter: No such file or directory\n")
-                return 126
+            line = text[2:].split("\n", 1)[0].strip()
+            if not re.search(r"(^|/|\s)(ba)?sh(\s|$)", line):
+                return await self._run_interpreter(name, line, argv, io_)
         return await self._run_script_text(text, io_, subshell=True, positional=list(argv[1:]), process=_NewProcess(name, name))
+
+    async def _run_interpreter(self, name: str, line: str, argv: list[str], io_: _Io) -> int:
+        """A #! line naming another program: like the kernel, run it with its one optional argument, the script and the
+        script's arguments, when it is one of the shell's commands."""
+        parts = re.split(r"[ \t]", line, maxsplit=1)
+        program = self.stub_command(parts[0])
+        if program is None:
+            io_.err.write(f"{self.err_prefix}{name}: cannot execute: required file not found\n")
+            return 127
+        opt = parts[1].strip() if len(parts) > 1 else ""
+        words = [] if not opt else opt[2:].split() if program == "env" and opt.startswith("-S") else [opt]
+        if program != "env":
+            return await self._invoke([program, *words, name, *argv[1:]], io_, skip_functions=True)
+        # shortcut: env in a #! line only looks the program up on PATH; env's own options are not supported
+        if not words or not self.is_unfiled(words[0]) and not self.search_path_all(words[0]):
+            io_.err.write(f"{parts[0]}: \u2018{words[0] if words else ''}\u2019: No such file or directory\n")
+            if " " in opt:
+                io_.err.write(f"{parts[0]}: use -[v]S to pass options in shebang lines\n")
+            return 127
+        return await self._invoke([*words, name, *argv[1:]], io_, skip_functions=True)
+
+    def is_unfiled(self, name: str) -> bool:
+        """A registered command with no program file (a shell-only builtin, or an app command added where there is no
+        /usr/bin): it runs whatever PATH says."""
+        return name in self.commands and "/" not in name and not self.fs.is_file("/usr/bin/" + name) and not self.fs.is_file("/bin/" + name)
+
+    def stub_command(self, path: str) -> str | None:
+        """The registered command a program file stands for, or None when `path` is not one of the stubs."""
+        p = self.resolve(path)
+        if not self.fs.is_file(p) or not self.fs.can_read(p) or self.fs.read_text(p) != EXECUTABLE_STUB:
+            return None
+        name = get_name(self.fs.real_path(p)[0] or p)
+        return name if name in self.commands else None
+
+    def _path_candidates(self, name: str) -> list[str]:
+        """Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd."""
+        return [d.rstrip("/") + "/" + name if d else "./" + name for d in self.env.get("PATH", "").split(":")]
+
+    def search_path(self, name: str) -> str | None:
+        """PATH search as bash does it: the first executable regular file named `name` in a directory the agent can
+        search, else the first one that isn't executable (running it says "Permission denied"), else None."""
+        denied = None
+        for p in self._path_candidates(name):
+            a = self.resolve(p)
+            if self.fs.is_file(a):
+                if self.fs.can_execute(a):
+                    return p
+                denied = denied or p
+        return denied
+
+    def search_path_all(self, name: str) -> list[str]:
+        """`type -a`, `which -a`: every executable regular file named `name` on PATH."""
+        return [p for p in self._path_candidates(name) if self.fs.is_file(self.resolve(p)) and self.fs.can_execute(self.resolve(p))]
+
+    def hash_lookup(self, name: str) -> str | None:
+        """The hash table's entry for `name`, counting a hit; the table empties first if PATH changed."""
+        self.sync_hashed()
+        h = self.hashed.get(name)
+        if h is None:
+            return None
+        h[1] += 1
+        return h[0]
+
+    def sync_hashed(self) -> None:
+        path = self.env.get("PATH")
+        if path != self._hashed_for:
+            self.hashed = {}
+            self._hashed_for = path
+
+    def locate(self, name: str) -> tuple[str, bool] | None:
+        """`type`, `command -v`: the program `name` runs, from the hash table (counting a hit) or PATH; an app command with
+        no program file is reported in /usr/bin as before."""
+        if "/" in name:
+            a = self.resolve(name)
+            return (name, False) if self.fs.is_file(a) and self.fs.can_execute(a) else None
+        h = self.hash_lookup(name)
+        if h is not None:
+            return h, True
+        p = self.search_path(name)
+        if p is not None:
+            return p, False
+        return ("/usr/bin/" + name, False) if self._is_app_only(name) else None
+
+    def locate_all(self, name: str) -> list[str]:
+        """`type -a`, `which`: every program file `name` could run, in PATH order."""
+        if "/" in name:
+            found = self.locate(name)
+            return [found[0]] if found else []
+        found = self.search_path_all(name)
+        return found or (["/usr/bin/" + name] if self._is_app_only(name) else [])
+
+    def _is_app_only(self, name: str) -> bool:
+        from .commands import is_shell_builtin
+        return self.is_unfiled(name) and not is_shell_builtin(self, name)
 
     async def _call_function(self, body, argv: list[str], io_: _Io) -> int:
         if len(self._locals) >= 200:
@@ -1594,6 +1711,8 @@ class Shell:
         if not is_name(name):
             raise ShellError(f"`{name}': not a valid identifier")
         self._check_writable(name)
+        if name == "PATH":
+            self.hashed = {}  # even to the same value
         if name == "SECONDS" and re.fullmatch(r"-?\d+", value):
             self._seconds_base = time.time() - int(value)
             return

@@ -15,6 +15,16 @@ def out(shell: Shell, cmd: str) -> str:
 
 
 class AgentFeatureTests(unittest.TestCase):
+    def test_app_commands_go_through_path_like_programs(self):
+        sh = Shell().register_command("greet", lambda ctx: ctx.print("app " + " ".join(ctx.args)))
+        self.assertEqual("app a\n/usr/bin/greet\n", out(sh, "greet a; command -v greet"))
+        # a script earlier on PATH shadows it, as a wrapper would
+        out(sh, "mkdir -p ~/bin && printf '#!/bin/sh\\necho wrapped; /usr/bin/greet \"$@\"\\n' > ~/bin/greet && chmod +x ~/bin/greet")
+        self.assertEqual("wrapped\napp b\n", out(sh, "PATH=~/bin:$PATH greet b"))
+        self.assertEqual(127, sh.run("PATH=/nowhere greet").exit_code)
+        # shell builtins have no program file and keep working whatever PATH holds
+        self.assertEqual("x\n", out(sh, "PATH=/nowhere; cd /tmp; echo x"))
+
     def test_scripts_run_with_arguments(self):
         sh = Shell()
         out(sh, "cat > run.sh <<'EOF'\n#!/bin/bash\nset -e\necho \"script $1 $2 ($#)\"\nfor a in \"$@\"; do echo \"arg: $a\"; done\nEOF\nchmod +x run.sh")
@@ -22,8 +32,8 @@ class AgentFeatureTests(unittest.TestCase):
         self.assertEqual("script a  (1)\narg: a\n", out(sh, "bash run.sh a"))
         out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py && chmod +x p.py")
         r = sh.run("./p.py")
-        self.assertEqual(126, r.exit_code)
-        self.assertIn("bad interpreter", r.stderr)
+        self.assertEqual(127, r.exit_code)
+        self.assertIn("python3\u2019: No such file or directory", r.stderr)
         self.assertEqual(127, sh.run("./missing.sh").exit_code)
         self.assertEqual(2, sh.run("exit 2").exit_code)
         e = sh.run("set -e; echo one; false; echo two")
