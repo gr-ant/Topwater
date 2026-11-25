@@ -17,8 +17,10 @@ namespace Topwater;
 /// </summary>
 public sealed class ShellSnapshot
 {
-    /// <summary>The version of the saved format this Topwater writes; <see cref="Load"/> refuses newer ones.</summary>
-    public const int FormatVersion = 1;
+    /// <summary>The newest version of the saved format this Topwater writes; <see cref="Load"/> refuses newer ones. Version 2 added
+    /// symbolic links (type "symlink" with a "target") and hard links (a "link" naming the entry's first path); a snapshot
+    /// without links is still written as version 1, so older Topwater can load it.</summary>
+    public const int FormatVersion = 2;
     const string FormatName = "topwater-snapshot";
 
     internal ShellSnapshot(VirtualFileSystem fs, ShellState state, string user, string hostname, DateTime created)
@@ -49,10 +51,16 @@ public sealed class ShellSnapshot
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
         var written = new HashSet<string>(StringComparer.Ordinal);
         var files = new List<FileEntry>();
+        bool links = false;
         foreach (var e in Fs.Entries())
         {
-            var entry = new FileEntry { Path = e.Path, Type = e.IsDirectory ? "dir" : "file", Mode = Convert.ToString(e.Mode, 8).PadLeft(4, '0'), Owner = e.Owner, Mtime = FormatTime(e.Modified) };
-            if (!e.IsDirectory)
+            var entry = new FileEntry
+            {
+                Path = e.Path, Type = e.IsDirectory ? "dir" : e.LinkTarget != null ? "symlink" : "file", Mode = Convert.ToString(e.Mode, 8).PadLeft(4, '0'),
+                Owner = e.Owner, Mtime = FormatTime(e.Modified), Target = e.LinkTarget, Link = e.HardLink,
+            };
+            links |= e.LinkTarget != null || e.HardLink != null;
+            if (entry.Type == "file")
             {
                 var bytes = e.Data ?? Encoding.UTF8.GetBytes(e.Text!);
                 entry.Size = bytes.Length;
@@ -71,7 +79,7 @@ public sealed class ShellSnapshot
         var names = new SortedSet<string>(st.Variables.Keys.Concat(st.Arrays.Keys).Concat(st.Attributes.Keys), StringComparer.Ordinal);
         var manifest = new Manifest
         {
-            Format = FormatName, Version = FormatVersion, Created = FormatTime(Created), User = User, Hostname = Hostname, Cwd = st.Cwd,
+            Format = FormatName, Version = links ? FormatVersion : 1, Created = FormatTime(Created), User = User, Hostname = Hostname, Cwd = st.Cwd,
             Files = files,
             Variables = names.Select(n => new VariableEntry
             {
@@ -172,7 +180,10 @@ public sealed class ShellSnapshot
             var mtime = ParseTime(f.Mtime, path + ": mtime");
             string? text = null;
             byte[]? data = null;
-            if (f.Type == "file")
+            if (f.Link != null && (f.Link is not { Length: > 0 and <= 4096 } || f.Link[0] != '/' || VirtualFileSystem.Normalize("/", f.Link) != f.Link || f.Type == "dir"))
+                throw Bad($"{path}: bad link {JsonSerializer.Serialize(f.Link)}");
+            if (f.Type == "symlink" && f.Target is not { Length: > 0 and <= 4096 } || f.Target?.Contains('\0') == true) throw Bad($"{path}: bad symlink target");
+            if (f.Type == "file" && f.Link == null) // another name of a file shares the first one's content
             {
                 if (f.ReportedSize < 0) throw Bad($"{path}: negative reportedSize");
                 if (f.Size == 0) { if (f.Binary) data = []; else text = ""; }
@@ -192,8 +203,8 @@ public sealed class ShellSnapshot
                     if (f.Binary) data = (byte[])content; else text = (string)content;
                 }
             }
-            else if (f.Type != "dir") throw Bad($"{path}: unknown type {JsonSerializer.Serialize(f.Type)}");
-            fs.Put(new(path, f.Type == "dir", Convert.ToInt32(mode, 8), owner, mtime, text, data, f.ReportedSize));
+            else if (f.Type is not ("dir" or "file" or "symlink")) throw Bad($"{path}: unknown type {JsonSerializer.Serialize(f.Type)}");
+            fs.Put(new(path, f.Type == "dir", Convert.ToInt32(mode, 8), owner, mtime, text, data, f.ReportedSize, f.Type == "symlink" ? f.Target : null, f.Link));
         }
         return fs;
     }
@@ -347,6 +358,9 @@ public sealed class ShellSnapshot
         public bool Binary { get; set; }
         public long? ReportedSize { get; set; }
         public string? Blob { get; set; }
+        // added in version 2: a symbolic link's target, and for another name of a file or link, the path it was first saved at
+        public string? Target { get; set; }
+        public string? Link { get; set; }
     }
 
     sealed class VariableEntry

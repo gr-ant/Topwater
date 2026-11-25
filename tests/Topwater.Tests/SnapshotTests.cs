@@ -266,7 +266,7 @@ public class SnapshotTests(ITestOutputHelper output)
         using var zip = new ZipArchive(new MemoryStream(Save(sh)));
         var manifest = JsonNode.Parse(zip.GetEntry("manifest.json")!.Open())!;
         Assert.Equal("topwater-snapshot", (string?)manifest["format"]);
-        Assert.Equal(ShellSnapshot.FormatVersion, (int)manifest["version"]!);
+        Assert.Equal(1, (int)manifest["version"]!); // no links: written as version 1, which older Topwater reads
         var files = manifest["files"]!.AsArray();
         var a = files.Single(f => (string?)f!["path"] == "/home/agent/a")!;
         Assert.Equal("0644", (string?)a["mode"]);
@@ -326,8 +326,8 @@ public class SnapshotTests(ITestOutputHelper output)
     [Fact]
     public void ANewerFormatVersionIsRefusedClearly()
     {
-        var e = Assert.Throws<NotSupportedException>(() => ShellSnapshot.Load(new MemoryStream(Tamper(new Shell(), m => { m["version"] = 2; m["files"] = "changed shape"; }))));
-        Assert.Equal("snapshot format version 2 is newer than this version of Topwater supports (1); upgrade Topwater to load it", e.Message);
+        var e = Assert.Throws<NotSupportedException>(() => ShellSnapshot.Load(new MemoryStream(Tamper(new Shell(), m => { m["version"] = 3; m["files"] = "changed shape"; }))));
+        Assert.Equal("snapshot format version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it", e.Message);
     }
 
     [Fact]
@@ -360,7 +360,8 @@ public class SnapshotTests(ITestOutputHelper output)
     {
         var sh = new Shell();
         sh.Fs.WriteAllText("/home/agent/x", "content");
-        Assert.Contains("unknown type \"symlink\"", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["type"] = "symlink")));
+        Assert.Contains("unknown type \"socket\"", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["type"] = "socket")));
+        Assert.Contains("bad symlink target", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["type"] = "symlink")));
         Assert.Contains("bad mode", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["mode"] = "9999")));
         Assert.Contains("owner", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["owner"] = "../root")));
         Assert.Contains("mtime", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["mtime"] = "yesterday")));
@@ -370,6 +371,50 @@ public class SnapshotTests(ITestOutputHelper output)
         Assert.Contains("bad cwd", Rejected(Tamper(sh, m => m["cwd"] = "../up")));
         Assert.Contains("bad variable name", Rejected(Tamper(sh, m => m["variables"]!.AsArray().Add(new JsonObject { ["name"] = "a;b", ["value"] = "x" }))));
         Assert.Contains("bad index", Rejected(Tamper(sh, m => m["variables"]!.AsArray().Add(JsonNode.Parse("""{"name":"a","array":{"items":[["-1","x"]]}}""")))));
+    }
+
+    [Fact]
+    public async Task LinksSurviveSaveLoadForkAndRestore()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("mkdir -p d/s; echo hi > d/f; ln -s f d/l; ln -s /etc d/etc; ln -s nowhere d/dang; ln -s . d/s/self; ln -s loop2 loop1; ln -s loop1 loop2; ln d/f d/h; ln -s f d/sl; ln d/sl d/sl2");
+        var bytes = Save(sh);
+        using (var zip = new ZipArchive(new MemoryStream(bytes)))
+        {
+            var manifest = JsonNode.Parse(zip.GetEntry("manifest.json")!.Open())!;
+            Assert.Equal(2, (int)manifest["version"]!);
+            Assert.Equal("symlink", (string?)FileEntry(manifest, "/home/agent/d/l")["type"]);
+            Assert.Equal("f", (string?)FileEntry(manifest, "/home/agent/d/l")["target"]);
+            Assert.Equal("/home/agent/d/f", (string?)FileEntry(manifest, "/home/agent/d/h")["link"]);
+        }
+        const string probe = "readlink d/l d/etc d/dang loop1; cat d/l d/s/self/self/../f; stat -c '%h %F' d/f d/h d/sl2; echo more >> d/h; cat d/f; cat loop1 2>&1";
+        const string want = "f\n/etc\nnowhere\nloop2\nhi\nhi\n2 regular file\n2 regular file\n2 symbolic link\nhi\nmore\ncat: loop1: Too many levels of symbolic links\n";
+        foreach (var copy in new[] { Shell.Load(new MemoryStream(bytes)), sh.Fork() })
+            Assert.Equal(want, (await copy.RunAsync(probe)).Stdout);
+        var snap = sh.Snapshot();
+        await sh.RunAsync("rm -r d loop1");
+        sh.Restore(snap);
+        Assert.Equal(want, (await sh.RunAsync(probe)).Stdout);
+    }
+
+    [Fact]
+    public void LinksInASnapshotAreChecked()
+    {
+        var sh = new Shell();
+        sh.Fs.CreateDirectory("/home/agent/d");
+        sh.Fs.WriteAllText("/home/agent/x", "x");
+        sh.Fs.CreateSymlink("/home/agent/l", "/etc");
+        // an entry can't be put through a link (it would land in /etc), nor be a hard link to a directory, a later or a missing entry
+        Assert.Contains("parent is not a directory", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["path"] = "/home/agent/l/x")));
+        Assert.Contains("not an earlier file", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["link"] = "/home/agent/d")));
+        Assert.Contains("not an earlier file", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["link"] = "/home/agent/missing")));
+        Assert.Contains("not an earlier file", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/l")["link"] = "/home/agent/x")));
+        Assert.Contains("bad link", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/x")["link"] = "../etc/passwd")));
+        Assert.Contains("bad symlink target", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/l")["target"] = "a\0b")));
+        Assert.Contains("bad symlink target", Rejected(Tamper(sh, m => FileEntry(m, "/home/agent/l")["target"] = new string('a', 4097))));
+        // a link to anywhere, even a loop, loads: it is only a path, resolved later with the agent's permissions
+        var loaded = Shell.Load(new MemoryStream(Tamper(sh, m => FileEntry(m, "/home/agent/l")["target"] = "l")));
+        Assert.Equal("l", loaded.Fs.ReadLink("/home/agent/l"));
     }
 
     [Fact]
