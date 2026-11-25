@@ -11,18 +11,17 @@ from .. import TOOL_DESCRIPTION, TOOL_NAME, Shell, execute_tool
 
 
 def bash_tool(shell: Shell | None = None, description: str | None = None) -> FunctionTool:
-    shell = shell or Shell()
-    # shortcut: the shell keeps per-call state, so calls are serialized; sync and async callers use separate locks
-    sync_lock, async_lock = threading.Lock(), asyncio.Lock()
+    shell = shell if shell is not None else Shell()
+    # the shell runs one call at a time; one thread lock serializes sync and async callers alike, from any event loop
+    lock = threading.Lock()
 
     def run(command: str) -> str:
         """Run a bash command."""
-        with sync_lock:
+        with lock:
             return asyncio.run(execute_tool(shell, command))
 
     async def arun(command: str) -> str:
         """Run a bash command."""
-        async with async_lock:
-            return await execute_tool(shell, command)
+        return await asyncio.to_thread(run, command)
 
     return FunctionTool.from_defaults(fn=run, async_fn=arun, name=TOOL_NAME, description=description or TOOL_DESCRIPTION)

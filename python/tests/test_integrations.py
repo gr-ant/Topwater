@@ -40,6 +40,7 @@ def test_langchain_async():
         return await tool.ainvoke({"command": "cat /tmp/x"})
 
     assert asyncio.run(go()).startswith("5")
+    assert asyncio.run(go()).startswith("5")  # a second event loop works too
 
 
 def test_llamaindex():
