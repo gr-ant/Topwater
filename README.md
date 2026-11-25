@@ -112,7 +112,7 @@ detail using the C# API, and each port's README maps it onto its own
 The same in all three:
 
 - A shell language: pipes, redirects, loops, functions, arrays, heredocs, scripts.
-- About 110 standard commands, including `grep`, `sed`, `awk`, `jq`, `find`, `tar` and `bc`.
+- About 110 standard commands, including `grep`, `sed`, `awk`, `jq`, `find` and `tar` (plus `bc` in C#, on `main` ahead of the next release).
 - An in-memory filesystem laid out like Ubuntu, with a regular user who cannot `sudo`.
 - `to-markdown` for reading Word, Excel, PowerPoint and HTML files.
 
