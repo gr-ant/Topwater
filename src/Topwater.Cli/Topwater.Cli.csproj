@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- a global tool built for net8.0 also runs on newer runtimes -->
+    <RollForward>Major</RollForward>
+
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>topwater</ToolCommandName>
+    <PackageId>Topwater.Cli</PackageId>
+    <Description>The topwater command: a simulated bash shell in your terminal, one-shot runs, snapshots, and an MCP server that gives any MCP client (Claude Desktop, Cursor, VS Code) a sandboxed bash tool.</Description>
+    <PackageTags>agents;llm;mcp;model-context-protocol;tool-use;bash;shell;sandbox;cli</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.Core" Version="2.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Topwater\Topwater.csproj" />
+    <ProjectReference Include="..\Topwater.AI\Topwater.AI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Topwater.Tests" />
+  </ItemGroup>
+
+</Project>
