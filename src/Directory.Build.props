@@ -1,7 +1,7 @@
 <Project>
-  <!-- Package metadata and build settings shared by Topwater, Topwater.AI and Topwater.Mcp -->
+  <!-- Package metadata and build settings shared by the Topwater packages -->
   <PropertyGroup>
-    <!-- one version for all three; clear the suffix (-p:VersionSuffix=) for a stable release -->
+    <!-- one version for all of them; clear the suffix (-p:VersionSuffix=) for a stable release -->
     <VersionPrefix>0.1.0</VersionPrefix>
     <VersionSuffix>preview.1</VersionSuffix>
 

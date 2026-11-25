@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.1.0-preview.1 or v0.1.0 to build, test and publish all three packages.
+# Push a tag like v0.1.0-preview.1 or v0.1.0 to build, test and publish all the packages.
 on:
   push:
     tags: ['v*']
@@ -23,7 +23,7 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           prefix="${v%%-*}"; suffix=""; [ "$v" != "$prefix" ] && suffix="${v#*-}"
-          for p in src/Topwater src/Topwater.AI src/Topwater.Mcp; do
+          for p in src/Topwater src/Topwater.AI src/Topwater.Mcp src/Topwater.Cli; do
             dotnet pack "$p" -c Release -o out -p:VersionPrefix="$prefix" -p:VersionSuffix="$suffix"
           done
       - name: NuGet login (OIDC to a one-hour API key)

@@ -201,8 +201,8 @@ static class Cli
         var machine = Machine.Open(o, io.Err);
         // stdout carries the protocol, so everything for people goes to stderr (MCP clients show it in their logs)
         io.Err.WriteLine($"topwater mcp {McpServerCommand.Version}: serving one simulated machine over stdio. " +
-            (o.Imports.Count + o.Exports.Count == 0 ? "No host files are read or written" : $"{o.Imports.Count} import(s), {o.Exports.Count} export(s) on exit") +
-            (o.State != null ? $"; state in {o.State}." : "."));
+            (o.Imports.Count + o.Exports.Count == 0 ? "No host files are copied in or out" : $"{o.Imports.Count} import(s), {o.Exports.Count} export(s) on exit") +
+            (o.State != null ? $"; the machine is saved to {o.State}." : "; the machine is discarded on exit."));
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // a client stopping the server sends SIGTERM (or closes stdin); either way the state is saved and exports run

@@ -49,7 +49,12 @@ You send the model one tool definition instead of one per function, and it can p
 | **Python 3.10+** | `pip install "git+https://github.com/gr-ant/Topwater@python#subdirectory=python"` (preview, not on PyPI yet) |
 | **TypeScript, Node 20+** | `git clone -b typescript https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
 
+| **Command line and MCP server** | `dotnet tool install -g Topwater.Cli --prerelease` gives you `topwater` (a shell on the simulated machine) and `topwater mcp` |
+
 None of them has runtime dependencies in its core.
+
+No code at all: `topwater mcp` is an MCP server with one sandboxed `bash` tool, for Claude Desktop, Cursor, VS Code or
+any MCP client. `topwater` alone opens a shell on the simulated machine. See [Command line and MCP server](docs/reference.md#command-line-and-mcp-server).
 
 ## Use
 
@@ -142,6 +147,7 @@ runs it under bubblewrap, where it can see only its private copy of the agent's 
 ## Try it
 
 ```bash
+topwater                                  # after dotnet tool install -g Topwater.Cli
 dotnet run --project examples/McpShell    # a terminal on the simulated machine
 dotnet run --project examples/WebShell    # the same, as a web page on port 8765
 dotnet test                               # C#; also: cd python && python -m pytest, cd typescript && npm test

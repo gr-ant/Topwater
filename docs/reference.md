@@ -176,6 +176,42 @@ var answer = await kernel.InvokePromptAsync("How many lines are in notes.txt?", 
 
 The model sees it as `shell-bash` (Semantic Kernel prefixes the plugin name), with the same description and schema.
 
+## Command line and MCP server
+
+The `Topwater.Cli` package is a .NET global tool, `topwater`:
+
+```bash
+dotnet tool install -g Topwater.Cli --prerelease
+topwater                                   # interactive shell
+topwater run "ls -la /etc | head"          # one command, exit code passed through
+topwater mcp --state ~/.topwater/m.zip     # MCP server over stdio, machine kept across restarts
+topwater snapshot save|load|info FILE
+```
+
+`topwater mcp` serves one tool, `bash`, built from `shell.AsAIFunction()`: the name, description, schema and output text
+are those of `BashTool`, `[exit code N]` and limit notes included. Calls run one at a time. Claude Desktop
+(`claude_desktop_config.json`):
+
+```json
+{ "mcpServers": { "topwater": { "command": "/Users/you/.dotnet/tools/topwater", "args": ["mcp"] } } }
+```
+
+Every command takes the same options:
+
+| Option | Effect |
+|---|---|
+| `--state FILE` | load the machine from FILE if it exists; save it after every command (through a temporary file) and on exit |
+| `--from FILE` | start from FILE when there is no `--state` file yet; FILE is never written |
+| `--import HOST:PATH` | copy a host file or directory into the machine at start, owned by the agent. A copy, not a mount; symlinks are skipped. Refused if it would not fit on the simulated disk |
+| `--export PATH:HOST` | copy PATH out to the host on exit. Overwrites same-named files, deletes nothing, never writes through a host symlink or outside HOST |
+| `--timeout SECONDS`, `--disk MB` | `MaxCallDuration` and `MaxFileSystemBytes` |
+
+Without `--import` and `--export`, the only host files the command touches are the `--state` and `--from` snapshots,
+which are loaded as untrusted (see [Loading untrusted snapshots](#loading-untrusted-snapshots)). The machine runs inside the
+`topwater` process with no network and no host programs; the process itself has your permissions, like any program.
+`topwater export`, `import` (container images) and `replay` (recorded runs) are reserved names that report "not
+available in this build" for now. The full security notes are in the package README (`src/Topwater.Cli/README.md`).
+
 ## Authenticated API calls
 
 The machine has no network. `RegisterApi` lets the agent call a few real HTTP APIs that you choose, with
