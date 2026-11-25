@@ -192,6 +192,9 @@ internal sealed class Arith
 
     long Unary(bool ev)
     {
+        // every nesting level passes through here; a stack overflow would kill the host process
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new ShellException("expression is nested too deeply");
         if (Accept("+")) return Unary(ev);
         if (Accept("-")) return -Unary(ev);
         if (Accept("!")) return Unary(ev) == 0 ? 1 : 0;

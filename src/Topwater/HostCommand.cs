@@ -302,7 +302,9 @@ public sealed class HostCommand : IDisposable
         foreach (var a in argv.Skip(1)) psi.ArgumentList.Add(a);
         psi.Environment.Clear();
         // the agent's own variables (GIT_AUTHOR_NAME=x git commit) come first; the fixed ones below win
-        foreach (var (k, v) in _shell.Environment) psi.Environment[k] = v;
+        // ...except the ones that make the dynamic loader run a library of the agent's choosing in any program
+        foreach (var (k, v) in _shell.Environment)
+            if (!k.StartsWith("LD_", StringComparison.Ordinal) && !k.StartsWith("DYLD_", StringComparison.Ordinal)) psi.Environment[k] = v;
         foreach (var k in new[] { "PWD", "OLDPWD", "SHELL" }) psi.Environment.Remove(k);
         psi.Environment["PATH"] = System.Environment.GetEnvironmentVariable("PATH") ?? "/usr/bin:/bin";
         psi.Environment["HOME"] = home;

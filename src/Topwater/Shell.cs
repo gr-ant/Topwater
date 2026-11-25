@@ -1014,8 +1014,14 @@ public sealed partial class Shell
     };
 
     /// <summary>Expands $(cmd), `cmd` and ${...} inside an arithmetic expression, then evaluates it.</summary>
-    async Task<long> EvalArithAsync(string expr, Io io, CancellationToken ct) =>
-        Arith.Eval(this, expr.IndexOfAny(['$', '`']) < 0 ? expr : await ExpandSingleAsync(new Word(new Lexer(expr).LexQuoted(null)), io, ct));
+    async Task<long> EvalArithAsync(string expr, Io io, CancellationToken ct)
+    {
+        // each level of $(( $(( ... )) )) re-reads what is inside it, so unbounded nesting is quadratic work
+        if (++_arithDepth > 100) { _arithDepth = 0; throw new LimitExceeded("arithmetic is nested too deeply"); }
+        try { return Arith.Eval(this, expr.IndexOfAny(['$', '`']) < 0 ? expr : await ExpandSingleAsync(new Word(new Lexer(expr).LexQuoted(null)), io, ct)); }
+        finally { if (_arithDepth > 0) _arithDepth--; }
+    }
+    int _arithDepth;
 
     static readonly Regex ParamRe = new(@"^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!])(.*)$", RegexOptions.Singleline);
 

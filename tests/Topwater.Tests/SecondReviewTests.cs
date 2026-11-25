@@ -170,3 +170,33 @@ public class HostBridgeReviewTests
         Assert.Contains("can only use files under /home/agent and /tmp", r.Stderr);
     }
 }
+
+/// <summary>Input that used to overflow the stack, which .NET cannot catch: it killed the host process.</summary>
+public class DeepNestingTests
+{
+    [Theory]
+    [InlineData("((", "))", 200_000)]          // arithmetic
+    [InlineData("( ", " )", 50_000)]           // subshells
+    [InlineData("{ ", "; }", 50_000)]          // groups
+    [InlineData("if ", "; then :; fi", 20_000)]
+    [InlineData("echo $((", "))", 100_000)]
+    [InlineData("echo $((-", "))", 1)]         // control: shallow input still parses
+    public async Task DeepNestingIsAnErrorNotACrash(string open, string close, int depth)
+    {
+        var body = depth == 1 ? "1" : "true";
+        var cmd = string.Concat(Enumerable.Repeat(open, depth)) + body + string.Concat(Enumerable.Repeat(close, depth));
+        var r = await new Shell().RunAsync(cmd);
+        if (depth == 1) Assert.Equal("-1\n", r.Stdout);
+        else Assert.NotEqual("", r.Stderr);
+    }
+
+    [Fact]
+    public async Task LoaderVariablesDoNotReachHostPrograms()
+    {
+        if (!File.Exists("/bin/sh")) return;
+        var sh = new Shell();
+        using var real = sh.RegisterHostCommand("realsh", "/bin/sh");
+        var r = await sh.RunAsync("export LD_PRELOAD=/home/agent/evil.so LD_LIBRARY_PATH=/home/agent KEEP=yes; realsh -c 'echo \"[$LD_PRELOAD][$LD_LIBRARY_PATH][$KEEP]\"'");
+        Assert.Equal("[][][yes]\n", r.Stdout);
+    }
+}

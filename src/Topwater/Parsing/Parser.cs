@@ -559,6 +559,8 @@ internal sealed class Parser
 
     Command ParseCommand()
     {
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new ParseException("command is nested too deeply");
         if (Cur is { Kind: TokenKind.Arith } arith) { _p++; return WithRedirects(new ArithCommand(arith.Op)); }
         if (IsOp("(") || IsWord("{"))
         {
