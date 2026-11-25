@@ -47,7 +47,7 @@ public class LimitTests
     {
         var sh = new Shell();
         var sw = Stopwatch.StartNew();
-        var r = await sh.RunAsync($"timeout 1 {loop}; echo $?");
+        var r = await sh.RunAsync($"timeout 0.1 {loop}; echo $?");
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(6), $"took {sw.Elapsed}");
         Assert.Equal("124\n", r.Stdout);
     }

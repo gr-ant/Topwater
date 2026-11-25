@@ -50,7 +50,7 @@ describe('time limit', () => {
   for (const [loop] of limitData['LimitTests.TimeoutInterruptsABuiltInLoop'] as string[][]) {
     it(`timeout interrupts ${loop}`, async () => {
       const start = Date.now();
-      const r = await new Shell().run(`timeout 1 ${loop}; echo $?`);
+      const r = await new Shell().run(`timeout 0.1 ${loop}; echo $?`);
       expect(Date.now() - start).toBeLessThan(6000);
       expect(r.stdout).toBe('124\n');
     });

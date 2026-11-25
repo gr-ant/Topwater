@@ -52,7 +52,7 @@ def test_slow_regex_over_many_lines_stops_at_the_call_limit():
 ])
 def test_timeout_interrupts_a_built_in_loop(loop):
     start = time.monotonic()
-    r = Shell().run(f"timeout 1 {loop}; echo $?")
+    r = Shell().run(f"timeout 0.1 {loop}; echo $?")
     assert time.monotonic() - start < 6
     assert r.stdout == "124\n"
 
