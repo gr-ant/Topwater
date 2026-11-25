@@ -27,6 +27,27 @@ describe('symbolic links and loops', () => {
     });
   }
 
+  // two links per level to the level below: no loop, but 2^30 paths; a regression fails at the test's own timeout
+  for (const cmd of ['find -L out | wc -l', 'cp -rL out o2', 'grep -R x out | wc -l', 'zip -qr z.zip out', 'chmod -R u+w out', 'ls -RL out | wc -l']) {
+    it(`link fan-out stops at the time limit: ${cmd}`, async () => {
+      const sh = new Shell({ maxCallDurationMs: 2000 });
+      await sh.run('mkdir -p /tmp/w/out/d0 && cd /tmp/w && echo x > out/d0/f && for i in $(seq 1 30); do mkdir out/d$i; ln -s ../d$((i-1)) out/d$i/a; ln -s ../d$((i-1)) out/d$i/b; done');
+      const start = Date.now();
+      await sh.run('cd /tmp/w; ' + cmd);
+      expect(Date.now() - start, cmd).toBeLessThan(10_000);
+    }, 30_000);
+  }
+
+  // cp -rL meets a directory it is already copying (through a link higher up, then down a plain child): cyclic, in either creation order
+  for (const setup of ['mkdir -p w/a; cd w; ln -s /tmp/w/w a/abs; mkdir a/b', 'mkdir -p w/a/b; cd w; ln -s /tmp/w/w a/abs']) {
+    it(`copying through links to a parent ends: ${setup}`, async () => {
+      const sh = new Shell({ maxCallDurationMs: 5000 });
+      const r = await sh.run(`mkdir -p /tmp/w && cd /tmp/w && ${setup}; echo x > a/b/f; ln -s .. a/b/up; ln -s . a/self; ln -s a l; ln -s l l2; cp -rL a zz; echo rc=$?; find zz | wc -l`);
+      expect(r.stdout).toBe('rc=1\n4\n'); // zz, zz/abs, zz/b, zz/b/f
+      expect(r.stderr.split('\n').filter(l => l.includes('cannot copy cyclic symbolic link')).length).toBe(5);
+    }, 30_000);
+  }
+
   it('a link grants nothing its target does not', async () => {
     const sh = new Shell();
     sh.fs.writeText('/root/secret', 's\n');

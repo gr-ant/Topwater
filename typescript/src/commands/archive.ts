@@ -542,6 +542,7 @@ async function zip(ctx: CommandContext): Promise<number> {
   const walking = new Set<string>(); // real paths of the directories being added
   const add = async (name: string, path: string): Promise<void> => {
     if (path === archivePath || !fs.exists(path)) return; // a dangling link has nothing to store
+    ctx.checkTime(); // following links, -r can walk far more than the tree
     const st = fs.stat(path);
     const entryName = name.split('/').filter(p => p !== '' && p !== '.').join('/') + (st.isDirectory ? '/' : '');
     if (entryName !== '/') {

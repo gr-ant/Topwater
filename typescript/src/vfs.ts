@@ -505,10 +505,12 @@ export class VirtualFileSystem {
    * Copies a file or tree, like `cp -r`: entries the user can't read are skipped and passed to `denied` (default: fail the
    * whole copy). `followTop`: copy what `source` leads to when it is a symbolic link (cp without -r, or -H), rather than the
    * link. `followAll`: copy what every symbolic link in the tree leads to (cp -L); a link back into a directory being copied
-   * goes to `broken` as "cyclic", one leading nowhere with its reason (default: fail the whole copy).
+   * goes to `broken` as "cyclic", one leading nowhere with its reason (default: fail the whole copy). `tick` is called for
+   * each entry copied: the caller's time limit (links can make a copy far bigger than the tree).
    */
   copy(source: string, dest: string, denied: (path: string, isDir: boolean) => void = p => { throw new ShellError(`${p}: Permission denied`); },
-    followTop = true, followAll = false, broken: (path: string, reason: string) => void = (p, reason) => { throw new ShellError(`${p}: ${reason}`); }) {
+    followTop = true, followAll = false, broken: (path: string, reason: string) => void = (p, reason) => { throw new ShellError(`${p}: ${reason}`); },
+    tick?: () => void) {
     source = VirtualFileSystem.normalize('/', source);
     const { node, why } = this.find(source, followTop || followAll);
     if (!node) throw new ShellError(`${source}: ${why}`);
@@ -523,16 +525,21 @@ export class VirtualFileSystem {
     const user = this.user;
     const owner = this.runAs ?? parent.owner;
     const copying = new Set<Dir>(); // directories on the way down, so -L can't loop
+    let cloned = 0;
     const clone = (n: Node, path: string): Node | null => {
       if (n instanceof LinkNode) {
         if (!followAll) return Object.assign(new LinkNode(), { target: n.target, owner, mode: n.mode, modified: this.store.clock() });
         const { node: to, why: reason } = this.find(path);
         if (!to) { broken(path, reason); return null; }
-        if (to instanceof Dir && copying.has(to)) { broken(path, 'cyclic'); return null; }
         n = to;
       }
+      // a directory already being copied further up, reached through a link (even one higher up), as cp -L reports it
+      if (n instanceof Dir && copying.has(n)) { broken(path, 'cyclic'); return null; }
+      tick?.();
       if (!permits(n, user, n instanceof Dir ? 5 : 4)) { denied(path, n instanceof Dir); return null; }
       if (n instanceof FileNode) {
+        // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
+        if (this.runAs !== null && this.usedBytes + (cloned += n.size) > this.capacity) throw new ShellError(`${dest}: ${NO_SPACE}`);
         const f = Object.assign(new FileNode(), { owner, mode: n.mode, size: n.size, data: n.data, modified: this.store.clock() });
         f.content = n.content;
         return f;

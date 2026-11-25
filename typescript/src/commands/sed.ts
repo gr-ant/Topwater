@@ -596,6 +596,7 @@ function run(ctx: CommandContext): number {
       let result = '';
       const q = execute(ctx, cmds, original, { write: s => { result += s; } }, quiet);
       if (suffix) ctx.fs.writeText(ctx.resolvePath(suffix.includes('*') ? suffix.replaceAll('*', f.slice(f.lastIndexOf('/') + 1)) : f + suffix), original);
+      if (ctx.fs.isSymlink(path)) ctx.fs.delete(path); // like GNU sed -i, the edited text replaces the link; its target stays as it was
       ctx.fs.writeText(path, result);
       if (q !== null) return q;
     }

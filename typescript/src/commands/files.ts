@@ -186,10 +186,9 @@ class Find {
     const expr: Pred = this.args.length === 0 ? () => true : this.parseOr();
     if (this.p < this.args.length) throw new ShellError(`unexpected \`${this.args[this.p]}'`);
     let code = 0;
-    let visited = 0;
     const above: { real: string; display: string }[] = []; // directories being walked, so -L stops at a link back up
     const walk = async (abs: string, display: string, depth: number, start: string, follow: boolean): Promise<void> => {
-      if (++visited % 500 === 0) ctx.checkTime();
+      ctx.checkTime(); // -L can make the walk far bigger than the tree
       this.prune = false;
       const dir = fs.isDirectory(abs, follow);
       const real = dir && follow ? fs.realPath(abs) ?? abs : abs;
@@ -591,6 +590,10 @@ export function registerFiles(shell: Shell) {
         continue;
       }
       if (ctx.fs.isDirectory(abs, p.endsWith('/')) && !recursive && !a.has('d')) { ctx.stderr.write(`rm: cannot remove '${p}': Is a directory\n`); code = 1; continue; }
+      if (p.endsWith('/') && ctx.fs.isSymlink(abs) && !ctx.fs.isDirectory(abs)) { // "link/" names what it leads to, which is no directory
+        if (!a.has('f')) { ctx.stderr.write(`rm: cannot remove '${p}': Not a directory\n`); code = 1; }
+        continue;
+      }
       if (recursive && p.endsWith('/') && ctx.fs.isSymlink(abs) && ctx.fs.isDirectory(abs)) {
         // like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
         for (const n of ctx.fs.list(abs)) {
@@ -622,6 +625,7 @@ export function registerFiles(shell: Shell) {
     if (a.positional.length === 0) throw new UsageException('missing operand');
     let code = 0;
     for (const arg of a.positional) {
+      if (arg.endsWith('/') && ctx.fs.isSymlink(ctx.resolvePath(arg))) { ctx.stderr.write(`rmdir: failed to remove ${quoteAlways(arg)}: Symbolic link not followed\n`); code = 1; continue; }
       // -p: a/b/c, then a/b, then a
       for (let p = trimEnd(arg, '/'); p.length > 0; p = a.has('p') && p.lastIndexOf('/') > 0 ? trimEnd(p.slice(0, p.lastIndexOf('/')), '/') : '') {
         const abs = ctx.resolvePath(p);
@@ -675,7 +679,9 @@ export function registerFiles(shell: Shell) {
       if (target === '/dev/null' && !move) continue; // copying to /dev/null discards the data
       const shown = destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg;
       const srcDir = fs.isDirectory(src, followTop);
-      const clash = target === src ? `${quoteAlways(s)} and ${quoteAlways(shown)} are the same file`
+      // mv onto another name of the same file, or onto the file a link names, loses it; mv refuses as GNU mv does
+      const same = target === src || (move && (fs.sameFile(src, target, false) || (fs.isSymlink(src) && !fs.isSymlink(target) && fs.sameFile(src, target))));
+      const clash = same ? `${quoteAlways(s)} and ${quoteAlways(shown)} are the same file`
         : srcDir && target.startsWith(src + '/')
           ? move ? `cannot move ${quoteAlways(s)} to a subdirectory of itself, ${quoteAlways(shown)}`
             : `cannot copy a directory, ${quoteAlways(s)}, into itself, ${quoteAlways(shown)}`
@@ -716,7 +722,7 @@ export function registerFiles(shell: Shell) {
             const p = typed(new Error(abs + ': '), s, src)[0];
             ctx.stderr.write(dir ? `cp: cannot access '${p}': Permission denied\n` : `cp: cannot open '${p}' for reading: Permission denied\n`);
             code = 1;
-          }, followTop, a.has('L'), broken);
+          }, followTop, a.has('L'), broken, () => ctx.checkTime());
         }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
@@ -981,7 +987,12 @@ export function registerFiles(shell: Shell) {
       const f = (m: number) => `${m.toString(8).padStart(4, '0')} (${VirtualFileSystem.formatMode(st.isDirectory, m).slice(1)})`;
       if (mode !== st.mode && (verbose || changes)) line(ctx, `mode of '${display}' changed from ${f(st.mode)} to ${f(mode)}`);
       else if (mode === st.mode && verbose) line(ctx, `mode of '${display}' retained as ${f(mode)}`);
-      if (recursive && st.isDirectory && ctx.fs.canRead(path)) for (const n of ctx.fs.list(path)) apply(trimEnd(display, '/') + '/' + n, norm(path, n));
+      if (recursive && st.isDirectory && ctx.fs.canRead(path)) for (const n of ctx.fs.list(path)) {
+        const shown = trimEnd(display, '/') + '/' + n;
+        // like chmod -R, links met on the way are left alone
+        if (!ctx.fs.isSymlink(norm(path, n))) apply(shown, norm(path, n));
+        else if (verbose) line(ctx, `neither symbolic link '${shown}' nor referent has been changed`);
+      }
     };
     for (const f of files) {
       const path = ctx.resolvePath(f);
