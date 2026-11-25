@@ -75,6 +75,15 @@ class ExportTests(unittest.TestCase):
         ctx = to_build_context(Shell().snapshot())
         self.assertEqual(["etc/topwater", "etc/topwater/paths", "etc/topwater/session.sh"], sorted(read_layer(ctx.layer)))
 
+    def test_links_are_exported_as_links(self):
+        # symlinks as symlinks, other names of a file as hard links to its first
+        sh = Shell()
+        sh.run("cd; echo hi > a; ln -s a l; ln -s /etc/shadow s; ln a h")
+        layer = read_layer(to_build_context(sh.snapshot()).layer)
+        self.assertEqual((tarfile.SYMTYPE, "a"), (layer["home/agent/l"][0].type, layer["home/agent/l"][0].linkname))
+        self.assertEqual((tarfile.SYMTYPE, "/etc/shadow"), (layer["home/agent/s"][0].type, layer["home/agent/s"][0].linkname))
+        self.assertEqual((tarfile.LNKTYPE, "home/agent/a"), (layer["home/agent/h"][0].type, layer["home/agent/h"][0].linkname))
+
     def test_line_breaks_cannot_inject_dockerfile_instructions(self):
         # the agent chooses its working directory and variables; a line break in either must not add a Dockerfile instruction
         sh = Shell()
@@ -216,14 +225,17 @@ class ImportTests(unittest.TestCase):
         self.assertEqual("/srv/w\nbar\n", restored(r).run("pwd; printenv FOO").stdout)
         self.assertTrue(any("1BAD" in w for w in whats(r.report)))
 
-    def test_symlinks_become_copies(self):
+    def test_symlinks_come_back_as_links(self):
+        # wherever they point (even nowhere); hard links as copies; an entry below a link (only a crafted archive has one) is reported
         tar = make_tar(D("srv"), F("srv/x", "data"), D("srv/d"), F("srv/d/f", "in dir"), L("srv/abs", "/srv/x"), L("srv/rel", "../srv/x"),
-                       L("srv/dl", "/srv/d"), L("srv/gone", "/nowhere"))
-        r = imported(tar, changes=[f"A /srv{p}" for p in ("", "/x", "/d", "/d/f", "/abs", "/rel", "/dl", "/gone")])
+                       L("srv/dl", "/srv/d"), L("srv/gone", "/nowhere"), L("srv/etc", "/etc"), F("srv/etc/evil", "x"),
+                       entry("srv/hard", None, tarfile.LNKTYPE, link="srv/x"))
+        r = imported(tar, changes=[f"A /srv{p}" for p in ("", "/x", "/d", "/d/f", "/abs", "/rel", "/dl", "/gone", "/etc", "/etc/evil", "/hard")])
         sh = restored(r)
-        self.assertEqual("datadatain dir", sh.run("cat /srv/abs /srv/rel /srv/dl/f").stdout)
-        self.assertNotEqual(0, sh.run("test -e /srv/gone").exit_code)
-        self.assertIn("/srv/gone", whats(r.report))
+        self.assertEqual("datadatain dirdata", sh.run("cat /srv/abs /srv/rel /srv/dl/f /srv/hard").stdout)
+        self.assertEqual("/srv/x ../srv/x /srv/d /nowhere /etc\n", sh.run("echo $(readlink /srv/abs /srv/rel /srv/dl /srv/gone /srv/etc)").stdout)
+        self.assertFalse(sh.fs.exists("/etc/evil"))
+        self.assertIn("/srv/etc/evil", whats(r.report))
 
     def test_elf_skipped_unless_included(self):
         elf = b"\x7fELF\x01\x02\x03"
@@ -294,10 +306,11 @@ class ImportTests(unittest.TestCase):
         with self.assertRaises(InvalidContainerData):
             imported(io.BytesIO(good[:512 + 100]), changes=["A /srv/f"])
 
-    def test_symlink_loop_is_reported(self):
+    def test_symlink_loop_comes_back(self):
+        # as the loop it is: following it fails, nothing hangs
         r = imported(make_tar(L("srv/a", "/srv/b"), L("srv/b", "/srv/a")), changes=["A /srv/a", "A /srv/b"])
-        self.assertIn("/srv/a", whats(r.report))
-        self.assertIn("/srv/b", whats(r.report))
+        run = restored(r).run("readlink /srv/a; cat /srv/a")
+        self.assertEqual(("/srv/b\n", "cat: /srv/a: Too many levels of symbolic links\n"), (run.stdout, run.stderr))
 
     def test_the_agent_cannot_reach_containers(self):
         # host APIs only: the module registers no command, and the default shell has no docker program
@@ -324,7 +337,7 @@ def machine() -> Shell:
     sh.fs.set_owner("/data", "bob", recursive=True)
     r = sh.run("""mkdir -p proj/src && cd proj
 printf 'hello\\n' > a.txt; chmod 600 a.txt; printf '#!/bin/sh\\necho ran\\n' > src/run.sh; chmod 755 src/run.sh
-touch 'sp ace'
+touch 'sp ace'; ln -s a.txt alink; ln a.txt ahard
 export EXP='exported $x "q"'; plain='multi
 line'; declare -i n=5; arr=(one 'two words' three); unset 'arr[1]'; declare -A map=([k1]=v1 ['key two']=v2)
 greet() { echo "hi $1 from $(pwd)"; }; export -f greet
@@ -349,10 +362,11 @@ class DockerRoundTripTests(unittest.TestCase):
             files = docker("run", "--rm", tag, "bash", "-c", """id -un; pwd; echo "EXP=$EXP"
 stat -c '%n %a %U %G' /home/agent/proj/a.txt /home/agent/proj/src/run.sh /data/report.txt
 cat a.txt; src/run.sh; od -An -tx1 /home/agent/blob.bin; cat /data/report.txt; ls 'sp ace'
-test -e ~/.profile && echo profile-present || echo profile-gone""")
+test -e ~/.profile && echo profile-present || echo profile-gone
+readlink alink; cat alink; stat -c %h a.txt""")
             self.assertEqual("agent\n/home/agent/proj\nEXP=exported $x \"q\"\n/home/agent/proj/a.txt 600 agent agent\n"
                              "/home/agent/proj/src/run.sh 755 agent agent\n/data/report.txt 644 bob bob\nhello\nran\n"
-                             " 00 01 02 7f 80 fe ff 0a c3\nhéllo wörld\nsp ace\nprofile-gone\n", files)
+                             " 00 01 02 7f 80 fe ff 0a c3\nhéllo wörld\nsp ace\nprofile-gone\na.txt\nhello\n2\n", files)
             # the session comes back in an interactive bash: functions, aliases, variables, options
             session = docker("run", "-i", "--rm", tag, "bash", "-i",
                              stdin="greet you; alias ll; declare -p plain n arr map; shopt nullglob; bash -c 'greet child'\n")
@@ -365,11 +379,11 @@ test -e ~/.profile && echo profile-present || echo profile-gone""")
 perl -e 'open F, ">calc.txt"; print F 6*7, "\\n"'
 ln -s a.txt link.txt; ln -s /etc/shadow secret; rm src/run.sh; mkdir -p /tmp/work && seq 1 5 > /tmp/work/nums""")
             result = from_container(name, ImportOptions(paths=("/var/log",)))
-            self.assertIn("/home/agent/proj/secret", whats(result.report))
+            self.assertNotIn("/home/agent/proj/secret", whats(result.report))  # links come back as links
             sh = restored(result)
-            out = sh.run("""whoami; pwd; echo "EXP=$EXP"; cat a.txt new.txt calc.txt link.txt; ls src | wc -l
+            out = sh.run("""whoami; pwd; echo "EXP=$EXP"; cat a.txt new.txt calc.txt link.txt; ls src | wc -l; readlink secret
 sort -rn /tmp/work/nums | head -1; test -s /var/log/dpkg.log && echo dpkg.log came along; greet back; declare -p n; alias ll""").stdout
-            self.assertEqual("agent\n/home/agent/proj\nEXP=exported $x \"q\"\nhello\nchanged\nnew\n42\nhello\nchanged\n0\n5\n"
+            self.assertEqual("agent\n/home/agent/proj\nEXP=exported $x \"q\"\nhello\nchanged\nnew\n42\nhello\nchanged\n0\n/etc/shadow\n5\n"
                              "dpkg.log came along\nhi back from /home/agent/proj\ndeclare -i n=\"5\"\nalias ll='ls -l'\n", out)
             self.assertEqual(BINARY, sh.fs.read_bytes("/home/agent/blob.bin"))
             self.assertEqual("bob", sh.fs.stat("/data/report.txt").owner)

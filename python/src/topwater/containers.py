@@ -110,7 +110,8 @@ def _is_plain_name(s: str) -> bool:
 
 @dataclass(frozen=True)
 class _Item:
-    """One file or directory of a snapshot; data is None for a directory."""
+    """One file, directory or symbolic link (link_target) of a snapshot; data is None for a directory. hard_link: the path of
+    the same file's earlier name, when it has several."""
     path: str
     is_dir: bool
     mode: int
@@ -119,9 +120,12 @@ class _Item:
     data: bytes | None = None
     binary: bool = False
     reported_size: int | None = None
+    link_target: str | None = None
+    hard_link: str | None = None
 
     def same_content(self, other: "_Item") -> bool:
-        return (self.is_dir, self.mode, self.owner) == (other.is_dir, other.mode, other.owner) and (self.is_dir or self.data == other.data)
+        return ((self.is_dir, self.mode, self.owner, self.link_target, self.hard_link) == (other.is_dir, other.mode, other.owner, other.link_target, other.hard_link)
+                and (self.is_dir or self.data == other.data))
 
 
 class _Machine:
@@ -141,7 +145,7 @@ class _Machine:
             for f in manifest.pop("files"):
                 data = None if f["type"] == "dir" else zf.read("blobs/" + f["blob"]) if f.get("blob") else b""
                 files[f["path"]] = _Item(f["path"], f["type"] == "dir", int(f["mode"], 8), f["owner"], parse_time(f["mtime"], "mtime"),
-                                         data, f.get("binary", False), f.get("reportedSize"))
+                                         data, f.get("binary", False), f.get("reportedSize"), f.get("target"), f.get("link"))
         return _Machine(manifest, dict(sorted(files.items())))
 
     @staticmethod
@@ -153,10 +157,17 @@ class _Machine:
         """Writes this as a saved snapshot and loads it back with `limits`: the format checks and limits apply."""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
-            written, files = set(), []
+            written, files, links = set(), [], False
             for f in sorted(self.files.values(), key=lambda i: i.path):
-                entry = {"path": f.path, "type": "dir" if f.is_dir else "file", "mode": f"{f.mode:04o}", "owner": f.owner, "mtime": format_time(f.mtime)}
-                if not f.is_dir:
+                entry = {"path": f.path, "type": "dir" if f.is_dir else "symlink" if f.link_target is not None else "file", "mode": f"{f.mode:04o}",
+                         "owner": f.owner, "mtime": format_time(f.mtime)}
+                if f.link_target is not None:
+                    entry["target"] = f.link_target
+                first = self.files.get(f.hard_link) if f.hard_link else None
+                if first is not None and not first.is_dir and first.hard_link is None and first.path < f.path:
+                    entry["link"] = f.hard_link  # else its first name is gone or comes later: a file of its own
+                links = links or "target" in entry or "link" in entry
+                if not f.is_dir and f.link_target is None:
                     entry["size"] = len(f.data)
                     if f.binary:
                         entry["binary"] = True
@@ -168,7 +179,7 @@ class _Machine:
                             written.add(blob)
                             zf.writestr("blobs/" + blob, f.data)
                 files.append(entry)
-            zf.writestr("manifest.json", json.dumps({**self.manifest, "files": files}))
+            zf.writestr("manifest.json", json.dumps({**self.manifest, **({"version": 2} if links else {}), "files": files}))  # links need version 2
         return ShellSnapshot.load(buf.getvalue(), limits)
 
     @property
@@ -494,11 +505,18 @@ def _layer(layer: dict[str, _Item], accounts: dict[str, _Account]) -> bytes:
         for path, f in layer.items():
             a = accounts.get(f.owner) or _Account("root", 0, 0, "", "/root", "")
             info = tarfile.TarInfo(path[1:] + ("/" if f.is_dir else ""))
-            info.type = tarfile.DIRTYPE if f.is_dir else tarfile.REGTYPE
+            # another name of a file goes in as a hard link when its first name is earlier in the layer, else as a copy
+            hard = usr_merge(f.hard_link) if f.hard_link and usr_merge(f.hard_link) in layer and usr_merge(f.hard_link) < path else None
+            info.type = (tarfile.DIRTYPE if f.is_dir else tarfile.LNKTYPE if hard else tarfile.SYMTYPE if f.link_target is not None else tarfile.REGTYPE)
             info.mode, info.uid, info.gid, info.uname = f.mode & 0o7777, a.uid, a.gid, a.name
             info.mtime = calendar.timegm(f.mtime.utctimetuple())
-            info.size = 0 if f.is_dir else len(f.data)
-            tar.addfile(info, None if f.is_dir else io.BytesIO(f.data))
+            if hard:
+                info.linkname = hard[1:]
+            elif f.link_target is not None:
+                info.linkname = f.link_target
+            regular = info.type == tarfile.REGTYPE
+            info.size = len(f.data) if regular else 0
+            tar.addfile(info, io.BytesIO(f.data) if regular else None)
     return buf.getvalue()
 
 
@@ -617,6 +635,7 @@ class _Entry:
     uid: int
     mtime: datetime
     data: bytes | None
+    link_target: str | None = None  # a symbolic link: the path it holds
 
 
 class _Importer:
@@ -682,7 +701,11 @@ class _Importer:
                 return
             self.items[path] = _Entry(False, mode, e.uid, mtime, data)
         elif e.issym():
-            self.links[path] = normalize(get_parent(path), e.linkname)
+            # kept as the link it is: it is only a path, resolved in the machine with the agent's permissions
+            if not 0 < len(e.linkname) <= 4096 or "\0" in e.linkname:
+                self.report.skip(path, "a symbolic link with an empty or overlong target")
+            else:
+                self.items[path] = _Entry(False, 0o777, e.uid, mtime, b"", e.linkname)
         elif e.islnk():
             self.links[path] = _canonical(e.linkname)
         else:
@@ -733,17 +756,24 @@ class _Importer:
                 report.deleted.append(path)
 
         for path, item in sorted(self.items.items()):
+            # a crafted archive can hold entries below a symbolic link; a real filesystem can't
+            p = get_parent(path)
+            while p != "/" and (fs.get(p) is None or fs[p].link_target is None):
+                p = get_parent(p)
+            if p != "/":
+                report.skip(path, f"below {p}, a symbolic link")
+                continue
             self.ensure(machine, get_parent(path))
             old = fs.get(path)
-            if old is not None and old.is_dir != item.is_dir:
+            if old is not None and (old.is_dir != item.is_dir or item.link_target is not None):
                 machine.remove_tree(path)
             binary = False
-            if not item.is_dir:
+            if not item.is_dir and item.link_target is None:
                 try:
                     item.data.decode("utf-8")
                 except UnicodeDecodeError:
                     binary = True
-            fs[path] = _Item(path, item.is_dir, item.mode, owner(item.uid), item.mtime, item.data, binary)
+            fs[path] = _Item(path, item.is_dir, item.mode, owner(item.uid), item.mtime, item.data, binary, link_target=item.link_target)
             report.carried.append(path)
 
         # an image Topwater exported: undo the export's additions, take the history back
@@ -806,7 +836,7 @@ class _Importer:
         machine.files[d] = _Item(d, True, 0o755, "root", utc_now())
 
     def resolve_links(self) -> None:
-        """Symlinks and hard links whose target was imported become copies; the others are skipped."""
+        """Hard links whose target was imported become copies of it (a file, or a symbolic link); the others are skipped."""
         for link, target in self.links.items():
             t = target
             for _ in range(8):
@@ -814,18 +844,10 @@ class _Importer:
                     break
                 t = self.links[t]
             item = self.items.get(t)
-            if item is None:
-                self.report.skip(link, f"a link to {target}, which wasn't imported (Topwater has no links)")
+            if item is None or item.is_dir:
+                self.report.skip(link, f"a hard link to {target}, which wasn't imported")
                 continue
-            if not item.is_dir:
-                self.items[link] = item
-                continue
-            below = [(p, i) for p, i in self.items.items() if under(p, t)]
-            self.count += len(below)
-            if self.count > self.max_entries:
-                raise InvalidContainerData(f"more than {self.max_entries} entries to import (max_extract_entries)")
-            for p, i in below:
-                self.items.setdefault(link + p[len(t):], i)
+            self.items[link] = item
 
 
 def _history(text: str) -> list[str]:
