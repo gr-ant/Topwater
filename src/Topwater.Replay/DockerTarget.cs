@@ -25,7 +25,6 @@ public sealed class DockerTargetOptions
 /// Replays on real bash in a throwaway Docker container that starts from a snapshot's files, user, host name, working
 /// directory and exported variables. Each call is a fresh <c>bash -c</c>; the working directory, variables and functions are
 /// saved after it and restored before the next, so state carries over as in a Topwater shell (aliases and shell options don't).
-/// shortcut: a minimal docker-run + tar copy; swap for Topwater.Containers' snapshot export once that lands.
 /// </summary>
 public sealed class DockerTarget : IReplayTarget
 {
@@ -50,8 +49,15 @@ public sealed class DockerTarget : IReplayTarget
         shell.Restore(start);
         var pristine = new Shell(new ShellOptions { User = start.User, Hostname = start.Hostname });
         var container = "topwater-replay-" + Guid.NewGuid().ToString("N")[..12];
-        // commands may come from untrusted recordings: bound memory and processes
-        var run = new List<string> { "run", "-d", "--rm", "--name", container, "--hostname", start.Hostname, "--memory", "1g", "--pids-limit", "512" };
+        if (!AccountName.IsMatch(start.User)) throw new ArgumentException($"snapshot user {start.User} is not an account name a container can hold");
+        // commands may come from untrusted recordings: bound memory, swap, CPU, processes and file size; no capabilities beyond
+        // what the root setup step needs to write the files with their owners, and nothing can gain privileges (setuid)
+        var run = new List<string>
+        {
+            "run", "-d", "--rm", "--name", container, "--hostname", start.Hostname, "--memory", "1g", "--memory-swap", "1g", "--cpus", "1",
+            "--pids-limit", "512", "--ulimit", "fsize=1073741824", "--cap-drop", "ALL",
+            "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--security-opt", "no-new-privileges",
+        };
         if (!o.Network) run.AddRange(["--network", "none"]);
         run.AddRange([image, "sleep", "infinity"]);
         await RunDockerAsync(o, run, null, ct, check: true);
@@ -60,18 +66,20 @@ public sealed class DockerTarget : IReplayTarget
         {
             var (tar, owners) = FilesTar(shell, pristine);
             var setup = new StringBuilder("set -e\n");
+            var user = Quote(start.User);
             if (start.User != "root")
-                setup.Append($"userdel -r ubuntu 2>/dev/null || true\nid -u {start.User} >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/bash {start.User}\nchmod 750 /home/{start.User}\n");
+                setup.Append($"userdel -r ubuntu 2>/dev/null || true\nid -u {user} >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/bash {user}\nchmod 750 /home/{user}\n");
+            // an owner no account can be named keeps its number only
             foreach (var (name, uid) in owners)
-                if (name != "root" && name != start.User) setup.Append($"id -u {name} >/dev/null 2>&1 || useradd -M -u {uid} {name}\n");
-            setup.Append($"mkdir -p {StateDir}\nchown {start.User} {StateDir}\n");
+                if (name != "root" && name != start.User && AccountName.IsMatch(name)) setup.Append($"id -u {Quote(name)} >/dev/null 2>&1 || useradd -M -u {uid} {Quote(name)}\n");
+            setup.Append($"mkdir -p {StateDir}\nchown {user} {StateDir}\n");
             await target.ExecAsync(["-u", "root"], ["bash", "-c", setup.ToString()], null, ct, check: true);
             if (tar.Length > 0) await target.ExecAsync(["-i", "-u", "root"], ["tar", "-xpf", "-", "-C", "/", "--numeric-owner"], tar, ct, check: true);
 
             // the session: exported variables become the environment, the rest (and functions) the saved state
             var env = new StringBuilder();
             foreach (var (k, v) in shell.Environment)
-                if (k is not ("PWD" or "OLDPWD" or "SHLVL" or "_")) env.Append($"export {k}={Quote(v)}\n");
+                if (k is not ("PWD" or "OLDPWD" or "SHLVL" or "_") && VariableName.IsMatch(k)) env.Append($"export {k}={Quote(v)}\n");
             var state = Encoding.UTF8.GetBytes(env.ToString());
             await target.ExecAsync(["-i", "-u", start.User], ["bash", "-c", $"cat > {StateDir}/env && printf %s {Quote(shell.Cwd)} > {StateDir}/cwd"], state, ct, check: true);
             target._env.AddRange(new[] { "HOME", "USER", "LOGNAME", "SHELL", "PATH", "LANG", "TERM" }.Where(shell.Environment.ContainsKey).Select(k => $"{k}={shell.Environment[k]}"));
@@ -213,6 +221,8 @@ public sealed class DockerTarget : IReplayTarget
         }
         return (ms.ToArray(), owners);
     }
+
+    static readonly System.Text.RegularExpressions.Regex AccountName = new("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$"), VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$");
 
     static string Quote(string s) => "'" + s.Replace("'", "'\\''") + "'";
 }

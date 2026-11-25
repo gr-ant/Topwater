@@ -335,4 +335,18 @@ public class RecordingTests
         Assert.True(report.Matches, report.ToString());
         Assert.StartsWith("replay on docker ubuntu:24.04", report.ToString());
     }
+
+    [Fact]
+    public async Task Docker_target_setup_never_runs_names_as_code()
+    {
+        // an owner or variable name the host put in by hand reaches the container's root setup script as data, or not at all
+        if (!await DockerTarget.IsAvailableAsync()) return; // skipped without docker
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/srv/f", "x");
+        sh.Fs.SetOwner("/srv/f", "a;touch /tmp/pwned1;b");
+        sh.Environment["a;touch /tmp/pwned2;b"] = "1";
+        await using var docker = await DockerTarget.StartAsync(sh.Snapshot(), new DockerTargetOptions { Packages = [] });
+        var r = await docker.RunAsync("ls /tmp | grep -c pwned; cat /srv/f; grep -E 'CapEff|NoNewPrivs' /proc/self/status");
+        Assert.Equal("0\nxCapEff:\t0000000000000000\nNoNewPrivs:\t1\n", r.Stdout);
+    }
 }
