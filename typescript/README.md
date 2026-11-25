@@ -106,7 +106,7 @@ the two ports' commands differ, so does the output.
   so a catastrophically backtracking match switches to V8's linear-time engine instead of hanging. Patterns with
   backreferences have no linear engine: one such match can still overrun the call's time limit (the C# version caps
   one match at 5 s). Run the shell in a worker thread (in a browser, a Web Worker; see below) if you need a hard stop.
-- `to-markdown` does not read PDF (the C# version shells out to `pdftotext`; nothing here touches the host).
+- `to-markdown` does not read PDF (neither does the C# version; nothing here touches the host).
 - `zip` and `gzip -v` report the ratio of the platform's deflate (`CompressionStream`), which differs slightly from
   Info-ZIP's; compression levels (`-1`..`-9`) are accepted but ignored.
 - `shell.fs` is your app's unrestricted view of the files; the shell and its commands work through a view that acts as
