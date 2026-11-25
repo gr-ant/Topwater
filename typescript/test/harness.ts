@@ -19,7 +19,7 @@ export function makeEnv() {
     register(name: string, handler: CommandHandler) { commands.set(name, handler); return shell; },
     resolvePath: (p: string) => VirtualFileSystem.normalize('/home/agent', p),
   };
-  async function run(argv: string[], stdin = '', deadlineMs = 10_000): Promise<RunResult> {
+  async function run(argv: string[], stdin = '', deadlineMs = 10_000, view: VirtualFileSystem = fs): Promise<RunResult> {
     let out = '', err = '';
     const stdout: Writer = { write: s => { out += s; } };
     const stderr: Writer = { write: s => { err += s; } };
@@ -32,7 +32,7 @@ export function makeEnv() {
       shell: shell as unknown as Shell,
       name: argv[0],
       args: argv.slice(1),
-      stdout, stderr, fs,
+      stdout, stderr, fs: view,
       get stdinText() { return stdinText ??= buf.readAll(); },
       readLine: d => buf.readLine(d),
       resolvePath: shell.resolvePath,

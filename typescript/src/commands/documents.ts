@@ -654,7 +654,7 @@ export function registerDocuments(shell: Shell): void {
 
 /**
  * Stores a document's bytes at `path` (creating parent directories); with `alsoMarkdown`, also writes its Markdown
- * conversion to `<path>.md`. Call it from host code (not as the agent), e.g. `fs.asRoot(() => addDocument(...))`.
+ * conversion to `<path>.md`. Call it from host code with an unrestricted view such as `shell.fs` (not `shell.fs.as('agent')`).
  */
 export function addDocument(fs: VirtualFileSystem, path: string, bytes: Uint8Array, alsoMarkdown = false): void {
   const slash = path.lastIndexOf('/');

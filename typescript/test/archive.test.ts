@@ -301,7 +301,7 @@ describe('tar: hostile archives', () => {
     env.fs.mkdir(`${H}/o`);
     env.fs.chmod(`${H}/o`, 0o777);
     env.fs.capacity = env.fs.usedBytes + 2;
-    const r = await env.fs.withUser('agent', () => run(['tar', 'xf', 't.tar', '-C', 'o']));
+    const r = await env.run(['tar', 'xf', 't.tar', '-C', 'o'], '', 10_000, env.fs.as('agent'));
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toContain('Cannot open: No space left on device');
   });
