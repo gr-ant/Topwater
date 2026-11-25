@@ -1,0 +1,17 @@
+{"id":"second-review-001","script":"source ~/.bashrc && echo ok","stdout":"ok\n","exitCode":null,"quiet":null}
+{"id":"second-review-002","script":"echo a; break; echo b","stdout":"a\nb\n","exitCode":null,"quiet":null}
+{"id":"second-review-003","script":"x=$(cat <<EOF\nit's fine\nEOF\n); echo \"$x\"","stdout":"it's fine\n","exitCode":null,"quiet":null}
+{"id":"second-review-004","script":"x=$(cat <<EOF\n1) item\nEOF\n); echo \"$x\"","stdout":"1) item\n","exitCode":null,"quiet":null}
+{"id":"second-review-005","script":"a=5 b=-3; echo $(($a-$b))","stdout":"8\n","exitCode":null,"quiet":null}
+{"id":"second-review-006","script":"echo $((-2**2))","stdout":"4\n","exitCode":null,"quiet":null}
+{"id":"second-review-007","script":"alias cnt='echo a b | wc -w'; cnt","stdout":"2\n","exitCode":null,"quiet":null}
+{"id":"second-review-008","script":"x=outer; f(){ local x; echo \"[$x]\"; }; f","stdout":"[]\n","exitCode":null,"quiet":null}
+{"id":"second-review-009","script":"set -- foo bar baz; echo \"${@:2}\"","stdout":"bar baz\n","exitCode":null,"quiet":null}
+{"id":"second-review-010","script":"echo x | exit 3; echo after","stdout":"after\n","exitCode":null,"quiet":null}
+{"id":"second-review-011","script":"false; $empty; echo $?","stdout":"0\n","exitCode":null,"quiet":null}
+{"id":"second-review-012","script":"echo hi 3>/dev/null","stdout":"hi\n","exitCode":null,"quiet":null}
+{"id":"second-review-013","script":"touch a; sleep 0.02; touch b; [ b -nt a ] && [ a -ot b ] && echo newer","stdout":"newer\n","exitCode":null,"quiet":null}
+{"id":"second-review-014","script":"echo hi > f.txt; grep -r hi f.txt","stdout":"hi\n","exitCode":null,"quiet":null}
+{"id":"second-review-015","script":"mkdir d; echo hi > d/a.txt; echo hi > d/a.log; grep -r --include '*.txt' hi d","stdout":"d/a.txt:hi\n","exitCode":null,"quiet":null}
+{"id":"second-review-016","script":"echo foobar | grep -oP 'foo\\K\\w+'","stdout":"bar\n","exitCode":null,"quiet":null}
+{"id":"second-review-017","script":"awk 'BEGIN{while(i++<25000)printf \"x\";print \"\"}' | cut -c5- | wc -c","stdout":"24997\n","exitCode":null,"quiet":null}

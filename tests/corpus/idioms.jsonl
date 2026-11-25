@@ -1,0 +1,41 @@
+{"id":"idioms-001","script":"set -euo pipefail\ntmp=$(mktemp -d)\ntrap 'rm -rf \"$tmp\"; echo cleaned' EXIT\necho data > \"$tmp/f\"\ncat \"$tmp/f\"","stdout":"data\ncleaned\n","exitCode":0,"quiet":true}
+{"id":"idioms-002","script":"usage() { echo \"usage: prog <file>\"; }\n[[ $# -eq 0 ]] && { usage; exit 1; }\necho unreachable","stdout":"usage: prog <file>\n","exitCode":1,"quiet":true}
+{"id":"idioms-003","script":"if [[ -z ${UNSET_VAR+x} ]]; then echo \"is unset\"; fi; EMPTY=; [[ -n ${EMPTY+x} ]] && echo \"is set\"","stdout":"is unset\nis set\n","exitCode":0,"quiet":true}
+{"id":"idioms-004","script":"touch 'a b.txt' c.txt; while IFS= read -r -d '' f; do echo \"[$f]\"; done < <(find . -name '*.txt' -print0 | sort -z)","stdout":"[./a b.txt]\n[./c.txt]\n","exitCode":0,"quiet":true}
+{"id":"idioms-005","script":"printf 'a\\0b\\0' > z; mapfile -d '' -t parts < z; echo \"${#parts[@]} ${parts[1]}\"","stdout":"2 b\n","exitCode":0,"quiet":true}
+{"id":"idioms-006","script":"line=$'one\\ttwo three'; IFS=$'\\t' read -r a b <<< \"$line\"; echo \"[$a] [$b]\"","stdout":"[one] [two three]\n","exitCode":0,"quiet":true}
+{"id":"idioms-007","script":"hex=ff; echo $(( 16#$hex )); printf -v padded '%05d' 42; echo $padded","stdout":"255\n00042\n","exitCode":0,"quiet":true}
+{"id":"idioms-008","script":"line=\"first second third\"; read -r first _ <<< \"$line\"; echo \"$first\"","stdout":"first\n","exitCode":0,"quiet":true}
+{"id":"idioms-009","script":"f() { local -r c=1; c=2; echo \"unreached $c\"; }; f; echo \"after f: $?\"","stdout":"","exitCode":1,"quiet":false}
+{"id":"idioms-010","script":"init() { declare -gA REG=([k]=v); }; init; echo \"${REG[k]}\"","stdout":"v\n","exitCode":0,"quiet":true}
+{"id":"idioms-011","script":"s=\"héllo\"; echo ${#s} \"${s:1:1}\" \"${s^^}\"","stdout":"5 é HÉLLO\n","exitCode":0,"quiet":true}
+{"id":"idioms-012","script":"case 42 in [[:digit:]][[:digit:]]) echo two-digits;; esac","stdout":"two-digits\n","exitCode":0,"quiet":true}
+{"id":"idioms-013","script":"set -- $(echo \"x y z\"); echo \"$2\"; line=\"a b\"; set -- $line; echo $#","stdout":"y\n2\n","exitCode":0,"quiet":true}
+{"id":"idioms-014","script":"f() { local IFS=; local s=\"$*\"; echo \"$s\"; }; f a b c","stdout":"abc\n","exitCode":0,"quiet":true}
+{"id":"idioms-015","script":"keys=(b a c); IFS=$'\\n' read -r -d '' -a sorted < <(printf '%s\\n' \"${keys[@]}\" | sort; printf '\\0'); echo \"${sorted[*]}\"","stdout":"a b c\n","exitCode":0,"quiet":true}
+{"id":"idioms-016","script":"json_escape() { local s=${1//\\\\/\\\\\\\\}; s=${s//\\\"/\\\\\\\"}; printf '\"%s\"' \"$s\"; }; json_escape 'say \"hi\" \\ ok'; echo","stdout":"\"say \\\"hi\\\" \\\\ ok\"\n","exitCode":0,"quiet":true}
+{"id":"idioms-017","script":"join() { local IFS=\"$1\"; shift; echo \"$*\"; }; join , a b c; join '' x y","stdout":"a,b,c\nxy\n","exitCode":0,"quiet":true}
+{"id":"idioms-018","script":"trim() { local v=\"$1\"; v=\"${v#\"${v%%[![:space:]]*}\"}\"; v=\"${v%\"${v##*[![:space:]]}\"}\"; printf '%s' \"$v\"; }; echo \"[$(trim '   hi there  ')]\"","stdout":"[hi there]\n","exitCode":0,"quiet":true}
+{"id":"idioms-019","script":"in_array() { local n=$1; shift; local e; for e in \"$@\"; do [[ $e == \"$n\" ]] && return 0; done; return 1; }; arr=(a b c); in_array b \"${arr[@]}\" && echo found; in_array z \"${arr[@]}\" || echo missing","stdout":"found\nmissing\n","exitCode":0,"quiet":true}
+{"id":"idioms-020","script":"str=\"a,b;c d\"; IFS=',; ' read -ra toks <<< \"$str\"; echo \"${#toks[@]}: ${toks[*]}\"","stdout":"4: a b c d\n","exitCode":0,"quiet":true}
+{"id":"idioms-021","script":"v=3; case $v in 1|2) echo low;; 3|4) echo mid;; *) echo high;; esac","stdout":"mid\n","exitCode":0,"quiet":true}
+{"id":"idioms-022","script":"printf '%s\\n' \"${!BASH_VERSINFO[@]}\" | tail -1","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"idioms-023","script":"x=5; y=$(( x > 3 ? x * 2 : x )); echo $y","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"idioms-024","script":"declare -A seen; dups=(); for w in a b a c b; do [[ -n ${seen[$w]:-} ]] && dups+=(\"$w\"); seen[$w]=1; done; echo \"${dups[@]}\"","stdout":"a b\n","exitCode":0,"quiet":true}
+{"id":"idioms-025","script":"ver1=1.10.2 ver2=1.9.0; if [[ \"$(printf '%s\\n' \"$ver1\" \"$ver2\" | sort -V | head -1)\" == \"$ver2\" ]]; then echo \"$ver1 is newer\"; fi","stdout":"1.10.2 is newer\n","exitCode":0,"quiet":true}
+{"id":"idioms-026","script":"lower=${1:-DEFAULT}; echo \"${lower,,}\"","stdout":"default\n","exitCode":0,"quiet":true}
+{"id":"idioms-027","script":"n=0; while :; do (( ++n >= 5 )) && break; done; echo $n","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"idioms-028","script":"for f in /etc/hostname /nonexistent; do if [[ -r $f ]]; then echo \"readable: $f\"; else echo \"skip: $f\"; fi; done","stdout":"readable: /etc/hostname\nskip: /nonexistent\n","exitCode":0,"quiet":true}
+{"id":"idioms-029","script":"out=$( { echo stdout; echo stderr >&2; } 2>/dev/null ); echo \"[$out]\"","stdout":"[stdout]\n","exitCode":0,"quiet":true}
+{"id":"idioms-030","script":"{ read -r header; while read -r row; do echo \"row: $row\"; done; } <<< $'h\\nr1\\nr2'","stdout":"row: r1\nrow: r2\n","exitCode":0,"quiet":true}
+{"id":"idioms-031","script":"cnt=$(printf 'a\\nb\\nc\\n' | wc -l); echo $(( cnt + 0 ))","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"idioms-032","script":"arr=(); [[ ${#arr[@]} -eq 0 ]] && echo empty; arr+=(\"\"); [[ ${#arr[@]} -eq 1 ]] && echo one-empty","stdout":"empty\none-empty\n","exitCode":0,"quiet":true}
+{"id":"idioms-033","script":"s=\"key1=val1&key2=val2\"; IFS='&' read -ra pairs <<< \"$s\"; for p in \"${pairs[@]}\"; do echo \"${p%%=*} -> ${p#*=}\"; done","stdout":"key1 -> val1\nkey2 -> val2\n","exitCode":0,"quiet":true}
+{"id":"idioms-034","script":"path=\"/usr/local/bin:/usr/bin:/bin\"; IFS=: read -ra dirs <<< \"$path\"; echo \"${#dirs[@]} ${dirs[0]}\"; [[ \":$path:\" == *\":/usr/bin:\"* ]] && echo has-usr-bin","stdout":"3 /usr/local/bin\nhas-usr-bin\n","exitCode":0,"quiet":true}
+{"id":"idioms-035","script":"max() { local m=$1; shift; for n; do (( n > m )) && m=$n; done; echo $m; }; max 3 9 2 7","stdout":"9\n","exitCode":0,"quiet":true}
+{"id":"idioms-036","script":"repeat() { local s; printf -v s '%*s' \"$2\" ''; echo \"${s// /$1}\"; }; repeat - 5","stdout":"-----\n","exitCode":0,"quiet":true}
+{"id":"idioms-037","script":"date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; for d in 2024-01-01 24-1-1; do [[ $d =~ $date_re ]] && echo \"ok $d\" || echo \"bad $d\"; done","stdout":"ok 2024-01-01\nbad 24-1-1\n","exitCode":0,"quiet":true}
+{"id":"idioms-038","script":"s=\"abc\"; rev=\"\"; for (( i=${#s}-1; i>=0; i-- )); do rev+=${s:i:1}; done; echo $rev","stdout":"cba\n","exitCode":0,"quiet":true}
+{"id":"idioms-039","script":"declare -A m=([x]=1 [y]=2); for k in $(echo \"${!m[@]}\" | tr ' ' '\\n' | sort); do printf '%s=%s ' \"$k\" \"${m[$k]}\"; done; echo","stdout":"x=1 y=2 \n","exitCode":0,"quiet":true}
+{"id":"idioms-040","script":"f() { echo \"$#:$*\"; }; f \"${@}\"; set -- \"\" \"\"; f \"$@\"; f $@","stdout":"0:\n2: \n0:\n","exitCode":0,"quiet":true}
+{"id":"idioms-041","script":"x='a b'; arr=($x \"$x\"); echo ${#arr[@]}","stdout":"3\n","exitCode":0,"quiet":true}

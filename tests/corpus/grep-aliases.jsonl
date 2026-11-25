@@ -1,0 +1,17 @@
+{"id":"grep-aliases-001","script":"printf 'foo\\nbar\\nbaz\\n' | egrep 'ba(r|z)'; echo \"rc=$?\"","stdout":"bar\nbaz\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-002","script":"printf 'foo\\nbar\\nbaz\\n' | egrep -c 'o+'; echo \"rc=$?\"","stdout":"1\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-003","script":"printf 'foo\\nbar\\nbaz\\n' | egrep 'x|y'; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-004","script":"printf 'a.b\\naxb\\n' | fgrep 'a.b'; echo \"rc=$?\"","stdout":"a.b\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-005","script":"printf 'a.b\\naxb\\n' | fgrep -v 'a.b'; echo \"rc=$?\"","stdout":"axb\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-006","script":"printf 'a(b\\n' | fgrep '('; echo \"rc=$?\"","stdout":"a(b\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-007","script":"printf 'a+b\\naab\\n' | fgrep -n 'a+'; echo \"rc=$?\"","stdout":"1:a+b\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-008","script":"printf 'x\\ny\\n' > f; egrep -n 'x|y' f; echo \"rc=$?\"","stdout":"1:x\n2:y\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-009","script":"printf 'x\\ny\\n' > f; fgrep -l x f nofile; echo \"rc=$?\"","stdout":"f\nrc=2\n","exitCode":0,"quiet":false}
+{"id":"grep-aliases-010","script":"printf 'one two\\n' | egrep -o '[a-z]{3}'; echo \"rc=$?\"","stdout":"one\ntwo\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-011","script":"printf 'one two\\n' | egrep -w 'tw'; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-012","script":"printf 'ab\\nAB\\n' | fgrep -i ab; echo \"rc=$?\"","stdout":"ab\nAB\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-013","script":"printf 'ab\\ncd\\n' | fgrep -e ab -e cd; echo \"rc=$?\"","stdout":"ab\ncd\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-014","script":"printf 'ab\\ncd\\n' | egrep '('; echo \"rc=$?\"","stdout":"rc=2\n","exitCode":0,"quiet":false}
+{"id":"grep-aliases-015","script":"printf 'a\\n' | egrep -q a; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-016","script":"printf 'a\\n' | fgrep -x 'a'; echo \"rc=$?\"","stdout":"a\nrc=0\n","exitCode":0,"quiet":true}
+{"id":"grep-aliases-017","script":"printf 'a\\n' | fgrep; echo \"rc=$?\"","stdout":"rc=2\n","exitCode":0,"quiet":false}

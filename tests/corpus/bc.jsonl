@@ -1,0 +1,96 @@
+{"id":"bc-001","script":"printf '%b\\n' '7/3' | bc","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"bc-002","script":"printf '%b\\n' 'scale=5; 7/3' | bc","stdout":"2.33333\n","exitCode":0,"quiet":true}
+{"id":"bc-003","script":"printf '%b\\n' 'scale=5; 7%3' | bc","stdout":".00001\n","exitCode":0,"quiet":true}
+{"id":"bc-004","script":"printf '%b\\n' '2.50+3.250' | bc","stdout":"5.750\n","exitCode":0,"quiet":true}
+{"id":"bc-005","script":"printf '%b\\n' 'scale=0; 1.5*1.5' | bc","stdout":"2.2\n","exitCode":0,"quiet":true}
+{"id":"bc-006","script":"printf '%b\\n' 'scale=1; 1.23*4.56' | bc","stdout":"5.60\n","exitCode":0,"quiet":true}
+{"id":"bc-007","script":"printf '%b\\n' 'scale=10; 1.23*4.56' | bc","stdout":"5.6088\n","exitCode":0,"quiet":true}
+{"id":"bc-008","script":"printf '%b\\n' 'scale=2; 2.345*3.456' | bc","stdout":"8.104\n","exitCode":0,"quiet":true}
+{"id":"bc-009","script":"printf '%b\\n' 'scale=5; 2^10' | bc","stdout":"1024\n","exitCode":0,"quiet":true}
+{"id":"bc-010","script":"printf '%b\\n' 'scale=5; 2^-2' | bc","stdout":".25000\n","exitCode":0,"quiet":true}
+{"id":"bc-011","script":"printf '%b\\n' 'scale=2; 10^-3' | bc","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"bc-012","script":"printf '%b\\n' 'scale=5; 2.5^3' | bc","stdout":"15.625\n","exitCode":0,"quiet":true}
+{"id":"bc-013","script":"printf '%b\\n' 'scale=5; (1/3)^2' | bc","stdout":".11110\n","exitCode":0,"quiet":true}
+{"id":"bc-014","script":"printf '%b\\n' 'scale=5; sqrt(2)' | bc","stdout":"1.41421\n","exitCode":0,"quiet":true}
+{"id":"bc-015","script":"printf '%b\\n' 'scale=20; sqrt(2)' | bc","stdout":"1.41421356237309504880\n","exitCode":0,"quiet":true}
+{"id":"bc-016","script":"printf '%b\\n' 'sqrt(2.25)' | bc","stdout":"1.50\n","exitCode":0,"quiet":true}
+{"id":"bc-017","script":"printf '%b\\n' 'scale=10; sqrt(1000000)' | bc","stdout":"1000.0000000000\n","exitCode":0,"quiet":true}
+{"id":"bc-018","script":"printf '%b\\n' '-7/2' | bc","stdout":"-3\n","exitCode":0,"quiet":true}
+{"id":"bc-019","script":"printf '%b\\n' 'scale=2;-7/2' | bc","stdout":"-3.50\n","exitCode":0,"quiet":true}
+{"id":"bc-020","script":"printf '%b\\n' '7 % -2' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-021","script":"printf '%b\\n' '2^200' | bc","stdout":"1606938044258990275541962092341162602522202993782792835301376\n","exitCode":0,"quiet":true}
+{"id":"bc-022","script":"printf '%b\\n' '2^300' | bc","stdout":"20370359763344860862684456884093781610514683936659362506361404493543\\\n81299763336706183397376\n","exitCode":0,"quiet":true}
+{"id":"bc-023","script":"printf '%b\\n' 'scale=80; 1/3' | bc","stdout":".3333333333333333333333333333333333333333333333333333333333333333333\\\n3333333333333\n","exitCode":0,"quiet":true}
+{"id":"bc-024","script":"printf '%b\\n' 'length(12345)' | bc","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"bc-025","script":"printf '%b\\n' 'length(123.45)' | bc","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"bc-026","script":"printf '%b\\n' 'length(0.00123)' | bc","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"bc-027","script":"printf '%b\\n' 'length(0)' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-028","script":"printf '%b\\n' 'scale=5; scale(1/3)' | bc","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"bc-029","script":"printf '%b\\n' '1==1' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-030","script":"printf '%b\\n' '5>3' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-031","script":"printf '%b\\n' '1&&0' | bc","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"bc-032","script":"printf '%b\\n' '1||0' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-033","script":"printf '%b\\n' '!0' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-034","script":"printf '%b\\n' '-2^2' | bc","stdout":"4\n","exitCode":0,"quiet":true}
+{"id":"bc-035","script":"printf '%b\\n' '2^3^2' | bc","stdout":"512\n","exitCode":0,"quiet":true}
+{"id":"bc-036","script":"printf '%b\\n' 'obase=16; 255' | bc","stdout":"FF\n","exitCode":0,"quiet":true}
+{"id":"bc-037","script":"printf '%b\\n' 'obase=16; 4095' | bc","stdout":"FFF\n","exitCode":0,"quiet":true}
+{"id":"bc-038","script":"printf '%b\\n' 'obase=16; 256' | bc","stdout":"100\n","exitCode":0,"quiet":true}
+{"id":"bc-039","script":"printf '%b\\n' 'obase=2; 255' | bc","stdout":"11111111\n","exitCode":0,"quiet":true}
+{"id":"bc-040","script":"printf '%b\\n' 'ibase=16; FF' | bc","stdout":"255\n","exitCode":0,"quiet":true}
+{"id":"bc-041","script":"printf '%b\\n' 'ibase=16; ff' | bc","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"bc-042","script":"printf '%b\\n' 'ibase=2; 1010' | bc","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"bc-043","script":"printf '%b\\n' 'obase=16; -255' | bc","stdout":"-FF\n","exitCode":0,"quiet":true}
+{"id":"bc-044","script":"printf '%b\\n' 'obase=16; 3.5' | bc","stdout":"3.8\n","exitCode":0,"quiet":true}
+{"id":"bc-045","script":"printf '%b\\n' 'obase=100; 255' | bc","stdout":" 02 55\n","exitCode":0,"quiet":true}
+{"id":"bc-046","script":"printf '%b\\n' 'obase=100; -255' | bc","stdout":"- 02 55\n","exitCode":0,"quiet":true}
+{"id":"bc-047","script":"printf '%b\\n' 'scale=4; obase=100; 1/3' | bc","stdout":".33 33\n","exitCode":0,"quiet":true}
+{"id":"bc-048","script":"printf '%b\\n' 'obase=1000; 123456789' | bc","stdout":" 123 456 789\n","exitCode":0,"quiet":true}
+{"id":"bc-049","script":"printf '%b\\n' 'A' | bc","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"bc-050","script":"printf '%b\\n' 'ibase=16; 1F' | bc","stdout":"31\n","exitCode":0,"quiet":true}
+{"id":"bc-051","script":"printf '%b\\n' 'ibase=10; AA' | bc","stdout":"99\n","exitCode":0,"quiet":true}
+{"id":"bc-052","script":"printf '%b\\n' 'scale=4;obase=16;10/3' | bc","stdout":"3.5553\n","exitCode":0,"quiet":true}
+{"id":"bc-053","script":"printf '%b\\n' 'obase=16; 255.5' | bc","stdout":"FF.8\n","exitCode":0,"quiet":true}
+{"id":"bc-054","script":"printf '%b\\n' 'scale=20; s(1)' | bc -l","stdout":".84147098480789650665\n","exitCode":0,"quiet":true}
+{"id":"bc-055","script":"printf '%b\\n' 'scale=20; c(1)' | bc -l","stdout":".54030230586813971740\n","exitCode":0,"quiet":true}
+{"id":"bc-056","script":"printf '%b\\n' 'scale=20; a(1)' | bc -l","stdout":".78539816339744830961\n","exitCode":0,"quiet":true}
+{"id":"bc-057","script":"printf '%b\\n' 'scale=20; 4*a(1)' | bc -l","stdout":"3.14159265358979323844\n","exitCode":0,"quiet":true}
+{"id":"bc-058","script":"printf '%b\\n' 'scale=20; l(2)' | bc -l","stdout":".69314718055994530941\n","exitCode":0,"quiet":true}
+{"id":"bc-059","script":"printf '%b\\n' 'scale=20; e(1)' | bc -l","stdout":"2.71828182845904523536\n","exitCode":0,"quiet":true}
+{"id":"bc-060","script":"printf '%b\\n' 'scale=50; 4*a(1)' | bc -l","stdout":"3.14159265358979323846264338327950288419716939937508\n","exitCode":0,"quiet":true}
+{"id":"bc-061","script":"printf '%b\\n' 'scale=20; j(0,1)' | bc -l","stdout":".76519768655796655144\n","exitCode":0,"quiet":true}
+{"id":"bc-062","script":"printf '%b\\n' 'scale=20; j(1,2)' | bc -l","stdout":".57672480775687338720\n","exitCode":0,"quiet":true}
+{"id":"bc-063","script":"printf '%b\\n' 'scale=30; s(0.5)' | bc -l","stdout":".479425538604203000273287935215\n","exitCode":0,"quiet":true}
+{"id":"bc-064","script":"printf '%b\\n' 'scale=20; e(2)' | bc -l","stdout":"7.38905609893065022723\n","exitCode":0,"quiet":true}
+{"id":"bc-065","script":"printf '%b\\n' 'scale=20; l(10)' | bc -l","stdout":"2.30258509299404568401\n","exitCode":0,"quiet":true}
+{"id":"bc-066","script":"printf '%b\\n' 'scale=20; c(0)' | bc -l","stdout":"1.00000000000000000000\n","exitCode":0,"quiet":true}
+{"id":"bc-067","script":"printf '%b\\n' 'scale=20; e(0)' | bc -l","stdout":"1.00000000000000000000\n","exitCode":0,"quiet":true}
+{"id":"bc-068","script":"printf '%b\\n' 'scale=20; s(0)' | bc -l","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"bc-069","script":"printf '%b\\n' 'define f(x){return x*x}\\nf(5)\\nf(3)+1' | bc","stdout":"25\n10\n","exitCode":0,"quiet":true}
+{"id":"bc-070","script":"printf '%b\\n' 'define fac(n){if(n<=1)return 1;return n*fac(n-1)}\\nfac(10)' | bc","stdout":"3628800\n","exitCode":0,"quiet":true}
+{"id":"bc-071","script":"printf '%b\\n' 'define g(n){auto i,s;for(i=1;i<=n;i++)s+=i;return s}\\ng(100)' | bc","stdout":"5050\n","exitCode":0,"quiet":true}
+{"id":"bc-072","script":"printf '%b\\n' 'x=7;x+=3;x' | bc","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"bc-073","script":"printf '%b\\n' 'y=5;y++;y' | bc","stdout":"5\n6\n","exitCode":0,"quiet":true}
+{"id":"bc-074","script":"printf '%b\\n' 'z=3;z--;z' | bc","stdout":"3\n2\n","exitCode":0,"quiet":true}
+{"id":"bc-075","script":"printf '%b\\n' '7\\n.+1\\nlast*2' | bc","stdout":"7\n8\n16\n","exitCode":0,"quiet":true}
+{"id":"bc-076","script":"printf '%b\\n' 'a[0]=10;a[1]=20;a[0]+a[1]' | bc","stdout":"30\n","exitCode":0,"quiet":true}
+{"id":"bc-077","script":"printf '%b\\n' 'x=2;x^=10;x' | bc","stdout":"1024\n","exitCode":0,"quiet":true}
+{"id":"bc-078","script":"printf '%b\\n' 'x=10;x%=3;x' | bc","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"bc-079","script":"printf '%b\\n' 'if(3>2)print \"yes\\n\"' | bc","stdout":"yes\n","exitCode":0,"quiet":true}
+{"id":"bc-080","script":"printf '%b\\n' 'scale=5;x=sqrt(2);x' | bc","stdout":"1.41421\n","exitCode":0,"quiet":true}
+{"id":"bc-081","script":"printf '%b\\n' 'define h(a[]){a[0]=99;return 0}\\nx[0]=1;h(x[]);x[0]' | bc","stdout":"0\n1\n","exitCode":0,"quiet":true}
+{"id":"bc-082","script":"printf '%b\\n' '(x=5)' | bc","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"bc-083","script":"printf '%b\\n' '3; 4; 5' | bc","stdout":"3\n4\n5\n","exitCode":0,"quiet":true}
+{"id":"bc-084","script":"printf '%b\\n' 'n=5;t=0;for(i=1;i<=n;i++){t+=i};t' | bc","stdout":"15\n","exitCode":0,"quiet":true}
+{"id":"bc-085","script":"printf '%b\\n' '2 /* c */ + 3 # trailing' | bc","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"bc-086","script":"printf '%b\\n' 'print 2+3, \" \", 4*5, \"\\n\"' | bc","stdout":"5 20\n","exitCode":0,"quiet":true}
+{"id":"bc-087","script":"printf '%b\\n' 'print \"hi\\n\"' | bc","stdout":"hi\n","exitCode":0,"quiet":true}
+{"id":"bc-088","script":"printf '%b\\n' '\"bare string\\n\"' | bc","stdout":"bare string\n","exitCode":0,"quiet":true}
+{"id":"bc-089","script":"printf '%b\\n' 'i=0;while(i<3){print i,\" \";i+=1}' | bc","stdout":"0 1 2 ","exitCode":0,"quiet":true}
+{"id":"bc-090","script":"printf '%b\\n' 'scale' | bc","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"bc-091","script":"printf '%b\\n' 'scale' | bc -l","stdout":"20\n","exitCode":0,"quiet":true}
+{"id":"bc-092","script":"printf '%b\\n' 'ibase' | bc","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"bc-093","script":"printf '%b\\n' 'obase' | bc","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"bc-094","script":"printf '%b\\n' '9^9^9' | bc","stdout":"","exitCode":1,"quiet":false}
+{"id":"bc-095","script":"printf '%b\\n' 'scale=100000;sqrt(2)' | bc","stdout":"","exitCode":1,"quiet":false}
+{"id":"bc-096","script":"printf '%b\\n' '2^500000' | bc","stdout":"","exitCode":1,"quiet":false}

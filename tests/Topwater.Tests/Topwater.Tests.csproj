@@ -24,6 +24,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\corpus\**\*" LinkBase="corpus" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Topwater\Topwater.csproj" />
     <ProjectReference Include="..\..\src\Topwater.Mcp\Topwater.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Topwater.AI\Topwater.AI.csproj" />

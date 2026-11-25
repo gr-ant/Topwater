@@ -1,0 +1,98 @@
+{"id":"errors-and-output-001","script":"set -x; [[ -n x ]]; (( 1 + 1 )); echo done","stdout":"done\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-002","script":"set -x; echo a | cat; ( echo sub )","stdout":"a\nsub\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-003","script":"set -x; x=$(echo inner); echo \"$x\"","stdout":"inner\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-004","script":"set -x; f() { local v=1; echo $v; }; f","stdout":"1\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-005","script":"set -x; a=(1 2); echo \"${a[@]}\"","stdout":"1 2\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-006","script":"set -x; if true; then echo yes; fi; case a in a) echo b;; esac","stdout":"yes\nb\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-007","script":"set -x; echo \"it's\" 'a\"b' '' \"tab\tx\"","stdout":"it's a\"b  tab\tx\n","exitCode":0,"quiet":false}
+{"id":"errors-and-output-008","script":"set -e; f() { false; echo after-false; }; if f; then echo cond-ok; fi","stdout":"after-false\ncond-ok\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-009","script":"set -e; local_fail() { local x=$(false); echo \"local masks $?\"; }; local_fail","stdout":"local masks 0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-010","script":"set -e; f() { false; }; x=$(f; echo still); echo \"[$x]\"","stdout":"[still]\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-011","script":"set -e; false || { echo handled; }; echo next","stdout":"handled\nnext\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-012","script":"set -e; cmd_fails() { return 1; }; cmd_fails && echo no; echo \"survived &&\"","stdout":"survived &&\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-013","script":"set -e; ! cmd_x 2>/dev/null; echo \"negation exempt\"","stdout":"negation exempt\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-014","script":"set -e; for i in 1 2; do [[ $i == 2 ]] && echo two; done; echo loop-end","stdout":"two\nloop-end\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-015","script":"set -e; [[ 1 == 2 ]] && echo no; echo \"last && false ok?\"","stdout":"last && false ok?\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-016","script":"set -e; true && false; echo unreachable","stdout":"","exitCode":1,"quiet":true}
+{"id":"errors-and-output-017","script":"set -e; x=1; (( x-- )); echo \"x=$x\"","stdout":"x=0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-018","script":"set -e; (( x = 0 )) || true; echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-019","script":"set -e; trap 'echo exiting $?' EXIT; f() { return 4; }; f","stdout":"exiting 4\n","exitCode":4,"quiet":true}
+{"id":"errors-and-output-020","script":"set -eu; v=${undefined_var:-}; echo \"[$v]\"","stdout":"[]\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-021","script":"(exit 3) || echo \"caught $?\"","stdout":"caught 3\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-022","script":"{ false; } || echo group-failed; ( false ) || echo sub-failed","stdout":"group-failed\nsub-failed\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-023","script":"false; echo $?; ! false; echo $?; ! true; echo $?","stdout":"1\n0\n1\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-024","script":"if false; then :; elif true; then echo elif; fi; echo $?","stdout":"elif\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-025","script":"while false; do :; done; echo $?; for x in; do :; done; echo $?","stdout":"0\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-026","script":"case x in y) ;; esac; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-027","script":"f() { :; }; f; echo $?; f() { false; }; f; echo $?","stdout":"0\n1\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-028","script":"x=$(exit 5); echo $?; y=$(true); echo $?","stdout":"5\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-029","script":"echo hi | false; echo $?; false | echo hi; echo $?","stdout":"1\nhi\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-030","script":"exit_in_pipe() { echo x | exit 3; echo \"still here $?\"; }; exit_in_pipe","stdout":"still here 3\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-031","script":"( exit 2 ); echo $?; ( exit 256 ); echo $?","stdout":"2\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-032","script":"f() { exit 3; }; (f); echo \"sub exit $?\"","stdout":"sub exit 3\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-033","script":"exit 4; echo never","stdout":"","exitCode":4,"quiet":true}
+{"id":"errors-and-output-034","script":"true; exit; echo never","stdout":"","exitCode":0,"quiet":true}
+{"id":"errors-and-output-035","script":"false; exit","stdout":"","exitCode":1,"quiet":true}
+{"id":"errors-and-output-036","script":"alias ll='ls -1'; unalias ll; ll 2>/dev/null; echo $?","stdout":"127\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-037","script":"echo 'echo \"args: $# $1\"' > s.sh; source ./s.sh one two; . ./s.sh","stdout":"args: 2 one\nargs: 0 \n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-038","script":"echo 'f_from_file() { echo defined; }' > lib.sh; source lib.sh; f_from_file","stdout":"defined\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-039","script":"cmd='printf \"%s|\" \"a b\" c'; eval \"$cmd\"; echo","stdout":"a b|c|\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-040","script":"var=name; eval \"$var=value\"; echo $name","stdout":"value\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-041","script":"eval 'for i in 1 2; do echo $i; done'","stdout":"1\n2\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-042","script":"x='$(echo injected)'; eval \"echo \\$x\"; eval echo \"$x\"","stdout":"$(echo injected)\ninjected\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-043","script":"arr=(\"a b\" c); eval \"copy=(\\\"\\${arr[@]}\\\")\"; echo ${#copy[@]}","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-044","script":"printf '%s %s\\n' a b c d e","stdout":"a b\nc d\ne \n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-045","script":"printf '%d%%\\n' 50","stdout":"50%\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-046","script":"printf '%b\\n' 'x\\ty' '\\0101' '\\x42' 'end\\c' 'after'","stdout":"x\ty\nA\nB\nend","exitCode":0,"quiet":true}
+{"id":"errors-and-output-047","script":"printf '%.3s|%-6.2f|%+.1e\\n' abcdef 3.14159 12345","stdout":"abc|3.14  |+1.2e+04\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-048","script":"printf '%q\\n' 'héllo wörld' $'a\\nb'","stdout":"héllo\\ wörld\n$'a\\nb'\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-049","script":"printf \"%s\\n\" \"$(printf '%03d' 1 2 3)\"","stdout":"001002003\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-050","script":"printf '%x %X %#x %#o\\n' 255 255 255 8","stdout":"ff FF 0xff 010\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-051","script":"printf '%s' ; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-052","script":"echo -e 'a\\0101b' 'é' 'x\\cy'","stdout":"aAb é x","exitCode":0,"quiet":true}
+{"id":"errors-and-output-053","script":"echo -e '\\e[1mbold\\e[0m' | od -c | head -1","stdout":"0000000 033   [   1   m   b   o   l   d 033   [   0   m  \\n\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-054","script":"echo \"-n\" ; echo -- \"-e\"; echo -nn x; echo","stdout":"-- -e\nx\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-055","script":"echo -e \"line1\\nline2\" | wc -l","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-056","script":"[ -n ]; echo $?; [ -z ]; echo $?; [ ! ]; echo $?","stdout":"0\n0\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-057","script":"[ \"a\" \\< \"b\" ]; echo $?; [ 10 -gt 9 ]; echo $?; [ \"10\" \\> \"9\" ]; echo $?","stdout":"0\n0\n1\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-058","script":"[ -f nonexist -o -d / ]; echo $?; [ ! -f nonexist -a -d / ]; echo $?","stdout":"0\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-059","script":"[ \\( 1 -eq 1 \\) -a \\( 2 -eq 2 \\) ]; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-060","script":"[ \"$undefined\" = \"\" ]; echo $?; [ = ]; echo $?","stdout":"0\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-061","script":"[ abc = 'a*' ]; echo $?; [[ abc = a* ]]; echo $?","stdout":"1\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-062","script":"[ 01 -eq 1 ]; echo $?; [[ 01 -eq 1 ]]; echo $?; [[ 0x10 -eq 16 ]]; echo $?","stdout":"0\n0\n0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-063","script":"[[ a < b && b > a ]]; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-064","script":"[[ -n \"\" || -z \"\" ]]; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-065","script":"x=5; [[ x -eq 5 ]]; echo $?; [[ $x == 5.0 ]]; echo $?","stdout":"0\n1\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-066","script":"[[ \"a b\" == a\\ b ]] && echo esc; [[ \"a*b\" == a\\*b ]] && echo star","stdout":"esc\nstar\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-067","script":"re='a b'; [[ \"a b\" =~ $re ]] && echo spaced-re","stdout":"spaced-re\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-068","script":"[[ abc =~ b ]] && echo \"${BASH_REMATCH[0]}\"; [[ xyz =~ b ]]; echo \"[${BASH_REMATCH[0]}]\"","stdout":"b\n[]\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-069","script":"[[ \"2024-01-15\" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]] && echo \"${BASH_REMATCH[2]}/${BASH_REMATCH[3]}/${BASH_REMATCH[1]}\"","stdout":"01/15/2024\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-070","script":"[[ \"foo.bar\" =~ \\.(bar|baz)$ ]] && echo ext","stdout":"ext\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-071","script":"[[ $'a\\nb' == a?b ]] && echo nl-match","stdout":"nl-match\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-072","script":"cat <<EOF\n$((2*3)) ${HOME##*/} $(echo \"q'uote\") \\$literal\nEOF","stdout":"6 agent q'uote $literal\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-073","script":"cat <<-'EOF'\n\t\tindented $x\n\tEOF","stdout":"indented $x\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-074","script":"f() {\n  cat <<EOF\ninside function $1\nEOF\n}\nf arg","stdout":"inside function arg\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-075","script":"cat << \"EOF\" | wc -l\na\nb\nEOF","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-076","script":"x=$(cat <<'EOF'\na 'single' \"double\" $(not)\nEOF\n)\necho \"$x\"","stdout":"a 'single' \"double\" $(not)\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-077","script":"cat <<EOF > out.txt\nwritten\nEOF\ncat out.txt","stdout":"written\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-078","script":"while read -r line; do echo \"got: $line\"; done <<'END'\none\ntwo\nEND","stdout":"got: one\ngot: two\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-079","script":"cat <<EOF\ntab\tinside and trailing space \nEOF","stdout":"tab\tinside and trailing space \n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-080","script":"v=1; cat <<EOF\n${v:+set} ${w:-unset} \"${v}\"\nEOF","stdout":"set unset \"1\"\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-081","script":"echo $'☺' $'\\x41\\x42' $'\\101' $'a\\'b'","stdout":"☺ AB A a'b\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-082","script":"echo $'\\t' | od -c | head -1","stdout":"0000000  \\t  \\n\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-083","script":"x=\"a\\\\b\"; echo \"$x\"; echo 'a\\\\b'; echo \"a\\\\\\\\b\"","stdout":"a\\b\na\\\\b\na\\\\b\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-084","script":"echo \"\\\\$HOME\" | sed 's|/home/agent|H|'","stdout":"\\H\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-085","script":"echo \\$HOME \\\\ \\' \\\"","stdout":"$HOME \\ ' \"\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-086","script":"echo \"a\nb\" \"c\"","stdout":"a\nb c\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-087","script":"x='*'; echo \"$x\" $x | head -c 1; echo","stdout":"*\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-088","script":"touch a b; x='a b'; ls $x; ls \"$x\" 2>/dev/null || echo \"no 'a b'\"","stdout":"a\nb\nno 'a b'\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-089","script":"set -- \"a  b\"; echo $1; echo \"$1\"","stdout":"a b\na  b\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-090","script":"IFS=:; x=\"a:b\"; echo $x; echo \"$x\"; unset IFS","stdout":"a b\na:b\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-091","script":"x=\" \"; [ -z \"$x\" ] || echo \"space is not empty\"; [ -z $x ] && echo \"unquoted space is empty\"","stdout":"space is not empty\nunquoted space is empty\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-092","script":"empty=\"\"; set -- $empty; echo $#; set -- \"$empty\"; echo $#","stdout":"0\n1\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-093","script":"x=\"a*\"; touch ab ac; echo $x; echo \"$x\"","stdout":"ab ac\na*\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-094","script":"for f in *.nomatch; do echo \"loop: $f\"; done","stdout":"loop: *.nomatch\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-095","script":"shopt -s nullglob; for f in *.nomatch; do echo \"loop: $f\"; done; echo after","stdout":"after\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-096","script":"touch .h v; shopt -s dotglob; echo *; shopt -u dotglob; echo *","stdout":".h v\nv\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-097","script":"mkdir -p d/sub; touch d/x d/sub/y; echo d/*; echo d/*/","stdout":"d/sub d/x\nd/sub/\n","exitCode":0,"quiet":true}
+{"id":"errors-and-output-098","script":"touch 'a b.txt'; for f in *.txt; do echo \"[$f]\"; done","stdout":"[a b.txt]\n","exitCode":0,"quiet":true}

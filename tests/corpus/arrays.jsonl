@@ -1,0 +1,93 @@
+{"id":"arrays-001","script":"a=(1 2 3); total=0; for i in 0 1 2; do (( total += a[i]++ )); done; echo $total \"${a[@]}\"","stdout":"6 2 3 4\n","exitCode":0,"quiet":true}
+{"id":"arrays-002","script":"a=(5 0 0); for ((i=1;i<3;i++)); do (( a[i] = a[i-1] + 1 )); done; echo \"${a[@]}\"","stdout":"5 6 7\n","exitCode":0,"quiet":true}
+{"id":"arrays-003","script":"a=(5); x=$(( a[0]++ )); echo $x ${a[0]}","stdout":"5 6\n","exitCode":0,"quiet":true}
+{"id":"arrays-004","script":"a=(5 6); (( ++a[1] )); echo ${a[1]}; echo $(( --a[0] )) ${a[0]}","stdout":"7\n4 4\n","exitCode":0,"quiet":true}
+{"id":"arrays-005","script":"a=(x y z); i=1; a[i + 1]=Q; echo \"${a[@]}\"","stdout":"x y Q\n","exitCode":0,"quiet":true}
+{"id":"arrays-006","script":"a=(x y z); i=0; a[ $i ]=Q; echo \"${a[@]}\"","stdout":"Q y z\n","exitCode":0,"quiet":true}
+{"id":"arrays-007","script":"x=hello; declare -p x","stdout":"declare -- x=\"hello\"\n","exitCode":0,"quiet":true}
+{"id":"arrays-008","script":"a=(1 'two words' 3); declare -p a","stdout":"declare -a a=([0]=\"1\" [1]=\"two words\" [2]=\"3\")\n","exitCode":0,"quiet":true}
+{"id":"arrays-009","script":"declare -A m=([k]=v); declare -p m","stdout":"declare -A m=([k]=\"v\" )\n","exitCode":0,"quiet":true}
+{"id":"arrays-010","script":"declare -A m; m[a]=1; m[b]='x y'; s=$(declare -p m); unset m; eval \"$s\"; echo \"${m[a]} ${m[b]}\"","stdout":"1 x y\n","exitCode":0,"quiet":true}
+{"id":"arrays-011","script":"f() { local -a arr=(p q); declare -p arr; }; f","stdout":"declare -a arr=([0]=\"p\" [1]=\"q\")\n","exitCode":0,"quiet":true}
+{"id":"arrays-012","script":"declare -i n=5; declare -p n","stdout":"declare -i n=\"5\"\n","exitCode":0,"quiet":true}
+{"id":"arrays-013","script":"export E=1; declare -p E","stdout":"declare -x E=\"1\"\n","exitCode":0,"quiet":true}
+{"id":"arrays-014","script":"declare -p nosuch; echo $?","stdout":"1\n","exitCode":0,"quiet":false}
+{"id":"arrays-015","script":"a=(\"it's\" 'a b' ''); printf '%s\\n' \"${a[@]@Q}\"","stdout":"'it'\\''s'\n'a b'\n''\n","exitCode":0,"quiet":true}
+{"id":"arrays-016","script":"x='hello world'; echo \"${x@U}\" \"${x@L}\" \"${x@Q}\"","stdout":"HELLO WORLD hello world 'hello world'\n","exitCode":0,"quiet":true}
+{"id":"arrays-017","script":"x='a\\tb'; echo \"${x@E}\"","stdout":"a\tb\n","exitCode":0,"quiet":true}
+{"id":"arrays-018","script":"x=abc; [[ -v x ]] && echo set; [[ -v nosuch ]] || echo unset","stdout":"set\nunset\n","exitCode":0,"quiet":true}
+{"id":"arrays-019","script":"declare -A m=([k]=v); [[ -v m[k] ]] && echo yes; [[ -v m[z] ]] || echo no","stdout":"yes\nno\n","exitCode":0,"quiet":true}
+{"id":"arrays-020","script":"a=(x); [[ -v a[0] ]] && echo yes; [[ -v a[1] ]] || echo no; [[ -v a ]] && echo arr","stdout":"yes\nno\narr\n","exitCode":0,"quiet":true}
+{"id":"arrays-021","script":"x=; [[ -v x ]] && echo empty-is-set","stdout":"empty-is-set\n","exitCode":0,"quiet":true}
+{"id":"arrays-022","script":"a=([1]=b [5]=f [9]=j); echo \"${a[@]:1:2}\"; echo \"${a[@]:6}\"","stdout":"b f\nj\n","exitCode":0,"quiet":true}
+{"id":"arrays-023","script":"a=(a b c d); a[-1]=Z; echo \"${a[@]}\"; unset 'a[-2]'; echo \"${a[@]}\" ${#a[@]}","stdout":"a b c Z\na b Z 3\n","exitCode":0,"quiet":true}
+{"id":"arrays-024","script":"a=(a b c); unset a[@]; echo \"${#a[@]}\"","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"arrays-025","script":"a=([2]=x y); echo \"${!a[@]}\" \"${a[@]}\"","stdout":"2 3 x y\n","exitCode":0,"quiet":true}
+{"id":"arrays-026","script":"declare -A m=([a]=1); m+=([b]=2 [c]=3); echo ${#m[@]} ${m[c]}","stdout":"3 3\n","exitCode":0,"quiet":true}
+{"id":"arrays-027","script":"foo_a=1; foo_b=2; bar=3; echo ${!foo_*}; echo ${!foo@}","stdout":"foo_a foo_b\nfoo_a foo_b\n","exitCode":0,"quiet":true}
+{"id":"arrays-028","script":"name=greeting; greeting=hi; echo ${!name}","stdout":"hi\n","exitCode":0,"quiet":true}
+{"id":"arrays-029","script":"a=(x y z); ref=\"a[1]\"; echo ${!ref}","stdout":"y\n","exitCode":0,"quiet":true}
+{"id":"arrays-030","script":"a=(x 'y z'); ref='a[@]'; for e in \"${!ref}\"; do echo \"[$e]\"; done","stdout":"[x]\n[y z]\n","exitCode":0,"quiet":true}
+{"id":"arrays-031","script":"fill() { local -n out=$1; out=(one two three); }; fill res; echo \"${#res[@]} ${res[2]}\"","stdout":"3 three\n","exitCode":0,"quiet":true}
+{"id":"arrays-032","script":"setv() { declare -n r=$1; r=value; }; setv myvar; echo $myvar","stdout":"value\n","exitCode":0,"quiet":true}
+{"id":"arrays-033","script":"f() { local -n arr=$1; for x in \"${arr[@]}\"; do echo \"<$x>\"; done; }; list=(a 'b c'); f list","stdout":"<a>\n<b c>\n","exitCode":0,"quiet":true}
+{"id":"arrays-034","script":"a=(); for x in \"${a[@]:-default}\"; do echo \"$x\"; done","stdout":"default\n","exitCode":0,"quiet":true}
+{"id":"arrays-035","script":"a=(abc de); echo ${#a[0]} ${#a[1]}; i=1; echo ${#a[i]}","stdout":"3 2\n2\n","exitCode":0,"quiet":true}
+{"id":"arrays-036","script":"a=(1 2 3 4 5); echo \"${a[@]:(-2)}\"; echo \"${a[@]: -3:2}\"","stdout":"4 5\n3 4\n","exitCode":0,"quiet":true}
+{"id":"arrays-037","script":"a=(x y); printf '%s\\n' \"${a[@]}\"; printf '[%s]\\n' \"${a[*]}\"","stdout":"x\ny\n[x y]\n","exitCode":0,"quiet":true}
+{"id":"arrays-038","script":"a=(one two); echo \"${a[@]/#/pre-}\" \"${a[@]/%/-suf}\"","stdout":"pre-one pre-two one-suf two-suf\n","exitCode":0,"quiet":true}
+{"id":"arrays-039","script":"a=(a b c); IFS=,; echo \"${a[*]}\"; echo \"${a[@]}\"; unset IFS","stdout":"a,b,c\na b c\n","exitCode":0,"quiet":true}
+{"id":"arrays-040","script":"a=(a b c); IFS=; echo \"${a[*]}\"","stdout":"abc\n","exitCode":0,"quiet":true}
+{"id":"arrays-041","script":"read -r -a parts <<< \"  one  two three  \"; echo ${#parts[@]} \"${parts[0]}\"","stdout":"3 one\n","exitCode":0,"quiet":true}
+{"id":"arrays-042","script":"printf 'a\\nb\\n' | { read -d '' all; echo \"[$all]\"; }","stdout":"[a\nb]\n","exitCode":0,"quiet":true}
+{"id":"arrays-043","script":"read -r -d '' text <<'EOF'\nline one\nline two\nEOF\necho \"$text\"; echo \"status=$?\"","stdout":"line one\nline two\nstatus=0\n","exitCode":0,"quiet":true}
+{"id":"arrays-044","script":"printf 'l1\\nl2\\nl3\\nl4\\n' > f; mapfile -t -n 2 arr < f; echo \"${arr[@]}\"","stdout":"l1 l2\n","exitCode":0,"quiet":true}
+{"id":"arrays-045","script":"printf 'l1\\nl2\\nl3\\nl4\\n' > f; mapfile -t -s 1 arr < f; echo \"${arr[@]}\"","stdout":"l2 l3 l4\n","exitCode":0,"quiet":true}
+{"id":"arrays-046","script":"printf 'l1\\nl2\\n' > f; arr=(x y); mapfile -t -O 2 arr < f; echo \"${arr[@]}\" ${#arr[@]}","stdout":"x y l1 l2 4\n","exitCode":0,"quiet":true}
+{"id":"arrays-047","script":"printf 'a,b,c' > f; mapfile -t -d , arr < f; echo \"${#arr[@]} ${arr[2]}\"","stdout":"3 c\n","exitCode":0,"quiet":true}
+{"id":"arrays-048","script":"lines=(); while IFS= read -r line; do lines+=(\"$line\"); done < <(printf 'x y\\nz\\n'); echo ${#lines[@]} \"${lines[0]}\"","stdout":"2 x y\n","exitCode":0,"quiet":true}
+{"id":"arrays-049","script":"readarray -t arr <<< \"$(printf 'a\\nb\\nc')\"; echo ${#arr[@]} ${arr[1]}","stdout":"3 b\n","exitCode":0,"quiet":true}
+{"id":"arrays-050","script":"readarray -t arr <<< \"\"; echo ${#arr[@]}","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"arrays-051","script":"set -u; a=(); echo \"${a[@]}\" end; echo ok","stdout":"end\nok\n","exitCode":0,"quiet":true}
+{"id":"arrays-052","script":"set -u; a=(); for x in \"${a[@]}\"; do echo $x; done; echo \"${#a[@]}\"","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"arrays-053","script":"a=(1 'b c'); b=(\"${a[@]}\"); b[0]=X; echo \"${a[0]} ${b[0]} ${b[1]}\"","stdout":"1 X b c\n","exitCode":0,"quiet":true}
+{"id":"arrays-054","script":"f() { echo $#; for x; do echo \"[$x]\"; done; }; a=(1 'b c' ''); f \"${a[@]}\"","stdout":"3\n[1]\n[b c]\n[]\n","exitCode":0,"quiet":true}
+{"id":"arrays-055","script":"a=(p q r); set -- \"${a[@]}\"; echo $# $2","stdout":"3 q\n","exitCode":0,"quiet":true}
+{"id":"arrays-056","script":"declare -i n; n=3+4; echo $n; n+=2; echo $n","stdout":"7\n9\n","exitCode":0,"quiet":true}
+{"id":"arrays-057","script":"declare -i n=10; n=\"n * 2\"; echo $n","stdout":"20\n","exitCode":0,"quiet":true}
+{"id":"arrays-058","script":"declare -r R=1; R=2; echo \"after $R $?\"","stdout":"","exitCode":1,"quiet":false}
+{"id":"arrays-059","script":"readonly R=1; unset R; echo \"R=$R\"","stdout":"R=1\n","exitCode":0,"quiet":false}
+{"id":"arrays-060","script":"declare -l low=HeLLo; declare -u up=HeLLo; echo $low $up; low=ABC; echo $low","stdout":"hello HELLO\nabc\n","exitCode":0,"quiet":true}
+{"id":"arrays-061","script":"declare -x X=1; bash -c 'echo $X'","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"arrays-062","script":"a=(1 2); export a; echo \"${a[@]}\"","stdout":"1 2\n","exitCode":0,"quiet":true}
+{"id":"arrays-063","script":"a=(); a[5]=x; a+=(y); echo \"${!a[@]}\"","stdout":"5 6\n","exitCode":0,"quiet":true}
+{"id":"arrays-064","script":"a=(z b a); IFS=$'\\n' sorted=($(sort <<<\"${a[*]}\")); unset IFS; echo \"${sorted[@]}\"","stdout":"a b z\n","exitCode":0,"quiet":true}
+{"id":"arrays-065","script":"a=(1 2 3); echo \"${a[@]:1}\"; echo \"${a[*]:1:1}\"","stdout":"2 3\n2\n","exitCode":0,"quiet":true}
+{"id":"arrays-066","script":"declare -A m=([x]=1 [y]=2); unset m[x]; echo \"${!m[@]}\"","stdout":"y\n","exitCode":0,"quiet":true}
+{"id":"arrays-067","script":"declare -A m; m[a b]=1; key='a b'; echo \"${m[$key]}\" \"${m[\"a b\"]}\"","stdout":"1 1\n","exitCode":0,"quiet":true}
+{"id":"arrays-068","script":"a=(x y); echo ${a}; echo $a[1]","stdout":"x\nx[1]\n","exitCode":0,"quiet":true}
+{"id":"arrays-069","script":"a=(a b c); echo \"${a[@]:0:$((${#a[@]}-1))}\"","stdout":"a b\n","exitCode":0,"quiet":true}
+{"id":"arrays-070","script":"a=(); a+=(x); a+=(\"y z\"); declare -p a","stdout":"declare -a a=([0]=\"x\" [1]=\"y z\")\n","exitCode":0,"quiet":true}
+{"id":"arrays-071","script":"arr=(c a b); for i in \"${!arr[@]}\"; do printf '%d:%s ' \"$i\" \"${arr[$i]}\"; done; echo","stdout":"0:c 1:a 2:b \n","exitCode":0,"quiet":true}
+{"id":"arrays-072","script":"declare -a nums=(3 1 2); max=${nums[0]}; for n in \"${nums[@]}\"; do (( n > max )) && max=$n; done; echo $max","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"arrays-073","script":"a=(1 2 3); sum=0; for n in \"${a[@]}\"; do ((sum+=n)); done; echo $sum","stdout":"6\n","exitCode":0,"quiet":true}
+{"id":"arrays-074","script":"declare -A cnt; for w in x y x z x; do cnt[$w]=$(( ${cnt[$w]:-0} + 1 )); done; for k in x y z; do echo \"$k ${cnt[$k]}\"; done","stdout":"x 3\ny 1\nz 1\n","exitCode":0,"quiet":true}
+{"id":"arrays-075","script":"declare -A h=([one]=1); echo \"${h[one]:-none} ${h[two]:-none}\"","stdout":"1 none\n","exitCode":0,"quiet":true}
+{"id":"arrays-076","script":"a=(x y z); echo \"${a[@]: -1}\"; echo \"${a[-2]}\"","stdout":"z\ny\n","exitCode":0,"quiet":true}
+{"id":"arrays-077","script":"a=(x y z); echo ${a[3]:-unset}; echo ${a[-4]}","stdout":"unset\n\n","exitCode":0,"quiet":false}
+{"id":"arrays-078","script":"a=(1 2); a=(\"${a[@]}\" 3); echo \"${a[@]}\"","stdout":"1 2 3\n","exitCode":0,"quiet":true}
+{"id":"arrays-079","script":"f() { local arr=(\"$@\"); echo \"${#arr[@]}\"; }; f a b c","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"arrays-080","script":"f() { local -a x; x+=(1); x+=(2); echo \"${x[@]}\"; }; f; echo \"[${x[@]}]\"","stdout":"1 2\n[]\n","exitCode":0,"quiet":true}
+{"id":"arrays-081","script":"a=(a b c); echo \"${a[@]^}\"; echo \"${a[*]^^}\"","stdout":"A B C\nA B C\n","exitCode":0,"quiet":true}
+{"id":"arrays-082","script":"a=(x.c y.c); echo \"${a[@]%.c}\"; echo \"${a[@]/./_}\"","stdout":"x y\nx_c y_c\n","exitCode":0,"quiet":true}
+{"id":"arrays-083","script":"str=\"a:b:c\"; IFS=: read -ra p <<< \"$str\"; echo \"${p[-1]}\" \"${#p[@]}\"","stdout":"c 3\n","exitCode":0,"quiet":true}
+{"id":"arrays-084","script":"str=\"a b c\"; arr=($str); echo ${#arr[@]}","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"arrays-085","script":"declare -A m=([b]=2 [a]=1); for k in $(printf '%s\\n' \"${!m[@]}\" | sort); do echo $k=${m[$k]}; done","stdout":"a=1\nb=2\n","exitCode":0,"quiet":true}
+{"id":"arrays-086","script":"a=(1 2 3); unset 'a[0]'; echo \"${a[0]:-gone}\" \"${a[@]}\" \"${!a[@]}\"","stdout":"gone 2 3 1 2\n","exitCode":0,"quiet":true}
+{"id":"arrays-087","script":"a=(1 2 3); a=(); echo ${#a[@]}","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"arrays-088","script":"x=(1 2); y=x; eval \"echo \\${$y[1]}\"","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"arrays-089","script":"a[0]=x; a[1]=y; echo ${#a[*]}","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"arrays-090","script":"declare -A m; m=([a]=1 [b]=2); echo ${#m[@]}","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"arrays-091","script":"a=(1 2 3); echo $((${#a[@]} * 2))","stdout":"6\n","exitCode":0,"quiet":true}
+{"id":"arrays-092","script":"a=(\"${a[@]}\" new); echo \"${a[@]}\"","stdout":"new\n","exitCode":0,"quiet":true}
+{"id":"arrays-093","script":"words=(alpha beta); echo \"${words[@]:0:1}\" \"${#words}\"","stdout":"alpha 5\n","exitCode":0,"quiet":true}

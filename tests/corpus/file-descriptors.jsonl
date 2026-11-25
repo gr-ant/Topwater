@@ -1,0 +1,9 @@
+{"id":"file-descriptors-001","script":"printf 'a\\nb\\n' > f; while read -u 3 line; do echo \"got $line\"; done 3< f","stdout":"got a\ngot b\n","exitCode":0,"quiet":true}
+{"id":"file-descriptors-002","script":"printf 'x\\n' > f; read -u 4 v 4< f; echo \"$v\"","stdout":"x\n","exitCode":0,"quiet":true}
+{"id":"file-descriptors-003","script":"{ echo to3 >&3; } 3> out.txt; cat out.txt","stdout":"to3\n","exitCode":0,"quiet":true}
+{"id":"file-descriptors-004","script":"{ echo out; echo err >&2; } 3>&1 1>&2 2>&3 2>/dev/null | cat","stdout":"","exitCode":0,"quiet":false}
+{"id":"file-descriptors-005","script":"echo hi > /dev/fd/1; echo err > /dev/fd/2 2>/dev/null","stdout":"hi\n","exitCode":0,"quiet":false}
+{"id":"file-descriptors-006","script":"exec 5>&1; echo via5 >&5; exec 5>&-; echo closed >&5; echo \"rc=$?\"","stdout":"via5\nrc=1\n","exitCode":0,"quiet":false}
+{"id":"file-descriptors-007","script":"echo x >&7; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"file-descriptors-008","script":"cat <&3; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"file-descriptors-009","script":"exec 3<<<\"line one\"; cat <&3","stdout":"line one\n","exitCode":0,"quiet":true}

@@ -1,0 +1,68 @@
+{"id":"parsing-001","script":"echo a # comment\n# full comment line\necho b #c","stdout":"a\nb\n","exitCode":0,"quiet":true}
+{"id":"parsing-002","script":"echo a\\\nb","stdout":"ab\n","exitCode":0,"quiet":true}
+{"id":"parsing-003","script":"echo if then else fi do done case esac in","stdout":"if then else fi do done case esac in\n","exitCode":0,"quiet":true}
+{"id":"parsing-004","script":"echo {; echo }","stdout":"{\n}\n","exitCode":0,"quiet":true}
+{"id":"parsing-005","script":"echo x=1 a=b","stdout":"x=1 a=b\n","exitCode":0,"quiet":true}
+{"id":"parsing-006","script":"if true; then echo one; fi; if true\nthen\n  echo two\nfi","stdout":"one\ntwo\n","exitCode":0,"quiet":true}
+{"id":"parsing-007","script":"{ echo a; }; { echo b\n}","stdout":"a\nb\n","exitCode":0,"quiet":true}
+{"id":"parsing-008","script":"for i in 1 2\ndo\n  echo $i\ndone","stdout":"1\n2\n","exitCode":0,"quiet":true}
+{"id":"parsing-009","script":"while false; do :; done; until true; do :; done; echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"parsing-010","script":"f()\n{\n  echo multiline-fn\n}\nf","stdout":"multiline-fn\n","exitCode":0,"quiet":true}
+{"id":"parsing-011","script":"case x in\n  x)\n    echo matched\n    ;;\n  *)\n    echo no\n    ;;\nesac","stdout":"matched\n","exitCode":0,"quiet":true}
+{"id":"parsing-012","script":"echo $(case x in x) echo inside;; esac)","stdout":"inside\n","exitCode":0,"quiet":true}
+{"id":"parsing-013","script":"echo $(echo \"paren ( inside\")","stdout":"paren ( inside\n","exitCode":0,"quiet":true}
+{"id":"parsing-014","script":"x=$( echo a; echo b ); echo $x","stdout":"a b\n","exitCode":0,"quiet":true}
+{"id":"parsing-015","script":"echo a#b a #b","stdout":"a#b a\n","exitCode":0,"quiet":true}
+{"id":"parsing-016","script":"echo ~ ~/ \"~\" '~'","stdout":"/home/agent /home/agent/ ~ ~\n","exitCode":0,"quiet":true}
+{"id":"parsing-017","script":"true &&\necho continued-and","stdout":"continued-and\n","exitCode":0,"quiet":true}
+{"id":"parsing-018","script":"false ||\necho continued-or","stdout":"continued-or\n","exitCode":0,"quiet":true}
+{"id":"parsing-019","script":"echo a |\ntr a b","stdout":"b\n","exitCode":0,"quiet":true}
+{"id":"parsing-020","script":"if true; then echo a; fi; then","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-021","script":"echo \"unterminated","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-022","script":"fi","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-023","script":"echo $(( 1 + \n2 ))","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"parsing-024","script":"[[ a == a ]]\necho $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"parsing-025","script":"! true; echo $?; ! false; echo $?","stdout":"1\n0\n","exitCode":0,"quiet":true}
+{"id":"parsing-026","script":"time echo timed 2>/dev/null","stdout":"timed\n","exitCode":0,"quiet":false}
+{"id":"parsing-027","script":"echo \"line1\nline2\"","stdout":"line1\nline2\n","exitCode":0,"quiet":true}
+{"id":"parsing-028","script":"echo 'multi\nline'","stdout":"multi\nline\n","exitCode":0,"quiet":true}
+{"id":"parsing-029","script":"a=1 b=2; echo $a $b","stdout":"1 2\n","exitCode":0,"quiet":true}
+{"id":"parsing-030","script":"x=1 y=$x; echo $y","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"parsing-031","script":"echo $((1+1));echo done","stdout":"2\ndone\n","exitCode":0,"quiet":true}
+{"id":"parsing-032","script":"echo foo;;","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-033","script":"func-name() { echo dashes; }; func-name","stdout":"dashes\n","exitCode":0,"quiet":true}
+{"id":"parsing-034","script":"f() { echo \"body\"; } ; f","stdout":"body\n","exitCode":0,"quiet":true}
+{"id":"parsing-035","script":"f(){ echo nospace; }; f","stdout":"nospace\n","exitCode":0,"quiet":true}
+{"id":"parsing-036","script":": <<'COMMENT'\nblock comment\nCOMMENT\necho after","stdout":"after\n","exitCode":0,"quiet":true}
+{"id":"parsing-037","script":"echo \"a\" 'b' $'c'","stdout":"a b c\n","exitCode":0,"quiet":true}
+{"id":"parsing-038","script":"if [ 1 ]; then :; else :; fi; echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"parsing-039","script":"( cd /tmp && pwd ); pwd >/dev/null; echo ok","stdout":"/tmp\nok\n","exitCode":0,"quiet":true}
+{"id":"parsing-040","script":"echo '{\"key\": \"value\"}'","stdout":"{\"key\": \"value\"}\n","exitCode":0,"quiet":true}
+{"id":"parsing-041","script":"echo \"${x:-{}}\"","stdout":"{}\n","exitCode":0,"quiet":true}
+{"id":"parsing-042","script":"echo [a] [] ]","stdout":"[a] [] ]\n","exitCode":0,"quiet":true}
+{"id":"parsing-043","script":"echo a=b=c","stdout":"a=b=c\n","exitCode":0,"quiet":true}
+{"id":"parsing-044","script":"echo $(echo $(echo a) b) c","stdout":"a b c\n","exitCode":0,"quiet":true}
+{"id":"parsing-045","script":"echo \"$(echo \"$(echo nested quotes)\")\"","stdout":"nested quotes\n","exitCode":0,"quiet":true}
+{"id":"parsing-046","script":"v=\"$(echo 'single ) paren')\"; echo \"$v\"","stdout":"single ) paren\n","exitCode":0,"quiet":true}
+{"id":"parsing-047","script":"x=$(cat <<'EOF'\nhas ) paren\nEOF\n); echo \"$x\"","stdout":"has ) paren\n","exitCode":0,"quiet":true}
+{"id":"parsing-048","script":"echo \"arr: (1 2)\"","stdout":"arr: (1 2)\n","exitCode":0,"quiet":true}
+{"id":"parsing-049","script":"echo \\(paren\\)","stdout":"(paren)\n","exitCode":0,"quiet":true}
+{"id":"parsing-050","script":"[ -n \"x\" ]&&echo tight","stdout":"tight\n","exitCode":0,"quiet":true}
+{"id":"parsing-051","script":"echo a&&echo b||echo c","stdout":"a\nb\n","exitCode":0,"quiet":true}
+{"id":"parsing-052","script":"echo $'\\'quoted\\''","stdout":"'quoted'\n","exitCode":0,"quiet":true}
+{"id":"parsing-053","script":"echo ${#}","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"parsing-054","script":"echo \"\\$(not a sub)\"","stdout":"$(not a sub)\n","exitCode":0,"quiet":true}
+{"id":"parsing-055","script":"echo $'a\\x00b' | od -c | head -1","stdout":"0000000   a  \\n\n","exitCode":0,"quiet":true}
+{"id":"parsing-056","script":"x=5;y=6;echo $x$y","stdout":"56\n","exitCode":0,"quiet":true}
+{"id":"parsing-057","script":"declare x=1 y=\"2 3\"; echo \"$x $y\"","stdout":"1 2 3\n","exitCode":0,"quiet":true}
+{"id":"parsing-058","script":"readonly c=3; echo $c","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"parsing-059","script":"export X=1; env | grep -c '^X=1$'","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"parsing-060","script":"echo $(( (1 + 2) * 3 ))","stdout":"9\n","exitCode":0,"quiet":true}
+{"id":"parsing-061","script":"((x = 2 + 3)); echo $x","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"parsing-062","script":"echo $((x=7)); echo $x","stdout":"7\n7\n","exitCode":0,"quiet":true}
+{"id":"parsing-063","script":"echo \"a\nb\" | wc -l","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"parsing-064","script":"echo foo > /dev/null && echo yes","stdout":"yes\n","exitCode":0,"quiet":true}
+{"id":"parsing-065","script":"done","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-066","script":"echo )","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-067","script":"if; then :; fi","stdout":"","exitCode":2,"quiet":false}
+{"id":"parsing-068","script":"for ; do :; done","stdout":"","exitCode":2,"quiet":false}

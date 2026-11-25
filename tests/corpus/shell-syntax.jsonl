@@ -1,0 +1,20 @@
+{"id":"shell-syntax-001","script":"echo hello world","stdout":"hello world\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-002","script":"echo 'single $HOME' \"double $USER\"","stdout":"single $HOME double agent\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-003","script":"echo a\\ b \"c\\\"d\"","stdout":"a b c\"d\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-004","script":"echo -n hi","stdout":"hi","exitCode":0,"quiet":null}
+{"id":"shell-syntax-005","script":"echo -e 'a\\tb'","stdout":"a\tb\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-006","script":"X=5; echo $X ${X} \"${MISSING:-dflt}\"","stdout":"5 5 dflt\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-007","script":"echo $(echo inner) `echo tick`","stdout":"inner tick\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-008","script":"echo \"$(printf 'a  b')\"","stdout":"a  b\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-009","script":"true && echo yes || echo no","stdout":"yes\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-010","script":"false && echo yes || echo no","stdout":"no\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-011","script":"false; echo $?","stdout":"1\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-012","script":"! false && echo negated","stdout":"negated\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-013","script":"printf '%s=%03d\\n' a 7 b 42","stdout":"a=007\nb=042\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-014","script":"echo one # a comment","stdout":"one\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-015","script":"{ echo a; echo b; } | wc -l","stdout":"2\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-016","script":"(cd /tmp && pwd); pwd","stdout":"/tmp\n/tmp/w\n","exitCode":0,"quiet":null,"notes":"was run from the home directory in ShellTests; corpus cases start in /tmp/w"}
+{"id":"shell-syntax-017","script":"echo ~ ~/x","stdout":"/home/agent /home/agent/x\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-018","script":"A=1 env | grep '^A='; echo \"[$A]\"","stdout":"A=1\n[]\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-019","script":"bash -c 'echo from bash'","stdout":"from bash\n","exitCode":0,"quiet":null}
+{"id":"shell-syntax-020","script":"[ 3 -gt 2 ] && test -d /tmp && echo ok","stdout":"ok\n","exitCode":0,"quiet":null}

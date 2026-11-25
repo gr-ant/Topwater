@@ -1,0 +1,53 @@
+{"id":"arithmetic-001","script":"echo $(( 2 + 3 * 4 )) $(( (2+3)*4 )) $(( 7 / 2 )) $(( -7 / 2 )) $(( 7 % 3 )) $(( -7 % 3 )) $(( 2 ** 10 ))","stdout":"14 20 3 -3 1 -1 1024\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-002","script":"echo $(( 1 << 4 )) $(( 256 >> 2 )) $(( 5 & 3 )) $(( 5 | 3 )) $(( 5 ^ 3 )) $(( ~5 )) $(( !5 )) $(( !0 ))","stdout":"16 64 1 7 6 -6 0 1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-003","script":"echo $(( 3 > 2 )) $(( 3 < 2 )) $(( 3 >= 3 )) $(( 3 <= 2 )) $(( 3 == 3 )) $(( 3 != 3 )) $(( 1 && 0 )) $(( 1 || 0 ))","stdout":"1 0 1 0 1 0 0 1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-004","script":"x=5; echo $(( x > 3 ? 10 : 20 )) $(( x < 3 ? 10 : x < 6 ? 30 : 40 ))","stdout":"10 30\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-005","script":"x=1; echo $(( x += 2, x * 10 )); echo $x","stdout":"30\n3\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-006","script":"x=10; (( x -= 3 )); (( x *= 2 )); (( x /= 3 )); (( x %= 3 )); echo $x; (( x <<= 3 )); (( x |= 1 )); echo $x","stdout":"1\n9\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-007","script":"i=5; echo $(( i++ )) $i $(( ++i )) $i $(( i-- )) $(( --i )) $i","stdout":"5 6 7 7 7 5 5\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-008","script":"a=3 b=4; echo $(( a*b )) $(( $a*$b )) $((a+b))","stdout":"12 12 7\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-009","script":"x=y; y=z; z=7; echo $(( x + 1 ))","stdout":"8\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-010","script":"x=\"3 + 4\"; echo $(( x * 2 )) $(( $x * 2 ))","stdout":"14 11\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-011","script":"(( 0 )); echo $?; (( 5 )); echo $?; (( x = 0 )); echo $?","stdout":"1\n0\n1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-012","script":"let x=5+3 y=x*2; echo $x $y; let \"z = 1 << 3\"; echo $z; let 0; echo $?","stdout":"8 16\n8\n1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-013","script":"echo $(( $(echo 3) + ${#PWD} * 0 ))","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-014","script":"echo $(( 1 / 0 )); echo after","stdout":"","exitCode":1,"quiet":false}
+{"id":"arithmetic-015","script":"x=0; (( 5 / x )); echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"arithmetic-016","script":"echo $(( 9223372036854775807 + 1 )) $(( 2 ** 63 )) $(( -9223372036854775808 / -1 ))","stdout":"-9223372036854775808 -9223372036854775808 -9223372036854775808\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-017","script":"echo $(( 010 )) $(( 08 ))","stdout":"","exitCode":1,"quiet":false}
+{"id":"arithmetic-018","script":"echo $(( 0x10 + 0X0a + 8#17 + 2#1111 ))","stdout":"56\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-019","script":"n=; echo $(( n + 1 )); unset m; echo $(( m * 2 ))","stdout":"1\n0\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-020","script":"echo $((  5  ))  $(( -5 )) $(( +5 )) $(( - -5 )) $(( 5--3 ))","stdout":"5 -5 5 5 8\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-021","script":"for ((i=0, j=10; i<3; i++, j--)); do echo \"$i $j\"; done","stdout":"0 10\n1 9\n2 8\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-022","script":"for ((;;)); do echo once; break; done","stdout":"once\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-023","script":"for (( i = 3 ; i > 0 ; i-- )); do printf '%d ' $i; done; echo","stdout":"3 2 1 \n","exitCode":0,"quiet":true}
+{"id":"arithmetic-024","script":"x=5; (( x++ )) && echo yes; y=0; (( y++ )) || echo \"zero then $y\"","stdout":"yes\nzero then 1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-025","script":"r=$RANDOM; (( r >= 0 && r < 32768 )) && echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-026","script":"echo $(( 2**3**2 )) $(( -2**2 )) $(( (-2)**2 ))","stdout":"512 4 4\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-027","script":"x=4; echo $(( x**2 )) $(( x<<1 )) $(( x>>1 ))","stdout":"16 8 2\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-028","script":"echo $(( 1, 2, 3 ))","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-029","script":"echo $(( 2 ** -1 ))","stdout":"","exitCode":1,"quiet":false}
+{"id":"arithmetic-030","script":"echo $(( 1 + ))","stdout":"","exitCode":1,"quiet":false}
+{"id":"arithmetic-031","script":"echo $(( abc ))","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-032","script":"x=5; echo $(( x = x * 2 + 1 )) $x","stdout":"11 11\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-033","script":"a=1; b=2; (( a < b )) && echo less; (( a == 1 && b == 2 )) && echo both","stdout":"less\nboth\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-034","script":"n=10; while (( n > 7 )); do echo $n; (( n-- )); done","stdout":"10\n9\n8\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-035","script":"total=0; for n in 1 2 3; do total=$((total + n)); done; echo $total","stdout":"6\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-036","script":"x=12; echo $(( x % 5 == 2 ))","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-037","script":"echo $(( 7 / -2 )) $(( 7 % -2 ))","stdout":"-3 1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-038","script":"pct=$(( 100 * 3 / 7 )); echo \"$pct%\"","stdout":"42%\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-039","script":"echo $(( 0 ? 1 : 0 ? 2 : 3 ))","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-040","script":"x=3; echo $(( x == 3 ? x++ : x-- )) $x","stdout":"3 4\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-041","script":"echo $(( 1 && 0 || 1 )) $(( 1 | 2 ^ 3 & 4 ))","stdout":"1 3\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-042","script":"echo $(( 'a' ))","stdout":"","exitCode":1,"quiet":false}
+{"id":"arithmetic-043","script":"x=010; echo $(( x + 1 ))","stdout":"9\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-044","script":"x=1e3; echo $(( x ))","stdout":"","exitCode":1,"quiet":false}
+{"id":"arithmetic-045","script":"declare -i i=0; i+=5; i=i*2; echo $i","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-046","script":"echo $(( 16#FF )) $(( 16#ff )) $(( 36#Z ))","stdout":"255 255 35\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-047","script":"echo $(( 3 > 2 > 1 ))","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-048","script":"v=$(( 1 + 2 )); echo \"$v\" $(( v ))","stdout":"3 3\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-049","script":"echo $(( ${#PWD} > 0 ))","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-050","script":"echo $((x=3, y=x+1, x*y))","stdout":"12\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-051","script":"let i++; echo $i; let ++i; echo $i","stdout":"1\n2\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-052","script":"let 'x = 2 * (3 + 4)'; echo $x","stdout":"14\n","exitCode":0,"quiet":true}
+{"id":"arithmetic-053","script":"(( big = 1 << 62 )); echo $big","stdout":"4611686018427387904\n","exitCode":0,"quiet":true}

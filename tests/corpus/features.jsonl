@@ -1,0 +1,118 @@
+{"id":"features-001","script":"a=(1 2 3); unset 'a[${#a[@]}-1]'; echo \"${a[@]}\"; i=0; unset \"a[$i]\"; echo \"${a[@]}\"","stdout":"1 2\n2\n","exitCode":0,"quiet":true}
+{"id":"features-002","script":"declare -n ref=target; target=5; echo $ref; ref=6; echo $target; echo ${!ref}","stdout":"5\n6\ntarget\n","exitCode":0,"quiet":true}
+{"id":"features-003","script":"f() { local -n arr_ref=$1; arr_ref[1]=changed; echo \"${#arr_ref[@]}\"; }; data=(a b c); f data; echo \"${data[1]}\"","stdout":"3\nchanged\n","exitCode":0,"quiet":true}
+{"id":"features-004","script":"f() { local -n m=$1; m[key]=val; }; declare -A cfg; f cfg; echo \"${cfg[key]}\"","stdout":"val\n","exitCode":0,"quiet":true}
+{"id":"features-005","script":"x=10; y=20; for v in x y; do echo \"$v=${!v}\"; done","stdout":"x=10\ny=20\n","exitCode":0,"quiet":true}
+{"id":"features-006","script":"pre_one=1 pre_two=2; for n in ${!pre_@}; do echo \"$n\"; done","stdout":"pre_one\npre_two\n","exitCode":0,"quiet":true}
+{"id":"features-007","script":"a=(x y); echo \"${!a[*]}\"; declare -A h=([k1]=v [k2]=w); echo \"${#h[*]}\"","stdout":"0 1\n2\n","exitCode":0,"quiet":true}
+{"id":"features-008","script":"v='a \"quoted\" $var'; echo \"${v@Q}\"; eval \"w=${v@Q}\"; [[ $w == \"$v\" ]] && echo roundtrip","stdout":"'a \"quoted\" $var'\nroundtrip\n","exitCode":0,"quiet":true}
+{"id":"features-009","script":"v=$'tab\\there'; echo \"${v@Q}\"","stdout":"$'tab\\there'\n","exitCode":0,"quiet":true}
+{"id":"features-010","script":"declare -i n=5; echo \"${n@a}\"; arr=(1); echo \"${arr@a}\"; declare -A m; echo \"${m@a}\"","stdout":"i\na\nA\n","exitCode":0,"quiet":true}
+{"id":"features-011","script":"x=val; echo \"${x@A}\"","stdout":"x='val'\n","exitCode":0,"quiet":true}
+{"id":"features-012","script":"s=hello; echo \"${s@u}\" \"${s^}\"","stdout":"Hello Hello\n","exitCode":0,"quiet":true}
+{"id":"features-013","script":"printf '%s\\n' \"${undef@Q}\" end","stdout":"\nend\n","exitCode":0,"quiet":true}
+{"id":"features-014","script":"declare -p PWD | cut -c1-12","stdout":"declare -x P\n","exitCode":0,"quiet":true}
+{"id":"features-015","script":"declare -r CONST=1; declare -p CONST","stdout":"declare -r CONST=\"1\"\n","exitCode":0,"quiet":true}
+{"id":"features-016","script":"declare -x -i num=3; declare -p num","stdout":"declare -ix num=\"3\"\n","exitCode":0,"quiet":true}
+{"id":"features-017","script":"declare -A m=([\"with space\"]=1 [plain]=2); declare -p m | grep -o '\\[\"with space\"\\]=\"1\"'","stdout":"[\"with space\"]=\"1\"\n","exitCode":0,"quiet":true}
+{"id":"features-018","script":"a=(); declare -p a","stdout":"declare -a a=()\n","exitCode":0,"quiet":true}
+{"id":"features-019","script":"s=$(declare -p HOME); eval \"$s\"; echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"features-020","script":"f() { local x=1; declare -p x; }; f","stdout":"declare -- x=\"1\"\n","exitCode":0,"quiet":true}
+{"id":"features-021","script":"declare -f nope; echo $?","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"features-022","script":"greet() { echo hi; }; eval \"$(declare -f greet | sed 's/greet/hello/')\"; hello","stdout":"hi\n","exitCode":0,"quiet":true}
+{"id":"features-023","script":"declare -F greet 2>/dev/null; echo $?; greet() { :; }; declare -F greet","stdout":"1\ngreet\n","exitCode":0,"quiet":true}
+{"id":"features-024","script":"type -t greet 2>/dev/null; echo \"rc $?\"","stdout":"rc 1\n","exitCode":0,"quiet":true}
+{"id":"features-025","script":"f() { echo \"line $LINENO\"; }\nf\necho \"line $LINENO\"","stdout":"line 1\nline 3\n","exitCode":0,"quiet":true}
+{"id":"features-026","script":"outer() { inner; }; inner() { echo \"${FUNCNAME[0]} <- ${FUNCNAME[1]}\"; }; outer","stdout":"inner <- outer\n","exitCode":0,"quiet":true}
+{"id":"features-027","script":"false | true; echo \"${PIPESTATUS[@]}\"; true | false; echo \"${PIPESTATUS[1]} $?\"","stdout":"1 0\n1 1\n","exitCode":0,"quiet":true}
+{"id":"features-028","script":"set -o pipefail; false | true | true; echo $?; set +o pipefail; false | true; echo $?","stdout":"1\n0\n","exitCode":0,"quiet":true}
+{"id":"features-029","script":"trap 'echo trap: $?' ERR; f() { return 3; }; f; echo after","stdout":"trap: 3\nafter\n","exitCode":0,"quiet":true}
+{"id":"features-030","script":"set -e; trap 'echo \"failed at $LINENO\"' ERR; true; false; echo never","stdout":"failed at 1\n","exitCode":1,"quiet":true}
+{"id":"features-031","script":"f() { trap 'echo leaving f' RETURN; echo in f; }; f; f2() { echo in f2; }; f2","stdout":"in f\nleaving f\nin f2\n","exitCode":0,"quiet":true}
+{"id":"features-032","script":"trap \"echo 'quoted' \\\"x\\\"\" EXIT","stdout":"quoted x\n","exitCode":0,"quiet":true}
+{"id":"features-033","script":"case \"$1\" in \"\") echo none;; *) echo some;; esac","stdout":"none\n","exitCode":0,"quiet":true}
+{"id":"features-034","script":"case abc in a*) echo 1;& b*) echo 2;& c*) echo 3;; *) echo 4;; esac","stdout":"1\n2\n3\n","exitCode":0,"quiet":true}
+{"id":"features-035","script":"x=foo; case $x in f*) echo f;;& *o) echo o;;& *z) echo z;; esac","stdout":"f\no\n","exitCode":0,"quiet":true}
+{"id":"features-036","script":"shopt -s extglob\nx=report-2024.csv\ncase $x in\n  *.@(csv|tsv)) echo table ;;\nesac\n[[ $x == !(*.txt) ]] && echo not-txt\necho ${x%%@(.csv|.tsv)}","stdout":"table\nnot-txt\nreport-2024\n","exitCode":0,"quiet":true}
+{"id":"features-037","script":"shopt -s extglob\ntouch a.txt b.md c.sh\necho !(*.txt)\necho *.@(md|sh)\necho +(a|b).*","stdout":"b.md c.sh\nb.md c.sh\na.txt b.md\n","exitCode":0,"quiet":true}
+{"id":"features-038","script":"shopt -s nocasematch; [[ YES == yes ]] && echo y; shopt -u nocasematch; [[ YES == yes ]] || echo n","stdout":"y\nn\n","exitCode":0,"quiet":true}
+{"id":"features-039","script":"touch File.TXT; shopt -s nocaseglob; echo *.txt","stdout":"File.TXT\n","exitCode":0,"quiet":true}
+{"id":"features-040","script":"[[ \"  x\" =~ ^[[:space:]]+([[:alpha:]]) ]] && echo \"${BASH_REMATCH[1]}\"","stdout":"x\n","exitCode":0,"quiet":true}
+{"id":"features-041","script":"[[ abc123 == *[[:digit:]]* ]] && echo has-digit; case Z in [[:upper:]]) echo upper;; esac","stdout":"has-digit\nupper\n","exitCode":0,"quiet":true}
+{"id":"features-042","script":"echo {a,b}-{1..2}; x=y; echo {$x,z}.txt; echo {a..e..2}","stdout":"a-1 a-2 b-1 b-2\ny.txt z.txt\na c e\n","exitCode":0,"quiet":true}
+{"id":"features-043","script":"echo a{,}b; echo {1..3}{,}","stdout":"ab ab\n1 1 2 2 3 3\n","exitCode":0,"quiet":true}
+{"id":"features-044","script":"echo $(( 0x7fffffffffffffff + 1 < 0 ))","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"features-045","script":"a=(1 2 3); (( a[1] *= 10, a[2]-- )); echo \"${a[@]}\"","stdout":"1 20 2\n","exitCode":0,"quiet":true}
+{"id":"features-046","script":"declare -A c; for w in x y x; do (( c[$w] += 1 )); done; echo \"${c[x]} ${c[y]}\"","stdout":"2 1\n","exitCode":0,"quiet":true}
+{"id":"features-047","script":"i=0; a=(); while (( i < 3 )); do a[i++]=$((i*i)); done; echo \"${a[@]}\"","stdout":"0 1 4\n","exitCode":0,"quiet":true}
+{"id":"features-048","script":"a=(5 6 7); echo $(( a[0] + a[a[0]-4] ))","stdout":"11\n","exitCode":0,"quiet":true}
+{"id":"features-049","script":"n=3; echo $(( n > 2 ? a=1 : 0 )) ; echo $a","stdout":"1\n1\n","exitCode":0,"quiet":true}
+{"id":"features-050","script":"read -r -n 1 c <<< \"xyz\"; echo \"$c\"","stdout":"x\n","exitCode":0,"quiet":true}
+{"id":"features-051","script":"printf 'a b\\nc d\\n' | while read -r first rest; do echo \"$first:$rest\"; done","stdout":"a:b\nc:d\n","exitCode":0,"quiet":true}
+{"id":"features-052","script":"read -r -a words -d '' <<< \"w1 w2\nw3\"; echo \"${#words[@]}\"","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"features-053","script":"while IFS='=' read -r k v; do echo \"$k -> $v\"; done <<< $'a=1\\nb=2=3'","stdout":"a -> 1\nb -> 2=3\n","exitCode":0,"quiet":true}
+{"id":"features-054","script":"IFS=: read -r -a path <<< \"/usr/bin:/bin:\"; echo \"${#path[@]} ${path[1]}\"","stdout":"2 /bin\n","exitCode":0,"quiet":true}
+{"id":"features-055","script":"mapfile -t lines < <(printf 'x\\ny\\nz\\n'); echo \"${#lines[@]} ${lines[-1]}\"","stdout":"3 z\n","exitCode":0,"quiet":true}
+{"id":"features-056","script":"printf '%3d|%-3d|%03d\\n' 5 5 5; printf '%x %o %e\\n' 255 8 1000","stdout":"  5|5  |005\nff 10 1.000000e+03\n","exitCode":0,"quiet":true}
+{"id":"features-057","script":"printf '%s and %s\\n' 1 2 3; printf '[%5.2s]\\n' abcdef","stdout":"1 and 2\n3 and \n[   ab]\n","exitCode":0,"quiet":true}
+{"id":"features-058","script":"printf -v x '%s-%s' a b; echo \"$x\"; printf -v 'y' '%d' 42; echo $y","stdout":"a-b\n42\n","exitCode":0,"quiet":true}
+{"id":"features-059","script":"printf '%c' A B C; echo","stdout":"ABC\n","exitCode":0,"quiet":true}
+{"id":"features-060","script":"printf '%q ' 'a b' \"c'd\" 'e$f'; echo","stdout":"a\\ b c\\'d e\\$f \n","exitCode":0,"quiet":true}
+{"id":"features-061","script":"echo -e \"a\\x20b\\101\"; echo -n a; echo -n b; echo","stdout":"a b\\101\nab\n","exitCode":0,"quiet":true}
+{"id":"features-062","script":"x=$(printf '%s' \"no newline\"); echo \"[$x]\"","stdout":"[no newline]\n","exitCode":0,"quiet":true}
+{"id":"features-063","script":"exec 3<<'EOF'\nfirst\nsecond\nEOF\nread -u 3 a; read -u 3 b; echo \"$a|$b\"","stdout":"first|second\n","exitCode":0,"quiet":true}
+{"id":"features-064","script":"exec 4>&1; echo \"via 4\" >&4; exec 4>&-","stdout":"via 4\n","exitCode":0,"quiet":true}
+{"id":"features-065","script":"{ echo out; echo err >&2; } 3>&1 1>&2 2>&3 | tr a-z A-Z","stdout":"ERR\n","exitCode":0,"quiet":false}
+{"id":"features-066","script":"exec 2>&1; echo err-to-out >&2","stdout":"err-to-out\n","exitCode":0,"quiet":true}
+{"id":"features-067","script":"f() { echo \"in f\"; return 0; }; out=$(f); echo \"[$out]\"","stdout":"[in f]\n","exitCode":0,"quiet":true}
+{"id":"features-068","script":"echo $(( $(echo 6) * 7 ))","stdout":"42\n","exitCode":0,"quiet":true}
+{"id":"features-069","script":"set -- a b c; echo \"${@:2:1}\" \"${@: -2}\" \"${#@}\"","stdout":"b b c 3\n","exitCode":0,"quiet":true}
+{"id":"features-070","script":"set -- \"x y\" z; IFS=-; echo \"$*\"; echo \"${*}\"; unset IFS","stdout":"x y-z\nx y-z\n","exitCode":0,"quiet":true}
+{"id":"features-071","script":"set -- 1 2 3; shift; echo \"$@\"; set -- \"$@\" 4; echo \"$#\"","stdout":"2 3\n3\n","exitCode":0,"quiet":true}
+{"id":"features-072","script":"arr=(a b); set -- \"${arr[@]}\" c; echo $#","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"features-073","script":"v=abc; echo ${v:1:1} ${v: -1} ${v:0:-1} ${v::1}","stdout":"b c ab a\n","exitCode":0,"quiet":true}
+{"id":"features-074","script":"v=hello; echo \"${v/l/L}\" \"${v//l/L}\" \"${v/#h/H}\" \"${v/%o/O}\" \"${v/l*/X}\"","stdout":"heLlo heLLo Hello hellO heX\n","exitCode":0,"quiet":true}
+{"id":"features-075","script":"p=/a/b/c.txt; echo \"${p##*/}\" \"${p%/*}\" \"${p##*.}\" \"$(basename \"$p\" .txt)\"","stdout":"c.txt /a/b txt c\n","exitCode":0,"quiet":true}
+{"id":"features-076","script":"v=x; echo \"${v:-}\" \"${v:+y}\" \"${u:-def}\" \"${u-def2}\" \"${u:+no}\"","stdout":"x y def def2 \n","exitCode":0,"quiet":true}
+{"id":"features-077","script":"s=\"a.b.c\"; IFS=. read -r -a parts <<< \"$s\"; echo \"${parts[*]}\" \"${#parts[@]}\"","stdout":"a b c 3\n","exitCode":0,"quiet":true}
+{"id":"features-078","script":"str=abc; for ((i=${#str}-1; i>=0; i--)); do printf %s \"${str:i:1}\"; done; echo","stdout":"cba\n","exitCode":0,"quiet":true}
+{"id":"features-079","script":"x=5; let \"x += 2\" \"x *= 3\"; echo $x","stdout":"21\n","exitCode":0,"quiet":true}
+{"id":"features-080","script":"echo $((RANDOM % 1)) $(( $RANDOM >= 0 ))","stdout":"0 1\n","exitCode":0,"quiet":true}
+{"id":"features-081","script":"f() { return 7; }; f; r=$?; echo $r; f || echo \"failed with $?\"","stdout":"7\nfailed with 7\n","exitCode":0,"quiet":true}
+{"id":"features-082","script":"false; echo \"$? $?\"; true; [ $? -eq 0 ] && echo zero","stdout":"1 1\nzero\n","exitCode":0,"quiet":true}
+{"id":"features-083","script":"x=a; [[ $x == a ]] && [[ $x != b ]] && echo both; [ \"$x\" = a -a \"$x\" != b ] && echo both2","stdout":"both\nboth2\n","exitCode":0,"quiet":true}
+{"id":"features-084","script":"[[ -v HOME ]] && echo home-set; [[ -v NOPE ]] || echo nope-unset; arr=(1); [[ -v arr[0] ]] && echo elem","stdout":"home-set\nnope-unset\nelem\n","exitCode":0,"quiet":true}
+{"id":"features-085","script":"test -v HOME && echo t1; [ -v NOPE ] || echo t2","stdout":"t1\nt2\n","exitCode":0,"quiet":true}
+{"id":"features-086","script":"[[ -o pipefail ]] || echo off; set -o pipefail; [[ -o pipefail ]] && echo on","stdout":"off\non\n","exitCode":0,"quiet":true}
+{"id":"features-087","script":"echo $- | grep -q e || echo no-e; set -e; echo $- | grep -q e && echo has-e","stdout":"no-e\nhas-e\n","exitCode":0,"quiet":true}
+{"id":"features-088","script":"true; echo $_; echo a b c; echo $_","stdout":"true\na b c\nc\n","exitCode":0,"quiet":true}
+{"id":"features-089","script":"x=1; readonly x; x=2; echo after","stdout":"","exitCode":1,"quiet":false}
+{"id":"features-090","script":"unset -v nosuch; echo $?; f() { :; }; unset f; type f 2>/dev/null || echo fn-gone","stdout":"0\nfn-gone\n","exitCode":0,"quiet":true}
+{"id":"features-091","script":"local_test() { local v=\"inner\"; echo \"$v\"; }; v=outer; local_test; echo \"$v\"","stdout":"inner\nouter\n","exitCode":0,"quiet":true}
+{"id":"features-092","script":"f() { local a=1; g; echo \"f sees $a\"; }; g() { a=2; }; f","stdout":"f sees 2\n","exitCode":0,"quiet":true}
+{"id":"features-093","script":"counter=0; inc() { (( counter++ )); }; inc; inc; echo $counter","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"features-094","script":"echo \"a\" > f.txt; [[ -s f.txt ]] && echo nonempty; [[ f.txt -nt nope ]] && echo newer","stdout":"nonempty\nnewer\n","exitCode":0,"quiet":true}
+{"id":"features-095","script":"x=010; echo $((x)) $((10#$x)); y=0x10; echo $((y))","stdout":"8 10\n16\n","exitCode":0,"quiet":true}
+{"id":"features-096","script":"pushd / >/dev/null; pwd; popd >/dev/null; [[ $PWD == /tmp/* ]] && echo back","stdout":"/\nback\n","exitCode":0,"quiet":true}
+{"id":"features-097","script":"dirs -c; dirs | grep -c /","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"features-098","script":"hash nosuchcmd 2>/dev/null; echo $?","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"features-099","script":"command echo via-command; builtin echo via-builtin","stdout":"via-command\nvia-builtin\n","exitCode":0,"quiet":true}
+{"id":"features-100","script":"cd() { builtin cd \"$@\" && echo \"now in $PWD\"; }; cd /","stdout":"now in /\n","exitCode":0,"quiet":true}
+{"id":"features-101","script":"ls() { command ls -d \"$@\"; }; ls /tmp","stdout":"/tmp\n","exitCode":0,"quiet":true}
+{"id":"features-102","script":"echo \"${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}\" \"${BASH_VERSION%%.*}\"","stdout":"5.2 5\n","exitCode":0,"quiet":true}
+{"id":"features-103","script":"kill -0 $$ && echo alive","stdout":"alive\n","exitCode":0,"quiet":true}
+{"id":"features-104","script":"wait; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":true}
+{"id":"features-105","script":"true & false & wait; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":true}
+{"id":"features-106","script":"x=0; x=1 & wait; echo $x","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"features-107","script":"cat <<< \"$(declare -p HOME | cut -d' ' -f1-2)\"","stdout":"declare -x\n","exitCode":0,"quiet":true}
+{"id":"features-108","script":"set -u; arr=(); echo \"${#arr[@]}\"; echo \"${arr[@]:-empty}\"","stdout":"0\nempty\n","exitCode":0,"quiet":true}
+{"id":"features-109","script":"set -u; declare -A m; echo \"${m[nokey]:-none}\"","stdout":"none\n","exitCode":0,"quiet":true}
+{"id":"features-110","script":"set -u; echo \"${1:-noarg}\"; echo \"$#\"","stdout":"noarg\n0\n","exitCode":0,"quiet":true}
+{"id":"features-111","script":"IFS=, ; set -- $(echo \"a,b,c\"); echo $#; unset IFS","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"features-112","script":"old=$IFS; IFS=,; IFS=$old; s=\"a b\"; set -- $s; echo $#","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"features-113","script":"f() { local IFS=,; echo \"$*\"; }; f x y z; echo \"$*\" \"[$IFS]\" | od -c | head -1 | wc -l","stdout":"x,y,z\n1\n","exitCode":0,"quiet":true}
+{"id":"features-114","script":"x=\"a b\"; y=$x; echo \"$y\"; z=\"$x c\"; echo $z","stdout":"a b\na b c\n","exitCode":0,"quiet":true}
+{"id":"features-115","script":"echo ${#} ${#*} ${#@}; set -- a; echo ${#}","stdout":"0 0 0\n1\n","exitCode":0,"quiet":true}
+{"id":"features-116","script":"a=1; b=; c=${a:+${b:-fallback}}; echo $c","stdout":"fallback\n","exitCode":0,"quiet":true}
+{"id":"features-117","script":"echo \"${HOME/#$HOME/~}\"","stdout":"/home/agent\n","exitCode":0,"quiet":true}
+{"id":"features-118","script":"f=\"dir/sub/file.tar.gz\"; echo \"${f%%/*}\" \"${f#*/}\" \"${f%.*.*}\"","stdout":"dir sub/file.tar.gz dir/sub/file\n","exitCode":0,"quiet":true}

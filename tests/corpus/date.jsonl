@@ -1,0 +1,52 @@
+{"id":"date-001","script":"date -u -d '2026-11-20' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-002","script":"date -u -d '2026-11-20 10:00' '+%F %T %s'","stdout":"2026-11-20 10:00:00 1795168800\n","exitCode":0,"quiet":true}
+{"id":"date-003","script":"date -u -d '2026-11-20 10:00:00 UTC' '+%F %T %s'","stdout":"2026-11-20 10:00:00 1795168800\n","exitCode":0,"quiet":true}
+{"id":"date-004","script":"date -u -d '2026-11-20T11:07:15+0100' '+%F %T %s'","stdout":"2026-11-20 10:07:15 1795169235\n","exitCode":0,"quiet":true}
+{"id":"date-005","script":"date -u -d '2026-11-20T11:07:15+01:00' '+%F %T %s'","stdout":"2026-11-20 10:07:15 1795169235\n","exitCode":0,"quiet":true}
+{"id":"date-006","script":"date -u -d '2026-11-20T11:07:15 +0100' '+%F %T %s'","stdout":"2026-11-20 10:07:15 1795169235\n","exitCode":0,"quiet":true}
+{"id":"date-007","script":"date -u -d '2026-11-20 11:07:15 +0100' '+%F %T %s'","stdout":"2026-11-20 10:07:15 1795169235\n","exitCode":0,"quiet":true}
+{"id":"date-008","script":"date -u -d '2026-11-20T10:00:00Z' '+%F %T %s'","stdout":"2026-11-20 10:00:00 1795168800\n","exitCode":0,"quiet":true}
+{"id":"date-009","script":"date -u -d '2026-11-20T10:00:00.250Z' '+%F %T %s'","stdout":"2026-11-20 10:00:00 1795168800\n","exitCode":0,"quiet":true}
+{"id":"date-010","script":"date -u -d '2026-11-20 10:00 -0530' '+%F %T %s'","stdout":"2026-11-20 15:30:00 1795188600\n","exitCode":0,"quiet":true}
+{"id":"date-011","script":"date -u -d '20 Nov 2026' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-012","script":"date -u -d '20 Nov 2026 13:30:00 +0000' '+%F %T %s'","stdout":"2026-11-20 13:30:00 1795181400\n","exitCode":0,"quiet":true}
+{"id":"date-013","script":"date -u -d '20 Nov 2026 11:07:15 +0100' '+%F %T %s'","stdout":"2026-11-20 10:07:15 1795169235\n","exitCode":0,"quiet":true}
+{"id":"date-014","script":"date -u -d '20 November 2026 1:30pm' '+%F %T %s'","stdout":"2026-11-20 13:30:00 1795181400\n","exitCode":0,"quiet":true}
+{"id":"date-015","script":"date -u -d '20-Nov-2026' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-016","script":"date -u -d 'Nov 20 2026 11:07' '+%F %T %s'","stdout":"2026-11-20 11:07:00 1795172820\n","exitCode":0,"quiet":true}
+{"id":"date-017","script":"date -u -d 'Nov 20, 2026' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-018","script":"date -u -d 'November 20, 2026 5:45 PM' '+%F %T %s'","stdout":"2026-11-20 17:45:00 1795196700\n","exitCode":0,"quiet":true}
+{"id":"date-019","script":"date -u -d 'Fri, 20 Nov 2026 13:30:00 +0000' '+%F %T %s'","stdout":"2026-11-20 13:30:00 1795181400\n","exitCode":0,"quiet":true}
+{"id":"date-020","script":"date -u -d 'Fri Nov 20 13:30:00 UTC 2026' '+%F %T %s'","stdout":"2026-11-20 13:30:00 1795181400\n","exitCode":0,"quiet":true}
+{"id":"date-021","script":"date -u -d 'Friday 2026-11-20' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-022","script":"date -u -d 'Mon 2026-11-16' '+%F %T %s'","stdout":"2026-11-16 00:00:00 1794787200\n","exitCode":0,"quiet":true}
+{"id":"date-023","script":"date -u -d '11/20/2026' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-024","script":"date -u -d '11/20/26' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-025","script":"date -u -d '11/20/69 08:00' '+%F %T %s'","stdout":"1969-11-20 08:00:00 -3600000\n","exitCode":0,"quiet":true}
+{"id":"date-026","script":"date -u -d '20261120' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-027","script":"date -u -d '2026-11-20 13:30 EST' '+%F %T %s'","stdout":"2026-11-20 18:30:00 1795199400\n","exitCode":0,"quiet":true}
+{"id":"date-028","script":"date -u -d '2026-11-20 13:30 PDT' '+%F %T %s'","stdout":"2026-11-20 20:30:00 1795206600\n","exitCode":0,"quiet":true}
+{"id":"date-029","script":"date -u -d '2026-11-20 13:30 UTC+2' '+%F %T %s'","stdout":"2026-11-20 11:30:00 1795174200\n","exitCode":0,"quiet":true}
+{"id":"date-030","script":"date -u -d '2026-11-20 13:30 GMT-5' '+%F %T %s'","stdout":"2026-11-20 18:30:00 1795199400\n","exitCode":0,"quiet":true}
+{"id":"date-031","script":"date -u -d '2026-11-20 12am' '+%F %T %s'","stdout":"2026-11-20 00:00:00 1795132800\n","exitCode":0,"quiet":true}
+{"id":"date-032","script":"date -u -d '2026-11-20 12pm' '+%F %T %s'","stdout":"2026-11-20 12:00:00 1795176000\n","exitCode":0,"quiet":true}
+{"id":"date-033","script":"date -u -d '2026-11-20 3 days ago' '+%F %T %s'","stdout":"2026-11-17 00:00:00 1794873600\n","exitCode":0,"quiet":true}
+{"id":"date-034","script":"date -u -d '2026-11-20 10:00 +2 hours' '+%F %T %s'","stdout":"2026-11-20 09:00:00 1795165200\n","exitCode":0,"quiet":true}
+{"id":"date-035","script":"date -u -d '2026-11-20 next week' '+%F %T %s'","stdout":"2026-11-27 00:00:00 1795737600\n","exitCode":0,"quiet":true}
+{"id":"date-036","script":"date -u -d '2026-01-31 1 month' '+%F %T %s'","stdout":"2026-03-03 00:00:00 1772496000\n","exitCode":0,"quiet":true}
+{"id":"date-037","script":"date -u -d '2026-11-20 10:00 1 year ago' '+%F %T %s'","stdout":"2025-11-20 10:00:00 1763632800\n","exitCode":0,"quiet":true}
+{"id":"date-038","script":"date -u -d '@1795168800' '+%F %T %s'","stdout":"2026-11-20 10:00:00 1795168800\n","exitCode":0,"quiet":true}
+{"id":"date-039","script":"date -u -d '20/Nov/2026:11:07:15 +0100' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-040","script":"date -u -d '2026-13-01' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-041","script":"date -u -d '2026-02-30' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-042","script":"date -u -d '2026-11-20 25:00' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-043","script":"date -u -d '2026-11-20 13pm' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-044","script":"date -u -d 'Nov 31 2026' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-045","script":"date -u -d 'bogus' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-046","script":"date -u -d '2026-11-20 10:00 10:30' '+%F %T %s'","stdout":"","exitCode":1,"quiet":false}
+{"id":"date-047","script":"date -u -d '2026-11-20 +2 hours' '+%F %T %s'","stdout":"2026-11-20 02:00:00 1795140000\n","exitCode":0,"quiet":true}
+{"id":"date-048","script":"date -u -d '2026-11-20 10:00 -3' '+%F %T %s'","stdout":"2026-11-20 13:00:00 1795179600\n","exitCode":0,"quiet":true}
+{"id":"date-049","script":"date -u -d '2026-11-20 10:00 +0130' '+%F %T %s'","stdout":"2026-11-20 08:30:00 1795163400\n","exitCode":0,"quiet":true}
+{"id":"date-050","script":"date -u -d '2026-11-20 10:00 + 2 hours' '+%F %T %s'","stdout":"2026-11-20 09:00:00 1795165200\n","exitCode":0,"quiet":true}
+{"id":"date-051","script":"date -u -d 'tomorrow 2026-11-20' '+%F %T %s'","stdout":"2026-11-21 00:00:00 1795219200\n","exitCode":0,"quiet":true}
+{"id":"date-052","script":"date -u -d '2026-11-20 last month' '+%F %T %s'","stdout":"2026-10-20 00:00:00 1792454400\n","exitCode":0,"quiet":true}

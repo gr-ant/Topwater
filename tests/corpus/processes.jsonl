@@ -1,0 +1,27 @@
+{"id":"processes-001","script":"x=1; bash -c 'echo \"[$x]\"'; export x; bash -c 'echo \"[$x]\"'","stdout":"[]\n[1]\n","exitCode":0,"quiet":true}
+{"id":"processes-002","script":"Y=2 bash -c 'echo \"$Y\"'; echo \"[${Y-}]\"","stdout":"2\n[]\n","exitCode":0,"quiet":true}
+{"id":"processes-003","script":"f() { echo fn; }; bash -c 'f' 2>/dev/null || echo \"not inherited\"; export -f f; bash -c f","stdout":"not inherited\nfn\n","exitCode":0,"quiet":true}
+{"id":"processes-004","script":"printf 'echo \"0=$0 1=$1 n=$#\"\\n' > s.sh; bash s.sh a b; chmod +x s.sh; ./s.sh c","stdout":"0=s.sh 1=a n=2\n0=./s.sh 1=c n=1\n","exitCode":0,"quiet":true}
+{"id":"processes-005","script":"printf '#!/bin/bash\\necho \"src=${BASH_SOURCE[0]}\"\\n' > t.sh; chmod +x t.sh; ./t.sh; bash t.sh; source t.sh","stdout":"src=./t.sh\nsrc=t.sh\nsrc=t.sh\n","exitCode":0,"quiet":true}
+{"id":"processes-006","script":"mkdir -p proj/bin; printf '#!/bin/bash\\nDIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\\necho \"${DIR##*/}\"\\n' > proj/bin/run.sh; chmod +x proj/bin/run.sh; ./proj/bin/run.sh; bash proj/bin/run.sh","stdout":"bin\nbin\n","exitCode":0,"quiet":true}
+{"id":"processes-007","script":"printf 'echo \"$(basename \"$0\")\"\\n' > named.sh; bash named.sh","stdout":"named.sh\n","exitCode":0,"quiet":true}
+{"id":"processes-008","script":"bash -c 'echo \"$0 $1\"' myname arg1","stdout":"myname arg1\n","exitCode":0,"quiet":true}
+{"id":"processes-009","script":"bash -c 'echo $#' _ a b c","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"processes-010","script":"bash -ec 'false; echo not reached'; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":true}
+{"id":"processes-011","script":"bash -c 'set -o | grep -E \"^errexit\"' | tr -s ' \\t' ' '","stdout":"errexit off\n","exitCode":0,"quiet":true}
+{"id":"processes-012","script":"set -e; bash -c 'false; echo child-continues'; echo \"never\"","stdout":"child-continues\nnever\n","exitCode":0,"quiet":true}
+{"id":"processes-013","script":"bash -euo pipefail -c 'false | true; echo no'; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":true}
+{"id":"processes-014","script":"printf 'set -e\\nfalse\\necho no\\n' > e.sh; bash e.sh; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":true}
+{"id":"processes-015","script":"printf 'exit 7\\n' > x.sh; bash x.sh; echo $?; sh x.sh; echo $?","stdout":"7\n7\n","exitCode":0,"quiet":true}
+{"id":"processes-016","script":"a=(1 2); bash -c 'echo \"${#a[@]}\"'","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"processes-017","script":"alias hi='echo hi'; bash -c 'hi' 2>/dev/null || echo \"alias not inherited\"","stdout":"alias not inherited\n","exitCode":0,"quiet":true}
+{"id":"processes-018","script":"cd /tmp; bash -c 'pwd'","stdout":"/tmp\n","exitCode":0,"quiet":true}
+{"id":"processes-019","script":"printf 'cd /\\n' > c.sh; bash c.sh; pwd | grep -c /tmp","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"processes-020","script":"printf 'v=set_by_script\\n' > v.sh; bash v.sh; echo \"[${v-}]\"; . ./v.sh; echo \"[$v]\"","stdout":"[]\n[set_by_script]\n","exitCode":0,"quiet":true}
+{"id":"processes-021","script":"echo 'echo in-stdin-script' | bash","stdout":"in-stdin-script\n","exitCode":0,"quiet":true}
+{"id":"processes-022","script":"bash <<'EOF'\necho \"heredoc script $0\"\nEOF","stdout":"heredoc script bash\n","exitCode":0,"quiet":true}
+{"id":"processes-023","script":"export PATH_EXTRA=/x; bash -c 'echo $PATH_EXTRA'","stdout":"/x\n","exitCode":0,"quiet":true}
+{"id":"processes-024","script":"readonly R=1; export R; bash -c 'R=2; echo $R'","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"processes-025","script":"f() { echo \"in f: $0\"; }; f","stdout":"in f: bash\n","exitCode":0,"quiet":true}
+{"id":"processes-026","script":"echo \"top: $0\"","stdout":"top: bash\n","exitCode":0,"quiet":true}
+{"id":"processes-027","script":"printf 'f() { echo \"f $0 ${FUNCNAME[0]} ${BASH_SOURCE[0]}\"; }\\nf\\n' > fn.sh; bash fn.sh","stdout":"f fn.sh f fn.sh\n","exitCode":0,"quiet":true}

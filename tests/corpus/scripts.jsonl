@@ -1,0 +1,52 @@
+{"id":"scripts-001","script":"set -euo pipefail\nmain() {\n  local name=\"${1:-world}\"\n  printf 'Hello, %s!\\n' \"$name\"\n}\nmain \"$@\"","stdout":"Hello, world!\n","exitCode":0,"quiet":true}
+{"id":"scripts-002","script":"#!/usr/bin/env bash\nset -e\nusage() { echo \"usage: $0 [-v] file\" >&2; exit 2; }\nverbose=0\nwhile getopts \":vh\" opt; do\n  case \"$opt\" in\n    v) verbose=1 ;;\n    h) usage ;;\n    \\?) echo \"bad option -$OPTARG\" >&2; exit 2 ;;\n  esac\ndone\nshift $((OPTIND - 1))\necho \"verbose=$verbose rest=$#\"","stdout":"verbose=0 rest=0\n","exitCode":0,"quiet":true}
+{"id":"scripts-003","script":"mkdir -p proj/src && cd $_ && pwd | sed 's|.*/proj|proj|'","stdout":"proj/src\n","exitCode":0,"quiet":true}
+{"id":"scripts-004","script":"declare -A config=([host]=localhost [port]=8080)\nfor key in host port; do echo \"$key=${config[$key]}\"; done\necho \"${#config[@]} keys\"","stdout":"host=localhost\nport=8080\n2 keys\n","exitCode":0,"quiet":true}
+{"id":"scripts-005","script":"files=(one.txt two.txt three.log)\ntxt=()\nfor f in \"${files[@]}\"; do [[ $f == *.txt ]] && txt+=(\"$f\"); done\necho \"${#txt[@]}: ${txt[*]}\"","stdout":"2: one.txt two.txt\n","exitCode":0,"quiet":true}
+{"id":"scripts-006","script":"cat > data.csv <<'EOF'\nname,age\nalice,30\nbob,25\nEOF\ntotal=0\nwhile IFS=, read -r name age; do\n  [[ $name == name ]] && continue\n  total=$((total + age))\ndone < data.csv\necho \"total age: $total\"","stdout":"total age: 55\n","exitCode":0,"quiet":true}
+{"id":"scripts-007","script":"retry() { local n=0; until \"$@\"; do n=$((n+1)); [ $n -ge 3 ] && return 1; done; }\nretry false || echo \"gave up\"\nretry true && echo ok","stdout":"gave up\nok\n","exitCode":0,"quiet":true}
+{"id":"scripts-008","script":"trap 'echo \"cleanup\"' EXIT\ntmp=$(mktemp -d)\n[[ -d $tmp ]] && echo made","stdout":"made\ncleanup\n","exitCode":0,"quiet":true}
+{"id":"scripts-009","script":"result=$(echo \"  trim me  \" | xargs); echo \"[$result]\"","stdout":"[trim me]\n","exitCode":0,"quiet":true}
+{"id":"scripts-010","script":"str=\"Hello World\"; echo \"${str,,}\" \"${str^^}\" \"${#str}\" \"${str:0:5}\" \"${str/World/There}\"","stdout":"hello world HELLO WORLD 11 Hello Hello There\n","exitCode":0,"quiet":true}
+{"id":"scripts-011","script":"if [[ \"$(uname -s)\" == \"Linux\" ]]; then echo linux; fi","stdout":"linux\n","exitCode":0,"quiet":true}
+{"id":"scripts-012","script":"json='{\"a\":1}'; [[ $json =~ \\\"a\\\":([0-9]+) ]] && echo \"a=${BASH_REMATCH[1]}\"","stdout":"a=1\n","exitCode":0,"quiet":true}
+{"id":"scripts-013","script":"version=\"1.2.3\"; IFS=. read -r major minor patch <<< \"$version\"; echo \"$major|$minor|$patch\"; echo $((patch + 1))","stdout":"1|2|3\n4\n","exitCode":0,"quiet":true}
+{"id":"scripts-014","script":"die() { echo \"error: $*\" >&2; exit 1; }\n[[ -f missing.txt ]] || die \"missing.txt not found\"\necho unreachable","stdout":"","exitCode":1,"quiet":false}
+{"id":"scripts-015","script":"set -u\n: \"${API_KEY:=default-key}\"\necho \"$API_KEY\"","stdout":"default-key\n","exitCode":0,"quiet":true}
+{"id":"scripts-016","script":"arr=(3 1 2); IFS=$'\\n' sorted=($(printf '%s\\n' \"${arr[@]}\" | sort -n)); unset IFS; echo \"${sorted[*]}\"","stdout":"1 2 3\n","exitCode":0,"quiet":true}
+{"id":"scripts-017","script":"seq 1 5 | while read -r n; do (( n % 2 == 0 )) && echo \"even $n\"; done","stdout":"even 2\neven 4\n","exitCode":1,"quiet":true}
+{"id":"scripts-018","script":"for i in {1..3}; do\n  case $i in\n    1) echo one ;;\n    2) echo two ;;\n    *) echo many ;;\n  esac\ndone","stdout":"one\ntwo\nmany\n","exitCode":0,"quiet":true}
+{"id":"scripts-019","script":"x=5; if (( x > 3 )) && [[ -n \"$x\" ]]; then echo big; fi","stdout":"big\n","exitCode":0,"quiet":true}
+{"id":"scripts-020","script":"names=(\"Alice Smith\" \"Bob Jones\"); for n in \"${names[@]}\"; do first=${n%% *}; last=${n##* }; echo \"$last, $first\"; done","stdout":"Smith, Alice\nJones, Bob\n","exitCode":0,"quiet":true}
+{"id":"scripts-021","script":"counter_file=c.txt; echo 0 > $counter_file; for i in 1 2 3; do n=$(<$counter_file); echo $((n+1)) > $counter_file; done; cat $counter_file","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"scripts-022","script":"out=$(ls nonexistent 2>&1) || echo \"failed: ${out%%:*}\"","stdout":"failed: ls\n","exitCode":0,"quiet":true}
+{"id":"scripts-023","script":"func() { echo \"args: $#\"; for a in \"$@\"; do echo \" - $a\"; done; }; func \"one two\" three \"\"","stdout":"args: 3\n - one two\n - three\n - \n","exitCode":0,"quiet":true}
+{"id":"scripts-024","script":"s=\"a-b_c d\"; echo \"${s//[-_ ]/.}\"","stdout":"a.b.c.d\n","exitCode":0,"quiet":true}
+{"id":"scripts-025","script":"printf '%-10s %5s\\n' Name Score; printf '%-10s %5d\\n' alice 90 bob 85","stdout":"Name       Score\nalice         90\nbob           85\n","exitCode":0,"quiet":true}
+{"id":"scripts-026","script":"line=\"key = value with spaces\"; key=${line%%=*}; val=${line#*=}; key=${key% }; val=${val# }; echo \"[$key] [$val]\"","stdout":"[key] [value with spaces]\n","exitCode":0,"quiet":true}
+{"id":"scripts-027","script":"upper() { echo \"${1^^}\"; }; result=$(upper \"hello\"); echo \"$result\"","stdout":"HELLO\n","exitCode":0,"quiet":true}
+{"id":"scripts-028","script":"if ! command -v nonexistent_cmd >/dev/null 2>&1; then echo \"not installed\"; fi","stdout":"not installed\n","exitCode":0,"quiet":true}
+{"id":"scripts-029","script":"x=\"\"; [ -z \"$x\" ] && echo \"empty\"; [ -n \"${x:-}\" ] || echo \"still empty\"","stdout":"empty\nstill empty\n","exitCode":0,"quiet":true}
+{"id":"scripts-030","script":"n=10; fib() { local a=0 b=1 i; for ((i=0; i<$1; i++)); do local t=$((a+b)); a=$b; b=$t; done; echo $a; }; fib $n","stdout":"55\n","exitCode":0,"quiet":true}
+{"id":"scripts-031","script":"declare -a stack=(); push() { stack+=(\"$1\"); }; pop() { unset 'stack[${#stack[@]}-1]'; }; push a; push b; push c; pop; echo \"${stack[@]}\"","stdout":"a b\n","exitCode":0,"quiet":true}
+{"id":"scripts-032","script":"str=\"one,two,three\"; IFS=',' read -ra parts <<< \"$str\"; for i in \"${!parts[@]}\"; do echo \"$i: ${parts[i]}\"; done","stdout":"0: one\n1: two\n2: three\n","exitCode":0,"quiet":true}
+{"id":"scripts-033","script":"text=\"The quick brown fox\"; words=($text); echo \"${#words[@]} words, last: ${words[-1]}\"","stdout":"4 words, last: fox\n","exitCode":0,"quiet":true}
+{"id":"scripts-034","script":"echo \"scale\" | { read w; echo \"${w:0:3}\"; }","stdout":"sca\n","exitCode":0,"quiet":true}
+{"id":"scripts-035","script":"f() { local -n _out=$1; _out=\"computed\"; }; f myresult; echo \"$myresult\"","stdout":"computed\n","exitCode":0,"quiet":true}
+{"id":"scripts-036","script":"get_list() { local -n _list=$1; _list=(); for i in 1 2 3; do _list+=(\"item$i\"); done; }; get_list items; echo \"${items[@]}\"","stdout":"item1 item2 item3\n","exitCode":0,"quiet":true}
+{"id":"scripts-037","script":"set -- --name=foo --verbose arg; for a; do case $a in --name=*) echo \"name=${a#*=}\";; --verbose) echo verbose;; *) echo \"pos $a\";; esac; done","stdout":"name=foo\nverbose\npos arg\n","exitCode":0,"quiet":true}
+{"id":"scripts-038","script":"check() { [[ $1 -gt 0 ]] && return 0 || return 1; }; check 5 && echo pos; check -1 || echo neg","stdout":"pos\nneg\n","exitCode":0,"quiet":true}
+{"id":"scripts-039","script":"exec 3>log.txt; echo \"line1\" >&3; echo \"line2\" >&3; exec 3>&-; cat log.txt","stdout":"line1\nline2\n","exitCode":0,"quiet":true}
+{"id":"scripts-040","script":"exec > out.log; echo \"to log\"; exec >&2; cat out.log >&2","stdout":"","exitCode":0,"quiet":false}
+{"id":"scripts-041","script":"{ echo a; echo b; } > both.txt; wc -l < both.txt","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"scripts-042","script":"set -x; x=$((1+2)); echo \"$x\"","stdout":"3\n","exitCode":0,"quiet":false}
+{"id":"scripts-043","script":"set -x; for i in 1 2; do echo $i; done","stdout":"1\n2\n","exitCode":0,"quiet":false}
+{"id":"scripts-044","script":"set -o errexit -o nounset; echo ${UNDEF:-safe}","stdout":"safe\n","exitCode":0,"quiet":true}
+{"id":"scripts-045","script":"nums=(5 3 8); max=0; for n in \"${nums[@]}\"; do (( n > max )) && max=$n; done; echo \"max=$max\"","stdout":"max=8\n","exitCode":0,"quiet":true}
+{"id":"scripts-046","script":"declare -i total=0; for n in 1 2 3; do total+=n; done; echo $total","stdout":"6\n","exitCode":0,"quiet":true}
+{"id":"scripts-047","script":"f() { local status; false; status=$?; echo \"status=$status\"; }; f","stdout":"status=1\n","exitCode":0,"quiet":true}
+{"id":"scripts-048","script":"v=$(false) || echo \"subst failed $?\"","stdout":"subst failed 1\n","exitCode":0,"quiet":true}
+{"id":"scripts-049","script":"cmd=\"echo hi\"; $cmd; ${cmd} there","stdout":"hi\nhi there\n","exitCode":0,"quiet":true}
+{"id":"scripts-050","script":"OPTIND=1; parse() { local OPTIND opt; while getopts \"n:\" opt; do echo \"n=$OPTARG\"; done; }; parse -n 1; parse -n 2","stdout":"n=1\nn=2\n","exitCode":0,"quiet":true}
+{"id":"scripts-051","script":"select opt in apple banana; do echo \"picked $opt ($REPLY)\"; break; done <<< \"1\"","stdout":"picked apple (1)\n","exitCode":0,"quiet":false}
+{"id":"scripts-052","script":"for job in 1 2 3; do ( echo \"job $job\" ) & done; wait; echo all done","stdout":"job 1\njob 2\njob 3\nall done\n","exitCode":0,"quiet":true}

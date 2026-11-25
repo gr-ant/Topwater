@@ -1,0 +1,41 @@
+{"id":"array-tests-001","script":"a=(x 'y z' w); echo ${#a[@]} \"${a[1]}\" $a","stdout":"3 y z x\n","exitCode":null,"quiet":true}
+{"id":"array-tests-002","script":"a=(x 'y z'); for e in \"${a[@]}\"; do echo \"[$e]\"; done","stdout":"[x]\n[y z]\n","exitCode":null,"quiet":true}
+{"id":"array-tests-003","script":"a=(x 'y z'); for e in ${a[@]}; do echo \"[$e]\"; done","stdout":"[x]\n[y]\n[z]\n","exitCode":null,"quiet":true}
+{"id":"array-tests-004","script":"a=(x 'y z'); printf '%s|' \"${a[*]}\"; echo","stdout":"x y z|\n","exitCode":null,"quiet":true}
+{"id":"array-tests-005","script":"a=(); echo ${#a[@]}; for e in \"${a[@]}\"; do echo no; done; echo end","stdout":"0\nend\n","exitCode":null,"quiet":true}
+{"id":"array-tests-006","script":"a=(1 2); a+=(3 4); a+=(5); echo \"${a[@]}\"","stdout":"1 2 3 4 5\n","exitCode":null,"quiet":true}
+{"id":"array-tests-007","script":"a=(); for i in 1 2 3; do a+=(\"n $i\"); done; echo ${#a[@]} \"${a[2]}\"","stdout":"3 n 3\n","exitCode":null,"quiet":true}
+{"id":"array-tests-008","script":"a[2]=c; a[0]=a; echo \"${a[@]}\" ${#a[@]} \"${!a[@]}\"","stdout":"a c 2 0 2\n","exitCode":null,"quiet":true}
+{"id":"array-tests-009","script":"a=(a b c d); echo \"${a[-1]}\" \"${a[@]:1:2}\" \"${a[@]:2}\"","stdout":"d b c c d\n","exitCode":null,"quiet":true}
+{"id":"array-tests-010","script":"a=(a b c); i=1; echo ${a[i]} ${a[$i]} ${a[i+1]} ${a[${#a[@]}-1]}","stdout":"b b c c\n","exitCode":null,"quiet":true}
+{"id":"array-tests-011","script":"a=(a b c); for i in \"${!a[@]}\"; do echo \"$i=${a[$i]}\"; done","stdout":"0=a\n1=b\n2=c\n","exitCode":null,"quiet":true}
+{"id":"array-tests-012","script":"a=(a b c); for ((i=0; i<${#a[@]}; i++)); do printf '%s' \"${a[i]}\"; done; echo","stdout":"abc\n","exitCode":null,"quiet":true}
+{"id":"array-tests-013","script":"a=(a b c); unset 'a[1]'; echo \"${a[@]}\" ${#a[@]}; unset a; echo \"[${a[@]}]\"","stdout":"a c 2\n[]\n","exitCode":null,"quiet":true}
+{"id":"array-tests-014","script":"a=(one two); a[1]=TWO; a[5]=six; echo \"${a[@]}\"; echo ${#a[1]}","stdout":"one TWO six\n3\n","exitCode":null,"quiet":true}
+{"id":"array-tests-015","script":"a=(a.txt b.txt); echo \"${a[@]%.txt}\" \"${a[@]/#/x-}\" \"${a[@]^^}\"","stdout":"a b x-a.txt x-b.txt A.TXT B.TXT\n","exitCode":null,"quiet":true}
+{"id":"array-tests-016","script":"a=($(echo one two three)); echo ${#a[@]} ${a[2]}","stdout":"3 three\n","exitCode":null,"quiet":true}
+{"id":"array-tests-017","script":"touch f1.log f2.log; a=(*.log); echo ${#a[@]} \"${a[@]}\"","stdout":"2 f1.log f2.log\n","exitCode":null,"quiet":true}
+{"id":"array-tests-018","script":"a=(\n  one   # comment\n  \"two words\"\n)\necho ${#a[@]} \"${a[1]}\"","stdout":"2 two words\n","exitCode":null,"quiet":true}
+{"id":"array-tests-019","script":"a=(1 2 3); b=(\"${a[@]}\" 4); echo \"${b[@]}\"; c=(\"${a[@]:1}\"); echo \"${c[@]}\"","stdout":"1 2 3 4\n2 3\n","exitCode":null,"quiet":true}
+{"id":"array-tests-020","script":"a=(3 4); echo $(( a[0] + a[1] )) $(( ${a[0]} * 2 ))","stdout":"7 6\n","exitCode":null,"quiet":true}
+{"id":"array-tests-021","script":"a=(1 2); (( a[0]++ )); (( a[1] += 10 )); echo \"${a[@]}\"","stdout":"2 12\n","exitCode":null,"quiet":true}
+{"id":"array-tests-022","script":"a=(x); echo \"${a[5]:-none}\" \"${a[0]:-none}\" \"${a[5]+set}|\"","stdout":"none x |\n","exitCode":null,"quiet":true}
+{"id":"array-tests-023","script":"x=scalar; echo \"${x[0]}\" \"${x[@]}\" ${#x[@]}","stdout":"scalar scalar 1\n","exitCode":null,"quiet":true}
+{"id":"array-tests-024","script":"declare -A m; m[one]=1; m[\"two words\"]=2; echo \"${m[one]}\" \"${m[two words]}\" ${#m[@]}","stdout":"1 2 2\n","exitCode":null,"quiet":true}
+{"id":"array-tests-025","script":"declare -A m=([a]=1 [b]=2); for k in \"${!m[@]}\"; do echo \"$k=${m[$k]}\"; done | sort","stdout":"a=1\nb=2\n","exitCode":null,"quiet":true}
+{"id":"array-tests-026","script":"declare -A c; for w in a b a; do (( c[$w]++ )); done; echo ${c[a]} ${c[b]}","stdout":"2 1\n","exitCode":null,"quiet":true}
+{"id":"array-tests-027","script":"declare -A m; k=key; m[$k]=v; [[ -n \"${m[$k]+x}\" ]] && echo has; [[ -z \"${m[nope]+x}\" ]] && echo not","stdout":"has\nnot\n","exitCode":null,"quiet":true}
+{"id":"array-tests-028","script":"declare -A m=([a]=1); unset 'm[a]'; echo ${#m[@]}","stdout":"0\n","exitCode":null,"quiet":true}
+{"id":"array-tests-029","script":"IFS=, read -ra parts <<< 'a,b c,d'; echo ${#parts[@]} \"${parts[1]}\"","stdout":"3 b c\n","exitCode":null,"quiet":true}
+{"id":"array-tests-030","script":"printf 'l1\\nl 2\\n' > f; mapfile -t lines < f; echo ${#lines[@]} \"${lines[1]}\"","stdout":"2 l 2\n","exitCode":null,"quiet":true}
+{"id":"array-tests-031","script":"readarray -t lines < <(printf 'a\\nb\\n'); echo \"${lines[@]}\"","stdout":"a b\n","exitCode":null,"quiet":true}
+{"id":"array-tests-032","script":"a=(outer); f(){ local a=(inner more); echo ${#a[@]}; }; f; echo \"${a[@]}\"","stdout":"2\nouter\n","exitCode":null,"quiet":true}
+{"id":"array-tests-033","script":"f(){ local -a acc; acc+=(x); acc+=(y); echo \"${acc[@]}\"; }; f; echo \"[${acc[@]}]\"","stdout":"x y\n[]\n","exitCode":null,"quiet":true}
+{"id":"array-tests-034","script":"a=(1); (a+=(2); echo ${#a[@]}); echo ${#a[@]}","stdout":"2\n1\n","exitCode":null,"quiet":true}
+{"id":"array-tests-035","script":"a=(1 2); echo \"${a[@]}\" | (read x y; echo $y); echo ${#a[@]}","stdout":"2\n2\n","exitCode":null,"quiet":true}
+{"id":"array-tests-036","script":"a=('x y' z); IFS=,; echo \"${a[*]}\"; unset IFS","stdout":"x y,z\n","exitCode":null,"quiet":true}
+{"id":"array-tests-037","script":"list=(3 1 2); IFS=$'\\n' sorted=($(sort <<<\"${list[*]}\")); unset IFS; echo \"${sorted[@]}\"","stdout":"1 2 3\n","exitCode":null,"quiet":true}
+{"id":"array-tests-038","script":"a=(a b c); unset 'a[0]'; a=(\"${a[@]}\"); echo \"${!a[@]}\"","stdout":"0 1\n","exitCode":null,"quiet":true}
+{"id":"array-tests-039","script":"args=(-l -a); set -- \"${args[@]}\" extra; echo $# \"$2\"","stdout":"3 -a\n","exitCode":null,"quiet":true}
+{"id":"array-tests-040","script":"f() { local -a r=(\"$@\"); echo \"${#r[@]}:${r[1]}\"; }; f p 'q r' s","stdout":"3:q r\n","exitCode":null,"quiet":true}
+{"id":"array-tests-041","script":"x=a; echo ${x/#/pre-} ${x/%/-post}","stdout":"pre-a a-post\n","exitCode":null,"quiet":true}

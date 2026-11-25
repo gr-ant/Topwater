@@ -1,0 +1,29 @@
+{"id":"special-variables-001","script":"echo $0 $#; set -- a b; echo $# \"$@\" \"$*\"","stdout":"bash 0\n2 a b a b\n","exitCode":0,"quiet":true}
+{"id":"special-variables-002","script":"echo $$ | grep -qE '^[0-9]+$' && echo pid","stdout":"pid\n","exitCode":0,"quiet":true}
+{"id":"special-variables-003","script":"echo $- | grep -q h && echo has-h; set -e; case $- in *e*) echo has-e;; esac","stdout":"has-h\nhas-e\n","exitCode":0,"quiet":true}
+{"id":"special-variables-004","script":"echo hi; echo $_","stdout":"hi\nhi\n","exitCode":0,"quiet":true}
+{"id":"special-variables-005","script":"[[ $BASH_VERSION == 5* ]] && echo v5; echo ${BASH_VERSINFO[0]}","stdout":"v5\n5\n","exitCode":0,"quiet":true}
+{"id":"special-variables-006","script":"echo ${#BASH_VERSINFO[@]}","stdout":"6\n","exitCode":0,"quiet":true}
+{"id":"special-variables-007","script":"[[ -n $HOSTNAME ]] && echo hn","stdout":"hn\n","exitCode":0,"quiet":true}
+{"id":"special-variables-008","script":"cd /tmp; cd /; echo $OLDPWD $PWD; cd - >/dev/null; echo $PWD","stdout":"/tmp /\n/tmp\n","exitCode":0,"quiet":true}
+{"id":"special-variables-009","script":"echo $HOME","stdout":"/home/agent\n","exitCode":0,"quiet":true}
+{"id":"special-variables-010","script":"[[ $UID =~ ^[0-9]+$ ]] && echo uid; [[ $EUID == $UID ]] && echo same","stdout":"uid\nsame\n","exitCode":0,"quiet":true}
+{"id":"special-variables-011","script":"[[ $PPID =~ ^[0-9]+$ ]] && echo ppid","stdout":"ppid\n","exitCode":0,"quiet":true}
+{"id":"special-variables-012","script":"[[ $SHLVL =~ ^[0-9]+$ ]] && echo shlvl","stdout":"shlvl\n","exitCode":0,"quiet":true}
+{"id":"special-variables-013","script":"printf '%q\\n' \"$IFS\"","stdout":"$' \\t\\n'\n","exitCode":0,"quiet":true}
+{"id":"special-variables-014","script":"echo \"${PS1-unset}\" | head -c 5; echo","stdout":"unset\n","exitCode":0,"quiet":true}
+{"id":"special-variables-015","script":"echo $OSTYPE","stdout":"linux-gnu\n","exitCode":0,"quiet":true}
+{"id":"special-variables-016","script":"[[ $MACHTYPE == x86_64* ]] && echo mt","stdout":"mt\n","exitCode":0,"quiet":true}
+{"id":"special-variables-017","script":"f() { echo $FUNCNAME; }; f; echo \"[${FUNCNAME:-}]\"","stdout":"f\n[]\n","exitCode":0,"quiet":true}
+{"id":"special-variables-018","script":"read <<< x; echo $REPLY","stdout":"x\n","exitCode":0,"quiet":true}
+{"id":"special-variables-019","script":"echo $OPTIND","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"special-variables-020","script":"echo \"${BASH_SOURCE[0]:-none}\"","stdout":"none\n","exitCode":0,"quiet":true}
+{"id":"special-variables-021","script":"echo $BASH | grep -c bash","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"special-variables-022","script":"echo ${RANDOM:+r}","stdout":"r\n","exitCode":0,"quiet":true}
+{"id":"special-variables-023","script":"x=1; echo ${!x:-indirect-empty}","stdout":"indirect-empty\n","exitCode":0,"quiet":true}
+{"id":"special-variables-024","script":"echo \"$@\" end","stdout":"end\n","exitCode":0,"quiet":true}
+{"id":"special-variables-025","script":"echo $10 ${10}; set -- 1 2 3 4 5 6 7 8 9 ten; echo $10 ${10}","stdout":"0\n10 ten\n","exitCode":0,"quiet":true}
+{"id":"special-variables-026","script":"echo $? ; ls /nope 2>/dev/null; echo $?","stdout":"0\n2\n","exitCode":0,"quiet":true}
+{"id":"special-variables-027","script":"echo $!","stdout":"\n","exitCode":0,"quiet":true}
+{"id":"special-variables-028","script":"echo $COLUMNS $LINES end","stdout":"end\n","exitCode":0,"quiet":true}
+{"id":"special-variables-029","script":"[[ -n $TERM ]] && echo term","stdout":"term\n","exitCode":0,"quiet":true}

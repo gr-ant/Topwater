@@ -1,0 +1,34 @@
+{"id":"agent-features-001","script":"if [ -d /tmp ]; then echo yes; else echo no; fi","stdout":"yes\n","exitCode":0,"quiet":null}
+{"id":"agent-features-002","script":"x=3; if (( x > 5 )); then echo big; elif (( x > 1 )); then echo mid; else echo small; fi","stdout":"mid\n","exitCode":0,"quiet":null}
+{"id":"agent-features-003","script":"for f in a b c; do echo \"item $f\"; done","stdout":"item a\nitem b\nitem c\n","exitCode":0,"quiet":null}
+{"id":"agent-features-004","script":"for i in {1..3}; do echo -n $i; done; echo","stdout":"123\n","exitCode":0,"quiet":null}
+{"id":"agent-features-005","script":"for ((i=0; i<3; i++)); do echo $i; done","stdout":"0\n1\n2\n","exitCode":0,"quiet":null}
+{"id":"agent-features-006","script":"i=0; while [ $i -lt 3 ]; do i=$((i+1)); done; echo $i","stdout":"3\n","exitCode":0,"quiet":null}
+{"id":"agent-features-007","script":"n=0; until [ $n -ge 2 ]; do ((n++)); done; echo $n","stdout":"2\n","exitCode":0,"quiet":null}
+{"id":"agent-features-008","script":"for i in 1 2 3 4; do [ $i = 3 ] && break; echo $i; done","stdout":"1\n2\n","exitCode":0,"quiet":null}
+{"id":"agent-features-009","script":"for i in 1 2 3; do [ $i = 2 ] && continue; echo $i; done","stdout":"1\n3\n","exitCode":0,"quiet":null}
+{"id":"agent-features-010","script":"case foo.txt in *.md) echo md;; *.txt|*.log) echo text;; *) echo other;; esac","stdout":"text\n","exitCode":0,"quiet":null}
+{"id":"agent-features-011","script":"greet() { echo \"hi $1, $# args\"; }; greet bob x","stdout":"hi bob, 2 args\n","exitCode":0,"quiet":null}
+{"id":"agent-features-012","script":"function f { local v=inner; echo $v; }; v=outer; f; echo $v","stdout":"inner\nouter\n","exitCode":0,"quiet":null}
+{"id":"agent-features-013","script":"f() { return 3; }; f; echo $?","stdout":"3\n","exitCode":0,"quiet":null}
+{"id":"agent-features-014","script":"sum() { echo $(( $1 + $2 )); }; echo \"total: $(sum 2 5)\"","stdout":"total: 7\n","exitCode":0,"quiet":null}
+{"id":"agent-features-015","script":"printf 'a\\nb\\nc\\n' | while read line; do echo \"<$line>\"; done","stdout":"<a>\n<b>\n<c>\n","exitCode":0,"quiet":null}
+{"id":"agent-features-016","script":"echo 'k1,v1' | while IFS=, read -r k v; do echo \"$k=$v\"; done","stdout":"k1=v1\n","exitCode":0,"quiet":null}
+{"id":"agent-features-017","script":"[[ -n $HOME && $HOME == /home/* ]] && echo match","stdout":"match\n","exitCode":0,"quiet":null}
+{"id":"agent-features-018","script":"v=abc123; [[ $v =~ ^[a-z]+[0-9]+$ ]] && echo ok","stdout":"ok\n","exitCode":0,"quiet":null}
+{"id":"agent-features-019","script":"f=report.txt; [[ $f != *.md ]] && echo notmd","stdout":"notmd\n","exitCode":0,"quiet":null}
+{"id":"agent-features-020","script":"echo $((2 + 3 * 4)) $(( (2+3)*4 )) $((7 / 2)) $((7 % 3)) $((2 ** 10))","stdout":"14 20 3 1 1024\n","exitCode":0,"quiet":null}
+{"id":"agent-features-021","script":"a=5; b=3; echo $((a > b ? a : b)) $((a == 5 && b == 3))","stdout":"5 1\n","exitCode":0,"quiet":null}
+{"id":"agent-features-022","script":"c=0; ((c++)); ((c += 10)); let c=c*2; echo $c","stdout":"22\n","exitCode":0,"quiet":null}
+{"id":"agent-features-023","script":"printf 'a\\nb\\nc\\n' > f.txt; echo $(( $(wc -l < f.txt) * 2 ))","stdout":"6\n","exitCode":0,"quiet":null}
+{"id":"agent-features-024","script":"fact() { if [ $1 -le 1 ]; then echo 1; else echo $(( $1 * $(fact $(($1-1))) )); fi; }; fact 5","stdout":"120\n","exitCode":0,"quiet":null}
+{"id":"agent-features-025","script":"f=/var/log/app.tar.gz; echo ${f##*/} ${f%.*} ${f%%.*} ${f#*.}","stdout":"app.tar.gz /var/log/app.tar /var/log/app tar.gz\n","exitCode":0,"quiet":null}
+{"id":"agent-features-026","script":"s=hello; echo ${#s} ${s^^} ${s:1:3} ${s: -2} ${s/l/L} ${s//l/L}","stdout":"5 HELLO ell lo heLlo heLLo\n","exitCode":0,"quiet":null}
+{"id":"agent-features-027","script":"echo ${UNSET:-fallback} ${HOME:+set} [${UNSET:+x}]","stdout":"fallback set []\n","exitCode":0,"quiet":null}
+{"id":"agent-features-028","script":"echo {a,b}.txt pre{1..3} {x..z}","stdout":"a.txt b.txt pre1 pre2 pre3 x y z\n","exitCode":0,"quiet":null}
+{"id":"agent-features-029","script":"echo file{01..03}","stdout":"file01 file02 file03\n","exitCode":0,"quiet":null}
+{"id":"agent-features-030","script":"set -e; false || echo recovered; echo after","stdout":"recovered\nafter\n","exitCode":0,"quiet":null}
+{"id":"agent-features-031","script":"set -o pipefail; false | true; echo $?","stdout":"1\n","exitCode":0,"quiet":null}
+{"id":"agent-features-032","script":"echo before; exit 0; echo after","stdout":"before\n","exitCode":0,"quiet":null}
+{"id":"agent-features-033","script":"command -v grep && command -v nosuch; echo $?","stdout":"/usr/bin/grep\n1\n","exitCode":0,"quiet":null}
+{"id":"agent-features-034","script":"eval 'x=42'; echo $x","stdout":"42\n","exitCode":0,"quiet":null}

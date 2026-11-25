@@ -1,0 +1,78 @@
+{"id":"parameters-001","script":"unset x; echo \"[${x:-d}] [${x-d}] [${x:+a}] [${x+a}]\"","stdout":"[d] [d] [] []\n","exitCode":0,"quiet":true}
+{"id":"parameters-002","script":"x=; echo \"[${x:-d}] [${x-d}] [${x:+a}] [${x+a}]\"","stdout":"[d] [] [] [a]\n","exitCode":0,"quiet":true}
+{"id":"parameters-003","script":"x=v; echo \"[${x:-d}] [${x-d}] [${x:+a}] [${x+a}]\"","stdout":"[v] [v] [a] [a]\n","exitCode":0,"quiet":true}
+{"id":"parameters-004","script":"unset x; echo \"${x:=init}\"; echo \"$x\"; y=; echo \"${y=keep}|$y\"","stdout":"init\ninit\n|\n","exitCode":0,"quiet":true}
+{"id":"parameters-005","script":"unset x; : ${x:?missing value}; echo after","stdout":"","exitCode":127,"quiet":false}
+{"id":"parameters-006","script":"unset x; echo ${x?}; echo after","stdout":"","exitCode":127,"quiet":false}
+{"id":"parameters-007","script":"x=; (echo ${x:?}); echo \"status $?\"","stdout":"status 1\n","exitCode":0,"quiet":false}
+{"id":"parameters-008","script":"f() { local v=${1:?usage: f arg}; echo $v; }; f; echo \"rc=$?\"","stdout":"","exitCode":127,"quiet":false}
+{"id":"parameters-009","script":"set -u; unset x; echo \"${x:-ok}\" \"${x-ok2}\"; echo \"${x+set}\"","stdout":"ok ok2\n\n","exitCode":0,"quiet":true}
+{"id":"parameters-010","script":"set -u; echo \"$undefined_var\"; echo after","stdout":"","exitCode":127,"quiet":false}
+{"id":"parameters-011","script":"set -u; f() { echo \"${1:-none}\"; }; f","stdout":"none\n","exitCode":0,"quiet":true}
+{"id":"parameters-012","script":"set -u; f() { echo \"$1\"; }; f; echo rc=$?","stdout":"","exitCode":127,"quiet":false}
+{"id":"parameters-013","script":"x=hello; echo ${#x}; e=; echo ${#e}; echo ${#nosuch}","stdout":"5\n0\n0\n","exitCode":0,"quiet":true}
+{"id":"parameters-014","script":"p=/usr/local/lib/file.tar.gz; echo ${p%.*} ${p%%.*} ${p#*/} ${p##*/}","stdout":"/usr/local/lib/file.tar /usr/local/lib/file usr/local/lib/file.tar.gz file.tar.gz\n","exitCode":0,"quiet":true}
+{"id":"parameters-015","script":"p=file.tar.gz; echo \"${p%.gz}\" \"${p%.zip}\" \"${p#file}\"","stdout":"file.tar file.tar.gz .tar.gz\n","exitCode":0,"quiet":true}
+{"id":"parameters-016","script":"s=aaa-bbb-ccc; echo ${s/-/_} ${s//-/_} ${s/#aaa/X} ${s/%ccc/Y} ${s/#bbb/Z}","stdout":"aaa_bbb-ccc aaa_bbb_ccc X-bbb-ccc aaa-bbb-Y aaa-bbb-ccc\n","exitCode":0,"quiet":true}
+{"id":"parameters-017","script":"s='a b c'; echo \"${s// /}\" \"${s// /_}\"","stdout":"abc a_b_c\n","exitCode":0,"quiet":true}
+{"id":"parameters-018","script":"s=hello; echo \"${s/l/L}\" \"${s//l}\" \"${s/x/y}\"","stdout":"heLlo heo hello\n","exitCode":0,"quiet":true}
+{"id":"parameters-019","script":"s='path/to/file'; echo \"${s//\\//:}\"","stdout":"path:to:file\n","exitCode":0,"quiet":true}
+{"id":"parameters-020","script":"s='a.b.c'; echo \"${s//./\\\\}\"","stdout":"a\\b\\c\n","exitCode":0,"quiet":true}
+{"id":"parameters-021","script":"s=abc; echo \"${s/b/&x}\"","stdout":"abxc\n","exitCode":0,"quiet":true}
+{"id":"parameters-022","script":"s=abc; echo \"${s/b/\\&x}\"","stdout":"a&xc\n","exitCode":0,"quiet":true}
+{"id":"parameters-023","script":"s=hello; r='L'; echo \"${s//l/$r}\"","stdout":"heLLo\n","exitCode":0,"quiet":true}
+{"id":"parameters-024","script":"s='foo bar'; echo \"${s/[ao]/_}\" \"${s//[ao]/_}\" \"${s//?/x}\"","stdout":"f_o bar f__ b_r xxxxxxx\n","exitCode":0,"quiet":true}
+{"id":"parameters-025","script":"s='x*y'; echo \"${s/\\*/+}\" \"${s//[*]/-}\"","stdout":"x+y x-y\n","exitCode":0,"quiet":true}
+{"id":"parameters-026","script":"s='hello world'; echo \"${s/o*/!}\" \"${s/#h*o/X}\"","stdout":"hell! Xrld\n","exitCode":0,"quiet":true}
+{"id":"parameters-027","script":"s=Hello; echo ${s^} ${s^^} ${s,} ${s,,}; t=hello; echo ${t^}","stdout":"Hello HELLO hello hello\nHello\n","exitCode":0,"quiet":true}
+{"id":"parameters-028","script":"s='hello world'; echo \"${s^^[lo]}\"","stdout":"heLLO wOrLd\n","exitCode":0,"quiet":true}
+{"id":"parameters-029","script":"s=abcdef; echo ${s:2} ${s:2:2} ${s: -2} ${s:(-3):2} ${s:1:-1}","stdout":"cdef cd ef de bcde\n","exitCode":0,"quiet":true}
+{"id":"parameters-030","script":"s=abc; echo \"[${s:5}]\" \"[${s: -5}]\"","stdout":"[] []\n","exitCode":0,"quiet":true}
+{"id":"parameters-031","script":"s=abcdef; i=2; echo ${s:i:i+1} ${s:$i:1}","stdout":"cde c\n","exitCode":0,"quiet":true}
+{"id":"parameters-032","script":"s=abcdef; echo ${s:-2}","stdout":"abcdef\n","exitCode":0,"quiet":true}
+{"id":"parameters-033","script":"x=5; y=x; echo ${!y}","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"parameters-034","script":"x=\"it's\"; echo ${x@Q}","stdout":"'it'\\''s'\n","exitCode":0,"quiet":true}
+{"id":"parameters-035","script":"x=abc; echo ${x@Q}; x=; echo \"[${x@Q}]\"","stdout":"'abc'\n['']\n","exitCode":0,"quiet":true}
+{"id":"parameters-036","script":"a=1; b=${a:+\"set $a\"}; echo \"$b\"","stdout":"set 1\n","exitCode":0,"quiet":true}
+{"id":"parameters-037","script":"v=\"a b\"; echo ${v:-\"x y\"}; f() { echo $#; }; f ${v:-\"x y\"}; unset v; f ${v:-\"x y\"}","stdout":"a b\n2\n1\n","exitCode":0,"quiet":true}
+{"id":"parameters-038","script":"u=; f() { echo $#; }; f ${u:-a b c}; f \"${u:-a b c}\"","stdout":"3\n1\n","exitCode":0,"quiet":true}
+{"id":"parameters-039","script":"echo $'tab\\there' $'nl\\nx' $'q\\'q' $'\\x41é'","stdout":"tab\there nl\nx q'q Aé\n","exitCode":0,"quiet":true}
+{"id":"parameters-040","script":"echo $\"translated\"","stdout":"translated\n","exitCode":0,"quiet":true}
+{"id":"parameters-041","script":"x=abc; echo ${x:1:1}${x:0:1}","stdout":"ba\n","exitCode":0,"quiet":true}
+{"id":"parameters-042","script":"file=\"My Doc.TXT\"; ext=\"${file##*.}\"; echo \"${ext,,}\" \"${file%.*}\"","stdout":"txt My Doc\n","exitCode":0,"quiet":true}
+{"id":"parameters-043","script":"url=\"https://example.com:8080/path?q=1\"; host=${url#*://}; host=${host%%/*}; echo ${host%:*} ${host#*:}","stdout":"example.com 8080\n","exitCode":0,"quiet":true}
+{"id":"parameters-044","script":"x=10; echo \"${x:-$((x+1))}\" \"${y:-$((x+1))}\"","stdout":"10 11\n","exitCode":0,"quiet":true}
+{"id":"parameters-045","script":"str=\"key=value=more\"; echo \"${str%%=*}\" \"${str#*=}\"","stdout":"key value=more\n","exitCode":0,"quiet":true}
+{"id":"parameters-046","script":"v=\"  padded  \"; t=\"${v#\"${v%%[![:space:]]*}\"}\"; t=\"${t%\"${t##*[![:space:]]}\"}\"; echo \"[$t]\"","stdout":"[padded]\n","exitCode":0,"quiet":true}
+{"id":"parameters-047","script":"x='a*b'; y=aXXb; echo \"${y/$x/Z}\" \"${y/\"$x\"/Z}\"","stdout":"Z aXXb\n","exitCode":0,"quiet":true}
+{"id":"parameters-048","script":"p='*.txt'; f=a.txt; [[ $f == $p ]] && echo glob; [[ $f == \"$p\" ]] || echo literal","stdout":"glob\nliteral\n","exitCode":0,"quiet":true}
+{"id":"parameters-049","script":"x=abc; echo \"${x/#/>}\" \"${x/%/<}\"","stdout":">abc abc<\n","exitCode":0,"quiet":true}
+{"id":"parameters-050","script":"name=World; echo \"Hello, ${name}!\" 'Hello, ${name}!'","stdout":"Hello, World! Hello, ${name}!\n","exitCode":0,"quiet":true}
+{"id":"parameters-051","script":"echo \"${HOME}\" ~ ~/x \"~\" x~","stdout":"/home/agent /home/agent /home/agent/x ~ x~\n","exitCode":0,"quiet":true}
+{"id":"parameters-052","script":"v=~; echo $v; w=a:~/b; echo $w; export P=~/bin:~/x; echo $P","stdout":"/home/agent\na:/home/agent/b\n/home/agent/bin:/home/agent/x\n","exitCode":0,"quiet":true}
+{"id":"parameters-053","script":"echo ~root ~nosuchuser","stdout":"/root ~nosuchuser\n","exitCode":0,"quiet":true}
+{"id":"parameters-054","script":"x=\"${undefined:-}\"; echo \"[$x]\"","stdout":"[]\n","exitCode":0,"quiet":true}
+{"id":"parameters-055","script":"s=abc; echo ${s:1:100} \"${s:0:0}|\"","stdout":"bc |\n","exitCode":0,"quiet":true}
+{"id":"parameters-056","script":"s=hello; echo ${s%l*} ${s%%l*}","stdout":"hel he\n","exitCode":0,"quiet":true}
+{"id":"parameters-057","script":"s=\"/a/b/\"; echo \"${s%/}\" \"${s%%/}\"","stdout":"/a/b /a/b\n","exitCode":0,"quiet":true}
+{"id":"parameters-058","script":"x=\"a'b\\\"c\"; echo \"${x//\\'/Q}\" \"${x//\\\"/D}\"","stdout":"aQb\"c a'bDc\n","exitCode":0,"quiet":true}
+{"id":"parameters-059","script":"f=report.final.pdf; echo ${f%%.*} ${f#*.} ${f%.*} ${f##*.}","stdout":"report final.pdf report.final pdf\n","exitCode":0,"quiet":true}
+{"id":"parameters-060","script":"x=AbC; echo ${x~~} ${x~}","stdout":"aBc abC\n","exitCode":0,"quiet":true}
+{"id":"parameters-061","script":"num=007; echo $((10#$num)) $((num))","stdout":"7 7\n","exitCode":0,"quiet":true}
+{"id":"parameters-062","script":"s='a-b-c'; IFS=- read -r x y z <<< \"$s\"; echo \"$x|$y|$z\"","stdout":"a|b|c\n","exitCode":0,"quiet":true}
+{"id":"parameters-063","script":"str=hello; echo ${str:0:1}; echo ${str::2}","stdout":"h\nhe\n","exitCode":0,"quiet":true}
+{"id":"parameters-064","script":"v=x; echo ${v:+\"[$v]\"} ${nov:+\"[$nov]\"}end","stdout":"[x] end\n","exitCode":0,"quiet":true}
+{"id":"parameters-065","script":"echo \"${x:-$(echo sub)}\" \"${x:-`echo bt`}\"","stdout":"sub bt\n","exitCode":0,"quiet":true}
+{"id":"parameters-066","script":"echo \"${#}\" \"${#@}\" \"${#*}\"","stdout":"0 0 0\n","exitCode":0,"quiet":true}
+{"id":"parameters-067","script":"set -- a b c; echo \"${@:2}\" \"${*:1:2}\" \"${@: -1}\" \"${@:0:1}\"","stdout":"b c a b c bash\n","exitCode":0,"quiet":true}
+{"id":"parameters-068","script":"set -- a b c d; echo \"${!#}\" \"${@:$#}\"","stdout":"d d\n","exitCode":0,"quiet":true}
+{"id":"parameters-069","script":"v=abc; echo ${v//[a-b]/X} ${v//[!a]/Y}","stdout":"XXc aYY\n","exitCode":0,"quiet":true}
+{"id":"parameters-070","script":"s=aaa; echo ${s/a*/X} ${s//a/} ${s/a/}","stdout":"X aa\n","exitCode":0,"quiet":true}
+{"id":"parameters-071","script":"x=hello; echo \"${x:${#x}-2}\"","stdout":"lo\n","exitCode":0,"quiet":true}
+{"id":"parameters-072","script":"x=\"hello\"; echo \"${x^^l}\" \"${x,,L}\"","stdout":"heLLo hello\n","exitCode":0,"quiet":true}
+{"id":"parameters-073","script":"s=\"CamelCaseString\"; echo \"${s,}\" ","stdout":"camelCaseString\n","exitCode":0,"quiet":true}
+{"id":"parameters-074","script":"x=a; y=${x:-${z:-${w:-deep}}}; echo $y; unset x; y=${x:-${z:-${w:-deep}}}; echo $y","stdout":"a\ndeep\n","exitCode":0,"quiet":true}
+{"id":"parameters-075","script":"var=value; echo \"${var:+${var}_suffix}\"","stdout":"value_suffix\n","exitCode":0,"quiet":true}
+{"id":"parameters-076","script":"v='$HOME'; echo $v \"$v\"","stdout":"$HOME $HOME\n","exitCode":0,"quiet":true}
+{"id":"parameters-077","script":"s=\"a/b/c\"; echo ${s////-}","stdout":"a-b-c\n","exitCode":0,"quiet":true}
+{"id":"parameters-078","script":"s=\"x  y\"; echo \"${s// /}\"; echo ${s// /}","stdout":"xy\nxy\n","exitCode":0,"quiet":true}

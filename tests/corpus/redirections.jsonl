@@ -1,0 +1,44 @@
+{"id":"redirections-001","script":"echo a > f; echo b >> f; cat f","stdout":"a\nb\n","exitCode":0,"quiet":true}
+{"id":"redirections-002","script":"ls /nonexistent 2>&1 | head -1 | cut -c1-2","stdout":"ls\n","exitCode":0,"quiet":true}
+{"id":"redirections-003","script":"{ echo out; echo err >&2; } > o.txt 2>&1; cat o.txt","stdout":"out\nerr\n","exitCode":0,"quiet":true}
+{"id":"redirections-004","script":"{ echo out; echo err >&2; } &> o.txt; cat o.txt; { echo more; } &>> o.txt; cat o.txt","stdout":"out\nerr\nout\nerr\nmore\n","exitCode":0,"quiet":true}
+{"id":"redirections-005","script":"{ echo out; echo err >&2; } 2>&1 > o.txt | tr a-z A-Z; cat o.txt","stdout":"ERR\nout\n","exitCode":0,"quiet":true}
+{"id":"redirections-006","script":"echo x >| f; cat f","stdout":"x\n","exitCode":0,"quiet":true}
+{"id":"redirections-007","script":"set -o noclobber; echo a > f; echo b > f; echo \"rc=$?\"; echo c >| f; cat f","stdout":"rc=1\nc\n","exitCode":0,"quiet":false}
+{"id":"redirections-008","script":"cat < /dev/null; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":true}
+{"id":"redirections-009","script":"tr a-z A-Z <<< \"hello\"","stdout":"HELLO\n","exitCode":0,"quiet":true}
+{"id":"redirections-010","script":"cat <<'EOF'\nliteral $HOME `x` \\n\nEOF","stdout":"literal $HOME `x` \\n\n","exitCode":0,"quiet":true}
+{"id":"redirections-011","script":"cat <<-EOF\n\ttab stripped\n\t\ttwo tabs\n\tEOF","stdout":"tab stripped\ntwo tabs\n","exitCode":0,"quiet":true}
+{"id":"redirections-012","script":"cat <<EOF | tr a-z A-Z\npiped heredoc\nEOF","stdout":"PIPED HEREDOC\n","exitCode":0,"quiet":true}
+{"id":"redirections-013","script":"x=$(cat <<EOF\nin subst\nEOF\n); echo \"$x\"","stdout":"in subst\n","exitCode":0,"quiet":true}
+{"id":"redirections-014","script":"cat <<A; cat <<B\nfirst\nA\nsecond\nB","stdout":"first\nsecond\n","exitCode":0,"quiet":true}
+{"id":"redirections-015","script":"f() { cat; }; f <<EOF\nto function\nEOF","stdout":"to function\n","exitCode":0,"quiet":true}
+{"id":"redirections-016","script":"while read -r l; do echo \"> $l\"; done <<EOF\na\nb\nEOF","stdout":"> a\n> b\n","exitCode":0,"quiet":true}
+{"id":"redirections-017","script":"cat <<EOF\nline \\\ncontinued\nEOF","stdout":"line continued\n","exitCode":0,"quiet":true}
+{"id":"redirections-018","script":"echo err 1>&2 2>/dev/null; echo ok","stdout":"ok\n","exitCode":0,"quiet":false}
+{"id":"redirections-019","script":"echo to-stderr >&2 2>/dev/null","stdout":"","exitCode":0,"quiet":false}
+{"id":"redirections-020","script":"echo hi > /dev/stdout; echo err > /dev/stderr 2>/dev/null; echo x 2>/dev/null >/dev/stderr","stdout":"hi\n","exitCode":0,"quiet":false}
+{"id":"redirections-021","script":"diff <(echo a) <(echo a) && echo same","stdout":"same\n","exitCode":0,"quiet":true}
+{"id":"redirections-022","script":"cat < <(echo procsub)","stdout":"procsub\n","exitCode":0,"quiet":true}
+{"id":"redirections-023","script":"for i in 1 2; do echo $i; done > o.txt; cat o.txt","stdout":"1\n2\n","exitCode":0,"quiet":true}
+{"id":"redirections-024","script":"if true; then echo in-if; fi > o.txt; cat o.txt","stdout":"in-if\n","exitCode":0,"quiet":true}
+{"id":"redirections-025","script":"f() { echo from-f; }; f > o.txt; cat o.txt","stdout":"from-f\n","exitCode":0,"quiet":true}
+{"id":"redirections-026","script":"f() { echo from-f; } > o.txt; f; cat o.txt","stdout":"from-f\n","exitCode":0,"quiet":true}
+{"id":"redirections-027","script":"echo a > \"file with space\"; cat \"file with space\"","stdout":"a\n","exitCode":0,"quiet":true}
+{"id":"redirections-028","script":"out=o.txt; echo v > $out; cat $out","stdout":"v\n","exitCode":0,"quiet":true}
+{"id":"redirections-029","script":"echo x > /nonexistent/dir/f; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"redirections-030","script":"cat nofile; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"redirections-031","script":"cat < nofile; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"redirections-032","script":"echo a >f 2>&1; cat f","stdout":"a\n","exitCode":0,"quiet":true}
+{"id":"redirections-033","script":"read l < /dev/null; echo \"rc=$? [$l]\"","stdout":"rc=1 []\n","exitCode":0,"quiet":true}
+{"id":"redirections-034","script":"printf 'x\\ny\\n' > f; while read l; do echo $l; done < f","stdout":"x\ny\n","exitCode":0,"quiet":true}
+{"id":"redirections-035","script":"exec 3>&1; echo via3 >&3","stdout":"via3\n","exitCode":0,"quiet":true}
+{"id":"redirections-036","script":"echo foo 3>/dev/null; echo ok","stdout":"foo\nok\n","exitCode":0,"quiet":true}
+{"id":"redirections-037","script":"{ echo 1; echo 2 >&2; } 2>/dev/null","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"redirections-038","script":"ls nonexist 2>/dev/null || echo failed","stdout":"failed\n","exitCode":0,"quiet":true}
+{"id":"redirections-039","script":"cmd_out=$(echo out; echo err >&2); echo \"[$cmd_out]\"","stdout":"[out]\n","exitCode":0,"quiet":false}
+{"id":"redirections-040","script":"cmd_out=$( { echo out; echo err >&2; } 2>&1 ); echo \"[$cmd_out]\"","stdout":"[out\nerr]\n","exitCode":0,"quiet":true}
+{"id":"redirections-041","script":"echo \"a\" | tee f | cat; cat f","stdout":"a\na\n","exitCode":0,"quiet":true}
+{"id":"redirections-042","script":"cat <<< \"$(echo multi; echo line)\"","stdout":"multi\nline\n","exitCode":0,"quiet":true}
+{"id":"redirections-043","script":"cat <<\"EOF\"\nquoted delim $x\nEOF","stdout":"quoted delim $x\n","exitCode":0,"quiet":true}
+{"id":"redirections-044","script":"cat << EOF\nspaced $((1+1))\nEOF","stdout":"spaced 2\n","exitCode":0,"quiet":true}

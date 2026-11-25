@@ -1,0 +1,115 @@
+{"id":"builtins-001","script":"printf '%d %i %o %x %X %u\\n' 42 -3 8 255 255 7","stdout":"42 -3 10 ff FF 7\n","exitCode":0,"quiet":true}
+{"id":"builtins-002","script":"printf '%5s|%-5s|%.2s|%05d|%+d|% d\\n' ab ab abcdef 42 5 5","stdout":"   ab|ab   |ab|00042|+5| 5\n","exitCode":0,"quiet":true}
+{"id":"builtins-003","script":"printf '%f %.2f %e %g %G\\n' 3.14159 2.5 12345.678 0.0001 1e10","stdout":"3.141590 2.50 1.234568e+04 0.0001 1E+10\n","exitCode":0,"quiet":true}
+{"id":"builtins-004","script":"printf '%c%c\\n' hello world","stdout":"hw\n","exitCode":0,"quiet":true}
+{"id":"builtins-005","script":"printf '%b\\n' 'a\\tb' 'c\\nd'","stdout":"a\tb\nc\nd\n","exitCode":0,"quiet":true}
+{"id":"builtins-006","script":"printf '%q\\n' \"it's\" 'a b' '$x' ''","stdout":"it\\'s\na\\ b\n\\$x\n''\n","exitCode":0,"quiet":true}
+{"id":"builtins-007","script":"printf '%*d|%-*d|\\n' 5 42 4 7","stdout":"   42|7   |\n","exitCode":0,"quiet":true}
+{"id":"builtins-008","script":"printf '%s=%s\\n' a 1 b 2 c","stdout":"a=1\nb=2\nc=\n","exitCode":0,"quiet":true}
+{"id":"builtins-009","script":"printf -v out '%03d' 7; echo $out","stdout":"007\n","exitCode":0,"quiet":true}
+{"id":"builtins-010","script":"a=(); printf -v 'a[1]' '%s' x; echo \"${a[1]}\"","stdout":"x\n","exitCode":0,"quiet":true}
+{"id":"builtins-011","script":"printf '%s\\n'; printf 'plain\\n'; printf '%%\\n'","stdout":"\nplain\n%\n","exitCode":0,"quiet":true}
+{"id":"builtins-012","script":"printf '%d\\n' abc; echo \"rc=$?\"","stdout":"0\nrc=1\n","exitCode":0,"quiet":false}
+{"id":"builtins-013","script":"printf '%d\\n' \"'A\" 0x1f 010","stdout":"65\n31\n8\n","exitCode":0,"quiet":true}
+{"id":"builtins-014","script":"printf '%(%Y)T\\n' 0","stdout":"1970\n","exitCode":0,"quiet":true}
+{"id":"builtins-015","script":"printf '%s\\n' \"${undefined[@]}\"; echo end","stdout":"\nend\n","exitCode":0,"quiet":true}
+{"id":"builtins-016","script":"printf '%-10s|\\n' hi; printf '%10.3f|\\n' 3.14159","stdout":"hi        |\n     3.142|\n","exitCode":0,"quiet":true}
+{"id":"builtins-017","script":"printf 'a\\x41\\101\\n'","stdout":"aAA\n","exitCode":0,"quiet":true}
+{"id":"builtins-018","script":"printf \"%s\\n\" 'single' \"double $((1+1))\"","stdout":"single\ndouble 2\n","exitCode":0,"quiet":true}
+{"id":"builtins-019","script":"printf '%5.1f%%\\n' 45.678","stdout":" 45.7%\n","exitCode":0,"quiet":true}
+{"id":"builtins-020","script":"read -r a b c <<< \"1 2 3 4 5\"; echo \"$a|$b|$c\"","stdout":"1|2|3 4 5\n","exitCode":0,"quiet":true}
+{"id":"builtins-021","script":"read -r a b <<< \"only\"; echo \"$a|$b|\"","stdout":"only||\n","exitCode":0,"quiet":true}
+{"id":"builtins-022","script":"read x <<< 'back\\slash'; echo $x; read -r y <<< 'back\\slash'; echo $y","stdout":"backslash\nback\\slash\n","exitCode":0,"quiet":true}
+{"id":"builtins-023","script":"IFS= read -r line <<< \"  spaced  \"; echo \"[$line]\"; read -r line2 <<< \"  spaced  \"; echo \"[$line2]\"","stdout":"[  spaced  ]\n[spaced]\n","exitCode":0,"quiet":true}
+{"id":"builtins-024","script":"read -n 3 c <<< \"abcdef\"; echo $c","stdout":"abc\n","exitCode":0,"quiet":true}
+{"id":"builtins-025","script":"read -N 2 c <<< \"abcdef\"; echo $c","stdout":"ab\n","exitCode":0,"quiet":true}
+{"id":"builtins-026","script":"read -p \"prompt: \" v <<< \"val\"; echo \"$v\"","stdout":"val\n","exitCode":0,"quiet":true}
+{"id":"builtins-027","script":"read -t 1 v <<< \"timed\"; echo $v","stdout":"timed\n","exitCode":0,"quiet":true}
+{"id":"builtins-028","script":"read -s v <<< \"secret\"; echo $v","stdout":"secret\n","exitCode":0,"quiet":true}
+{"id":"builtins-029","script":"read v; echo \"rc=$? [$v]\"","stdout":"rc=1 []\n","exitCode":0,"quiet":true}
+{"id":"builtins-030","script":"printf 'no newline' | { read v; echo \"rc=$? [$v]\"; }","stdout":"rc=1 [no newline]\n","exitCode":0,"quiet":true}
+{"id":"builtins-031","script":"read <<< \"reply var\"; echo \"$REPLY\"","stdout":"reply var\n","exitCode":0,"quiet":true}
+{"id":"builtins-032","script":"read -a arr <<< \"x y z\"; echo ${arr[2]}","stdout":"z\n","exitCode":0,"quiet":true}
+{"id":"builtins-033","script":"read -r a b <<< \"  lead  trail  \"; echo \"[$a][$b]\"","stdout":"[lead][trail]\n","exitCode":0,"quiet":true}
+{"id":"builtins-034","script":"IFS=, read -r a b <<< \"x,y,z\"; echo \"[$a][$b]\"","stdout":"[x][y,z]\n","exitCode":0,"quiet":true}
+{"id":"builtins-035","script":"IFS=, read -r a b <<< \"x,y,\"; echo \"[$a][$b]\"","stdout":"[x][y]\n","exitCode":0,"quiet":true}
+{"id":"builtins-036","script":"echo 'a\\\nb' | { read v; echo \"$v\"; }","stdout":"ab\n","exitCode":0,"quiet":true}
+{"id":"builtins-037","script":"exec 3<<< \"fd3 line\"; read -u 3 v; echo $v","stdout":"fd3 line\n","exitCode":0,"quiet":true}
+{"id":"builtins-038","script":"[ -z \"\" ] && echo z; [ -n \"x\" ] && echo n; [ \"a\" = \"a\" ] && echo eq; [ \"a\" != \"b\" ] && echo ne","stdout":"z\nn\neq\nne\n","exitCode":0,"quiet":true}
+{"id":"builtins-039","script":"[ 2 -gt 1 -a 3 -gt 2 ] && echo and; [ 1 -gt 2 -o 3 -gt 2 ] && echo or","stdout":"and\nor\n","exitCode":0,"quiet":true}
+{"id":"builtins-040","script":"[ ! -e /nonexistent ] && echo notexist; [ -d / ] && echo dir; [ -f / ] || echo notfile","stdout":"notexist\ndir\nnotfile\n","exitCode":0,"quiet":true}
+{"id":"builtins-041","script":"touch f; [ -e f ] && [ -f f ] && [ -r f ] && [ -w f ] && [ ! -s f ] && echo filechecks; echo x > f; [ -s f ] && echo nonempty","stdout":"filechecks\nnonempty\n","exitCode":0,"quiet":true}
+{"id":"builtins-042","script":"[ abc \\< abd ] && echo lt; [[ abc < abd ]] && echo lt2; [[ b > a ]] && echo gt","stdout":"lt\nlt2\ngt\n","exitCode":0,"quiet":true}
+{"id":"builtins-043","script":"[ ]; echo $?; [ x ]; echo $?; [ \"\" ]; echo $?","stdout":"1\n0\n1\n","exitCode":0,"quiet":true}
+{"id":"builtins-044","script":"[ 1 -eq a ]; echo $?","stdout":"2\n","exitCode":0,"quiet":false}
+{"id":"builtins-045","script":"[ 1 = 1 ] ] ; echo $?","stdout":"2\n","exitCode":0,"quiet":false}
+{"id":"builtins-046","script":"[ \"$x\" == \"\" ] && echo empty","stdout":"empty\n","exitCode":0,"quiet":true}
+{"id":"builtins-047","script":"test 5 -ge 5 && echo ge; test -z \"\"; echo $?","stdout":"ge\n0\n","exitCode":0,"quiet":true}
+{"id":"builtins-048","script":"[[ abc =~ ^a(b)(c)$ ]] && echo \"${BASH_REMATCH[0]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${#BASH_REMATCH[@]}\"","stdout":"abc b c 3\n","exitCode":0,"quiet":true}
+{"id":"builtins-049","script":"re='^([0-9]+)-([0-9]+)$'; [[ \"12-34\" =~ $re ]] && echo \"${BASH_REMATCH[1]}+${BASH_REMATCH[2]}\"","stdout":"12+34\n","exitCode":0,"quiet":true}
+{"id":"builtins-050","script":"[[ \"a.b\" =~ a.b ]] && echo dot; [[ \"axb\" =~ \"a.b\" ]] || echo quoted-literal","stdout":"dot\nquoted-literal\n","exitCode":0,"quiet":true}
+{"id":"builtins-051","script":"[[ foo.txt == *.txt ]] && echo glob; [[ foo.txt == \"*.txt\" ]] || echo nolit","stdout":"glob\nnolit\n","exitCode":0,"quiet":true}
+{"id":"builtins-052","script":"[[ -n $undefined ]] || echo empty-unquoted-ok","stdout":"empty-unquoted-ok\n","exitCode":0,"quiet":true}
+{"id":"builtins-053","script":"x=\"a b\"; [[ $x == \"a b\" ]] && echo nosplit","stdout":"nosplit\n","exitCode":0,"quiet":true}
+{"id":"builtins-054","script":"[[ 10 -gt 9 ]] && echo numeric; [[ 10 > 9 ]] || echo lexical","stdout":"numeric\nlexical\n","exitCode":0,"quiet":true}
+{"id":"builtins-055","script":"[[ ! -f nonexist && -d / ]] && echo combo","stdout":"combo\n","exitCode":0,"quiet":true}
+{"id":"builtins-056","script":"[[ (1 -eq 1 || 1 -eq 2) && 2 -eq 2 ]] && echo grouped","stdout":"grouped\n","exitCode":0,"quiet":true}
+{"id":"builtins-057","script":"[[ abc == a* && $((1+1)) -eq 2 ]] && echo mix","stdout":"mix\n","exitCode":0,"quiet":true}
+{"id":"builtins-058","script":"[[ -e /etc/passwd ]] && echo e","stdout":"e\n","exitCode":0,"quiet":true}
+{"id":"builtins-059","script":"[[ $x =~ [0-9]+ ]]; echo $?","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"builtins-060","script":"s=\"hello world\"; [[ $s =~ (o) ]] && echo \"${BASH_REMATCH[1]}\"","stdout":"o\n","exitCode":0,"quiet":true}
+{"id":"builtins-061","script":"[[ \"abc\" == ab? ]] && echo q; [[ \"ab\" == [ab][ab] ]] && echo class","stdout":"q\nclass\n","exitCode":0,"quiet":true}
+{"id":"builtins-062","script":"[[ 1 -eq 1 ]] && [[ 2 -eq 2 ]]; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"builtins-063","script":"[[ abc ]] && echo nonempty; [[ \"\" ]] || echo empty","stdout":"nonempty\nempty\n","exitCode":0,"quiet":true}
+{"id":"builtins-064","script":"[[ -z \"\" && -n \"x\" ]] && echo zn","stdout":"zn\n","exitCode":0,"quiet":true}
+{"id":"builtins-065","script":"[[ x == x ]] && [[ y != x ]] && echo neq","stdout":"neq\n","exitCode":0,"quiet":true}
+{"id":"builtins-066","script":"[[ \"$(echo hi)\" == hi ]] && echo subst","stdout":"subst\n","exitCode":0,"quiet":true}
+{"id":"builtins-067","script":"v=5; [[ $v -ge 1 && $v -le 10 ]] && echo inrange","stdout":"inrange\n","exitCode":0,"quiet":true}
+{"id":"builtins-068","script":"[[ -o errexit ]] || echo noerrexit; set -e; [[ -o errexit ]] && echo errexit","stdout":"noerrexit\nerrexit\n","exitCode":0,"quiet":true}
+{"id":"builtins-069","script":"[[ -t 0 ]] || echo notty","stdout":"notty\n","exitCode":0,"quiet":true}
+{"id":"builtins-070","script":"while getopts \"ab:c\" opt; do case $opt in a) echo A;; b) echo \"B=$OPTARG\";; c) echo C;; \\?) echo bad;; esac; done <<< \"\"; echo $OPTIND","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"builtins-071","script":"set -- -a -b val -c file; while getopts \"ab:c\" opt; do case $opt in a) echo A;; b) echo \"B=$OPTARG\";; c) echo C;; esac; done; shift $((OPTIND-1)); echo \"rest: $*\"","stdout":"A\nB=val\nC\nrest: file\n","exitCode":0,"quiet":true}
+{"id":"builtins-072","script":"set -- -ab val -x; while getopts \"ab:\" opt; do echo \"$opt ${OPTARG:-}\"; done","stdout":"a \nb val\n? \n","exitCode":0,"quiet":false}
+{"id":"builtins-073","script":"set -- -x; while getopts \":ab:\" opt; do case $opt in \\?) echo \"invalid -$OPTARG\";; :) echo \"missing $OPTARG\";; esac; done","stdout":"invalid -x\n","exitCode":0,"quiet":true}
+{"id":"builtins-074","script":"set -- -b; while getopts \":b:\" opt; do case $opt in :) echo \"needs arg: $OPTARG\";; esac; done","stdout":"needs arg: b\n","exitCode":0,"quiet":true}
+{"id":"builtins-075","script":"f() { local OPTIND opt; while getopts \"v\" opt; do echo \"v\"; done; shift $((OPTIND-1)); echo \"$@\"; }; f -v x; f -v y","stdout":"v\nx\nv\ny\n","exitCode":0,"quiet":true}
+{"id":"builtins-076","script":"set -- a b c d; shift 2; echo \"$@\"; shift; echo $#","stdout":"c d\n1\n","exitCode":0,"quiet":true}
+{"id":"builtins-077","script":"shift 3; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":true}
+{"id":"builtins-078","script":"set -- x y; set --; echo $#","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"builtins-079","script":"type echo; type ls; type nonexist; echo \"rc=$?\"","stdout":"echo is a shell builtin\nls is /usr/bin/ls\nrc=1\n","exitCode":0,"quiet":false}
+{"id":"builtins-080","script":"type -t echo ls if; f() { :; }; type -t f","stdout":"builtin\nfile\nkeyword\nfunction\n","exitCode":0,"quiet":true}
+{"id":"builtins-081","script":"command -v ls; command -v echo; command -v nonexist; echo \"rc=$?\"","stdout":"/usr/bin/ls\necho\nrc=1\n","exitCode":0,"quiet":true}
+{"id":"builtins-082","script":"command -V echo","stdout":"echo is a shell builtin\n","exitCode":0,"quiet":true}
+{"id":"builtins-083","script":"which ls; which nonexist; echo $?","stdout":"/usr/bin/ls\n1\n","exitCode":0,"quiet":true}
+{"id":"builtins-084","script":"hash ls; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":true}
+{"id":"builtins-085","script":"export A=1 B=\"$A x\"; echo \"$B\"","stdout":" x\n","exitCode":0,"quiet":true}
+{"id":"builtins-086","script":"export A=\"a b\"; bash -c 'echo \"$A\"'","stdout":"a b\n","exitCode":0,"quiet":true}
+{"id":"builtins-087","script":"f() { local x=\"a b\" y=$(echo c d); echo \"$x|$y\"; }; f","stdout":"a b|c d\n","exitCode":0,"quiet":true}
+{"id":"builtins-088","script":"f() { local a=1 b; b=2; echo $a$b; }; f","stdout":"12\n","exitCode":0,"quiet":true}
+{"id":"builtins-089","script":"x=1; f() { local x; echo \"[$x]\"; }; f","stdout":"[]\n","exitCode":0,"quiet":true}
+{"id":"builtins-090","script":"export -p | grep -c 'declare -x HOME'","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"builtins-091","script":"eval 'echo $((1+2))'; eval \"x=5\"; echo $x","stdout":"3\n5\n","exitCode":0,"quiet":true}
+{"id":"builtins-092","script":"cmd='echo \"a  b\"'; eval \"$cmd\"; eval $cmd","stdout":"a  b\na b\n","exitCode":0,"quiet":true}
+{"id":"builtins-093","script":"eval \"arr=(1 2 3)\"; echo ${#arr[@]}","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"builtins-094","script":"v='$HOME'; eval \"echo $v\"","stdout":"/home/agent\n","exitCode":0,"quiet":true}
+{"id":"builtins-095","script":"eval 'f() { echo evaled; }'; f","stdout":"evaled\n","exitCode":0,"quiet":true}
+{"id":"builtins-096","script":"echo 'echo sourced $1 $#' > s.sh; source s.sh a b; . ./s.sh c","stdout":"sourced a 2\nsourced c 1\n","exitCode":0,"quiet":true}
+{"id":"builtins-097","script":"echo 'x=from_file' > s.sh; . s.sh; echo $x","stdout":"from_file\n","exitCode":0,"quiet":true}
+{"id":"builtins-098","script":"echo 'return 3; echo no' > s.sh; . s.sh; echo \"rc=$?\"","stdout":"rc=3\n","exitCode":0,"quiet":true}
+{"id":"builtins-099","script":"true; echo $?; false; echo $?; :; echo $?","stdout":"0\n1\n0\n","exitCode":0,"quiet":true}
+{"id":"builtins-100","script":"let \"a = 5\" \"b = a * 2\"; echo $b","stdout":"10\n","exitCode":0,"quiet":true}
+{"id":"builtins-101","script":"set -- \"a b\" c; echo \"$#: $1\"","stdout":"2: a b\n","exitCode":0,"quiet":true}
+{"id":"builtins-102","script":"set a b c; echo $2","stdout":"b\n","exitCode":0,"quiet":true}
+{"id":"builtins-103","script":"set -o | grep -E '^(errexit|nounset|pipefail) ' | tr -s ' \\t' ' '","stdout":"errexit off\nnounset off\npipefail off\n","exitCode":0,"quiet":true}
+{"id":"builtins-104","script":"shopt nullglob; shopt -q nullglob || echo off","stdout":"nullglob       \toff\noff\n","exitCode":0,"quiet":true}
+{"id":"builtins-105","script":"echo \"$(type -P ls)\"","stdout":"/usr/bin/ls\n","exitCode":0,"quiet":true}
+{"id":"builtins-106","script":"mapfile -t lines <<< $'a\\nb'; echo \"${#lines[@]}:${lines[1]}\"","stdout":"2:b\n","exitCode":0,"quiet":true}
+{"id":"builtins-107","script":"readarray lines <<< $'a\\nb'; printf '[%s]' \"${lines[@]}\"; echo","stdout":"[a\n][b\n]\n","exitCode":0,"quiet":true}
+{"id":"builtins-108","script":"kill -0 $$; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"builtins-109","script":"builtin echo hi","stdout":"hi\n","exitCode":0,"quiet":true}
+{"id":"builtins-110","script":"enable -n echo 2>/dev/null; echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"builtins-111","script":"ulimit -n >/dev/null; echo $?","stdout":"0\n","exitCode":0,"quiet":true}
+{"id":"builtins-112","script":"times >/dev/null; echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
+{"id":"builtins-113","script":"local x=1; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
+{"id":"builtins-114","script":"return 2>/dev/null; echo \"after return rc=$?\"","stdout":"after return rc=2\n","exitCode":0,"quiet":true}
+{"id":"builtins-115","script":"break; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":false}

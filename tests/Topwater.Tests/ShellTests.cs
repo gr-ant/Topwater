@@ -14,29 +14,6 @@ public class ShellTests
         return r.Stdout;
     }
 
-    [Theory]
-    [InlineData("echo hello world", "hello world\n")]
-    [InlineData("echo 'single $HOME' \"double $USER\"", "single $HOME double agent\n")]
-    [InlineData("echo a\\ b \"c\\\"d\"", "a b c\"d\n")]
-    [InlineData("echo -n hi", "hi")]
-    [InlineData("echo -e 'a\\tb'", "a\tb\n")]
-    [InlineData("X=5; echo $X ${X} \"${MISSING:-dflt}\"", "5 5 dflt\n")]
-    [InlineData("echo $(echo inner) `echo tick`", "inner tick\n")]
-    [InlineData("echo \"$(printf 'a  b')\"", "a  b\n")]
-    [InlineData("true && echo yes || echo no", "yes\n")]
-    [InlineData("false && echo yes || echo no", "no\n")]
-    [InlineData("false; echo $?", "1\n")]
-    [InlineData("! false && echo negated", "negated\n")]
-    [InlineData("printf '%s=%03d\\n' a 7 b 42", "a=007\nb=042\n")]
-    [InlineData("echo one # a comment", "one\n")]
-    [InlineData("{ echo a; echo b; } | wc -l", "2\n")]
-    [InlineData("(cd /tmp && pwd); pwd", "/tmp\n/home/agent\n")]
-    [InlineData("echo ~ ~/x", "/home/agent /home/agent/x\n")]
-    [InlineData("A=1 env | grep '^A='; echo \"[$A]\"", "A=1\n[]\n")]
-    [InlineData("bash -c 'echo from bash'", "from bash\n")]
-    [InlineData("[ 3 -gt 2 ] && test -d /tmp && echo ok", "ok\n")]
-    public async Task Syntax(string cmd, string expected) => Assert.Equal(expected, await Out(new Shell(), cmd));
-
     [Fact]
     public async Task FilesystemPersistsAcrossCalls()
     {
