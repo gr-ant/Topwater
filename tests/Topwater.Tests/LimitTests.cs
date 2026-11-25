@@ -73,7 +73,7 @@ public class LimitTests
     {
         var sh = SmallDisk();
         var r = await sh.RunAsync(Kilobyte + "for i in {1..2000}; do echo $x >> f.txt; done; echo done");
-        Assert.Contains("bash: /home/agent/f.txt: No space left on device", r.Stderr);
+        Assert.Contains("bash: line 1: /home/agent/f.txt: No space left on device", r.Stderr);
         Assert.EndsWith("done\n", r.Stdout); // the call goes on
         Assert.True(sh.Fs.UsedBytes <= 1L << 20);
         Assert.Equal("1\n", (await sh.RunAsync(Kilobyte + "echo $x >> f.txt; echo $?")).Stdout);

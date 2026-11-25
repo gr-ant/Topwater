@@ -43,7 +43,7 @@ export interface Redirect {
   fdVar?: string;
 }
 
-export type Command =
+export type Command = (
   | { k: 'simple'; assigns: Assignment[]; words: Word[]; redirects: Redirect[]; line: number }
   | { k: 'group'; body: Script; subshell: boolean; redirects: Redirect[] }
   | { k: 'if'; branches: [Script, Script][]; else: Script | null; redirects: Redirect[] }
@@ -53,7 +53,9 @@ export type Command =
   | { k: 'case'; subject: Word; clauses: CaseClause[]; redirects: Redirect[] }
   | { k: 'func'; name: string; body: Command; source: string; redirects: Redirect[] }
   | { k: 'arith'; expr: string; redirects: Redirect[]; line: number }
-  | { k: 'cond'; items: Word[]; redirects: Redirect[]; line: number };
+  | { k: 'cond'; items: Word[]; redirects: Redirect[]; line: number })
+  // the line bash names in the command's own errors (a failed redirection, (( )), [[ ]])
+  & { line?: number };
 
 export interface CaseClause { patterns: Word[]; body: Script; terminator: ';;' | ';&' | ';;&' }
 export interface Pipeline { commands: Command[]; negate: boolean; timed: boolean; posixTime: boolean }
@@ -290,8 +292,14 @@ class Parser {
   private parseCommand(): Command {
     if (++this.depth > MAX_DEPTH) throw new ParseError('command is nested too deeply');
     try {
+      this.skipBlank();
+      const start = this.line();
       const cmd = this.parseCommandInner();
-      if (cmd.k !== 'simple' && cmd.k !== 'func') this.parseRedirects(cmd.redirects);
+      if (cmd.k !== 'simple' && cmd.k !== 'func') {
+        this.parseRedirects(cmd.redirects);
+        // a compound command's line is where it starts, or where its redirections are
+        cmd.line = cmd.redirects.length > 0 ? this.line(Math.max(this.pos - 1, 0)) : cmd.line ?? start;
+      }
       return cmd;
     } finally { this.depth--; }
   }
@@ -517,6 +525,7 @@ class Parser {
     const assigns: Assignment[] = [];
     const words: Word[] = [];
     const redirects: Redirect[] = [];
+    let end = this.pos;
     for (;;) {
       this.skipBlank();
       if (this.atEnd()) break;
@@ -537,11 +546,13 @@ class Parser {
       }
       const w = this.readWord();
       if (!w) this.fail();
+      end = this.pos;
       if (words.length === 0 && w.assign) { assigns.push(w.assign); continue; }
       words.push(w);
     }
     if (words.length === 0 && assigns.length === 0 && redirects.length === 0) this.fail();
-    return { k: 'simple', assigns, words, redirects, line };
+    // bash reports a command that spans lines (a quoted newline) at its last line
+    return { k: 'simple', assigns, words, redirects, line: Math.max(line, this.line(Math.max(end - 1, 0))) };
   }
 
   private parseRedirects(into: Redirect[]) {

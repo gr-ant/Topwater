@@ -132,7 +132,7 @@ public class AgentFeatureTests
         // chmod on the agent's own files is real and visible
         await Out(sh, "printf 'echo ran' > s.sh");
         var r = await sh.RunAsync("./s.sh");
-        Assert.Equal((126, "bash: ./s.sh: Permission denied\n"), (r.ExitCode, r.Stderr));
+        Assert.Equal((126, "bash: line 1: ./s.sh: Permission denied\n"), (r.ExitCode, r.Stderr));
         Assert.Equal("-rw-r--r--\n-rwxr-xr-x\nran\n", await Out(sh, "ls -l s.sh | cut -c1-10; chmod +x s.sh; ls -l s.sh | cut -c1-10; ./s.sh"));
         Assert.Equal("mode of 's.sh' changed from 0755 (rwxr-xr-x) to 0700 (rwx------)\n", await Out(sh, "chmod -v go-rx s.sh"));
         Assert.Equal("640 agent\n", await Out(sh, "chmod 640 s.sh; stat -c '%a %U' s.sh"));
@@ -141,7 +141,7 @@ public class AgentFeatureTests
         // system areas belong to root
         foreach (var (cmd, err) in new[]
         {
-            ("echo x > /etc/motd", "bash: /etc/motd: Permission denied\n"),
+            ("echo x > /etc/motd", "bash: line 1: /etc/motd: Permission denied\n"),
             ("rm /usr/bin/grep", "rm: cannot remove '/usr/bin/grep': Permission denied\n"),
             ("chmod 777 /etc/passwd", "chmod: changing permissions of '/etc/passwd': Operation not permitted\n"),
             ("chown agent /etc/passwd", "chown: changing ownership of '/etc/passwd': Operation not permitted\n"),

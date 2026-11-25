@@ -118,14 +118,14 @@ class AgentFeatureTests(unittest.TestCase):
         # chmod on the agent's own files is real and visible
         out(sh, "printf 'echo ran' > s.sh")
         r = sh.run("./s.sh")
-        self.assertEqual((126, "bash: ./s.sh: Permission denied\n"), (r.exit_code, r.stderr))
+        self.assertEqual((126, "bash: line 1: ./s.sh: Permission denied\n"), (r.exit_code, r.stderr))
         self.assertEqual("-rw-r--r--\n-rwxr-xr-x\nran\n", out(sh, "ls -l s.sh | cut -c1-10; chmod +x s.sh; ls -l s.sh | cut -c1-10; ./s.sh"))
         self.assertEqual("mode of 's.sh' changed from 0755 (rwxr-xr-x) to 0700 (rwx------)\n", out(sh, "chmod -v go-rx s.sh"))
         self.assertEqual("640 agent\n", out(sh, "chmod 640 s.sh; stat -c '%a %U' s.sh"))
         self.assertEqual("ok\n", out(sh, "[ -x /usr/bin/grep ] && [ ! -w /etc/passwd ] && [ -w ~ ] && echo ok"))
         # system areas belong to root
         for cmd, err in [
-            ("echo x > /etc/motd", "bash: /etc/motd: Permission denied\n"),
+            ("echo x > /etc/motd", "bash: line 1: /etc/motd: Permission denied\n"),
             ("rm /usr/bin/grep", "rm: cannot remove '/usr/bin/grep': Permission denied\n"),
             ("chmod 777 /etc/passwd", "chmod: changing permissions of '/etc/passwd': Operation not permitted\n"),
             ("chown agent /etc/passwd", "chown: changing ownership of '/etc/passwd': Operation not permitted\n"),

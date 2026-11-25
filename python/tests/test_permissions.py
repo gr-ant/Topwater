@@ -23,24 +23,24 @@ def setup() -> Shell:
 
 
 def err(r) -> str:
-    return r.stderr.replace("bash: line 1: ", "").replace("bash: ", "")
+    return r.stderr
 
 
 UNSEARCHABLE = [
     ("cat /root/notes.txt", "cat: /root/notes.txt: Permission denied\n"),
     ("cat /root/missing", "cat: /root/missing: Permission denied\n"),
-    ("cat < /root/notes.txt", "/root/notes.txt: Permission denied\n"),
-    ("source /root/notes.txt", "/root/notes.txt: Permission denied\n"),
+    ("cat < /root/notes.txt", "bash: line 1: /root/notes.txt: Permission denied\n"),
+    ("source /root/notes.txt", "bash: line 1: /root/notes.txt: Permission denied\n"),
     ("cat /root/*", "cat: '/root/*': Permission denied\n"),
     ("grep -r private /root", "grep: /root: Permission denied\n"),
     ("ls /root", "ls: cannot open directory '/root': Permission denied\n"),
     ("ls -l /root/notes.txt", "ls: cannot access '/root/notes.txt': Permission denied\n"),
     ("stat /root/notes.txt", "stat: cannot statx '/root/notes.txt': Permission denied\n"),
-    ("cd /root", "cd: /root: Permission denied\n"),
+    ("cd /root", "bash: line 1: cd: /root: Permission denied\n"),
     ("cp /root/notes.txt ~/n", "cp: cannot stat '/root/notes.txt': Permission denied\n"),
     ("chmod 777 /root/notes.txt", "chmod: cannot access '/root/notes.txt': Permission denied\n"),
     ("to-markdown /root/notes.txt", "to-markdown: /root/notes.txt: Permission denied\n"),
-    ("echo x > /root/notes.txt", "/root/notes.txt: Permission denied\n"),
+    ("echo x > /root/notes.txt", "bash: line 1: /root/notes.txt: Permission denied\n"),
     ("rm /root/notes.txt", "rm: cannot remove '/root/notes.txt': Permission denied\n"),
 ]
 
@@ -112,7 +112,7 @@ def test_directory_write_permission():
     sh.run("mkdir -p ro/sub; echo b > ro/b; echo c > ro/sub/c; chmod 555 ro/sub; chmod 555 ro")
     for cmd, expected in [
         ("touch ro/new", "touch: cannot touch 'ro/new': Permission denied\n"),
-        ("echo x > ~/ro/new", "/home/agent/ro/new: Permission denied\n"),
+        ("echo x > ~/ro/new", "bash: line 1: /home/agent/ro/new: Permission denied\n"),
         ("mkdir ro/d", "mkdir: cannot create directory ‘ro/d’: Permission denied\n"),
         ("rm ro/b", "rm: cannot remove 'ro/b': Permission denied\n"),
         ("rm -r ro/sub", "rm: cannot remove 'ro/sub/c': Permission denied\n"),
@@ -132,7 +132,7 @@ def test_replace_unwritable_file_in_own_directory():
     sh = setup()
     sh.fs.write_text("/home/agent/cfg", "app")
     sh.fs.set_owner("/home/agent/cfg", "root")
-    assert err(sh.run("echo agent > ~/cfg")) == "/home/agent/cfg: Permission denied\n"
+    assert err(sh.run("echo agent > ~/cfg")) == "bash: line 1: /home/agent/cfg: Permission denied\n"
     assert sh.run("stat -c '%U' ~ | tr '\\n' ' '; stat -c %U ~/cfg; rm ~/cfg && echo agent > ~/cfg && cat ~/cfg | tr '\\n' ' '; "
                   "stat -c %U ~/cfg").stdout == "agent root\nagent agent\n"
 

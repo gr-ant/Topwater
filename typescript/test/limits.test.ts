@@ -84,7 +84,7 @@ describe('filesystem cap', () => {
   it('an append loop stops at the cap and rm frees space', async () => {
     const sh = smallDisk();
     const r = await sh.run(kilobyte + 'for i in {1..2000}; do echo $x >> f.txt; done; echo done');
-    expect(r.stderr).toContain('bash: /home/agent/f.txt: No space left on device');
+    expect(r.stderr).toContain('bash: line 1: /home/agent/f.txt: No space left on device');
     expect(r.stdout.endsWith('done\n')).toBe(true);
     expect(sh.fs.usedBytes).toBeLessThanOrEqual(1 << 20);
     expect((await sh.run(kilobyte + 'echo $x >> f.txt; echo $?')).stdout).toBe('1\n');

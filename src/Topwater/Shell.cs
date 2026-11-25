@@ -303,6 +303,12 @@ public sealed partial class Shell
     int[] _pipeStatus = [];
     readonly List<string> _funcNames = [];
     readonly List<string> _sources = [];
+    readonly List<(string Name, bool File)> _errWhere = []; // whose name starts bash's own errors: a script file, bash -c, a function's origin
+    readonly Dictionary<string, string> _funcWhere = [];
+
+    /// <summary>bash's prefix for its own errors: "bash: line 3: ", "./s.sh: line 2: ", or "environment: line 1: " in a
+    /// function defined in a bash -c string.</summary>
+    internal string ErrPrefix => $"{(_errWhere.Count > 0 ? _errWhere[^1].Name : "bash")}: line {Math.Max(_lineno, 1)}: ";
     string _arg0 = "bash";
     /// <summary>`export -f name`: functions a child bash (bash -c, a script) also gets.</summary>
     internal HashSet<string> ExportedFunctions { get; } = [];
@@ -455,7 +461,7 @@ public sealed partial class Shell
         int code;
         string? trailer = null;
         var previousUser = Fs.RunAs;
-        _totalIterations = _scriptDepth = 0;
+        _totalIterations = _scriptDepth = _lineno = 0; // each call is a new bash -c: its lines count from 1
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(Options.MaxCallDuration);
         var callToken = budget.Token; // everything below, built-ins included, sees the call's time limit
@@ -536,8 +542,10 @@ public sealed partial class Shell
         catch (ParseException e) { io.Err.WriteLine($"bash: {e.Message}"); return 2; }
         if (++_scriptDepth > 100) throw new LimitExceeded("maximum script nesting level exceeded (100)");
         var savedArg0 = _arg0;
-        int sources = _sources.Count;
+        int sources = _sources.Count, where = _errWhere.Count, line = _lineno;
         if ((process?.File ?? sourced) is { } file) _sources.Add(file);
+        if (process != null) _errWhere.Add((process.File ?? process.Arg0, process.File != null));
+        else if (sourced != null) _errWhere.Add((sourced, true));
         try
         {
             if (!subshell)
@@ -565,6 +573,8 @@ public sealed partial class Shell
             _scriptDepth--;
             _arg0 = savedArg0;
             _sources.RemoveRange(sources, _sources.Count - sources);
+            _errWhere.RemoveRange(where, _errWhere.Count - where);
+            _lineno = line;
         }
     }
 
@@ -811,6 +821,7 @@ public sealed partial class Shell
         if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new LimitExceeded("maximum nesting level exceeded");
         if (cmd is SimpleCommand { Assignments.Count: 0, Words: [var only] } && only.Is("exec")) return await ExecRedirectsAsync(cmd.Redirects, io, ct);
+        if (cmd.Line > 0) _lineno = cmd.Line; // a failed redirection reports this line too
         var sinks = new List<FileSink>();
         var redirected = await ApplyRedirectsAsync(cmd.Redirects, io, sinks, ct);
         if (redirected is not { } rio) return 1;
@@ -837,7 +848,7 @@ public sealed partial class Shell
         }
         catch (ShellException e)
         {
-            rio.Err.WriteLine($"bash: {e.Message}");
+            rio.Err.WriteLine($"{ErrPrefix}{e.Message}");
             code = cmd is CondCommand ? 2 : e.ExitCode;
         }
         catch (RegexMatchTimeoutException) { throw new LimitExceeded("pattern matching took too long"); }
@@ -846,7 +857,7 @@ public sealed partial class Shell
             foreach (var sink in sinks)
             {
                 try { Fs.AppendAllText(sink.Path, sink.ToString()); }
-                catch (ShellException e) { io.Err.WriteLine($"bash: {e.Message}"); code = 1; }
+                catch (ShellException e) { io.Err.WriteLine($"{ErrPrefix}{e.Message}"); code = 1; }
             }
         }
         return code;
@@ -855,6 +866,7 @@ public sealed partial class Shell
     int DefineFunction(FunctionDef d)
     {
         Functions[d.Name] = d;
+        _funcWhere[d.Name] = _errWhere.Count > 0 && _errWhere[^1].File ? _errWhere[^1].Name : "environment";
         return 0;
     }
 
@@ -1027,7 +1039,7 @@ public sealed partial class Shell
             }
             catch (ShellException e)
             {
-                io.Err.WriteLine($"bash: {e.Message}");
+                io.Err.WriteLine($"{ErrPrefix}{e.Message}");
                 return null;
             }
         }
@@ -1112,7 +1124,7 @@ public sealed partial class Shell
             }
             catch (ShellException e)
             {
-                io.Err.WriteLine($"bash: {e.Message}");
+                io.Err.WriteLine($"{ErrPrefix}{e.Message}");
                 return 1;
             }
         }
@@ -1154,7 +1166,7 @@ public sealed partial class Shell
             }
             catch (ShellException e) when (words.Count == 0 && e.Message.EndsWith("readonly variable"))
             {
-                io.Err.WriteLine($"bash: {e.Message}");
+                io.Err.WriteLine($"{ErrPrefix}{e.Message}");
                 throw new ExitSignal(1); // like bash, assigning a read-only variable ends the script
             }
         }
@@ -1252,7 +1264,7 @@ public sealed partial class Shell
         }
         catch (ShellException e)
         {
-            io.Err.WriteLine($"{(e is UsageException || Builtins.IsShellBuiltin(this, name) ? "bash: " : "")}{name}: {e.Message}");
+            io.Err.WriteLine($"{(e is UsageException || Builtins.IsShellBuiltin(this, name) ? ErrPrefix : "")}{name}: {e.Message}");
             return e is UsageException ? 2 : e.ExitCode;
         }
         catch (Exception e) when (e is FormatException or OverflowException)
@@ -1271,17 +1283,17 @@ public sealed partial class Shell
 
     async Task<int> RunScriptFileAsync(string name, string path, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
-        if (Fs.IsDirectory(path)) { io.Err.WriteLine($"bash: {name}: Is a directory"); return 126; }
-        if (!Fs.IsFile(path)) { io.Err.WriteLine($"bash: {name}: No such file or directory"); return 127; }
-        if (!Fs.CanExecute(path) || !Fs.CanRead(path)) { io.Err.WriteLine($"bash: {name}: Permission denied"); return 126; }
+        if (Fs.IsDirectory(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: Is a directory"); return 126; }
+        if (!Fs.IsFile(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: No such file or directory"); return 127; }
+        if (!Fs.CanExecute(path) || !Fs.CanRead(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: Permission denied"); return 126; }
         var text = Fs.ReadAllText(path);
-        if (text.StartsWith(ExecutableStub[..4])) { io.Err.WriteLine($"bash: {name}: cannot execute binary file"); return 126; }
+        if (text.StartsWith(ExecutableStub[..4])) { io.Err.WriteLine($"{ErrPrefix}{name}: cannot execute binary file"); return 126; }
         if (text.StartsWith("#!"))
         {
             var interp = text[2..(text.IndexOf('\n') is var nl and >= 0 ? nl : text.Length)].Trim();
             if (!Regex.IsMatch(interp, @"(^|/|\s)(ba)?sh(\s|$)"))
             {
-                io.Err.WriteLine($"bash: {name}: {interp.Split(' ')[0]}: bad interpreter: No such file or directory");
+                io.Err.WriteLine($"{ErrPrefix}{name}: {interp.Split(' ')[0]}: bad interpreter: No such file or directory");
                 return 126;
             }
         }
@@ -1297,11 +1309,15 @@ public sealed partial class Shell
         _locals.Push([]);
         _localArrays.Push(new Dictionary<string, ShellArray?>());
         _funcNames.Add(argv[0]);
-        int code;
+        var where = _funcWhere.GetValueOrDefault(argv[0], "environment");
+        _errWhere.Add((where, where != "environment"));
+        int code, line = _lineno;
         try { code = await ExecCommandAsync(body, io, ct); }
         catch (ReturnSignal r) { code = r.Code; }
         finally
         {
+            _errWhere.RemoveAt(_errWhere.Count - 1);
+            _lineno = line;
             // shadowed values come back without passing ChargeVariable, so they count again
             foreach (var (k, v) in _localArrays.Pop())
                 if (v == null) Arrays.Remove(k); else { Arrays[k] = v; _variableChars += v.Items.Sum(e => (long)e.Key.Length + e.Value.Length); }
@@ -1778,7 +1794,7 @@ public sealed partial class Shell
     /// <summary>An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1).</summary>
     ExitSignal Fatal(Io io, string message, int code)
     {
-        io.Err.WriteLine($"bash: {message}");
+        io.Err.WriteLine($"{ErrPrefix}{message}");
         return new ExitSignal(_subshell > 0 ? 1 : code);
     }
 
@@ -1856,7 +1872,7 @@ public sealed partial class Shell
         {
             string? element;
             try { element = GetElement(one.Name, await SubscriptAsync(one.Sub, io, ct)); }
-            catch (ShellException e) { io.Err.WriteLine($"bash: {e.Message}"); element = null; } // like bash: reported, and the expansion is empty
+            catch (ShellException e) { io.Err.WriteLine($"{ErrPrefix}{e.Message}"); element = null; } // like bash: reported, and the expansion is empty
             return await ElementOpAsync(element, one.Tail, io, ct, quoted);
         }
         if (expr.Length > 1 && expr[0] == '#')
@@ -2013,7 +2029,7 @@ public sealed partial class Shell
             }
             catch (ShellException e)
             {
-                io.Err.WriteLine($"bash: {target}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
+                io.Err.WriteLine($"{ErrPrefix}{target}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
                 LastExitCode = 1;
                 return "";
             }

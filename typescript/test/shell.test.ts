@@ -161,4 +161,21 @@ describe('shell', () => {
     expect((await sh.run('bash -c \'echo "[$API_URL]"\'')).stdout).toBe('[https://x]\n');
     expect((await sh.run('export -n API_URL; bash -c \'echo "[$API_URL]"\'')).stdout).toBe('[]\n');
   });
+
+  it('counts lines from 1 in each call', async () => {
+    const sh = new Shell();
+    await sh.run('true\ntrue\ntrue\ntrue\ntrue');
+    expect((await sh.run('while read l; do :; done < /nofile')).stderr).toBe('bash: line 1: /nofile: No such file or directory\n');
+    expect((await sh.run('true\ntrue\nif true; then :; fi > /nope/z')).stderr).toBe('bash: line 3: /nope/z: No such file or directory\n');
+  });
+
+  it('keeps a long run of quantifiers fast', async () => {
+    const sh = new Shell();
+    const t = Date.now();
+    // a 1 MB run of * on one atom: one quantifier, built in one pass
+    const r = await sh.run('p=\'*\'; for i in {1..20}; do p=$p$p; done; echo aaa | grep -cE "a$p"; [[ aaa =~ a$p ]]; echo $?; echo aaa | sed -E "s/a$p/X/"');
+    expect(r.stdout).toBe('1\n0\nX\n');
+    expect(Date.now() - t).toBeLessThan(10_000);
+    expect((await sh.run('p=$(printf \'\\\\{1\\\\}%.0s\' {1..40}); echo aaa | grep -c "a$p"')).stderr).toBe('grep: Regular expression too big\n');
+  });
 });

@@ -439,6 +439,8 @@ class Shell:
         self._pipe_status: list[int] = []
         self._func_names: list[str] = []
         self._sources: list[str] = []
+        self._err_where: list[tuple[str, bool]] = []  # whose name starts bash's own errors: a script file, bash -c, a function's origin
+        self._func_where: dict[str, str] = {}
         self._arg0 = "bash"
         self._jobs: dict[int, int] = {}
         self._seconds_base = time.time()
@@ -721,6 +723,7 @@ class Shell:
         trailer = None
         previous_user, self.fs.run_as = self.fs.run_as, self.user  # the agent's commands run as a regular user
         self._total_iterations = self._script_depth = self._arith_depth = 0
+        self._lineno = 0  # each call is a new bash -c: its lines count from 1
         self._deadline = time.monotonic() + self.max_call_duration
         io_ = _Io(StdinBuffer(), SwitchWriter(out), SwitchWriter(err))
 
@@ -770,6 +773,12 @@ class Shell:
         self.last_exit_code = code
         return ShellResult(bytetext.printable(out.getvalue()), bytetext.printable(err.getvalue()), code, trailer)
 
+    @property
+    def err_prefix(self) -> str:
+        """bash's prefix for its own errors: "bash: line 3: ", "./s.sh: line 2: ", or "environment: line 1: " in a
+        function defined in a bash -c string."""
+        return f"{self._err_where[-1][0] if self._err_where else 'bash'}: line {max(self._lineno, 1)}: "
+
     async def _run_script_text(self, text: str, io_: _Io, subshell: bool, positional: list[str] | None = None,
                                process: _NewProcess | None = None, sourced: str | None = None) -> int:
         """process is set for a new bash process (it sees only exported variables and functions); sourced is the file
@@ -783,10 +792,14 @@ class Shell:
         if self._script_depth > 100:
             raise LimitExceeded("maximum script nesting level exceeded (100)")
         saved_arg0 = self._arg0
-        sources = len(self._sources)
+        sources, where, line = len(self._sources), len(self._err_where), self._lineno
         file = (process.file if process else None) or sourced
         if file is not None:
             self._sources.append(file)
+        if process is not None:
+            self._err_where.append((process.file or process.arg0, process.file is not None))
+        elif sourced is not None:
+            self._err_where.append((sourced, True))
         try:
             if not subshell:
                 saved_pos = self.positional
@@ -817,6 +830,8 @@ class Shell:
             self._script_depth -= 1
             self._arg0 = saved_arg0
             del self._sources[sources:]
+            del self._err_where[where:]
+            self._lineno = line
 
     def _become_new_process(self, process: _NewProcess) -> None:
         """What a child bash inherits: exported variables (not their other attributes) and exported functions."""
@@ -980,6 +995,8 @@ class Shell:
     async def _exec_command(self, cmd, io_: _Io) -> int:
         if isinstance(cmd, SimpleCommand) and not cmd.assignments and len(cmd.words) == 1 and cmd.words[0].is_("exec"):
             return await self._exec_redirects(cmd.redirects, io_)
+        if getattr(cmd, "line", 0) > 0:
+            self._lineno = cmd.line  # a failed redirection reports this line too
         sinks: list[FileSink] = []
         rio = await self._apply_redirects(cmd.redirects, io_, sinks)
         if rio is None:
@@ -1001,20 +1018,21 @@ class Shell:
                 code = await self._exec_case(cmd, rio)
             elif isinstance(cmd, FunctionDef):
                 self.functions[cmd.name] = cmd
+                self._func_where[cmd.name] = self._err_where[-1][0] if self._err_where and self._err_where[-1][1] else "environment"
                 code = 0
             elif isinstance(cmd, ArithCommand):
                 code = 0 if await self._arith(cmd.expr, rio) != 0 else 1
             else:
                 code = 0 if await _CondEvaluator(self, cmd.items, rio).evaluate() else 1
         except ShellError as e:
-            rio.err.write(f"bash: {e}\n")
+            rio.err.write(f"{self.err_prefix}{e}\n")
             code = 2 if isinstance(cmd, CondCommand) else e.exit_code
         finally:
             for sink in sinks:
                 try:
                     self.fs.append_text(sink.path, sink.getvalue())
                 except ShellError as e:
-                    io_.err.write(f"bash: {e}\n")
+                    io_.err.write(f"{self.err_prefix}{e}\n")
                     code = 1
         return code
 
@@ -1170,7 +1188,7 @@ class Shell:
                     w = await self._open_output(r, io_, open_sink)
                     io_ = replace(io_, out=w, err=w) if r.op.startswith("&") else _with_fd(io_, r.fd, w)
             except ShellError as e:
-                io_.err.write(f"bash: {e}\n")
+                io_.err.write(f"{self.err_prefix}{e}\n")
                 return None
         return io_
 
@@ -1257,7 +1275,7 @@ class Shell:
                     else:
                         self.fds[fd] = target
             except ShellError as e:
-                io_.err.write(f"bash: {e}\n")
+                io_.err.write(f"{self.err_prefix}{e}\n")
                 return 1
         return 0
 
@@ -1299,7 +1317,7 @@ class Shell:
             except ShellError as e:
                 if words or not str(e).endswith("readonly variable"):
                     raise
-                io_.err.write(f"bash: {e}\n")
+                io_.err.write(f"{self.err_prefix}{e}\n")
                 raise ExitSignal(1) from None  # like bash, assigning a read-only variable ends the script
 
         if not argv:
@@ -1391,12 +1409,12 @@ class Shell:
             raise
         except UsageException as e:
             if is_shell_builtin(self, name):
-                io_.err.write(f"bash: {name}: {e}\n")
+                io_.err.write(f"{self.err_prefix}{name}: {e}\n")
                 return 2
             io_.err.write(usage_error("grep" if name in ("egrep", "fgrep") else name, str(e)))
             return 2 if name in ("ls", "grep", "egrep", "fgrep", "sort", "diff") else 1
         except ShellError as e:
-            io_.err.write(f"{'bash: ' if is_shell_builtin(self, name) else ''}{name}: {e}\n")
+            io_.err.write(f"{self.err_prefix if is_shell_builtin(self, name) else ''}{name}: {e}\n")
             return e.exit_code
         except Exception as e:  # a tool crashing must not crash the agent loop
             m = _BAD_INT.match(str(e)) if isinstance(e, ValueError) else None
@@ -1405,22 +1423,22 @@ class Shell:
 
     async def _run_script_file(self, name: str, path: str, argv: list[str], io_: _Io) -> int:
         if self.fs.is_dir(path):
-            io_.err.write(f"bash: {name}: Is a directory\n")
+            io_.err.write(f"{self.err_prefix}{name}: Is a directory\n")
             return 126
         if not self.fs.is_file(path):
-            io_.err.write(f"bash: {name}: No such file or directory\n")
+            io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n")
             return 127
         if not (self.fs.can_execute(path) and self.fs.can_read(path)):
-            io_.err.write(f"bash: {name}: Permission denied\n")
+            io_.err.write(f"{self.err_prefix}{name}: Permission denied\n")
             return 126
         text = self.fs.read_text(path)
         if text.startswith(EXECUTABLE_STUB[:4]):
-            io_.err.write(f"bash: {name}: cannot execute binary file\n")
+            io_.err.write(f"{self.err_prefix}{name}: cannot execute binary file\n")
             return 126
         if text.startswith("#!"):
             interp = text[2:].split("\n", 1)[0].strip()
             if not re.search(r"(^|/|\s)(ba)?sh(\s|$)", interp):
-                io_.err.write(f"bash: {name}: {interp.split(' ')[0]}: bad interpreter: No such file or directory\n")
+                io_.err.write(f"{self.err_prefix}{name}: {interp.split(' ')[0]}: bad interpreter: No such file or directory\n")
                 return 126
         return await self._run_script_text(text, io_, subshell=True, positional=list(argv[1:]), process=_NewProcess(name, name))
 
@@ -1433,6 +1451,9 @@ class Shell:
         self._locals.append({})
         self._local_arrays.append({})
         self._func_names.append(argv[0])
+        where = self._func_where.get(argv[0], "environment")
+        self._err_where.append((where, where != "environment"))
+        line = self._lineno
         try:
             code = await self._exec_command(body, io_)
         except ReturnSignal as r:
@@ -1457,6 +1478,8 @@ class Shell:
                     self.var_attrs[k] = attrs
             self.positional = saved_pos
             self._func_names.pop()
+            self._err_where.pop()
+            self._lineno = line
         # a RETURN trap set inside the function runs as it returns
         trap = self.traps.get("RETURN")
         if trap and trap != on_return:
@@ -1952,7 +1975,7 @@ class Shell:
 
     def _fatal(self, io_: _Io, message: str, code: int) -> ExitSignal:
         """An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1)."""
-        io_.err.write(f"bash: {message}\n")
+        io_.err.write(f"{self.err_prefix}{message}\n")
         return ExitSignal(1 if self._subshell > 0 else code)
 
     def _indirect_target(self, expr: str) -> str | None:
@@ -2038,7 +2061,7 @@ class Shell:
             try:
                 element = self.get_element(one[1], await self._subscript(one[2], io_))
             except ShellError as e:
-                io_.err.write(f"bash: {e}\n")  # like bash: reported, and the expansion is empty
+                io_.err.write(f"{self.err_prefix}{e}\n")  # like bash: reported, and the expansion is empty
                 element = None
             return await self._element_op(element, one[3], io_, quoted)
         if len(expr) > 1 and expr[0] == "#":
@@ -2225,7 +2248,7 @@ class Shell:
                 text = self.fs.read_text(self.resolve(target))
                 self.last_exit_code = 0
             except ShellError as e:
-                io_.err.write(f"bash: {target}: {str(e).rsplit(': ', 1)[-1]}\n")
+                io_.err.write(f"{self.err_prefix}{target}: {str(e).rsplit(': ', 1)[-1]}\n")
                 text, self.last_exit_code = "", 1
             return text.rstrip("\n")
         out = CappedWriter(self)

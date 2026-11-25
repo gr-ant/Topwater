@@ -1,7 +1,7 @@
 import type { Shell } from '../shell.js';
 import { Args, ShellError, UsageException, quoteL, inputBytes, inputs, reason, splitLines, type CommandContext, type CommandHandler } from '../command.js';
 import { decodeBytes, encodeText as encodeBytes } from '../bytes.js';
-import { escapeRegex, posixToJs } from '../regex.js';
+import { escapeRegex, posixRegexError, posixToJs } from '../regex.js';
 import { globRegex } from '../glob.js';
 import { printfFormat, unescape } from '../format.js';
 import { VirtualFileSystem } from '../vfs.js';
@@ -26,6 +26,9 @@ function intArg(s: string, what: string): number {
 function grepRegex(patterns: string[], o: { E: boolean; F: boolean; i: boolean; w: boolean; x: boolean; P: boolean }): RegExp {
   // JS has no \K: a leading X\KY means (?<=X)Y
   const keep = (p: string) => { const k = p.indexOf('\\K'); return k > 0 ? `(?<=${p.slice(0, k)})${p.slice(k + 2)}` : p; };
+  // GNU reports every bad pattern, one line each; the shell adds the first "grep: "
+  const errors = o.F || o.P ? [] : patterns.map(p => posixRegexError(p, o.E, true)).filter((e): e is string => e !== null);
+  if (errors.length > 0) throw new ShellError(errors.join('\ngrep: '), 2);
   const parts = patterns.map(p => (o.F ? escapeRegex(p) : o.P ? keep(p) : posixToJs(p, o.E)));
   let re = parts.length === 1 ? parts[0] : parts.map(p => `(?:${p})`).join('|');
   if (o.w) re = `(?<!\\w)(?:${re})(?!\\w)`;
@@ -77,6 +80,11 @@ function grep(ctx: CommandContext): number {
   const recursive = a.has('r') || a.has('R');
   const implicitDot = recursive && positional.length === 0;
   if (implicitDot) positional.push('.');
+  if (a.has('E') && !a.has('F') && !a.has('P'))
+    for (const p of patterns) {
+      const lead = /^[*+?]|(?<!\\)[(|]([*+?])/.exec(p);
+      if (lead) ctx.stderr.write(`grep: warning: ${lead[0].slice(-1)} at start of expression\n`);
+    }
   const re = grepRegex(patterns, { E: a.has('E'), F: a.has('F'), i: a.has('i'), w: a.has('w'), x: a.has('x'), P: a.has('P') });
   const num = (v: string | undefined, what: string) => { if (v === undefined) return 0; if (!/^\d+$/.test(v)) throw new ShellError(`${v}: invalid ${what} argument`, 2); return parseInt(v, 10); };
   const after = num(a.value('A') ?? a.value('C'), 'context length'), before = num(a.value('B') ?? a.value('C'), 'context length');

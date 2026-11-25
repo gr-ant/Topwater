@@ -22,7 +22,7 @@ internal static partial class Builtins
     static int LoopJump(CommandContext ctx, bool isBreak)
     {
         if (ctx.Shell.LoopDepth > 0) throw new LoopControl(isBreak, Math.Max(1, ParseCount(ctx, 1)));
-        ctx.Stderr.WriteLine($"bash: {ctx.Name}: only meaningful in a `for', `while', or `until' loop");
+        ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: only meaningful in a `for', `while', or `until' loop");
         return 0;
     }
 
@@ -65,7 +65,7 @@ internal static partial class Builtins
         else if (sh.Functions.TryGetValue(a, out var f)) ctx.Stdout.WriteLine($"{a} is a function\n{a} () \n{f.Source}");
         else if (IsShellBuiltin(sh, a)) ctx.Stdout.WriteLine($"{a} is a shell builtin");
         else if (sh.Commands.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is /usr/bin/{a}");
-        else { ctx.Stderr.WriteLine($"bash: type: {a}: not found"); return false; }
+        else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}type: {a}: not found"); return false; }
         return true;
     }
 
@@ -108,7 +108,16 @@ internal static partial class Builtins
 
     static void RegisterScriptingCommands(Shell shell)
     {
-        shell.Register("exit", (Func<CommandContext, int>)(ctx => throw new ExitSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255)), "Exit the shell");
+        shell.Register("exit", (Func<CommandContext, int>)(ctx =>
+        {
+            if (ctx.Args.Count > 0 && !int.TryParse(ctx.Args[0], out _))
+            {
+                // bash still exits, with status 2
+                ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}exit: {ctx.Args[0]}: numeric argument required");
+                throw new ExitSignal(2);
+            }
+            throw new ExitSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255);
+        }), "Exit the shell");
         shell.Register("return", (Func<CommandContext, int>)(ctx =>
         {
             if (!ctx.Shell.InFunction && ctx.Shell.SourceDepth == 0) throw new ShellException("can only `return' from a function or sourced script", 2);
@@ -268,7 +277,7 @@ internal static partial class Builtins
             {
                 foreach (var n in names)
                     if (DeclareLine(sh, n) is { } line) ctx.Stdout.WriteLine(line);
-                    else { ctx.Stderr.WriteLine($"bash: {ctx.Name}: {n}: not found"); code = 1; }
+                    else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: {n}: not found"); code = 1; }
                 return Task.FromResult(code);
             }
             bool local = ctx.Name == "local" || ctx.Name is "declare" or "typeset" && sh.InFunction && !global;
@@ -296,7 +305,7 @@ internal static partial class Builtins
                     else if (!sh.Environment.ContainsKey(target) && !sh.Arrays.ContainsKey(target)) { sh.MarkShellVariable(target); sh.Environment[target] = ""; }
                     if (on.Contains('r')) sh.SetAttrs(target, "r");
                 }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"bash: {ctx.Name}: {e.Message}"); code = 1; }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: {e.Message}"); code = 1; }
             }
             return Task.FromResult(code);
         };
@@ -434,9 +443,9 @@ internal static partial class Builtins
             foreach (var id in ids)
             {
                 if (id.StartsWith('%')) { code = 0; continue; }
-                if (!int.TryParse(id, out var pid)) { ctx.Stderr.WriteLine($"bash: wait: `{id}': not a pid or valid job spec"); code = 2; continue; }
+                if (!int.TryParse(id, out var pid)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}wait: `{id}': not a pid or valid job spec"); code = 2; continue; }
                 code = ctx.Shell.WaitFor(pid);
-                if (code == 127) ctx.Stderr.WriteLine($"bash: wait: pid {pid} is not a child of this shell");
+                if (code == 127) ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}wait: pid {pid} is not a child of this shell");
             }
             return code;
         }, "Wait for background jobs (they run to completion when started)");
@@ -464,7 +473,7 @@ internal static partial class Builtins
             foreach (var t in targets)
             {
                 if (t == "4242") { if (signal != 0) throw new ExitSignal(128 + signal); continue; } // the shell itself
-                ctx.Stderr.WriteLine(t.StartsWith('%') ? $"bash: kill: {t}: no such job" : $"bash: kill: ({t}) - No such process");
+                ctx.Stderr.WriteLine(t.StartsWith('%') ? $"{ctx.Shell.ErrPrefix}kill: {t}: no such job" : $"{ctx.Shell.ErrPrefix}kill: ({t}) - No such process");
                 code = 1;
             }
             return code;
@@ -474,7 +483,7 @@ internal static partial class Builtins
         {
             int code = 0;
             foreach (var n in ctx.Args.Where(a => !a.StartsWith('-')))
-                if (!ctx.Shell.Commands.ContainsKey(n)) { ctx.Stderr.WriteLine($"bash: hash: {n}: not found"); code = 1; }
+                if (!ctx.Shell.Commands.ContainsKey(n)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}hash: {n}: not found"); code = 1; }
             return code;
         }, "Remember command locations");
 

@@ -66,7 +66,7 @@ internal sealed class Find
         var l = ParseAnd();
         while (Is("-o") || Is("-or"))
         {
-            _p++;
+            if (++_p >= _args.Count) throw new ShellException($"expected an expression after '{_args[_p - 1]}'");
             var left = l;
             var right = ParseAnd();
             l = async e => await left(e) || await right(e);
@@ -79,7 +79,7 @@ internal sealed class Find
         var l = ParseNot();
         while (_p < _args.Count && !Is("-o") && !Is("-or") && !Is(")"))
         {
-            if (Is("-a") || Is("-and")) _p++;
+            if ((Is("-a") || Is("-and")) && ++_p >= _args.Count) throw new ShellException($"expected an expression after '{_args[_p - 1]}'");
             var left = l;
             var right = ParseNot();
             l = async e => await left(e) && await right(e);
@@ -210,7 +210,9 @@ internal sealed class Find
             case "-mmin" or "-mtime":
             {
                 var spec = Arg();
-                double unit = tok == "-mmin" ? 1 : 1440, n = double.Parse(spec.TrimStart('+', '-'), CultureInfo.InvariantCulture);
+                if (!double.TryParse(spec.Length > 0 && spec[0] is '+' or '-' ? spec[1..] : spec, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var n))
+                    throw new ShellException($"invalid argument `{spec}' to `{tok}'");
+                double unit = tok == "-mmin" ? 1 : 1440;
                 return e =>
                 {
                     var age = (fs.Clock() - fs.Stat(e.Abs).Modified).TotalMinutes / unit;
@@ -219,13 +221,18 @@ internal sealed class Find
             }
             case "-newer":
             {
-                var refTime = fs.Stat(_ctx.ResolvePath(Arg())).Modified;
+                var reference = Arg();
+                var refAbs = _ctx.ResolvePath(reference);
+                if (!fs.Exists(refAbs)) throw new ShellException($"{Builtins.QuoteL(reference)}: {fs.WhyMissing(refAbs)}");
+                var refTime = fs.Stat(refAbs).Modified;
                 return e => T(fs.Stat(e.Abs).Modified > refTime);
             }
             case "-size":
             {
-                var m = Regex.Match(Arg(), @"^([+-]?)(\d+)([cwbkMG]?)$");
-                if (!m.Success) throw new ShellException("invalid -size argument");
+                var spec = Arg();
+                var m = Regex.Match(spec, @"^([+-]?)(\d+)([cwbkMG]?)$");
+                if (Regex.Match(spec, @"^[+-]?\d+(\D)") is { Success: true } bad && !m.Success) throw new ShellException($"invalid -size type `{bad.Groups[1].Value}'");
+                if (!m.Success) throw new ShellException($"invalid argument `{spec}' to `-size'");
                 long unit = m.Groups[3].Value switch { "c" => 1, "w" => 2, "k" => 1024, "M" => 1 << 20, "G" => 1 << 30, _ => 512 };
                 long n = long.Parse(m.Groups[2].Value);
                 return e =>
@@ -271,8 +278,7 @@ internal sealed class Find
                 return async e => await _ctx.InvokeAsync(cmd.Select(x => x.Replace("{}", e.Display)).ToList()) == 0;
             }
             default:
-                throw new ShellException($"unknown predicate `{tok}' (supported: -name -iname -path -regex -type -size -mmin -mtime -newer -empty " +
-                                         "-maxdepth -mindepth -prune -print -print0 -printf -exec -delete -quit ! -not -a -o ( ))");
+                throw new ShellException($"unknown predicate `{tok}'");
         }
     }
 }

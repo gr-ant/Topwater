@@ -194,4 +194,28 @@ public class ShellTests
         sh.Fs.WriteAllText("/big.txt", new string('x', 40_000));
         Assert.Contains("output truncated", await BashTool.ExecuteAsync(sh, "cat /big.txt"));
     }
+
+    [Fact]
+    public async Task EachCallCountsLinesFromOne()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("true\ntrue\ntrue\ntrue\ntrue");
+        var r = await sh.RunAsync("while read l; do :; done < /nofile");
+        Assert.Equal("bash: line 1: /nofile: No such file or directory\n", r.Stderr);
+        r = await sh.RunAsync("true\ntrue\nif true; then :; fi > /nope/z");
+        Assert.Equal("bash: line 3: /nope/z: No such file or directory\n", r.Stderr);
+    }
+
+    [Fact]
+    public async Task LongRunsOfQuantifiersStayFast()
+    {
+        var sh = new Shell();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        // a 1 MB run of * on one atom: one quantifier, built in one pass
+        var r = await sh.RunAsync("p='*'; for i in {1..20}; do p=$p$p; done; echo aaa | grep -cE \"a$p\"; [[ aaa =~ a$p ]]; echo $?; echo aaa | sed -E \"s/a$p/X/\"");
+        Assert.Equal("1\n0\nX\n", r.Stdout);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"took {sw.Elapsed}");
+        r = await sh.RunAsync("p=$(printf '\\{1\\}%.0s' {1..40}); echo aaa | grep -c \"a$p\"");
+        Assert.Equal("grep: Regular expression too big\n", r.Stderr);
+    }
 }

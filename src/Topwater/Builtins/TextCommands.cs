@@ -22,6 +22,29 @@ internal static partial class Builtins
         var sb = new StringBuilder();
         int n = pattern.Length;
         char? last = null; // last character emitted outside brackets, to spot a leading *
+        var groups = new Stack<int>(); // where each open group starts in sb
+        int atom = 0;                  // where the last atom starts in sb
+        string? quantifier = null;     // the quantifier on the last atom, as emitted
+        int wraps = 0;                 // groups wrapped around the last atom
+        void Atom(string text) { atom = sb.Length; quantifier = null; wraps = 0; sb.Append(text); }
+        void Quantifier(string text)
+        {
+            if (quantifier is [var q] && text is [var t])
+            {
+                // a run of * + ? is one quantifier: ++ is +, ?? is ?, any other mix is *; linear however long the run
+                sb[^1] = q == t ? q : '*';
+                quantifier = sb[^1].ToString();
+                return;
+            }
+            if (quantifier != null)
+            {
+                // .NET rejects a{2}{3}; POSIX applies them in turn. Each wrap copies the pattern, so keep it to a few.
+                if (++wraps > 32) throw new ShellException("Regular expression too big", 2);
+                sb.Insert(atom, "(?:").Append(')');
+            }
+            quantifier = text;
+            sb.Append(text);
+        }
         for (int i = 0; i < n; i++)
         {
             char c = pattern[i];
@@ -51,27 +74,148 @@ internal static partial class Builtins
                     body.Append(pattern[j]);
                     j++;
                 }
-                if (j >= n) { sb.Append(@"\["); last = '['; continue; }
-                sb.Append('[').Append(body).Append(']');
+                if (j >= n) { Atom(@"\["); last = '['; continue; }
+                Atom("[" + body + "]");
                 last = ']';
                 i = j;
                 continue;
             }
-            if (c == '\\' && i + 1 < n)
+            bool escaped = c == '\\' && i + 1 < n;
+            if (escaped) c = pattern[++i];
+            bool op = escaped != extended && "(){}|+?".Contains(c); // operators: bare in ERE, escaped in BRE
+            bool leading = last == null || last is '^' or '(' or '|'; // a quantifier here is a literal
+            if (escaped && c is '<' or '>') Atom(@"\b");
+            else if (op && c == '(') { groups.Push(sb.Length); sb.Append('('); }
+            else if (op && c == ')' && groups.Count > 0) { atom = groups.Pop(); quantifier = null; wraps = 0; sb.Append(')'); }
+            else if (op && c == '|') sb.Append('|');
+            else if ((c == '*' && !escaped || op && c is '+' or '?') && !leading) Quantifier(c.ToString());
+            else if (op && c == '{' && !leading && Interval(pattern, i + 1, extended) is { } end)
             {
-                char next = pattern[++i];
-                if (next is '<' or '>') sb.Append(@"\b");
-                else if (!extended && "(){}|+?".Contains(next)) sb.Append(next);
-                else sb.Append('\\').Append(next);
-                last = !extended && next is '(' or '|' ? next : 'x';
-                continue;
+                Quantifier("{" + (pattern[i + 1] == ',' ? "0" : "") + pattern[(i + 1)..end] + "}");
+                i = end + (extended ? 0 : 1);
             }
-            if (c == '*' && (last == null || last is '^' or '(' or '|')) sb.Append(@"\*"); // a leading * is literal
-            else if (!extended && "(){}|+?".Contains(c)) sb.Append('\\').Append(c);
-            else sb.Append(c);
-            last = !extended && "(|".Contains(c) ? 'x' : c;
+            else if (escaped && !"(){}|+?*".Contains(c)) Atom("\\" + c); // \. \w \1 ...
+            else Atom("(){}|+?*".Contains(c) ? "\\" + c : c.ToString()); // a literal, or . ^ $ as they are
+            last = op && c is '(' or '|' ? c : escaped || c is '(' or '|' ? 'x' : c;
         }
         return sb.ToString();
+    }
+
+    /// <summary>The end of an interval whose text starts at <paramref name="i"/> (after the "{"): the index of its "}" (of
+    /// "\}" in basic mode), or null when the text is not m, m, m,n or ,n.</summary>
+    static int? Interval(string p, int i, bool extended)
+    {
+        int j = i;
+        while (j < p.Length && (char.IsAsciiDigit(p[j]) || p[j] == ',')) j++;
+        var body = p[i..j];
+        if (body.Length == 0 || body == "," || body.Count(ch => ch == ',') > 1) return null;
+        if (extended) return j < p.Length && p[j] == '}' ? j : null;
+        return j + 1 < p.Length && p[j] == '\\' && p[j + 1] == '}' ? j : null;
+    }
+
+    internal const string ClassSyntax = "character class syntax is [[:space:]], not [:space:]";
+
+    /// <summary>
+    /// The error GNU grep/sed report for a malformed POSIX regex (basic unless extended), or null when it is valid.
+    /// grep is lenient where sed is not: in grep -E a stray ")" and a "{" that does not start a valid interval are literals.
+    /// </summary>
+    internal static string? PosixRegexError(string p, bool extended, bool grep)
+    {
+        const string Content = @"Invalid content of \{\}", Unmatched = "Unmatched [, [^, [:, [., or [=";
+        int n = p.Length, open = 0, closed = 0;
+        bool atStart = true; // an interval here has nothing to repeat
+        for (int i = 0; i < n;)
+        {
+            char c = p[i];
+            if (c == '[')
+            {
+                int j = i + 1;
+                if (j < n && p[j] == '^') j++;
+                if (j >= n) return "Invalid regular expression";
+                int start = j;
+                if (p[j] == ']') j++;
+                char? low = null; // the character a following '-' starts a range from
+                while (j < n && p[j] != ']')
+                {
+                    if (p[j] == '[' && j + 1 < n && p[j + 1] is ':' or '.' or '=')
+                    {
+                        char kind = p[j + 1];
+                        int close = p.IndexOf(kind + "]", j + 2, StringComparison.Ordinal);
+                        if (close < 0) return Unmatched;
+                        var name = p[(j + 2)..close];
+                        if (kind == ':' && !PosixClasses.ContainsKey(name)) return "Invalid character class name";
+                        if (kind == '.' && name.Length != 1) return "Invalid collation character";
+                        low = kind == '.' ? name[0] : null;
+                        j = close + 2;
+                        continue;
+                    }
+                    if (p[j] == '-' && low != null && j + 1 < n && p[j + 1] != ']')
+                    {
+                        if (p[j + 1] < low) return "Invalid range end";
+                        low = null;
+                        j += 2;
+                        continue;
+                    }
+                    low = p[j++];
+                }
+                if (j >= n) return Unmatched;
+                if (j - start >= 2 && p[start] == ':' && p[j - 1] == ':') return ClassSyntax;
+                i = j + 1;
+                atStart = false;
+                continue;
+            }
+            bool escaped = c == '\\';
+            if (escaped)
+            {
+                if (i + 1 >= n) return "Trailing backslash";
+                c = p[++i];
+            }
+            i++;
+            if (escaped && c is >= '1' and <= '9')
+            {
+                if (c - '0' > closed) return "Invalid back reference";
+            }
+            else if (escaped != extended && c == '(') { open++; atStart = true; continue; }
+            else if (escaped != extended && c == ')')
+            {
+                if (open == 0) { if (extended && grep) { atStart = false; continue; } return @"Unmatched ) or \)"; }
+                open--;
+                closed++;
+            }
+            else if (escaped != extended && c == '|') { atStart = true; continue; }
+            else if (escaped != extended && c == '{' && !atStart)
+            {
+                // {m} {m,} {m,n} {,n}; in grep -E anything else that is not obviously an interval is a literal "{"
+                bool lenient = extended && grep;
+                string end = extended ? "}" : @"\}";
+                int Num(ref int k)
+                {
+                    int value = -1;
+                    for (; k < n && p[k] != ',' && string.CompareOrdinal(p, k, end, 0, end.Length) != 0; k++)
+                        value = value == -2 || !char.IsAsciiDigit(p[k]) ? -2 : Math.Min(100000, Math.Max(value, 0) * 10 + (p[k] - '0'));
+                    return value;
+                }
+                int k = i, lo = Num(ref k), hi;
+                if (k >= n) { if (lenient) continue; return @"Unmatched \{"; }
+                if (lo == -2) { if (lenient) continue; return Content; }
+                if (p[k] == ',')
+                {
+                    k++;
+                    hi = Num(ref k);
+                    if (k >= n) { if (lenient) continue; return @"Unmatched \{"; }
+                    if (hi == -2) { if (lenient) continue; return Content; }
+                    if (p[k] == ',') return Content;
+                    if (lo < 0) lo = 0;
+                }
+                else if (lo < 0) return Content;
+                else hi = lo;
+                if (hi >= 0 && lo > hi) return Content;
+                if (Math.Max(lo, hi) > 32767) return "Regular expression too big";
+                i = k + end.Length;
+            }
+            atStart = false;
+        }
+        return open > 0 ? @"Unmatched ( or \(" : null;
     }
 
     /// <summary>Splits xargs input like GNU xargs: blanks separate items; quotes and backslashes protect them.</summary>
@@ -115,6 +259,9 @@ internal static partial class Builtins
     {
         // .NET has no \K ("keep"): a leading X\KY means the same as (?<=X)Y
         static string Keep(string p) => p.IndexOf(@"\K", StringComparison.Ordinal) is var k and > 0 ? $"(?<={p[..k]}){p[(k + 2)..]}" : p;
+        // GNU reports every bad pattern, one line each; the shell adds the first "grep: "
+        var errors = fixedString || perl ? [] : patterns.Select(p => PosixRegexError(p, extended, grep: true)).OfType<string>().ToList();
+        if (errors.Count > 0) throw new ShellException(string.Join("\ngrep: ", errors), 2);
         var parts = patterns.Select(p => fixedString ? Regex.Escape(p) : perl ? Keep(p) : PosixToNet(p, extended)).ToList();
         var re = parts.Count == 1 ? parts[0] : string.Join("|", parts.Select(p => $"(?:{p})"));
         if (word) re = $@"\b(?:{re})\b";
@@ -194,6 +341,10 @@ internal static partial class Builtins
             bool recursive = a.Has('r') || a.Has('R');
             bool implicitDot = recursive && positional.Count == 0;
             if (implicitDot) positional.Add(".");
+            if (a.Has('E') && !a.Has('F') && !a.Has('P'))
+                foreach (var p in patterns)
+                    if (Regex.Match(p, @"^[*+?]|(?<!\\)[(|]([*+?])") is { Success: true } lead)
+                        ctx.Stderr.WriteLine($"grep: warning: {lead.Value[^1]} at start of expression");
             var re = BuildRegex(patterns, a.Has('E'), a.Has('F'), a.Has('i'), a.Has('w'), a.Has('x'), a.Has('P'));
             int after = int.Parse(a.Value('A') ?? a.Value('C') ?? "0"), before = int.Parse(a.Value('B') ?? a.Value('C') ?? "0");
             int maxCount = a.Value('m') is { } mc ? int.Parse(mc) : int.MaxValue;
@@ -497,7 +648,7 @@ internal static partial class Builtins
             return code;
         }, "Build and run commands from stdin");
 
-        shell.Register("sed", ctx => Sed.Run(ctx), "Stream editor");
+        shell.Register("sed", ctx => Sed.Run(ctx), "Stream editor", Sed.Help);
     }
 
     static readonly Dictionary<string, string> TrClasses = new()
@@ -701,9 +852,49 @@ internal static class Sed
         public Dictionary<char, char> Table = [];
     }
 
+    // our own summary of the options this sed takes (not GNU's help text); also printed after a usage error
+    internal const string Usage = """
+        Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...
+        Run a script of editing commands over each line of the input and print the result.
+
+          -n, --quiet, --silent    print only what the script prints (p, s///p, ...)
+          -e script, --expression=script
+                                   add the commands in script
+          -f script-file, --file=script-file
+                                   add the commands in a file
+          -i[SUFFIX], --in-place[=SUFFIX]
+                                   write the result back into each file; with SUFFIX,
+                                   keep the original under the name FILE+SUFFIX
+          -E, -r, --regexp-extended
+                                   read regular expressions as POSIX extended ones
+          -s, --separate           treat each file as its own input, not one stream
+          -u, --unbuffered         accepted, no effect
+              --debug, --posix, --sandbox, --follow-symlinks
+                                   accepted, no effect
+              --help               show this help
+              --version            show the version
+
+        Without -e or -f, the first operand is the script. The other operands are
+        input files; with none, sed reads standard input.
+
+        """;
+
+    internal const string Help = Usage;
+
     public static int Run(CommandContext ctx)
     {
-        var scripts = new List<string>();
+        // a bad command line: the complaint, then the whole usage text, on stderr
+        int Bad(string message) { ctx.Stderr.Write((message.Length > 0 ? $"sed: {message}\n" : "") + Usage); return 1; }
+        var scripts = new List<(string Text, string Where)>();
+        int expressions = 0;
+        void AddScript(char kind, string value)
+        {
+            if (kind == 'e') { scripts.Add((value, $"-e expression #{++expressions}")); return; }
+            string text;
+            try { text = value == "-" ? ctx.StdinText : ctx.Fs.ReadAllText(ctx.ResolvePath(value)); }
+            catch (ShellException e) { throw new ShellException($"couldn't open file {value}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}", 4); }
+            scripts.Add((text, $"file {value}"));
+        }
         var files = new List<string>();
         bool quiet = false, extended = false, separate = false, inPlace = false;
         var suffix = "";
@@ -724,11 +915,12 @@ internal static class Sed
                     case "separate": separate = true; break;
                     case "in-place": inPlace = true; suffix = value ?? ""; break;
                     case "expression" or "file":
-                        value ??= i < args.Count ? args[i++] : throw new ShellException($"option '--{name}' requires an argument", 1);
-                        scripts.Add(name == "expression" ? value : ctx.Fs.ReadAllText(ctx.ResolvePath(value)));
+                        if (value == null && i >= args.Count) return Bad($"option '--{name}' requires an argument");
+                        AddScript(name[0], value ?? args[i++]);
                         break;
-                    case "posix" or "debug" or "sandbox" or "follow-symlinks": break;
-                    default: throw new ShellException($"unrecognized option '{arg}'", 1);
+                    case "posix" or "debug" or "sandbox" or "follow-symlinks" or "unbuffered": break;
+                    case "help": ctx.Stdout.Write(Help); return 0;
+                    default: return Bad($"unrecognized option '{arg}'");
                 }
                 continue;
             }
@@ -744,20 +936,20 @@ internal static class Sed
                 else if (f is 'e' or 'f')
                 {
                     var value = arg[(k + 1)..];
-                    if (value.Length == 0) value = i < args.Count ? args[i++] : throw new ShellException($"option requires an argument -- '{f}'", 1);
-                    scripts.Add(f == 'e' ? value : ctx.Fs.ReadAllText(ctx.ResolvePath(value)));
+                    if (value.Length == 0 && i >= args.Count) return Bad($"option requires an argument -- '{f}'");
+                    AddScript(f, value.Length > 0 ? value : args[i++]);
                     break;
                 }
-                else throw new ShellException($"invalid option -- '{f}'", 1);
+                else return Bad($"invalid option -- '{f}'");
             }
         }
         if (scripts.Count == 0)
         {
-            if (files.Count == 0) throw new ShellException("usage: sed [-n] [-i[SUFFIX]] [-E] [-e SCRIPT]... [SCRIPT] [FILE]...", 1);
-            scripts.Add(files[0]);
+            if (files.Count == 0) return Bad("");
+            AddScript('e', files[0]);
             files.RemoveAt(0);
         }
-        var cmds = Parse(string.Join("\n", scripts), extended);
+        var cmds = Parse(scripts, extended);
 
         if (inPlace)
         {
@@ -795,42 +987,85 @@ internal static class Sed
     }
 
     /// <summary>Parses a sed script into a flat command list; { } blocks and b/t/T labels become jump targets.</summary>
-    static List<Cmd> Parse(string script, bool extended)
+    /// <param name="parts">Each -e expression and -f file, with where GNU says an error is ("-e expression #2", "file x.sed").</param>
+    static List<Cmd> Parse(List<(string Text, string Where)> parts, bool extended)
     {
+        var script = string.Join("\n", parts.Select(p => p.Text));
+        var starts = new int[parts.Count];
+        for (int k = 1; k < parts.Count; k++) starts[k] = starts[k - 1] + parts[k - 1].Text.Length + 1;
         var cmds = new List<Cmd>();
         var labels = new Dictionary<string, int>();
-        var blocks = new Stack<int>();
+        var blocks = new Stack<(int Cmd, int At)>();
         Regex? lastRe = null;
         int i = 0, n = script.Length;
 
+        // GNU's place for an error: how many characters of the expression were read (or the line of the file) at pos
+        ShellException Fail(string message, int pos, bool charZero = false)
+        {
+            int k = 0;
+            for (int s = 1; s < starts.Length; s++) if (starts[s] < pos) k = s;
+            pos = Math.Min(pos, starts[k] + parts[k].Text.Length);
+            var where = parts[k].Where;
+            var at = where.StartsWith("file ", StringComparison.Ordinal)
+                ? $" line {1 + script.AsSpan(starts[k], pos - starts[k]).Count('\n')}"
+                : $", char {(charZero ? 0 : pos - starts[k])}";
+            return new ShellException($"{where}{at}: {message}");
+        }
+
         void SkipBlanks() { while (i < n && script[i] is ' ' or '\t') i++; }
 
+        // what: "regex" (of s), "addr" (an address regex), "replacement" or "y"; a regex's [brackets] may hold the delimiter
         string ReadDelimited(char delim, string what)
         {
+            bool regex = what is "regex" or "addr";
+            bool inBracket = false;
             var sb = new StringBuilder();
-            while (i < n && script[i] != delim)
+            while (i < n && (script[i] != delim || inBracket))
             {
-                if (script[i] == '\\' && i + 1 < n)
+                char ch = script[i];
+                if (ch == '\\' && i + 1 < n)
                 {
                     if (script[i + 1] == delim) sb.Append(delim);
-                    else if (script[i + 1] == 'n' && what == "regex") sb.Append(@"\n");
+                    else if (script[i + 1] == 'n' && regex) sb.Append(@"\n");
+                    else if (inBracket) { sb.Append(ch); i++; continue; } // a backslash is literal in brackets
                     else sb.Append(script, i, 2);
                     i += 2;
                     continue;
                 }
-                if (script[i] == '\n' && what != "replacement") break;
-                sb.Append(script[i++]);
+                if (ch == '\n') break; // a newline in the replacement needs a backslash before it
+                if (regex && !inBracket && ch == '[')
+                {
+                    sb.Append(ch);
+                    i++;
+                    if (i < n && script[i] == '^') sb.Append(script[i++]);
+                    if (i < n && script[i] == ']') sb.Append(script[i++]);
+                    inBracket = true;
+                    continue;
+                }
+                if (inBracket && ch == '[' && i + 1 < n && script[i + 1] is ':' or '.' or '=' && script.IndexOf(script[i + 1] + "]", i + 2, StringComparison.Ordinal) is var close and >= 0
+                    && script.IndexOf('\n', i, close - i) < 0)
+                {
+                    sb.Append(script, i, close + 2 - i);
+                    i = close + 2;
+                    continue;
+                }
+                if (ch == ']') inBracket = false;
+                sb.Append(ch);
+                i++;
             }
-            if (i >= n || script[i] != delim) throw new ShellException($"unterminated `{(what == "y" ? 'y' : 's')}' command");
+            if (i >= n || script[i] != delim)
+                throw Fail(what switch { "addr" => "unterminated address regex", "y" => "unterminated `y' command", _ => "unterminated `s' command" }, i);
             i++;
             return sb.ToString();
         }
 
-        Regex CompileRegex(string text, RegexOptions options)
+        Regex CompileRegex(string text, RegexOptions options, int errorAt)
         {
-            if (text.Length == 0) return lastRe ?? throw new ShellException("no previous regular expression");
+            if (text.Length == 0) return lastRe ?? throw Fail("no previous regular expression", errorAt);
+            if (Builtins.PosixRegexError(text, extended, grep: false) is { } error)
+                throw error == Builtins.ClassSyntax ? new ShellException(error, 4) : Fail(error, errorAt);
             try { return lastRe = new Regex(Builtins.PosixToNet(text, extended), options, Shell.RegexTimeout); }
-            catch (ArgumentException e) { throw new ShellException($"invalid regular expression: {e.Message}"); }
+            catch (ArgumentException e) { throw Fail($"invalid regular expression: {e.Message}", errorAt); }
         }
 
         int ReadNumber()
@@ -865,10 +1100,11 @@ internal static class Sed
             {
                 char delim = ch == '/' ? '/' : script[i + 1];
                 i += ch == '/' ? 1 : 2;
-                var text = ReadDelimited(delim, "regex");
+                var text = ReadDelimited(delim, "addr");
                 var options = RegexOptions.None;
                 while (i < n && script[i] is 'I' or 'M') options |= script[i++] == 'I' ? RegexOptions.IgnoreCase : RegexOptions.Multiline;
-                return new RegexAddr(CompileRegex(text, options));
+                SkipBlanks();
+                return new RegexAddr(CompileRegex(text, options, i));
             }
             return null;
         }
@@ -885,7 +1121,8 @@ internal static class Sed
         string ReadText()
         {
             SkipBlanks();
-            if (i < n && script[i] == '\\')
+            if (i >= n) throw Fail("expected \\ after `a', `c' or `i'", i);
+            if (script[i] == '\\')
             {
                 i++;
                 if (i < n && script[i] == '\n') i++;
@@ -910,83 +1147,103 @@ internal static class Sed
             {
                 i++;
                 SkipBlanks();
-                c.A2 = ReadAddr(true) ?? throw new ShellException("unexpected `,'");
+                c.A2 = ReadAddr(true) ?? throw Fail("unexpected `,'", Math.Min(i + 1, n));
             }
-            if (c.A1 is ZeroAddr && c.A2 is not RegexAddr) throw new ShellException("invalid usage of line address 0");
+            if (c.A1 is ZeroAddr && c.A2 is not RegexAddr) throw Fail("invalid usage of line address 0", Math.Min(i + 1, n));
             SkipBlanks();
-            while (i < n && script[i] == '!') { c.Negate = true; i++; SkipBlanks(); }
-            if (i >= n) throw new ShellException("missing command");
+            if (i < n && script[i] == '!')
+            {
+                c.Negate = true;
+                i++;
+                SkipBlanks();
+                if (i < n && script[i] == '!') throw Fail("multiple `!'s", i + 1);
+            }
+            if (i >= n) throw Fail("missing command", i);
             char op = c.Op = script[i++];
             switch (op)
             {
-                case '{': blocks.Push(cmds.Count); break;
+                case '{': blocks.Push((cmds.Count, i)); break;
                 case '}':
-                    if (blocks.Count == 0) throw new ShellException("unexpected `}'");
-                    if (c.A1 != null) throw new ShellException("} doesn't want any addresses");
-                    cmds[blocks.Pop()].Target = cmds.Count + 1;
+                    if (blocks.Count == 0) throw Fail("unexpected `}'", i);
+                    if (c.A1 != null) throw Fail("} doesn't want any addresses", i);
+                    cmds[blocks.Pop().Cmd].Target = cmds.Count + 1;
                     break;
                 case 's':
-                    if (i >= n) throw new ShellException("unterminated `s' command");
+                    if (i >= n) throw Fail("unterminated `s' command", i);
                     char delim = script[i++];
                     var find = ReadDelimited(delim, "regex");
                     c.Repl = ParseReplacement(ReadDelimited(delim, "replacement"));
                     var options = RegexOptions.None;
-                    while (i < n && "gpiIme0123456789".Contains(script[i]))
+                    bool numbered = false;
+                    while (i < n)
                     {
                         char f = script[i];
                         if (char.IsAsciiDigit(f))
                         {
                             c.Nth = ReadNumber();
-                            if (c.Nth == 0) throw new ShellException("number option to `s' command may not be zero");
+                            if (numbered) throw Fail("multiple number options to `s' command", i);
+                            if (c.Nth == 0) throw Fail("number option to `s' command may not be zero", i);
+                            numbered = true;
                             continue;
                         }
+                        if (!"gpiImMew".Contains(f)) break;
                         i++;
                         switch (f)
                         {
+                            case 'g' when c.Global: throw Fail("multiple `g' options to `s' command", i);
+                            case 'p' when c.Print: throw Fail("multiple `p' options to `s' command", i);
                             case 'g': c.Global = true; break;
                             case 'p': c.Print = true; break;
                             case 'i' or 'I': options |= RegexOptions.IgnoreCase; break;
-                            case 'm': options |= RegexOptions.Multiline; break;
-                            default: throw new ShellException("the `e' flag of `s' is not supported");
+                            case 'm' or 'M': options |= RegexOptions.Multiline; break;
+                            case 'w' when script.IndexOf('\n', i) is var eol && script[i..(eol < 0 ? n : eol)].Trim().Length == 0:
+                                throw Fail("missing filename in r/R/w/W commands", i);
+                            default: throw Fail($"the `{f}' flag of `s' is not supported", i);
                         }
                     }
-                    if (i < n && script[i] == 'w') throw new ShellException("the `w' flag of `s' is not supported");
-                    c.Re = CompileRegex(find, options);
+                    SkipBlanks();
+                    if (i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail("unknown option to `s'", i + 1);
+                    // GNU compiles the regex once it has read the character that ends the command
+                    int compiledAt = i < n && script[i] is ';' or '\n' ? i + 1 : i;
+                    c.Re = CompileRegex(find, options, compiledAt);
                     var maxRef = c.Repl.OfType<GroupPart>().Select(g => g.Group).DefaultIfEmpty(0).Max();
-                    if (maxRef > c.Re.GetGroupNumbers().Length - 1) throw new ShellException($"invalid reference \\{maxRef} on `s' command's RHS");
+                    if (maxRef > c.Re.GetGroupNumbers().Length - 1) throw Fail($"invalid reference \\{maxRef} on `s' command's RHS", compiledAt);
                     break;
                 case 'y':
                     char yd = i < n ? script[i] : '\0';
                     i++;
                     var src = Builtins.Unescape(ReadDelimited(yd, "y"));
                     var dst = Builtins.Unescape(ReadDelimited(yd, "y"));
-                    if (src.Length != dst.Length) throw new ShellException("strings for `y' command are different lengths");
+                    if (src.Length != dst.Length) throw Fail("strings for `y' command are different lengths", i);
                     for (int k = 0; k < src.Length; k++) c.Table[src[k]] = dst[k];
                     break;
                 case 'a' or 'i' or 'c': c.Text = ReadText(); break;
                 case ':':
-                    if (c.A1 != null) throw new ShellException(": doesn't want any addresses");
+                    if (c.A1 != null) throw Fail(": doesn't want any addresses", i);
                     var label = ReadLabel();
-                    if (label.Length == 0) throw new ShellException("\":\" lacks a label");
+                    if (label.Length == 0) throw Fail("\":\" lacks a label", i);
                     labels[label] = cmds.Count;
                     break;
                 case 'b' or 't' or 'T': c.Label = ReadLabel(); break;
+                case 'v': ReadLabel(); break; // "requires GNU sed VERSION": always met
                 case 'q' or 'Q':
                     SkipBlanks();
                     c.Code = i < n && char.IsAsciiDigit(script[i]) ? ReadNumber() : 0;
                     break;
                 default:
-                    if (!"=dDgGhHnNpPxz".Contains(op)) throw new ShellException($"unknown command: `{op}'");
+                    int at = i;
+                    if (op is 'r' or 'R' or 'w' or 'W' && ReadLabel().Length == 0) throw Fail("missing filename in r/R/w/W commands", i);
+                    if (!"=dDgGhHnNpPxz".Contains(op)) throw Fail($"unknown command: `{op}'", at);
                     break;
             }
             cmds.Add(c);
             SkipBlanks();
-            if (op != '{' && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw new ShellException("extra characters after command");
+            if (op != '{' && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail("extra characters after command", i + 1);
         }
-        if (blocks.Count > 0) throw new ShellException("unmatched `{'");
+        if (blocks.Count > 0) throw Fail("unmatched `{'", blocks.Peek().At, charZero: true);
         foreach (var c in cmds.Where(c => c.Op is 'b' or 't' or 'T'))
         {
-            if (c.Label.Length > 0 && !labels.ContainsKey(c.Label)) throw new ShellException($"can't find label for jump to `{c.Label}'");
+            if (c.Label.Length > 0 && !labels.ContainsKey(c.Label)) throw new ShellException($"can't find label for jump to `{c.Label}'", 4);
             c.Target = c.Label.Length > 0 ? labels[c.Label] : cmds.Count;
         }
         return cmds;

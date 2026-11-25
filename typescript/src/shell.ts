@@ -269,6 +269,8 @@ export class Shell implements ArithHost {
   private pipeStatus: number[] = [];
   private readonly funcNames: string[] = [];
   private readonly sources: string[] = [];
+  private readonly errWhere: { name: string; file: boolean }[] = []; // whose name starts bash's own errors: a script file, bash -c, a function's origin
+  private readonly funcWhere = new Map<string, string>();
   private arg0 = 'bash';
   private readonly jobs = new Map<number, number>();
   private secondsBase = 0;
@@ -488,7 +490,7 @@ export class Shell implements ArithHost {
     const stderr = new BufferWriter(this.options.maxStringBytes);
     let code: number;
     let trailer: string | undefined;
-    this.totalIterations = this.scriptDepth = this.callDepth = this.arithDepth = 0;
+    this.totalIterations = this.scriptDepth = this.callDepth = this.arithDepth = this.lineno = 0; // each call is a new bash -c: its lines count from 1
     const callDeadline: Deadline = { at: Date.now() + this.options.maxCallDurationMs };
     this.deadline = callDeadline;
     const tee = (w: Writer, stream: 'stdout' | 'stderr'): Writer => onOutput ? { write(t) { w.write(t); onOutput(printable(t), stream); } } : w;
@@ -579,6 +581,10 @@ export class Shell implements ArithHost {
     return Number((z ^ (z >> 31n)) % BigInt(max));
   }
 
+  /** @internal bash's prefix for its own errors: "bash: line 3: ", "./s.sh: line 2: ", or "environment: line 1: " in a
+   *  function defined in a bash -c string. */
+  get errPrefix(): string { return `${this.errWhere.at(-1)?.name ?? 'bash'}: line ${Math.max(this.lineno, 1)}: `; }
+
   /** @internal Throws when the call's time limit (or a `timeout`) has passed. */
   checkTime() {
     const now = Date.now();
@@ -603,9 +609,11 @@ export class Shell implements ArithHost {
     }
     if (++this.scriptDepth > 100) throw new LimitExceeded('maximum script nesting level exceeded (100)');
     const savedArg0 = this.arg0;
-    const sources = this.sources.length;
+    const sources = this.sources.length, where = this.errWhere.length, line = this.lineno;
     const file = process?.file ?? sourced;
     if (file !== undefined) this.sources.push(file);
+    if (process) this.errWhere.push({ name: process.file ?? process.arg0, file: process.file !== undefined });
+    else if (sourced !== undefined) this.errWhere.push({ name: sourced, file: true });
     try {
       if (!subshell) {
         const savedPos = this.positional;
@@ -627,6 +635,8 @@ export class Shell implements ArithHost {
       this.scriptDepth--;
       this.arg0 = savedArg0;
       this.sources.length = sources;
+      this.errWhere.length = where;
+      this.lineno = line;
     }
   }
 
@@ -793,6 +803,7 @@ export class Shell implements ArithHost {
     try {
       if (cmd.k === 'simple' && cmd.assigns.length === 0 && cmd.words.length === 1 && literal(cmd.words[0]) === 'exec')
         return await this.execRedirects(cmd.redirects, io);
+      if (cmd.line) this.lineno = cmd.line; // a failed redirection reports this line too
       const sinks: FileSink[] = [];
       const rio = cmd.redirects.length ? await this.applyRedirects(cmd.redirects, io, sinks) : io;
       if (!rio) return 1;
@@ -806,26 +817,26 @@ export class Shell implements ArithHost {
           case 'for': code = cmd.select ? await this.execSelect(cmd, rio) : await this.execFor(cmd, rio); break;
           case 'arithfor': code = await this.execArithFor(cmd, rio); break;
           case 'case': code = await this.execCase(cmd, rio); break;
-          case 'func': this.functions.set(cmd.name, { name: cmd.name, body: cmd.body, source: cmd.source }); code = 0; break;
+          case 'func': this.functions.set(cmd.name, { name: cmd.name, body: cmd.body, source: cmd.source });
+            this.funcWhere.set(cmd.name, this.errWhere.at(-1)?.file ? this.errWhere.at(-1)!.name : 'environment');
+            code = 0; break;
           case 'arith':
-            this.lineno = cmd.line;
             code = (await this.evalArithExpr(cmd.expr, rio)) !== 0n ? 0 : 1;
             if (this.xtrace) rio.err.write(`+ (( ${cmd.expr.trim()} ))\n`);
             break;
           case 'cond':
-            this.lineno = cmd.line;
             code = (await new CondEvaluator(this, cmd.items, rio).evaluate()) ? 0 : 1;
             break;
         }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        rio.err.write(`bash: ${e.message}\n`);
+        rio.err.write(`${this.errPrefix}${e.message}\n`);
         code = cmd.k === 'cond' ? 2 : e.exitCode;
       } finally {
         for (const sink of sinks) {
           try { sink.flush(); } catch (e) {
             if (!(e instanceof ShellError)) throw e;
-            io.err.write(`bash: ${e.message}\n`);
+            io.err.write(`${this.errPrefix}${e.message}\n`);
             code = 1;
           }
         }
@@ -989,7 +1000,7 @@ export class Shell implements ArithHost {
         }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        io.err.write(`bash: ${e.message}\n`);
+        io.err.write(`${this.errPrefix}${e.message}\n`);
         return null;
       }
     }
@@ -1073,7 +1084,7 @@ export class Shell implements ArithHost {
         }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        io.err.write(`bash: ${e.message}\n`);
+        io.err.write(`${this.errPrefix}${e.message}\n`);
         return 1;
       }
     }
@@ -1114,7 +1125,7 @@ export class Shell implements ArithHost {
         this.setVar(a.name, v, a.append);
       } catch (e) {
         if (e instanceof ShellError && words.length === 0 && e.message.endsWith('readonly variable')) {
-          io.err.write(`bash: ${e.message}\n`);
+          io.err.write(`${this.errPrefix}${e.message}\n`);
           throw new ExitSignal(1); // like bash, assigning a read-only variable ends the script
         }
         throw e;
@@ -1196,7 +1207,7 @@ export class Shell implements ArithHost {
         return ['ls', 'grep', 'egrep', 'fgrep', 'sort', 'diff'].includes(name) ? 2 : 1;
       }
       if (e instanceof ShellError) {
-        io.err.write(`${e instanceof UsageException || isShellBuiltin(this, name) ? 'bash: ' : ''}${name}: ${e.message}\n`);
+        io.err.write(`${e instanceof UsageException || isShellBuiltin(this, name) ? this.errPrefix : ''}${name}: ${e.message}\n`);
         return e instanceof UsageException ? 2 : e.exitCode;
       }
       if (e instanceof RangeError && /call stack/i.test(e.message)) throw new LimitExceeded('maximum nesting level exceeded');
@@ -1221,16 +1232,16 @@ export class Shell implements ArithHost {
   }
 
   private async runScriptFile(name: string, path: string, argv: string[], io: Io): Promise<number> {
-    if (this.agentFs.isDirectory(path)) { io.err.write(`bash: ${name}: Is a directory\n`); return 126; }
-    if (!this.agentFs.isFile(path)) { io.err.write(`bash: ${name}: ${this.agentFs.whyMissing(path)}\n`); return this.agentFs.whyMissing(path) === 'Permission denied' ? 126 : 127; }
-    if (!this.agentFs.canExecute(path) || !this.agentFs.canRead(path)) { io.err.write(`bash: ${name}: Permission denied\n`); return 126; }
+    if (this.agentFs.isDirectory(path)) { io.err.write(`${this.errPrefix}${name}: Is a directory\n`); return 126; }
+    if (!this.agentFs.isFile(path)) { io.err.write(`${this.errPrefix}${name}: ${this.agentFs.whyMissing(path)}\n`); return this.agentFs.whyMissing(path) === 'Permission denied' ? 126 : 127; }
+    if (!this.agentFs.canExecute(path) || !this.agentFs.canRead(path)) { io.err.write(`${this.errPrefix}${name}: Permission denied\n`); return 126; }
     const text = this.agentFs.readText(path);
-    if (text.startsWith(EXECUTABLE_STUB.slice(0, 4))) { io.err.write(`bash: ${name}: cannot execute binary file\n`); return 126; }
+    if (text.startsWith(EXECUTABLE_STUB.slice(0, 4))) { io.err.write(`${this.errPrefix}${name}: cannot execute binary file\n`); return 126; }
     if (text.startsWith('#!')) {
       const nl = text.indexOf('\n');
       const interp = text.slice(2, nl >= 0 ? nl : text.length).trim();
       if (!/(^|\/|\s)(ba)?sh(\s|$)/.test(interp)) {
-        io.err.write(`bash: ${name}: ${interp.split(' ')[0]}: bad interpreter: No such file or directory\n`);
+        io.err.write(`${this.errPrefix}${name}: ${interp.split(' ')[0]}: bad interpreter: No such file or directory\n`);
         return 126;
       }
     }
@@ -1245,6 +1256,8 @@ export class Shell implements ArithHost {
     this.locals.push(new Map());
     this.localArrays.push(new Map());
     this.funcNames.push(argv[0]);
+    const where = this.funcWhere.get(argv[0]) ?? 'environment', line = this.lineno;
+    this.errWhere.push({ name: where, file: where !== 'environment' });
     let code: number;
     try { code = await this.execCommand(body, io); } catch (e) {
       if (!(e instanceof ReturnSignal)) throw e;
@@ -1261,6 +1274,8 @@ export class Shell implements ArithHost {
       }
       this.positional = savedPos;
       this.funcNames.pop();
+      this.errWhere.pop();
+      this.lineno = line;
     }
     // a RETURN trap set inside the function runs as it returns
     const trap = this.traps.get('RETURN');
@@ -1701,7 +1716,7 @@ export class Shell implements ArithHost {
 
   /** An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1). */
   private fatal(io: Io, message: string, code: number): ExitSignal {
-    io.err.write(`bash: ${message}\n`);
+    io.err.write(`${this.errPrefix}${message}\n`);
     return new ExitSignal(this.subshell > 0 ? 1 : code);
   }
 
@@ -1774,7 +1789,7 @@ export class Shell implements ArithHost {
       let element: string | null;
       try { element = this.getElement(one.name, await this.subscript(one.sub, io)); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        io.err.write(`bash: ${e.message}\n`); // like bash: reported, and the expansion is empty
+        io.err.write(`${this.errPrefix}${e.message}\n`); // like bash: reported, and the expansion is empty
         element = null;
       }
       if (element === null && this.nounset && !defaultOp(one.tail)) throw this.fatal(io, `${one.name}[${one.sub}]: unbound variable`, 127);
@@ -1927,7 +1942,7 @@ export class Shell implements ArithHost {
         return text.replace(/\n+$/, '');
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        io.err.write(`bash: ${target}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
+        io.err.write(`${this.errPrefix}${target}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
         this.lastExitCode = 1;
         return '';
       }

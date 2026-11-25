@@ -224,6 +224,7 @@ class Token:
     word: Word | None = None
     redirect: Redirect | None = None
     line: int = 0
+    end_line: int = 0
     start: int = 0
     end: int = 0
 
@@ -276,7 +277,8 @@ class Lexer:
             self.lex_one(tokens)
             if len(tokens) > count:
                 t = tokens[count]
-                t.line, t.start, t.end = self.line_at(start), start, self.i
+                t.line, t.start = self.line_at(start), start
+                t.end_line, t.end = self.line_at(self.i), self.i
         self.read_heredoc_bodies()  # heredoc on the last line with no trailing newline: body is empty
         return tokens
 
@@ -971,15 +973,18 @@ class Parser:
             cmds.append(self.parse_command())
         return Pipeline(cmds, negate, timed, posix)
 
-    def with_redirects(self, cmd):
+    def with_redirects(self, cmd, line: int):
         cmd.redirects = self.parse_redirects([])
+        # the line bash names in a compound command's own errors: where it starts, or where its redirections are
+        cmd.line = self.t[self.p - 1].end_line if cmd.redirects else line
         return cmd
 
     def parse_command(self):
         c = self.cur
+        start = c.line if c is not None else 0
         if c is not None and c.kind == "arith":
             self.p += 1
-            return self.with_redirects(ArithCommand(c.op))
+            return self.with_redirects(ArithCommand(c.op), start)
         if self.is_op("(") or self.is_word("{"):
             sub = self.is_op("(")
             self.p += 1
@@ -987,23 +992,23 @@ class Parser:
             if not (self.is_op(")") if sub else self.is_word("}")):
                 raise ParseError("syntax error: unexpected end of file") if self.cur is None else self.unexpected()
             self.p += 1
-            return self.with_redirects(GroupCommand(body, sub))
+            return self.with_redirects(GroupCommand(body, sub), start)
         kw = c.word.unquoted_literal if c is not None and c.kind == "word" else None
         if kw is not None:
             if kw == "if":
-                return self.with_redirects(self.parse_if())
+                return self.with_redirects(self.parse_if(), start)
             if kw in ("while", "until"):
-                return self.with_redirects(self.parse_while(kw == "until"))
+                return self.with_redirects(self.parse_while(kw == "until"), start)
             if kw == "for":
-                return self.with_redirects(self.parse_for())
+                return self.with_redirects(self.parse_for(), start)
             if kw == "case":
-                return self.with_redirects(self.parse_case())
+                return self.with_redirects(self.parse_case(), start)
             if kw == "function":
                 return self.parse_function(True)
             if kw == "[[":
-                return self.with_redirects(self.parse_cond())
+                return self.with_redirects(self.parse_cond(), start)
             if kw == "select":
-                return self.with_redirects(self.parse_for(select=True))
+                return self.with_redirects(self.parse_for(select=True), start)
             if kw == "coproc":
                 raise ParseError("'coproc' is not supported by this shell")
             if kw in _RESERVED:
@@ -1030,7 +1035,8 @@ class Parser:
             words.append(w)
         if not words and not assignments and not redirects:
             raise self.unexpected()
-        return SimpleCommand(assignments, words, redirects, line)
+        # bash reports a command that spans lines (a quoted newline) at its last line
+        return SimpleCommand(assignments, words, redirects, max(line, self.t[self.p - 1].end_line) if self.p > 0 else line)
 
     def parse_list(self, *terms: str) -> Script:
         """A compound command's list, which bash requires to hold at least one command (`if; then` is an error)."""

@@ -78,7 +78,7 @@ KILOBYTE = "x=$(printf '%01023d' 0); "
 def test_append_loop_stops_at_the_cap_and_rm_frees_space():
     sh = small_disk()
     r = sh.run(KILOBYTE + "for i in {1..2000}; do echo $x >> f.txt; done; echo done")
-    assert "bash: /home/agent/f.txt: No space left on device" in r.stderr
+    assert "bash: line 1: /home/agent/f.txt: No space left on device" in r.stderr
     assert r.stdout.endswith("done\n")  # the call goes on
     assert sh.fs.used_bytes <= 1 << 20
     assert sh.run(KILOBYTE + "echo $x >> f.txt; echo $?").stdout == "1\n"

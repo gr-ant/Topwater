@@ -29,24 +29,65 @@ function humanSize(n: number): string {
   v = Math.ceil(v);
   return v >= 1024 && u < 5 ? '1.0' + 'KMGTPE'[u + 1] : String(v) + 'KMGTPE'[u];
 }
+// cp -r d d/x copies d into d/x, entry by entry, until it meets a directory this copy created; there it stops.
+// shortcut: entries go in name order, where GNU goes in the directory's own order.
+function copyIntoItself(fs: CommandContext['fs'], from: string, to: string, created: Set<string>): boolean {
+  if (!fs.exists(to)) { fs.mkdir(to); created.add(to); }
+  for (const name of fs.list(from)) {
+    const child = norm(from, name);
+    if (created.has(child)) return false;
+    if (!fs.isDirectory(child)) fs.copy(child, norm(to, name));
+    else if (!copyIntoItself(fs, child, norm(to, name), created)) return false;
+  }
+  return true;
+}
 const fail = (message: string): never => { throw new ShellError(message); };
 const fmt1 = (v: number) => String(Math.round(v * 10) / 10);
 
-/** ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times). */
-const lsDate = (t: number, now: number) => strftime(t, t <= now && (now - t) / 1000 < 15778476 ? '%b %e %H:%M' : '%b %e  %Y');
+/** ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times);
+ * or in a --time-style: full-iso, long-iso, iso, or +FORMAT (FORMAT for old times, NEWLINE FORMAT for recent ones). */
+function lsDate(t: number, now: number, style?: string): string {
+  const recent = t <= now && (now - t) / 1000 < 15778476;
+  if (style === 'full-iso') return strftime(t, '%Y-%m-%d %H:%M:%S.%N %z');
+  if (style === 'long-iso') return strftime(t, '%Y-%m-%d %H:%M');
+  if (style === 'iso') return strftime(t, recent ? '%m-%d %H:%M' : '%Y-%m-%d ');
+  if (style?.startsWith('+')) {
+    const nl = style.indexOf('\n');
+    return strftime(t, recent && nl >= 0 ? style.slice(nl + 1) : nl >= 0 ? style.slice(1, nl) : style.slice(1));
+  }
+  return strftime(t, recent ? '%b %e %H:%M' : '%b %e  %Y');
+}
+
+const TIME_STYLES = ['full-iso', 'long-iso', 'iso', 'locale', 'posix-full-iso', 'posix-long-iso', 'posix-iso', 'posix-locale'];
+
+/** ls --time-style: a style name, a unique abbreviation of one, or +FORMAT; posix- styles act as the plain ones,
+ * since the locale is not POSIX. */
+function timeStyle(arg: string): string {
+  if (arg.startsWith('+')) return arg;
+  const hits = TIME_STYLES.includes(arg) ? [arg] : TIME_STYLES.filter(s => s.startsWith(arg));
+  if (hits.length !== 1)
+    throw new ShellError(`${hits.length === 0 ? 'invalid' : 'ambiguous'} argument ${quoteL(arg)} for ‘time style’\nValid arguments are:\n` +
+      '  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n' +
+      "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.", 2);
+  return hits[0].startsWith('posix-') ? hits[0].slice(6) : hits[0];
+}
+
+/** ls -s: the space a file takes, in KiB (or -h units). */
+const blockSize = (st: FileStat, human: boolean) => (human ? humanSize(st.blocks * 512) : String(st.blocks / 2));
 
 /** ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned); `widthFrom`
  * are more paths that count toward the widths (ls sizes the columns for its file operands over all operands). */
-function longEntries(ctx: CommandContext, entries: [abs: string, name: string][], human: boolean, widthFrom: string[] = []): string[] {
+function longEntries(ctx: CommandContext, entries: [abs: string, name: string][], human: boolean, widthFrom: string[] = [],
+  style?: string, blocks = false): string[] {
   const now = ctx.fs.clock();
   const size = (st: FileStat) => (human ? humanSize(st.size) : String(st.size));
   const rows = entries.map(([abs, name]) => ({ st: ctx.fs.stat(abs), name }));
   if (rows.length === 0) return [];
   const all = [...rows.map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p))];
   const width = (f: (st: FileStat) => string) => all.reduce((m, st) => Math.max(m, f(st).length), -Infinity);
-  const lw = width(st => String(st.links)), ow = width(st => st.owner), sw = width(size);
-  return rows.map(({ st, name }) => `${VirtualFileSystem.formatMode(st.isDirectory, st.mode)} ${String(st.links).padStart(lw)} ` +
-    `${st.owner.padEnd(ow)} ${st.owner.padEnd(ow)} ${size(st).padStart(sw)} ${lsDate(st.modified, now)} ${name}`);
+  const lw = width(st => String(st.links)), ow = width(st => st.owner), sw = width(size), bw = width(st => blockSize(st, human));
+  return rows.map(({ st, name }) => (blocks ? blockSize(st, human).padStart(bw) + ' ' : '') + `${VirtualFileSystem.formatMode(st.isDirectory, st.mode)} ${String(st.links).padStart(lw)} ` +
+    `${st.owner.padEnd(ow)} ${st.owner.padEnd(ow)} ${size(st).padStart(sw)} ${lsDate(st.modified, now, style)} ${name}`);
 }
 
 /** touch -t [[CC]YY]MMDDhhmm[.ss]; a two-digit year 69-99 is 19YY, else 20YY. */
@@ -164,7 +205,7 @@ class Find {
   private parseOr(): Pred {
     let l = this.parseAnd();
     while (this.is('-o') || this.is('-or')) {
-      this.p++;
+      if (++this.p >= this.args.length) throw new ShellError(`expected an expression after '${this.args[this.p - 1]}'`);
       const left = l, right = this.parseAnd();
       l = async e => (await left(e)) || (await right(e));
     }
@@ -174,7 +215,7 @@ class Find {
   private parseAnd(): Pred {
     let l = this.parseNot();
     while (this.p < this.args.length && !this.is('-o') && !this.is('-or') && !this.is(')')) {
-      if (this.is('-a') || this.is('-and')) this.p++;
+      if ((this.is('-a') || this.is('-and')) && ++this.p >= this.args.length) throw new ShellError(`expected an expression after '${this.args[this.p - 1]}'`);
       const left = l, right = this.parseNot();
       l = async e => (await left(e)) && (await right(e));
     }
@@ -274,16 +315,25 @@ class Find {
       case '-mindepth': this.minDepth = Number(arg()); return () => true;
       case '-mmin': case '-mtime': {
         const spec = arg();
-        const unit = tok === '-mmin' ? 1 : 1440, n = Number(spec.replace(/^[+-]/, ''));
+        const num = spec.replace(/^[+-]/, '');
+        if (!/^(\d+\.?\d*|\.\d+)$/.test(num)) throw new ShellError(`invalid argument \`${spec}' to \`${tok}'`);
+        const unit = tok === '-mmin' ? 1 : 1440, n = Number(num);
         return e => {
           const age = (ctx.shell.now() - fs.stat(e.abs).modified) / 60_000 / unit;
           return spec[0] === '-' ? age < n : spec[0] === '+' ? age > n : Math.floor(age) === n;
         };
       }
-      case '-newer': { const refTime = fs.stat(ctx.resolvePath(arg())).modified; return e => fs.stat(e.abs).modified > refTime; }
+      case '-newer': {
+        const reference = arg(), refAbs = ctx.resolvePath(reference);
+        if (!fs.exists(refAbs)) throw new ShellError(`${quoteL(reference)}: ${fs.whyMissing(refAbs)}`);
+        const refTime = fs.stat(refAbs).modified;
+        return e => fs.stat(e.abs).modified > refTime; }
       case '-size': {
-        const m = /^([+-]?)(\d+)([cwbkMG]?)$/.exec(arg());
-        if (!m) throw new ShellError('invalid -size argument');
+        const spec = arg();
+        const m = /^([+-]?)(\d+)([cwbkMG]?)$/.exec(spec);
+        const bad = /^[+-]?\d+(\D)/.exec(spec);
+        if (bad && !m) throw new ShellError(`invalid -size type \`${bad[1]}'`);
+        if (!m) throw new ShellError(`invalid argument \`${spec}' to \`-size'`);
         const unit = ({ c: 1, w: 2, k: 1024, M: 1 << 20, G: 1 << 30 } as Record<string, number>)[m[3]] ?? 512;
         const n = Number(m[2]);
         return e => {
@@ -328,8 +378,7 @@ class Find {
         return async e => (await ctx.invoke(cmd.map(x => x.replaceAll('{}', e.display)))) === 0;
       }
     }
-    throw new ShellError(`unknown predicate \`${tok}' (supported: -name -iname -path -regex -type -size -mmin -mtime -newer -empty ` +
-      '-maxdepth -mindepth -prune -print -print0 -printf -exec -delete -quit ! -not -a -o ( ))');
+    throw new ShellError(`unknown predicate \`${tok}'`);
   }
 }
 
@@ -339,14 +388,22 @@ export function registerFiles(shell: Shell) {
   const reg = (name: string, handler: CommandHandler, description: string, usage?: string) => shell.register(name, handler, description, usage);
 
   reg('ls', ctx => {
-    const a = Args.parse(ctx.args, 'alhA1dFrtRSCZ', '', 'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1');
+    // \u0001: --time-style=STYLE, \u0002: --full-time
+    const a = Args.parse(ctx.args, 'alhA1dFrtRSCZsk\u0002', '\u0001',
+      'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002');
     const paths = a.positional.length > 0 ? a.positional : ['.'];
-    const lng = a.has('l'), human = a.has('h');
+    const lng = a.has('l') || a.has('\u0002'), human = a.has('h'), blocks = a.has('s');
+    const ts = a.value('\u0001');
+    const style = a.has('\u0002') ? 'full-iso' : lng && ts !== undefined ? timeStyle(ts) : undefined;
     let code = 0;
     const fs = ctx.fs;
     const show = (entries: [string, string][], widthFrom?: string[]) => {
       const named = entries.map(([abs, name]): [string, string] => [abs, name + (a.has('F') && fs.isDirectory(abs) && name !== '.' && name !== '..' ? '/' : '')]);
-      for (const l of lng ? longEntries(ctx, named, human, widthFrom) : named.map(e => e[1])) line(ctx, l);
+      if (lng) { for (const l of longEntries(ctx, named, human, widthFrom, style, blocks)) line(ctx, l); return; }
+      if (!blocks) { for (const e of named) line(ctx, e[1]); return; }
+      const sizes = named.map(e => blockSize(fs.stat(e[0]), human));
+      const w = Math.max(0, ...sizes.map(x => x.length));
+      named.forEach((e, k) => line(ctx, sizes[k].padStart(w) + ' ' + e[1]));
     };
     const exists = (p: string) => fs.exists(ctx.resolvePath(p));
     // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
@@ -371,7 +428,7 @@ export function registerFiles(shell: Shell) {
       if (a.has('S')) entries = [...entries].sort((x, y) => st(y).size - st(x).size);
       if (a.has('a')) entries.unshift('.', '..');
       if (a.has('r')) entries.reverse();
-      if (lng) {
+      if (lng || blocks) {
         const kib = entries.reduce((sum, n) => sum + st(n).blocks / 2, 0);
         line(ctx, `total ${human ? humanSize(kib * 1024) : kib}`);
       }
@@ -525,9 +582,9 @@ export function registerFiles(shell: Shell) {
     const destArg = positional[positional.length - 1];
     const dest = ctx.resolvePath(destArg);
     const destIsDir = fs.isDirectory(dest) && !a.has('T');
-    if ((sources.length > 1 || destArg.endsWith('/')) && !destIsDir) {
+    if ((sources.length > 1 || destArg.endsWith('/') && !fs.isDirectory(ctx.resolvePath(sources[0]))) && !destIsDir) {
       if (sources.length === 1 && !fs.exists(ctx.resolvePath(sources[0]))) throw new ShellError(`cannot stat '${sources[0]}': No such file or directory`);
-      if (sources.length > 1) throw new ShellError(fs.exists(dest) ? `target '${destArg}' is not a directory` : `target '${destArg}': No such file or directory`);
+      if (sources.length > 1) throw new ShellError(`target '${destArg}': ${fs.exists(dest) ? 'Not a directory' : 'No such file or directory'}`);
       throw new ShellError(move ? `cannot move '${sources[0]}' to '${destArg}': Not a directory` : `cannot create regular file '${destArg}': Not a directory`);
     }
     let code = 0;
@@ -536,17 +593,29 @@ export function registerFiles(shell: Shell) {
       if (!fs.exists(src)) { ctx.stderr.write(`${ctx.name}: cannot stat '${s}': ${fs.whyMissing(src)}\n`); code = 1; continue; }
       if (!move && fs.isDirectory(src) && !(a.has('r') || a.has('R') || a.has('a'))) { ctx.stderr.write(`cp: -r not specified; omitting directory '${s}'\n`); code = 1; continue; }
       const target = destIsDir ? norm(dest, nameOf(src)) : dest;
-      if (target === src) { ctx.stderr.write(`${ctx.name}: '${s}' and '${destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg}' are the same file\n`); code = 1; continue; }
       if (target === '/dev/null' && !move) continue; // copying to /dev/null discards the data
-      if (a.has('n') && fs.exists(target)) continue;
       const shown = destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg;
-      if (fs.isDirectory(target) && !fs.isDirectory(src)) { ctx.stderr.write(`${ctx.name}: cannot overwrite directory '${shown}' with non-directory\n`); code = 1; continue; }
+      const srcDir = fs.isDirectory(src);
+      const clash = target === src ? `${quoteAlways(s)} and ${quoteAlways(shown)} are the same file`
+        : srcDir && target.startsWith(src + '/')
+          ? move ? `cannot move ${quoteAlways(s)} to a subdirectory of itself, ${quoteAlways(shown)}`
+            : `cannot copy a directory, ${quoteAlways(s)}, into itself, ${quoteAlways(shown)}`
+        : !fs.exists(target) ? null
+        : srcDir && !fs.isDirectory(target) ? `cannot overwrite non-directory ${quoteAlways(shown)} with directory ${quoteAlways(s)}`
+        : !srcDir && fs.isDirectory(target) ? `cannot overwrite directory ${quoteAlways(shown)} with non-directory`
+        : move && srcDir && fs.list(target).length > 0 ? `cannot overwrite ${quoteAlways(shown)}: Directory not empty`
+        : null;
+      if (clash !== null) {
+        ctx.stderr.write(`${ctx.name}: ${clash}\n`);
+        code = 1;
+        // cp creates the copy and fills it until it reaches the copy itself
+        if (!move && clash.startsWith('cannot copy')) copyIntoItself(fs, src, target, new Set());
+        continue;
+      }
+      if (a.has('n') && fs.exists(target)) continue;
+      if (move && srcDir && fs.isDirectory(target)) fs.delete(target); // an empty directory is replaced
       try {
         if (move) {
-          if (fs.isDirectory(src) && fs.isDirectory(target)) {
-            if (fs.list(target).length > 0) throw new ShellError(`${target}: Directory not empty`);
-            fs.delete(target);
-          }
           fs.move(src, target);
         } else if (fs.isDirectory(src) && fs.isDirectory(target)) {
           // copying a directory onto an existing one merges into it

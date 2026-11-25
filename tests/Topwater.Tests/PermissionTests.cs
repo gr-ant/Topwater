@@ -23,25 +23,24 @@ public class PermissionTests
     [Theory] // hole 1: every ancestor needs search permission
     [InlineData("cat /root/notes.txt", "cat: /root/notes.txt: Permission denied\n")]
     [InlineData("cat /root/missing", "cat: /root/missing: Permission denied\n")]
-    [InlineData("cat < /root/notes.txt", "bash: /root/notes.txt: Permission denied\n")]
-    [InlineData("source /root/notes.txt", "bash: /root/notes.txt: Permission denied\n")]
+    [InlineData("cat < /root/notes.txt", "bash: line 1: /root/notes.txt: Permission denied\n")]
+    [InlineData("source /root/notes.txt", "bash: line 1: /root/notes.txt: Permission denied\n")]
     [InlineData("cat /root/*", "cat: '/root/*': Permission denied\n")]
     [InlineData("grep -r private /root", "grep: /root: Permission denied\n")]
     [InlineData("ls /root", "ls: cannot open directory '/root': Permission denied\n")]
     [InlineData("ls -l /root/notes.txt", "ls: cannot access '/root/notes.txt': Permission denied\n")]
     [InlineData("stat /root/notes.txt", "stat: cannot statx '/root/notes.txt': Permission denied\n")]
-    [InlineData("cd /root", "bash: cd: /root: Permission denied\n")]
+    [InlineData("cd /root", "bash: line 1: cd: /root: Permission denied\n")]
     [InlineData("cp /root/notes.txt ~/n", "cp: cannot stat '/root/notes.txt': Permission denied\n")]
     [InlineData("chmod 777 /root/notes.txt", "chmod: cannot access '/root/notes.txt': Permission denied\n")]
     [InlineData("to-markdown /root/notes.txt", "to-markdown: /root/notes.txt: Permission denied\n")]
-    [InlineData("echo x > /root/notes.txt", "bash: /root/notes.txt: Permission denied\n")]
+    [InlineData("echo x > /root/notes.txt", "bash: line 1: /root/notes.txt: Permission denied\n")]
     [InlineData("rm /root/notes.txt", "rm: cannot remove '/root/notes.txt': Permission denied\n")]
     public async Task UnsearchableDirectoryHidesItsEntries(string cmd, string err)
     {
         var sh = Setup();
         var r = await sh.RunAsync(cmd);
-        // Topwater prints built-in errors without bash's "bash: line 1: " prefix
-        Assert.True(r.ExitCode != 0 && r.Stdout == "" && r.Stderr.Replace("bash: ", "") == err.Replace("bash: ", ""), $"{cmd}: [{r.ExitCode}] {r.Stdout}|{r.Stderr}");
+        Assert.True(r.ExitCode != 0 && r.Stdout == "" && r.Stderr == err, $"{cmd}: [{r.ExitCode}] {r.Stdout}|{r.Stderr}");
         Assert.Equal("private\n", sh.Fs.ReadAllText("/root/notes.txt")); // the app still reads it
     }
 
@@ -119,7 +118,7 @@ public class PermissionTests
         foreach (var (cmd, err) in new[]
         {
             ("touch ro/new", "touch: cannot touch 'ro/new': Permission denied\n"),
-            ("echo x > ~/ro/new", "bash: /home/agent/ro/new: Permission denied\n"),
+            ("echo x > ~/ro/new", "bash: line 1: /home/agent/ro/new: Permission denied\n"),
             ("mkdir ro/d", "mkdir: cannot create directory \u2018ro/d\u2019: Permission denied\n"),
             ("rm ro/b", "rm: cannot remove 'ro/b': Permission denied\n"),
             ("rm -r ro/sub", "rm: cannot remove 'ro/sub/c': Permission denied\n"),
@@ -145,7 +144,7 @@ public class PermissionTests
         sh.Fs.WriteAllText("/home/agent/cfg", "app");
         sh.Fs.SetOwner("/home/agent/cfg", "root");
         var r = await sh.RunAsync("echo agent > ~/cfg");
-        Assert.Equal("bash: /home/agent/cfg: Permission denied\n", r.Stderr.Replace("bash: line 1: ", "bash: "));
+        Assert.Equal("bash: line 1: /home/agent/cfg: Permission denied\n", r.Stderr);
         Assert.Equal("agent root\nagent agent\n", (await sh.RunAsync("stat -c '%U' ~ | tr '\\n' ' '; stat -c %U ~/cfg; rm ~/cfg && echo agent > ~/cfg && cat ~/cfg | tr '\\n' ' '; stat -c %U ~/cfg")).Stdout);
     }
 

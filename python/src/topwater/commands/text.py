@@ -17,11 +17,42 @@ _CLASSES = {
 }
 
 
+_ERE_RUN, _BRE_RUN = re.compile(r"[*+?]*"), re.compile(r"\**")
+
+
 def posix_to_python(pattern: str, extended: bool, bracket_escapes: bool = False) -> str:
     r"""POSIX regex (grep/sed; basic unless extended) -> Python: [[:class:]] brackets, \< \> word edges, and in basic
     mode \( \) \{ \} \| \+ \? are the operators while bare ( ) { } | + ? are literals."""
     out: list[str] = []
-    i, n = 0, len(pattern)
+    n = len(pattern)
+    last: str | None = None  # last character emitted outside brackets, to spot a leading *
+    groups: list[int] = []  # where each open group starts in out
+    atom = 0  # where the last atom starts in out
+    quantified: str | None = None  # the quantifier on the last atom, as emitted
+    wraps = 0  # groups wrapped around the last atom
+
+    def put_atom(text: str) -> None:
+        nonlocal atom, quantified, wraps
+        atom, quantified, wraps = len(out), None, 0
+        out.append(text)
+
+    def put_quantifier(text: str) -> None:
+        nonlocal quantified, wraps
+        if quantified is not None and len(quantified) == 1 and len(text) == 1:
+            # a run of * + ? is one quantifier: ++ is +, ?? is ?, any other mix is *; linear however long the run
+            quantified = out[-1] = text if quantified == text else "*"
+            return
+        if quantified is not None:
+            # Python makes a+* possessive or an error; POSIX applies them in turn. Keep the wraps to a few.
+            wraps += 1
+            if wraps > 32:
+                raise ShellError("Regular expression too big", 2)
+            out.insert(atom, "(?:")
+            out.append(")")
+        quantified = text
+        out.append(text)
+
+    i = 0
     while i < n:
         c = pattern[i]
         if c == "[":
@@ -53,30 +84,184 @@ def posix_to_python(pattern: str, extended: bool, bracket_escapes: bool = False)
                 body.append("\\" + pattern[j] if pattern[j] in "\\[" else pattern[j])  # backslash is literal in POSIX brackets
                 j += 1
             if j >= n:
-                out.append(r"\[")
+                put_atom(r"\[")
+                last = "["
                 i += 1
                 continue
-            out.append("[" + "".join(body) + "]")
+            put_atom("[" + "".join(body) + "]")
+            last = "]"
             i = j + 1
             continue
-        if c == "\\" and i + 1 < n:
-            nxt = pattern[i + 1]
-            if nxt in "<>":
-                out.append(r"\b")
-            elif not extended and nxt in "(){}|+?":
-                out.append(nxt)
-            else:
-                out.append("\\" + nxt)
-            i += 2
-            continue
-        if c == "*" and (not out or out[-1] in ("^", "(", "|")):
-            out.append(r"\*")  # a leading * is literal
-        elif not extended and c in "(){}|+?":
-            out.append("\\" + c)
+        escaped = c == "\\" and i + 1 < n
+        if escaped:
+            i += 1
+            c = pattern[i]
+        op = escaped != extended and c in "(){}|+?"  # operators: bare in ERE, escaped in BRE
+        leading = last is None or last in ("^", "(", "|")  # a quantifier here is a literal
+        end = _interval_end(pattern, i + 1, extended) if op and c == "{" and not leading else None
+        if escaped and c in "<>":
+            put_atom(r"\b")
+        elif op and c == "(":
+            groups.append(len(out))
+            out.append("(")
+        elif op and c == ")" and groups:
+            atom, quantified, wraps = groups.pop(), None, 0
+            out.append(")")
+        elif op and c == "|":
+            out.append("|")
+        elif ((c == "*" and not escaped) or (op and c in "+?")) and not leading:
+            put_quantifier(c)
+            # the rest of a run of bare * (and + ? in ERE) in one step: a pure-Python loop is slow on a long run
+            j = (_ERE_RUN if extended else _BRE_RUN).match(pattern, i + 1).end()
+            if j > i + 1:
+                rest = pattern[i + 1:j]
+                put_quantifier("*" if rest.strip(c) or c == "*" else c)
+                i = j - 1
+        elif end is not None:
+            put_quantifier("{" + ("0" if pattern[i + 1] == "," else "") + pattern[i + 1:end] + "}")
+            i = end + (0 if extended else 1)
+        elif escaped and c not in "(){}|+?*":
+            put_atom("\\" + c)  # \. \w \1 ...
         else:
-            out.append(c)
+            put_atom("\\" + c if c in "(){}|+?*" else c)  # a literal, or . ^ $ as they are
+        last = c if op and c in "(|" else "x" if escaped or c in "(|" else c
         i += 1
     return "".join(out)
+
+
+def _interval_end(p: str, i: int, extended: bool) -> int | None:
+    """The end of an interval whose text starts at i (after the "{"): the index of its "}" (of "\\}" in basic mode), or
+    None when the text is not m, m, m,n or ,n."""
+    j = i
+    while j < len(p) and p[j] in "0123456789,":
+        j += 1
+    body = p[i:j]
+    if body in ("", ",") or body.count(",") > 1:
+        return None
+    return j if p.startswith("}" if extended else "\\}", j) else None
+
+
+CLASS_SYNTAX = "character class syntax is [[:space:]], not [:space:]"
+
+
+def posix_regex_error(p: str, extended: bool, grep: bool) -> str | None:
+    r"""The error GNU grep/sed report for a malformed POSIX regex (basic unless extended), or None when it is valid.
+    grep is lenient where sed is not: in grep -E a stray ")" and a "{" that does not start a valid interval are literals."""
+    content, unmatched = r"Invalid content of \{\}", "Unmatched [, [^, [:, [., or [="
+    n, open_, closed = len(p), 0, 0
+    at_start = True  # an interval here has nothing to repeat
+    i = 0
+    while i < n:
+        c = p[i]
+        if c == "[":
+            j = i + 1
+            if j < n and p[j] == "^":
+                j += 1
+            if j >= n:
+                return "Invalid regular expression"
+            start = j
+            if p[j] == "]":
+                j += 1
+            low: str | None = None  # the character a following '-' starts a range from
+            while j < n and p[j] != "]":
+                if p[j] == "[" and j + 1 < n and p[j + 1] in ":.=":
+                    kind = p[j + 1]
+                    close = p.find(kind + "]", j + 2)
+                    if close < 0:
+                        return unmatched
+                    name = p[j + 2:close]
+                    if kind == ":" and name not in _CLASSES:
+                        return "Invalid character class name"
+                    if kind == "." and len(name) != 1:
+                        return "Invalid collation character"
+                    low = name[0] if kind == "." else None
+                    j = close + 2
+                    continue
+                if p[j] == "-" and low is not None and j + 1 < n and p[j + 1] != "]":
+                    if p[j + 1] < low:
+                        return "Invalid range end"
+                    low = None
+                    j += 2
+                    continue
+                low = p[j]
+                j += 1
+            if j >= n:
+                return unmatched
+            if j - start >= 2 and p[start] == ":" and p[j - 1] == ":":
+                return CLASS_SYNTAX
+            i = j + 1
+            at_start = False
+            continue
+        escaped = c == "\\"
+        if escaped:
+            if i + 1 >= n:
+                return "Trailing backslash"
+            i += 1
+            c = p[i]
+        i += 1
+        if escaped and "1" <= c <= "9":
+            if int(c) > closed:
+                return "Invalid back reference"
+        elif escaped != extended and c == "(":
+            open_ += 1
+            at_start = True
+            continue
+        elif escaped != extended and c == ")":
+            if open_ == 0:
+                if extended and grep:
+                    at_start = False
+                    continue
+                return r"Unmatched ) or \)"
+            open_ -= 1
+            closed += 1
+        elif escaped != extended and c == "|":
+            at_start = True
+            continue
+        elif escaped != extended and c == "{" and not at_start:
+            # {m} {m,} {m,n} {,n}; in grep -E anything else that is not obviously an interval is a literal "{"
+            lenient = extended and grep
+            end = "}" if extended else r"\}"
+
+            def num(k: int) -> tuple[int, int]:
+                value = -1
+                while k < n and p[k] != "," and not p.startswith(end, k):
+                    value = -2 if value == -2 or not "0" <= p[k] <= "9" else min(100000, max(value, 0) * 10 + int(p[k]))
+                    k += 1
+                return value, k
+
+            lo, k = num(i)
+            if k >= n:
+                if lenient:
+                    continue
+                return r"Unmatched \{"
+            if lo == -2:
+                if lenient:
+                    continue
+                return content
+            if p[k] == ",":
+                hi, k = num(k + 1)
+                if k >= n:
+                    if lenient:
+                        continue
+                    return r"Unmatched \{"
+                if hi == -2:
+                    if lenient:
+                        continue
+                    return content
+                if p[k] == ",":
+                    return content
+                lo = max(lo, 0)
+            elif lo < 0:
+                return content
+            else:
+                hi = lo
+            if hi >= 0 and lo > hi:
+                return content
+            if max(lo, hi) > 32767:
+                return "Regular expression too big"
+            i = k + len(end)
+        at_start = False
+    return r"Unmatched ( or \(" if open_ > 0 else None
 
 
 def _regex(patterns: list[str], extended: bool, fixed: bool, ignore_case: bool, word: bool = False, line: bool = False,
@@ -86,6 +271,10 @@ def _regex(patterns: list[str], extended: bool, fixed: bool, ignore_case: bool, 
         k = p.find("\\K")
         return f"(?<={p[:k]}){p[k + 2:]}" if k > 0 else p
 
+    # GNU reports every bad pattern, one line each; the shell adds the first "grep: "
+    errors = [] if fixed or perl else [e for p in patterns if (e := posix_regex_error(p, extended, grep=True))]
+    if errors:
+        raise ShellError("\ngrep: ".join(errors), 2)
     parts = [re.escape(p) if fixed else keep(p) if perl else posix_to_python(p, extended) for p in patterns]
     rx = parts[0] if len(parts) == 1 else "|".join(f"(?:{p})" for p in parts)
     if word:
@@ -180,6 +369,10 @@ def _grep(ctx):
     implicit_dot = recursive and not positional
     if implicit_dot:
         positional = ["."]
+    if a.has("E") and not a.has("F") and not a.has("P"):
+        for p in patterns:
+            if lead := re.search(r"^[*+?]|(?<!\\)[(|]([*+?])", p):
+                ctx.error(f"grep: warning: {lead.group(0)[-1]} at start of expression")
     rx = _regex(patterns, a.has("E"), a.has("F"), a.has("i"), a.has("w"), a.has("x"), a.has("P"))
     after = int(a.value("A") or a.value("C") or 0)
     before = int(a.value("B") or a.value("C") or 0)
@@ -715,50 +908,119 @@ class _SedCmd:
         self.table: dict[int, str] = {}
 
 
-def _sed_parse(script: str, extended: bool) -> list[_SedCmd]:
-    """Parses a sed script into a flat command list; { } blocks and b/t/T labels become jump targets."""
+# our own summary of the options this sed takes (not GNU's help text); also printed after a usage error
+SED_USAGE = """Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...
+Run a script of editing commands over each line of the input and print the result.
+
+  -n, --quiet, --silent    print only what the script prints (p, s///p, ...)
+  -e script, --expression=script
+                           add the commands in script
+  -f script-file, --file=script-file
+                           add the commands in a file
+  -i[SUFFIX], --in-place[=SUFFIX]
+                           write the result back into each file; with SUFFIX,
+                           keep the original under the name FILE+SUFFIX
+  -E, -r, --regexp-extended
+                           read regular expressions as POSIX extended ones
+  -s, --separate           treat each file as its own input, not one stream
+  -u, --unbuffered         accepted, no effect
+      --debug, --posix, --sandbox, --follow-symlinks
+                           accepted, no effect
+      --help               show this help
+      --version            show the version
+
+Without -e or -f, the first operand is the script. The other operands are
+input files; with none, sed reads standard input.
+"""
+SED_HELP = SED_USAGE
+
+
+def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
+    """Parses a sed script into a flat command list; { } blocks and b/t/T labels become jump targets.
+    parts: each -e expression and -f file, with where GNU says an error is ("-e expression #2", "file x.sed")."""
+    script = "\n".join(t for t, _ in parts)
+    starts = [0]
+    for t, _ in parts[:-1]:
+        starts.append(starts[-1] + len(t) + 1)
     cmds: list[_SedCmd] = []
     labels: dict[str, int] = {}
-    blocks: list[int] = []
+    blocks: list[tuple[int, int]] = []
     last_rx: list[re.Pattern | None] = [None]
     i, n = 0, len(script)
+
+    def fail(message: str, pos: int, char_zero: bool = False) -> ShellError:
+        """GNU's place for an error: how many characters of the expression were read (or the line of the file) at pos."""
+        k = max([0] + [j for j in range(1, len(starts)) if starts[j] < pos])
+        pos = min(pos, starts[k] + len(parts[k][0]))
+        where = parts[k][1]
+        at = f" line {1 + script.count(chr(10), starts[k], pos)}" if where.startswith("file ") else f", char {0 if char_zero else pos - starts[k]}"
+        return ShellError(f"{where}{at}: {message}")
 
     def skip_blanks():
         nonlocal i
         while i < n and script[i] in " \t":
             i += 1
 
+    # what: "regex" (of s), "addr" (an address regex), "replacement" or "y"; a regex's [brackets] may hold the delimiter
     def read_delimited(delim: str, what: str) -> str:
         nonlocal i
+        regex = what in ("regex", "addr")
+        in_bracket = False
         out = []
-        while i < n and script[i] != delim:
-            if script[i] == "\\" and i + 1 < n:
+        while i < n and (script[i] != delim or in_bracket):
+            ch = script[i]
+            if ch == "\\" and i + 1 < n:
                 if script[i + 1] == delim:
                     out.append(delim)
-                elif script[i + 1] == "n" and what == "regex":
+                elif script[i + 1] == "n" and regex:
                     out.append("\\n")
+                elif in_bracket:  # a backslash is literal in brackets
+                    out.append(ch)
+                    i += 1
+                    continue
                 else:
                     out.append(script[i:i + 2])
                 i += 2
                 continue
-            if script[i] == "\n" and what != "replacement":
+            if ch == "\n":  # a newline in the replacement needs a backslash before it
                 break
-            out.append(script[i])
+            if regex and not in_bracket and ch == "[":
+                out.append(ch)
+                i += 1
+                if i < n and script[i] == "^":
+                    out.append(script[i])
+                    i += 1
+                if i < n and script[i] == "]":
+                    out.append(script[i])
+                    i += 1
+                in_bracket = True
+                continue
+            if in_bracket and ch == "[" and i + 1 < n and script[i + 1] in ":.=":
+                close = script.find(script[i + 1] + "]", i + 2)
+                if close >= 0 and script.find("\n", i, close) < 0:
+                    out.append(script[i:close + 2])
+                    i = close + 2
+                    continue
+            if ch == "]":
+                in_bracket = False
+            out.append(ch)
             i += 1
         if i >= n or script[i] != delim:
-            raise ShellError(f"unterminated `{what[0] if what in ('s', 'y') else 's'}' command")
+            raise fail({"addr": "unterminated address regex", "y": "unterminated `y' command"}.get(what, "unterminated `s' command"), i)
         i += 1
         return "".join(out)
 
-    def compile_rx(text: str, flags: int) -> re.Pattern:
+    def compile_rx(text: str, flags: int, error_at: int) -> re.Pattern:
         if text == "":
             if last_rx[0] is None:
-                raise ShellError("no previous regular expression")
+                raise fail("no previous regular expression", error_at)
             return last_rx[0]
+        if (error := posix_regex_error(text, extended, grep=False)) is not None:
+            raise ShellError(error, 4) if error == CLASS_SYNTAX else fail(error, error_at)
         try:
             rx = re.compile(posix_to_python(text, extended), flags)
         except re.error as e:
-            raise ShellError(f"invalid regular expression: {e}") from None
+            raise fail(f"invalid regular expression: {e}", error_at) from None
         last_rx[0] = rx
         return rx
 
@@ -789,12 +1051,13 @@ def _sed_parse(script: str, extended: bool) -> list[_SedCmd]:
         if ch == "/" or (ch == "\\" and i + 1 < n):
             delim = "/" if ch == "/" else script[i + 1]
             i += 1 if ch == "/" else 2
-            text = read_delimited(delim, "regex")
+            text = read_delimited(delim, "addr")
             flags = 0
             while i < n and script[i] in "IM":
                 flags |= re.IGNORECASE if script[i] == "I" else re.MULTILINE
                 i += 1
-            return ("re", compile_rx(text, flags))
+            skip_blanks()
+            return ("re", compile_rx(text, flags, i))
         return None
 
     def read_label() -> str:
@@ -809,7 +1072,9 @@ def _sed_parse(script: str, extended: bool) -> list[_SedCmd]:
         r"""Text for a/i/c: `a text` or `a\` NEWLINE text, where a trailing backslash continues the text."""
         nonlocal i
         skip_blanks()
-        if i < n and script[i] == "\\":
+        if i >= n:
+            raise fail("expected \\ after `a', `c' or `i'", i)
+        if script[i] == "\\":
             i += 1
             if i < n and script[i] == "\n":
                 i += 1
@@ -841,93 +1106,116 @@ def _sed_parse(script: str, extended: bool) -> list[_SedCmd]:
             skip_blanks()
             c.a2 = read_addr(True)
             if c.a2 is None:
-                raise ShellError("unexpected `,'")
+                raise fail("unexpected `,'", min(i + 1, n))
         if c.a1 == ("zero",) and (c.a2 is None or c.a2[0] != "re"):
-            raise ShellError("invalid usage of line address 0")
+            raise fail("invalid usage of line address 0", min(i + 1, n))
         skip_blanks()
-        while i < n and script[i] == "!":
+        if i < n and script[i] == "!":
             c.negate = True
             i += 1
             skip_blanks()
+            if i < n and script[i] == "!":
+                raise fail("multiple `!'s", i + 1)
         if i >= n:
-            raise ShellError("missing command")
+            raise fail("missing command", i)
         c.op = script[i]
         i += 1
         op = c.op
+        at = i
         if op == "{":
-            blocks.append(len(cmds))
+            blocks.append((len(cmds), i))
         elif op == "}":
             if not blocks:
-                raise ShellError("unexpected `}'")
+                raise fail("unexpected `}'", i)
             if c.a1 is not None:
-                raise ShellError("} doesn't want any addresses")
-            cmds[blocks.pop()].target = len(cmds) + 1
+                raise fail("} doesn't want any addresses", i)
+            cmds[blocks.pop()[0]].target = len(cmds) + 1
         elif op == "s":
             if i >= n:
-                raise ShellError("unterminated `s' command")
+                raise fail("unterminated `s' command", i)
             delim = script[i]
             i += 1
             find = read_delimited(delim, "regex")
             c.repl = _sed_replacement(read_delimited(delim, "replacement"))
             flags = 0
-            while i < n and script[i] in "gpiIme0123456789":
+            numbered = False
+            while i < n:
                 f = script[i]
-                if f.isdigit():
+                if f in "0123456789":
                     c.nth = read_number()
+                    if numbered:
+                        raise fail("multiple number options to `s' command", i)
                     if c.nth == 0:
-                        raise ShellError("number option to `s' command may not be zero")
+                        raise fail("number option to `s' command may not be zero", i)
+                    numbered = True
                     continue
+                if f not in "gpiImMew":
+                    break
                 i += 1
+                if f == "g" and c.glob:
+                    raise fail("multiple `g' options to `s' command", i)
+                if f == "p" and c.print:
+                    raise fail("multiple `p' options to `s' command", i)
                 if f == "g":
                     c.glob = True
                 elif f == "p":
                     c.print = True
                 elif f in "iI":
                     flags |= re.IGNORECASE
-                elif f == "m":
+                elif f in "mM":
                     flags |= re.MULTILINE
+                elif f == "w" and not script[i:].split("\n", 1)[0].strip():
+                    raise fail("missing filename in r/R/w/W commands", i)
                 else:
-                    raise ShellError("the `e' flag of `s' is not supported")
-            if i < n and script[i] == "w":
-                raise ShellError("the `w' flag of `s' is not supported")
-            c.rx = compile_rx(find, flags)
+                    raise fail(f"the `{f}' flag of `s' is not supported", i)
+            skip_blanks()
+            if i < n and script[i] not in ";\n}#":
+                raise fail("unknown option to `s'", i + 1)
+            # GNU compiles the regex once it has read the character that ends the command
+            compiled_at = i + 1 if i < n and script[i] in ";\n" else i
+            c.rx = compile_rx(find, flags, compiled_at)
             refs = [p for p in c.repl if isinstance(p, int)]
             if refs and max(refs) > c.rx.groups:
-                raise ShellError(f"invalid reference \\{max(refs)} on `s' command's RHS")
+                raise fail(f"invalid reference \\{max(refs)} on `s' command's RHS", compiled_at)
         elif op == "y":
             delim = script[i] if i < n else ""
             i += 1
             src = unescape(read_delimited(delim, "y"))
             dst = unescape(read_delimited(delim, "y"))
             if len(src) != len(dst):
-                raise ShellError("strings for `y' command are different lengths")
+                raise fail("strings for `y' command are different lengths", i)
             c.table = {ord(a): b for a, b in zip(src, dst)}
         elif op in "aic":
             c.text = read_text()
         elif op == ":":
             if c.a1 is not None:
-                raise ShellError(": doesn't want any addresses")
+                raise fail(": doesn't want any addresses", i)
             label = read_label()
             if not label:
-                raise ShellError("\":\" lacks a label")
+                raise fail("\":\" lacks a label", i)
             labels[label] = len(cmds)
         elif op in "btT":
             c.label = read_label()
+        elif op == "v":
+            read_label()  # "requires GNU sed VERSION": always met
         elif op in "qQ":
             skip_blanks()
             c.code = read_number() if i < n and script[i].isdigit() else 0
-        elif op not in "=dDgGhHnNpPxz":
-            raise ShellError(f"unknown command: `{op}'")
+        else:
+            if op in "rRwW" and not read_label():
+                raise fail("missing filename in r/R/w/W commands", i)
+            if op not in "=dDgGhHnNpPxz":
+                raise fail(f"unknown command: `{op}'", at)
         cmds.append(c)
         skip_blanks()
         if op != "{" and i < n and script[i] not in ";\n}#":
-            raise ShellError("extra characters after command")
+            raise fail("extra characters after command", i + 1)
     if blocks:
-        raise ShellError("unmatched `{'")
+        raise fail("unmatched `{'", blocks[-1][1], char_zero=True)
     for c in cmds:
         if c.op in "btT":
             if c.label and c.label not in labels:
-                raise ShellError(f"can't find label for jump to `{c.label}'")
+                raise ShellError(f"can't find label for jump to `{c.label}'", 4)
             c.target = labels[c.label] if c.label else len(cmds)
     return cmds
 
@@ -1198,7 +1486,25 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
 
 
 def _sed(ctx):
-    scripts: list[str] = []
+    def bad(message: str) -> int:  # a bad command line: the complaint, then the whole usage text, on stderr
+        ctx.stderr.write((f"sed: {message}\n" if message else "") + SED_USAGE)
+        return 1
+
+    scripts: list[tuple[str, str]] = []
+    expressions = 0
+
+    def add_script(kind: str, value: str) -> None:
+        nonlocal expressions
+        if kind == "e":
+            expressions += 1
+            scripts.append((value, f"-e expression #{expressions}"))
+            return
+        try:
+            text = ctx.stdin if value == "-" else ctx.fs.read_text(ctx.resolve(value))
+        except ShellError as e:
+            raise ShellError(f"couldn't open file {value}: {str(e).rsplit(': ', 1)[-1]}", 4) from None
+        scripts.append((text, f"file {value}"))
+
     files: list[str] = []
     quiet = extended = separate = in_place = False
     suffix = ""
@@ -1223,14 +1529,17 @@ def _sed(ctx):
             elif name in ("expression", "file"):
                 if not eq:
                     if i >= len(args):
-                        raise ShellError(f"option '--{name}' requires an argument", 1)
+                        return bad(f"option '--{name}' requires an argument")
                     value = args[i]
                     i += 1
-                scripts.append(value if name == "expression" else ctx.fs.read_text(ctx.resolve(value)))
-            elif name in ("posix", "debug", "sandbox", "follow-symlinks"):
+                add_script(name[0], value)
+            elif name in ("posix", "debug", "sandbox", "follow-symlinks", "unbuffered"):
                 pass
+            elif name == "help":
+                ctx.stdout.write(SED_HELP)
+                return 0
             else:
-                raise ShellError(f"unrecognized option '{arg}'", 1)
+                return bad(f"unrecognized option '{arg}'")
             continue
         if len(arg) < 2 or arg[0] != "-":
             files.append(arg)
@@ -1254,18 +1563,18 @@ def _sed(ctx):
                 value = arg[k:]
                 if not value:
                     if i >= len(args):
-                        raise ShellError(f"option requires an argument -- '{f}'", 1)
+                        return bad(f"option requires an argument -- '{f}'")
                     value = args[i]
                     i += 1
-                scripts.append(value if f == "e" else ctx.fs.read_text(ctx.resolve(value)))
+                add_script(f, value)
                 break
             else:
-                raise ShellError(f"invalid option -- '{f}'", 1)
+                return bad(f"invalid option -- '{f}'")
     if not scripts:
         if not files:
-            raise ShellError("usage: sed [-n] [-i[SUFFIX]] [-E] [-e SCRIPT]... [SCRIPT] [FILE]...", 1)
-        scripts.append(files.pop(0))
-    cmds = _sed_parse("\n".join(scripts), extended)
+            return bad("")
+        add_script("e", files.pop(0))
+    cmds = _sed_parse(scripts, extended)
     if in_place:
         if not files:
             raise ShellError("no input files", 1)
@@ -1322,4 +1631,4 @@ def register(shell) -> None:
     r("tr", _tr, "Translate or delete characters")
     r("tee", _tee, "Copy stdin to stdout and files")
     r("xargs", _xargs, "Build and run commands from stdin")
-    r("sed", _sed, "Stream editor")
+    r("sed", _sed, "Stream editor", SED_HELP)

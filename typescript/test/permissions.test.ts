@@ -31,7 +31,7 @@ describe('permissions', () => {
       const r = await sh.run(cmd);
       expect(r.exitCode).not.toBe(0);
       expect(r.stdout).toBe('');
-      expect(r.stderr.replaceAll('bash: ', '')).toBe(err.replaceAll('bash: ', ''));
+      expect(r.stderr).toBe(err);
       expect(sh.fs.readText('/root/notes.txt')).toBe('private\n'); // the app still reads it
     });
   }
@@ -91,7 +91,7 @@ describe('permissions', () => {
     await sh.run('mkdir -p ro/sub; echo b > ro/b; echo c > ro/sub/c; chmod 555 ro/sub; chmod 555 ro');
     await expectErrors(sh, [
       ['touch ro/new', "touch: cannot touch 'ro/new': Permission denied\n"],
-      ['echo x > ~/ro/new', 'bash: /home/agent/ro/new: Permission denied\n'],
+      ['echo x > ~/ro/new', 'bash: line 1: /home/agent/ro/new: Permission denied\n'],
       ['mkdir ro/d', 'mkdir: cannot create directory \u2018ro/d\u2019: Permission denied\n'],
       ['rm ro/b', "rm: cannot remove 'ro/b': Permission denied\n"],
       ['rm -r ro/sub', "rm: cannot remove 'ro/sub/c': Permission denied\n"],
@@ -108,7 +108,7 @@ describe('permissions', () => {
     const sh = setup();
     sh.fs.writeText('/home/agent/cfg', 'app');
     sh.fs.setOwner('/home/agent/cfg', 'root');
-    expect((await sh.run('echo agent > ~/cfg')).stderr).toBe('bash: /home/agent/cfg: Permission denied\n');
+    expect((await sh.run('echo agent > ~/cfg')).stderr).toBe('bash: line 1: /home/agent/cfg: Permission denied\n');
     expect((await sh.run("stat -c '%U' ~ | tr '\\n' ' '; stat -c %U ~/cfg; rm ~/cfg && echo agent > ~/cfg && cat ~/cfg | tr '\\n' ' '; stat -c %U ~/cfg")).stdout)
       .toBe('agent root\nagent agent\n');
   });

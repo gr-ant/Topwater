@@ -58,6 +58,12 @@ State persists between tool calls: working directory, variables, functions, alia
 `help` lists everything, including your commands. Standard tools answer `--version` and `--help` the way the
 real ones do. `find` supports `-name -iname -path -regex -type -size -mmin -mtime -newer -empty -maxdepth
 -mindepth -print -print0 -exec -delete` with `!`, `-o` and parentheses. `sed` is a full engine: addresses, `{}` blocks, hold space, labels and branches, `-i`, `-E`.
+`ls` also takes `-s`, `--time-style` (`full-iso`, `long-iso`, `iso`, `+FORMAT`) and `--full-time`.
+
+Error messages follow bash 5.2 and GNU coreutils, grep and sed on Ubuntu 24.04: bash's own errors start
+`bash: line N:` as under `bash -c` (`./s.sh: line N:` in a script, `environment: line N:` in a function), each call
+counting its lines from 1; a sed script error says where it is (`-e expression #1, char 5:`), and a bad grep or sed
+regex gets GNU's message. `command not found` is worded our own way, with a pointer to `help`.
 `awk` covers patterns, ranges, `BEGIN`/`END`, fields, arrays, control flow, user-defined functions, `getline`
 from files, `printf`, and the string functions. `jq` is a real parser with about 90 builtins: object
 construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_entries`, `reduce`, `@csv`,

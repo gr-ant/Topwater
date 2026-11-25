@@ -34,8 +34,8 @@ tar 1.35, gzip 1.12, Zip 3.0 and UnZip 6.00 (`archives`; compressed bytes differ
 compare listings, messages and round-tripped contents, never sizes). These are the versions on Ubuntu 24.04. Exceptions:
 
 - `error-messages` and `ls-long` were recorded with `--agent` (as the user `agent`, so owners and "Permission denied"
-  match Topwater's shell) and send stderr to stdout so the message wording is compared. Messages from bash itself
-  pass through `sed 's/^bash: line [0-9]*: /bash: /'`, since Topwater leaves out bash's `line N:`.
+  match Topwater's shell) and send stderr to stdout so the message wording is compared. Their first cases pass bash's
+  own messages through `sed 's/^bash: line [0-9]*: /bash: /'`; later ones keep bash's `line N:` prefix as it is.
 - `bc-094`..`bc-096` are Topwater's safety caps (GNU bc would hang or run out of memory): no output, an error, exit 1.
 - `shell-syntax`, `agent-features`, `second-review`, `array-tests` and `review-fixes` came from older hand-written
   tables checked against bash; they leave `exitCode` or `quiet` unchecked where those tables did, and `review-fixes`

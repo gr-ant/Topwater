@@ -59,11 +59,10 @@ internal sealed record Redirect(int Fd, string Op, Word? Target, HereDoc? Here)
 internal abstract record Command
 {
     public List<Redirect> Redirects { get; init; } = [];
-}
-internal sealed record SimpleCommand(List<Assignment> Assignments, List<Word> Words) : Command
-{
+    /// <summary>The line bash names in this command's own errors (a failed redirection, (( )), [[ ]]); 0: none.</summary>
     public int Line { get; init; }
 }
+internal sealed record SimpleCommand(List<Assignment> Assignments, List<Word> Words) : Command;
 internal sealed record GroupCommand(Script Body, bool Subshell) : Command;
 internal sealed record IfCommand(List<(Script Cond, Script Body)> Branches, Script? Else) : Command;
 internal sealed record LoopCommand(Script Cond, Script Body, bool Until) : Command;
@@ -102,6 +101,7 @@ internal enum TokenKind { Word, Op, Redirect, Arith }
 internal sealed record Token(TokenKind Kind, string Op = "", Word? Word = null, Redirect? Redirect = null)
 {
     public int Line { get; init; }
+    public int EndLine { get; init; }
     public int Start { get; init; }
     public int End { get; init; }
     public override string ToString() => Kind switch
@@ -140,7 +140,7 @@ internal sealed class Lexer(string s)
             if (_i >= s.Length) break;
             int count = tokens.Count, start = _i;
             LexOne(tokens);
-            if (tokens.Count > count) tokens[count] = tokens[count] with { Line = LineAt(start), Start = start, End = _i };
+            if (tokens.Count > count) tokens[count] = tokens[count] with { Line = LineAt(start), EndLine = LineAt(_i), Start = start, End = _i };
         }
         ReadHereDocBodies(); // heredoc on the last line with no trailing newline: body is empty
         return tokens;
@@ -747,17 +747,19 @@ internal sealed class Parser
         return new Pipeline(cmds, negate) { Timed = timed, PosixTime = posix };
     }
 
-    Command WithRedirects(Command c)
+    // a compound command's line is where it starts, or where its redirections are
+    Command WithRedirects(Command c, int line)
     {
         var r = ParseRedirects([]);
-        return r.Count == 0 ? c : c with { Redirects = r };
+        return c with { Redirects = r.Count == 0 ? c.Redirects : r, Line = r.Count == 0 ? line : _t[_p - 1].EndLine };
     }
 
     Command ParseCommand()
     {
         if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new ParseException("command is nested too deeply");
-        if (Cur is { Kind: TokenKind.Arith } arith) { _p++; return WithRedirects(new ArithCommand(arith.Op)); }
+        int start = Cur?.Line ?? 0;
+        if (Cur is { Kind: TokenKind.Arith } arith) { _p++; return WithRedirects(new ArithCommand(arith.Op), start); }
         if (IsOp("(") || IsWord("{"))
         {
             bool sub = IsOp("(");
@@ -765,19 +767,19 @@ internal sealed class Parser
             var body = ParseScript(sub ? ")" : "}");
             if (sub ? !IsOp(")") : !IsWord("}")) throw Cur == null ? new ParseException("syntax error: unexpected end of file") : Unexpected();
             _p++;
-            return WithRedirects(new GroupCommand(body, sub));
+            return WithRedirects(new GroupCommand(body, sub), start);
         }
         if (Cur is { Kind: TokenKind.Word } kwTok && kwTok.Word!.UnquotedLiteral is { } kw)
         {
             switch (kw)
             {
-                case "if": return WithRedirects(ParseIf());
-                case "while" or "until": return WithRedirects(ParseWhile(kw == "until"));
-                case "for": return WithRedirects(ParseFor());
-                case "case": return WithRedirects(ParseCase());
+                case "if": return WithRedirects(ParseIf(), start);
+                case "while" or "until": return WithRedirects(ParseWhile(kw == "until"), start);
+                case "for": return WithRedirects(ParseFor(), start);
+                case "case": return WithRedirects(ParseCase(), start);
                 case "function": return ParseFunction(true);
-                case "[[": return WithRedirects(ParseCond());
-                case "select": return WithRedirects(ParseFor(select: true));
+                case "[[": return WithRedirects(ParseCond(), start);
+                case "select": return WithRedirects(ParseFor(select: true), start);
                 case "coproc": throw new ParseException("'coproc' is not supported by this shell");
             }
             if (Reserved.Contains(kw) || kw == "}") throw Unexpected();
@@ -798,7 +800,8 @@ internal sealed class Parser
             words.Add(w);
         }
         if (words.Count == 0 && assignments.Count == 0 && redirects.Count == 0) throw Unexpected();
-        return new SimpleCommand(assignments, words) { Redirects = redirects, Line = line };
+        // bash reports a command that spans lines (a quoted newline) at its last line
+        return new SimpleCommand(assignments, words) { Redirects = redirects, Line = _p > 0 ? Math.Max(line, _t[_p - 1].EndLine) : line };
     }
 
     /// <summary>A compound command's list, which bash requires to hold at least one command (`if; then` is an error).</summary>

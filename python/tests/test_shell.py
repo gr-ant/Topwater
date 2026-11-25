@@ -18,6 +18,23 @@ def out(shell: Shell, cmd: str) -> str:
 
 
 class ShellTests(unittest.TestCase):
+    def test_each_call_counts_lines_from_one(self):
+        sh = Shell()
+        sh.run("true\ntrue\ntrue\ntrue\ntrue")
+        self.assertEqual("bash: line 1: /nofile: No such file or directory\n", sh.run("while read l; do :; done < /nofile").stderr)
+        self.assertEqual("bash: line 3: /nope/z: No such file or directory\n", sh.run("true\ntrue\nif true; then :; fi > /nope/z").stderr)
+
+    def test_long_runs_of_quantifiers_stay_fast(self):
+        import time
+        sh = Shell()
+        start = time.monotonic()
+        # a 1 MB run of * on one atom: one quantifier, built in one pass
+        r = sh.run("p='*'; for i in {1..20}; do p=$p$p; done; echo aaa | grep -cE \"a$p\"; [[ aaa =~ a$p ]]; echo $?; echo aaa | sed -E \"s/a$p/X/\"")
+        self.assertEqual("1\n0\nX\n", r.stdout)
+        self.assertLess(time.monotonic() - start, 10)
+        r = sh.run("p=$(printf '\\\\{1\\\\}%.0s' {1..40}); echo aaa | grep -c \"a$p\"")
+        self.assertEqual("grep: Regular expression too big\n", r.stderr)
+
     def test_filesystem_persists_across_calls(self):
         sh = Shell()
         out(sh, "mkdir -p proj/src && cd proj")

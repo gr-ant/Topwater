@@ -40,14 +40,44 @@ internal static partial class Builtins
         return v >= 1024 && u < 5 ? "1.0" + "KMGTPE"[u + 1] : v.ToString("0", CultureInfo.InvariantCulture) + "KMGTPE"[u];
     }
 
-    /// <summary>ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times).</summary>
-    static string LsDate(DateTime t, DateTime now) =>
-        string.Format(CultureInfo.InvariantCulture, t <= now && (now - t).TotalSeconds < 15778476 ? "{0:MMM} {1,2} {0:HH:mm}" : "{0:MMM} {1,2}  {0:yyyy}", t, t.Day);
+    /// <summary>ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times);
+    /// or in a --time-style: full-iso, long-iso, iso, or +FORMAT (FORMAT for old times, NEWLINE FORMAT for recent ones).</summary>
+    static string LsDate(DateTime t, DateTime now, string? style = null)
+    {
+        bool recent = t <= now && (now - t).TotalSeconds < 15778476;
+        return style switch
+        {
+            "full-iso" => Strftime(t, "%Y-%m-%d %H:%M:%S.%N %z"),
+            "long-iso" => Strftime(t, "%Y-%m-%d %H:%M"),
+            "iso" => Strftime(t, recent ? "%m-%d %H:%M" : "%Y-%m-%d "),
+            ['+', ..] => style[1..].Split('\n', 2) is var f && recent && f.Length > 1 ? Strftime(t, f[1]) : Strftime(t, f[0]),
+            _ => string.Format(CultureInfo.InvariantCulture, recent ? "{0:MMM} {1,2} {0:HH:mm}" : "{0:MMM} {1,2}  {0:yyyy}", t, t.Day),
+        };
+    }
+
+    static readonly string[] TimeStyles = ["full-iso", "long-iso", "iso", "locale", "posix-full-iso", "posix-long-iso", "posix-iso", "posix-locale"];
+
+    /// <summary>ls --time-style: a style name, a unique abbreviation of one, or +FORMAT; posix- styles act as the plain
+    /// ones, since the locale is not POSIX.</summary>
+    static string TimeStyle(string arg)
+    {
+        if (arg.StartsWith('+')) return arg;
+        var hits = TimeStyles.Contains(arg) ? [arg] : TimeStyles.Where(s => s.StartsWith(arg, StringComparison.Ordinal)).ToArray();
+        if (hits.Length != 1)
+            throw new ShellException($"{(hits.Length == 0 ? "invalid" : "ambiguous")} argument {QuoteL(arg)} for ‘time style’\nValid arguments are:\n"
+                + "  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n"
+                + "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.", 2);
+        return hits[0].StartsWith("posix-", StringComparison.Ordinal) ? hits[0][6..] : hits[0];
+    }
+
+    /// <summary>ls -s: the space a file takes, in KiB (or -h units).</summary>
+    static string BlockSize(FileStat st, bool human) => human ? HumanSize(st.Blocks * 512) : (st.Blocks / 2).ToString(CultureInfo.InvariantCulture);
 
     /// <summary>ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned).</summary>
     /// <param name="widthFrom">More entries that count toward the widths: ls sizes the columns for its file operands
     /// over all operands, directories included.</param>
-    static IEnumerable<string> LongEntries(CommandContext ctx, IEnumerable<(string Abs, string Name)> entries, bool human, IEnumerable<string>? widthFrom = null)
+    static IEnumerable<string> LongEntries(CommandContext ctx, IEnumerable<(string Abs, string Name)> entries, bool human, IEnumerable<string>? widthFrom = null,
+        string? style = null, bool blocks = false)
     {
         var now = ctx.Fs.Clock();
         string Size(FileStat st) => human ? HumanSize(st.Size) : st.Size.ToString(CultureInfo.InvariantCulture);
@@ -56,8 +86,10 @@ internal static partial class Builtins
         if (rows.Count == 0) yield break;
         var all = rows.Select(r => r.St).Concat((widthFrom ?? []).Select(ctx.Fs.Stat)).ToList();
         int lw = all.Max(s => s.Links.ToString(CultureInfo.InvariantCulture).Length), ow = all.Max(s => s.Owner.Length), sw = all.Max(s => Size(s).Length);
+        int bw = all.Max(s => BlockSize(s, human).Length);
         foreach (var r in rows)
-            yield return $"{VirtualFileSystem.FormatMode(r.St.IsDirectory, r.St.Mode)} {r.Links.PadLeft(lw)} {r.St.Owner.PadRight(ow)} {r.St.Owner.PadRight(ow)} {r.Size.PadLeft(sw)} {LsDate(r.St.Modified, now)} {r.Name}";
+            yield return (blocks ? BlockSize(r.St, human).PadLeft(bw) + " " : "")
+                + $"{VirtualFileSystem.FormatMode(r.St.IsDirectory, r.St.Mode)} {r.Links.PadLeft(lw)} {r.St.Owner.PadRight(ow)} {r.St.Owner.PadRight(ow)} {r.Size.PadLeft(sw)} {LsDate(r.St.Modified, now, style)} {r.Name}";
     }
 
     static string ShowNonprinting(string line) => string.Concat(line.Select(c =>
@@ -67,14 +99,21 @@ internal static partial class Builtins
     {
         shell.Register("ls", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "alhA1dFrtRSZ", longs: "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R");
+            // \u0001: --time-style=STYLE, \u0002: --full-time
+            var a = Args.Parse(ctx.Args, "alhA1dFrtRSZsk\u0002", "\u0001",
+                "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002");
             var paths = a.Positional.Count > 0 ? a.Positional : ["."];
-            bool lng = a.Has('l'), human = a.Has('h');
+            bool lng = a.Has('l') || a.Has('\u0002'), human = a.Has('h'), blocks = a.Has('s');
+            var style = a.Has('\u0002') ? "full-iso" : lng && a.Value('\u0001') is { } ts ? TimeStyle(ts) : null;
             int code = 0;
             void Show(IEnumerable<(string Abs, string Name)> entries, IEnumerable<string>? widthFrom = null)
             {
                 var named = entries.Select(e => (e.Abs, Name: e.Name + (a.Has('F') && ctx.Fs.IsDirectory(e.Abs) && e.Name is not "." and not ".." ? "/" : ""))).ToList();
-                WriteLines(ctx.Stdout, lng ? LongEntries(ctx, named, human, widthFrom) : named.Select(e => e.Name));
+                if (lng) { WriteLines(ctx.Stdout, LongEntries(ctx, named, human, widthFrom, style, blocks)); return; }
+                if (!blocks) { WriteLines(ctx.Stdout, named.Select(e => e.Name)); return; }
+                var sizes = named.Select(e => BlockSize(ctx.Fs.Stat(e.Abs), human)).ToList();
+                int w = sizes.Select(x => x.Length).DefaultIfEmpty(0).Max();
+                WriteLines(ctx.Stdout, named.Select((e, k) => sizes[k].PadLeft(w) + " " + e.Name));
             }
 
             // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
@@ -102,7 +141,7 @@ internal static partial class Builtins
                 if (a.Has('S')) entries = entries.OrderByDescending(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Size).ToList();
                 if (a.Has('a')) entries.InsertRange(0, [".", ".."]);
                 if (a.Has('r')) entries.Reverse();
-                if (lng)
+                if (lng || blocks)
                 {
                     long kib = entries.Sum(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Blocks / 2);
                     ctx.Stdout.WriteLine($"total {(human ? HumanSize(kib * 1024) : kib)}");
@@ -238,11 +277,11 @@ internal static partial class Builtins
             var destArg = a.Positional[^1];
             var dest = ctx.ResolvePath(destArg);
             bool destIsDir = ctx.Fs.IsDirectory(dest);
-            if ((sources.Count > 1 || destArg.EndsWith('/')) && !destIsDir)
+            if ((sources.Count > 1 || destArg.EndsWith('/') && !ctx.Fs.IsDirectory(ctx.ResolvePath(sources[0]))) && !destIsDir)
             {
                 if (sources.Count == 1 && !ctx.Fs.Exists(ctx.ResolvePath(sources[0]))) throw new ShellException($"cannot stat '{sources[0]}': No such file or directory");
                 if (sources.Count > 1)
-                    throw new ShellException(ctx.Fs.Exists(dest) ? $"target '{destArg}' is not a directory" : $"target '{destArg}': No such file or directory");
+                    throw new ShellException($"target '{destArg}': {(ctx.Fs.Exists(dest) ? "Not a directory" : "No such file or directory")}");
                 throw new ShellException(move ? $"cannot move '{sources[0]}' to '{destArg}': Not a directory" : $"cannot create regular file '{destArg}': Not a directory");
             }
             int code = 0;
@@ -253,9 +292,27 @@ internal static partial class Builtins
                 if (!move && ctx.Fs.IsDirectory(src) && !(a.Has('r') || a.Has('R') || a.Has('a')))
                 { ctx.Stderr.WriteLine($"cp: -r not specified; omitting directory '{s}'"); code = 1; continue; }
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
-                if (target == src) { ctx.Stderr.WriteLine($"{ctx.Name}: '{s}' and '{destArg}' are the same file"); code = 1; continue; }
                 if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data
                 var shown = destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg;
+                bool srcDir = ctx.Fs.IsDirectory(src);
+                string? clash = target == src ? $"{QuoteAlways(s)} and {QuoteAlways(shown)} are the same file"
+                    : srcDir && target.StartsWith(src + "/", StringComparison.Ordinal)
+                        ? move ? $"cannot move {QuoteAlways(s)} to a subdirectory of itself, {QuoteAlways(shown)}"
+                            : $"cannot copy a directory, {QuoteAlways(s)}, into itself, {QuoteAlways(shown)}"
+                    : !ctx.Fs.Exists(target) ? null
+                    : srcDir && !ctx.Fs.IsDirectory(target) ? $"cannot overwrite non-directory {QuoteAlways(shown)} with directory {QuoteAlways(s)}"
+                    : !srcDir && ctx.Fs.IsDirectory(target) ? $"cannot overwrite directory {QuoteAlways(shown)} with non-directory"
+                    : move && srcDir && ctx.Fs.List(target).Count > 0 ? $"cannot overwrite {QuoteAlways(shown)}: Directory not empty"
+                    : null;
+                if (clash != null)
+                {
+                    ctx.Stderr.WriteLine($"{ctx.Name}: {clash}");
+                    code = 1;
+                    // cp creates the copy and fills it until it reaches the copy itself
+                    if (!move && clash.StartsWith("cannot copy", StringComparison.Ordinal)) CopyIntoItself(ctx, src, target, []);
+                    continue;
+                }
+                if (move && srcDir && ctx.Fs.IsDirectory(target)) ctx.Fs.Delete(target); // an empty directory is replaced
                 try
                 {
                     if (move) ctx.Fs.Move(src, target);
@@ -285,6 +342,21 @@ internal static partial class Builtins
             return Task.FromResult(code);
         };
         shell.Register("cp", copyOrMove, "Copy files and directories");
+
+        // cp -r d d/x copies d into d/x, entry by entry, until it meets a directory this copy created; there it stops.
+        // Returns false once stopped. shortcut: entries go in name order, where GNU goes in the directory's own order.
+        static bool CopyIntoItself(CommandContext ctx, string from, string to, HashSet<string> created)
+        {
+            if (!ctx.Fs.Exists(to)) { ctx.Fs.CreateDirectory(to); created.Add(to); }
+            foreach (var name in ctx.Fs.List(from).ToList())
+            {
+                var child = VirtualFileSystem.Normalize(from, name);
+                if (created.Contains(child)) return false;
+                if (!ctx.Fs.IsDirectory(child)) ctx.Fs.Copy(child, VirtualFileSystem.Normalize(to, name));
+                else if (!CopyIntoItself(ctx, child, VirtualFileSystem.Normalize(to, name), created)) return false;
+            }
+            return true;
+        }
         shell.Register("mv", copyOrMove, "Move or rename files");
 
         shell.Register("find", Find.RunAsync, "Search for files");

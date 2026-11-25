@@ -47,6 +47,10 @@ def _duration(s: str) -> float:
 # ---------- scripting ----------
 
 def _exit(ctx):
+    if ctx.args and not re.fullmatch(r"[+-]?\d+", ctx.args[0]):
+        # bash still exits, with status 2
+        ctx.error(f"{ctx.shell.err_prefix}exit: {ctx.args[0]}: numeric argument required")
+        raise ExitSignal(2)
     raise ExitSignal(_count(ctx, ctx.shell.last_exit_code) & 255)
 
 
@@ -59,7 +63,7 @@ def _return(ctx):
 def _break(ctx):
     if ctx.shell.loop_depth > 0:
         raise LoopControl(ctx.name == "break", max(1, _count(ctx, 1)))
-    ctx.error(f"bash: {ctx.name}: only meaningful in a `for', `while', or `until' loop")
+    ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: only meaningful in a `for', `while', or `until' loop")
     return 0
 
 
@@ -203,7 +207,7 @@ def describe(ctx, a: str) -> bool:
     elif a in sh.commands:
         ctx.print(f"{a} is /usr/bin/{a}")
     else:
-        ctx.error(f"bash: type: {a}: not found")
+        ctx.error(f"{ctx.shell.err_prefix}type: {a}: not found")
         return False
     return True
 
@@ -310,7 +314,7 @@ def _declare(ctx):
             if line is not None:
                 ctx.print(line)
             else:
-                ctx.error(f"bash: {ctx.name}: {n}: not found")
+                ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: {n}: not found")
                 code = 1
         return code
     local = ctx.name == "local" or (ctx.name in ("declare", "typeset") and sh.in_function and not glob)
@@ -341,7 +345,7 @@ def _declare(ctx):
             if "r" in on:
                 sh.set_attrs(target, "r")
         except ShellError as e:
-            ctx.error(f"bash: {ctx.name}: {e}")
+            ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: {e}")
             code = 1
     return code
 
@@ -549,12 +553,12 @@ def _wait(ctx):
             code = 0
             continue
         if not i.isdigit():
-            ctx.error(f"bash: wait: `{i}': not a pid or valid job spec")
+            ctx.error(f"{ctx.shell.err_prefix}wait: `{i}': not a pid or valid job spec")
             code = 2
             continue
         code = ctx.shell.wait_for(int(i))
         if code == 127:
-            ctx.error(f"bash: wait: pid {i} is not a child of this shell")
+            ctx.error(f"{ctx.shell.err_prefix}wait: pid {i} is not a child of this shell")
     return code
 
 
@@ -587,7 +591,7 @@ def _kill(ctx):
             if signal != 0:
                 raise ExitSignal(128 + signal)
             continue
-        ctx.error(f"bash: kill: {t}: no such job" if t.startswith("%") else f"bash: kill: ({t}) - No such process")
+        ctx.error(f"{ctx.shell.err_prefix}kill: {t}: no such job" if t.startswith("%") else f"{ctx.shell.err_prefix}kill: ({t}) - No such process")
         code = 1
     return code
 
@@ -596,7 +600,7 @@ def _hash(ctx):
     code = 0
     for n in ctx.args:
         if not n.startswith("-") and n not in ctx.shell.commands:
-            ctx.error(f"bash: hash: {n}: not found")
+            ctx.error(f"{ctx.shell.err_prefix}hash: {n}: not found")
             code = 1
     return code
 

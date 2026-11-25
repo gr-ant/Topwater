@@ -220,27 +220,27 @@ describe('sed files', () => {
 });
 
 describe('sed errors and limits', () => {
-  const bad = (name: string, script: string, msg: RegExp) =>
+  const bad = (name: string, script: string, msg: RegExp, exitCode = 1) =>
     test(name, async () => {
       const { run } = env();
       const r = await run(['sed', script], 'a\n');
-      expect(r.exitCode).toBe(1);
+      expect(r.exitCode).toBe(exitCode);
       expect(r.stderr).toMatch(msg);
     });
   bad('unknown command', 'k', /unknown command/);
   bad('unterminated s', 's/a/b', /unterminated `s' command/);
   bad('unmatched {', '{p', /unmatched `\{'/);
   bad('unexpected }', 'p}', /unexpected `\}'/);
-  bad('missing label', 'b nowhere', /can't find label for jump to `nowhere'/);
+  bad('missing label', 'b nowhere', /can't find label for jump to `nowhere'/, 4);
   bad('extra characters', 'pp', /extra characters after command/);
   bad('y lengths', 'y/ab/c/', /different lengths/);
-  bad('invalid regex', 's/\\(/x/', /invalid regular expression/);
+  bad('invalid regex', 's/\\(/x/', /char 7: Unmatched \( or \\\(/);
   bad('zero address', '0p', /invalid usage of line address 0/);
   test('no script', async () => {
     const { run } = env();
     const r = await run(['sed']);
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/usage: sed/);
+    expect(r.stderr).toMatch(/^Usage: sed \[OPTION\]/);
   });
   test('infinite loop is stopped', async () => {
     const { run } = env();

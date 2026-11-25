@@ -10,11 +10,11 @@
   ],
   [
    "cat < /root/notes.txt",
-   "bash: /root/notes.txt: Permission denied\n"
+   "bash: line 1: /root/notes.txt: Permission denied\n"
   ],
   [
    "source /root/notes.txt",
-   "bash: /root/notes.txt: Permission denied\n"
+   "bash: line 1: /root/notes.txt: Permission denied\n"
   ],
   [
    "cat /root/*",
@@ -38,7 +38,7 @@
   ],
   [
    "cd /root",
-   "bash: cd: /root: Permission denied\n"
+   "bash: line 1: cd: /root: Permission denied\n"
   ],
   [
    "cp /root/notes.txt ~/n",
@@ -54,7 +54,7 @@
   ],
   [
    "echo x > /root/notes.txt",
-   "bash: /root/notes.txt: Permission denied\n"
+   "bash: line 1: /root/notes.txt: Permission denied\n"
   ],
   [
    "rm /root/notes.txt",

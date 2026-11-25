@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from .. import bytetext
+from ..parser import is_name
 from ..vfs import ShellError, UsageException
 
 
@@ -343,7 +344,7 @@ def _export(ctx):
             else:
                 sh.set_attrs(sh.resolve_name(name), "x")
         except ShellError as e:
-            ctx.error(f"bash: export: {e}")
+            ctx.error(f"{ctx.shell.err_prefix}export: {e}")
             code = 1
     return code
 
@@ -361,7 +362,7 @@ def _alias(ctx):
         elif k in aliases:
             ctx.print(f"alias {k}='{aliases[k]}'")
         else:
-            ctx.error(f"alias: {k}: not found")
+            ctx.error(f"{ctx.shell.err_prefix}alias: {k}: not found")
             code = 1
     return code
 
@@ -383,6 +384,7 @@ SHELL_BUILTINS = {
     "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
     "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
     "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt", ":",
+    "pushd", "popd", "dirs", "mapfile", "readarray", "ulimit", "builtin", "caller", "times", "disown",
 }
 
 
@@ -616,7 +618,8 @@ async def _run_script(ctx):
     try:
         text = ctx.fs.read_text(ctx.resolve(args[0]))
     except ShellError as e:
-        ctx.error(f"bash: {args[0]}: {str(e).rsplit(': ', 1)[-1]}")
+        # a new bash reports its missing script itself, so without a line; source reports it at its own line
+        ctx.error(f"{'bash: ' if is_bash else ctx.shell.err_prefix}{args[0]}: {str(e).rsplit(': ', 1)[-1]}")
         return 127 if is_bash else 1
     if is_bash:
         return await sh._run_script_text(text, io_, subshell=True, positional=args[1:], process=_NewProcess(args[0], args[0], setup))
@@ -635,6 +638,10 @@ async def _unset(ctx):
     code = 0
     for arg in args:
         try:
+            if "f" not in flags and not is_name(arg.split("[")[0]):
+                if "v" in flags:
+                    raise ShellError(f"`{arg}': not a valid identifier")
+                continue  # plain unset passes over what can be neither a variable nor a function, silently
             a = await sh.expand_subscript(arg, ctx.io)
             # with neither -v nor -f, a name that is no variable but a function unsets the function
             if "f" in flags or ("v" not in flags and not sh.is_variable_set(a) and a in sh.functions):
@@ -642,7 +649,7 @@ async def _unset(ctx):
             else:
                 sh.unset(a, nameref="n" in flags)
         except ShellError as e:
-            ctx.error(f"bash: unset: {e}")
+            ctx.error(f"{sh.err_prefix}unset: {e}")
             code = 1
     return code
 
@@ -782,12 +789,12 @@ def _printf(ctx):
         raise ShellError("usage: printf [-v var] format [arguments]", 2)
     errors: list[str] = []
     text = printf_format(args[0], args[1:], errors)
+    for e in errors:  # bash reports them as it goes, then writes the text
+        ctx.error(ctx.shell.err_prefix + e)
     if var is None:
         ctx.stdout.write(text)
     else:
         ctx.shell.set_var(var, text)
-    for e in errors:
-        ctx.error(e)
     return 1 if errors else 0
 
 

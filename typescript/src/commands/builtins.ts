@@ -117,7 +117,7 @@ function parseDuration(s: string): number {
 
 function loopJump(ctx: CommandContext, isBreak: boolean): number {
   if (ctx.shell.loopDepth > 0) ctx.shell.loopControl(isBreak, Math.max(1, parseCount(ctx, 1)));
-  ctx.stderr.write(`bash: ${ctx.name}: only meaningful in a \`for', \`while', or \`until' loop\n`);
+  ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: only meaningful in a \`for', \`while', or \`until' loop\n`);
   return 0;
 }
 
@@ -156,7 +156,7 @@ function describe(ctx: CommandContext, a: string): boolean {
   else if (fn) line(ctx, `${a} is a function\n${a} () \n${fn.source}`);
   else if (isShellBuiltin(sh, a)) line(ctx, `${a} is a shell builtin`);
   else if (sh.commands.has(a)) line(ctx, `${a} is /usr/bin/${a}`);
-  else { ctx.stderr.write(`bash: type: ${a}: not found\n`); return false; }
+  else { ctx.stderr.write(`${ctx.shell.errPrefix}type: ${a}: not found\n`); return false; }
   return true;
 }
 
@@ -358,8 +358,8 @@ export function registerBuiltins(shell: Shell) {
     if (args.length === 0) throw new ShellError('usage: printf [-v var] format [arguments]', 2);
     const errors: string[] = [];
     const text = printfFormat(args[0], args.slice(1), errors, () => ctx.shell.now());
+    for (const e of errors) ctx.stderr.write(ctx.shell.errPrefix + e + '\n'); // bash reports them as it goes, then writes the text
     if (variable === undefined) ctx.stdout.write(text); else ctx.shell.setVar(variable, text);
-    for (const e of errors) ctx.stderr.write(e + '\n');
     return errors.length > 0 ? 1 : 0;
   }, 'Format and print data');
 
@@ -410,7 +410,7 @@ export function registerBuiltins(shell: Shell) {
         if (remove) sh.unexport(target); else sh.setAttrs(target, 'x');
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`bash: export: ${e.message}\n`);
+        ctx.stderr.write(`${ctx.shell.errPrefix}export: ${e.message}\n`);
         code = 1;
       }
     }
@@ -425,13 +425,17 @@ export function registerBuiltins(shell: Shell) {
     let code = 0;
     for (const arg of ctx.args.slice(k)) {
       try {
+        if (!flags.includes('f') && !isName(arg.split('[')[0])) {
+          if (flags.includes('v')) throw new ShellError(`\`${arg}': not a valid identifier`);
+          continue; // plain unset passes over what can be neither a variable nor a function, silently
+        }
         const a = await sh.expandSubscript(arg, ioOf(ctx));
         // with neither -v nor -f, a name that is no variable but a function unsets the function
         if (flags.includes('f') || (!flags.includes('v') && !sh.isVariableSet(a) && sh.functions.has(a))) sh.functions.delete(a);
         else sh.unset(a, flags.includes('n'));
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`bash: unset: ${e.message}\n`);
+        ctx.stderr.write(`${ctx.shell.errPrefix}unset: ${e.message}\n`);
         code = 1;
       }
     }
@@ -477,7 +481,7 @@ export function registerBuiltins(shell: Shell) {
       const eq = a.indexOf('=');
       if (eq > 0) sh.aliases.set(a.slice(0, eq), a.slice(eq + 1));
       else if (sh.aliases.has(a)) line(ctx, `alias ${a}='${sh.aliases.get(a)}'`);
-      else { ctx.stderr.write(`bash: alias: ${a}: not found\n`); code = 1; }
+      else { ctx.stderr.write(`${ctx.shell.errPrefix}alias: ${a}: not found\n`); code = 1; }
     }
     return code;
   }, 'Define or list aliases');
@@ -485,7 +489,7 @@ export function registerBuiltins(shell: Shell) {
   reg('unalias', ctx => {
     if (ctx.args.includes('-a')) { ctx.shell.aliases.clear(); return 0; }
     let code = 0;
-    for (const a of ctx.args) if (!ctx.shell.aliases.delete(a)) { ctx.stderr.write(`bash: unalias: ${a}: not found\n`); code = 1; }
+    for (const a of ctx.args) if (!ctx.shell.aliases.delete(a)) { ctx.stderr.write(`${ctx.shell.errPrefix}unalias: ${a}: not found\n`); code = 1; }
     return code;
   }, 'Remove aliases');
 
@@ -561,7 +565,8 @@ export function registerBuiltins(shell: Shell) {
     let text: string;
     try { text = ctx.fs.readText(ctx.resolvePath(args[0])); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      ctx.stderr.write(`bash: ${args[0]}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
+      // a new bash reports its missing script itself, so without a line; source reports it at its own line
+      ctx.stderr.write(`${isBash ? 'bash: ' : ctx.shell.errPrefix}${args[0]}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
       return isBash ? 127 : 1;
     }
     if (isBash) return sh.runScriptText(text, io, true, args.slice(1), { arg0: args[0], file: args[0], setup });
@@ -592,7 +597,14 @@ export function registerBuiltins(shell: Shell) {
 
   // ---------- scripting ----------
 
-  reg('exit', ctx => { throw new ExitSignal(parseCount(ctx, ctx.shell.lastExitCode) & 255); }, 'Exit the shell');
+  reg('exit', ctx => {
+    if (ctx.args.length > 0 && !/^-?\d+$/.test(ctx.args[0])) {
+      // bash still exits, with status 2
+      ctx.stderr.write(`${ctx.shell.errPrefix}exit: ${ctx.args[0]}: numeric argument required\n`);
+      throw new ExitSignal(2);
+    }
+    throw new ExitSignal(parseCount(ctx, ctx.shell.lastExitCode) & 255);
+  }, 'Exit the shell');
   reg('return', ctx => {
     if (!ctx.shell.inFunction && ctx.shell.sourceDepth === 0) throw new ShellError("can only `return' from a function or sourced script", 2);
     ctx.shell.returnSignal(parseCount(ctx, ctx.shell.lastExitCode) & 255);
@@ -656,7 +668,7 @@ export function registerBuiltins(shell: Shell) {
     }
     let code = 0;
     for (const n of names) {
-      if (!KNOWN_SHOPTS.includes(n)) { ctx.stderr.write(`bash: shopt: ${n}: invalid shell option name\n`); code = 1; continue; }
+      if (!KNOWN_SHOPTS.includes(n)) { ctx.stderr.write(`${ctx.shell.errPrefix}shopt: ${n}: invalid shell option name\n`); code = 1; continue; }
       const on = sh.shopts.has(n);
       if (code === 0 && !on) code = 1;
       if (!a.has('q')) line(ctx, `${n.padEnd(15)}\t${on ? 'on' : 'off'}`);
@@ -743,7 +755,7 @@ export function registerBuiltins(shell: Shell) {
     if (print) {
       for (const n of names) {
         const l = declareLine(sh, n);
-        if (l) line(ctx, l); else { ctx.stderr.write(`bash: ${ctx.name}: ${n}: not found\n`); code = 1; }
+        if (l) line(ctx, l); else { ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: ${n}: not found\n`); code = 1; }
       }
       return code;
     }
@@ -771,7 +783,7 @@ export function registerBuiltins(shell: Shell) {
         if (on.includes('r')) sh.setAttrs(target, 'r');
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`bash: ${ctx.name}: ${e.message}\n`);
+        ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: ${e.message}\n`);
         code = 1;
       }
     }
@@ -904,9 +916,9 @@ export function registerBuiltins(shell: Shell) {
     if (ids.length === 0) sh.forgetJobs();
     for (const id of ids) {
       if (id.startsWith('%')) { code = 0; continue; }
-      if (!/^\d+$/.test(id)) { ctx.stderr.write(`bash: wait: \`${id}': not a pid or valid job spec\n`); code = 2; continue; }
+      if (!/^\d+$/.test(id)) { ctx.stderr.write(`${ctx.shell.errPrefix}wait: \`${id}': not a pid or valid job spec\n`); code = 2; continue; }
       code = sh.waitFor(Number(id));
-      if (code === 127) ctx.stderr.write(`bash: wait: pid ${id} is not a child of this shell\n`);
+      if (code === 127) ctx.stderr.write(`${ctx.shell.errPrefix}wait: pid ${id} is not a child of this shell\n`);
     }
     return code;
   }, 'Wait for background jobs (they run to completion when started)');
@@ -931,7 +943,7 @@ export function registerBuiltins(shell: Shell) {
     for (const t of targets) {
       if (t === '4242') { if (signal !== 0) throw new ExitSignal(128 + signal); continue; } // the shell itself
       if (/^\d+$/.test(t) && ctx.shell.isJob(Number(t))) continue; // a finished job: nothing to signal
-      ctx.stderr.write(t.startsWith('%') ? `bash: kill: ${t}: no such job\n` : `bash: kill: (${t}) - No such process\n`);
+      ctx.stderr.write(t.startsWith('%') ? `${ctx.shell.errPrefix}kill: ${t}: no such job\n` : `${ctx.shell.errPrefix}kill: (${t}) - No such process\n`);
       code = 1;
     }
     return code;
@@ -939,7 +951,7 @@ export function registerBuiltins(shell: Shell) {
 
   reg('hash', ctx => {
     let code = 0;
-    for (const n of ctx.args.filter(a => !a.startsWith('-'))) if (!ctx.shell.commands.has(n)) { ctx.stderr.write(`bash: hash: ${n}: not found\n`); code = 1; }
+    for (const n of ctx.args.filter(a => !a.startsWith('-'))) if (!ctx.shell.commands.has(n)) { ctx.stderr.write(`${ctx.shell.errPrefix}hash: ${n}: not found\n`); code = 1; }
     return code;
   }, 'Remember command locations');
 

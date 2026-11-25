@@ -231,6 +231,7 @@ internal static partial class Builtins
         "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
         "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
         "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt", ":",
+        "pushd", "popd", "dirs", "mapfile", "readarray", "ulimit", "builtin", "caller", "times", "disown",
     ];
 
     internal static bool IsShellBuiltin(Shell shell, string name) => ShellBuiltins.Contains(name) && shell.IsBuiltin(name);
@@ -268,9 +269,9 @@ internal static partial class Builtins
             if (args.Count == 0) throw new ShellException("usage: printf [-v var] format [arguments]", 2);
             var errors = new List<string>();
             var text = Printf.Format(args[0], args.Skip(1).ToList(), errors, ctx.Shell.Now);
+            foreach (var e in errors) ctx.Stderr.WriteLine(ctx.Shell.ErrPrefix + e); // bash reports them as it goes, then writes the text
             if (variable == null) ctx.Stdout.Write(text);
             else ctx.Shell.SetVar(variable, text);
-            foreach (var e in errors) ctx.Stderr.WriteLine(e);
             return errors.Count > 0 ? 1 : 0;
         }, "Format and print data");
 
@@ -324,7 +325,7 @@ internal static partial class Builtins
                     else if (!sh.Arrays.ContainsKey(sh.Resolve(name)) && !sh.Environment.ContainsKey(sh.Resolve(name))) { sh.MarkShellVariable(sh.Resolve(name)); sh.Environment[sh.Resolve(name)] = ""; }
                     if (remove) sh.Unexport(sh.Resolve(name)); else sh.SetAttrs(sh.Resolve(name), "x");
                 }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"bash: export: {e.Message}"); code = 1; }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}export: {e.Message}"); code = 1; }
             }
             return code;
         }, "Set environment variables");
@@ -337,12 +338,17 @@ internal static partial class Builtins
             {
                 try
                 {
+                    if (!flags.Contains('f') && !Topwater.Parsing.Parser.IsName(arg.Split('[')[0]))
+                    {
+                        if (flags.Contains('v')) throw new ShellException($"`{arg}': not a valid identifier");
+                        continue; // plain unset passes over what can be neither a variable nor a function, silently
+                    }
                     var a = await ctx.Shell.ExpandSubscriptAsync(arg, ctx.Io, ctx.CancellationToken);
                     // with neither -v nor -f, a name that is no variable but a function unsets the function
                     if (flags.Contains('f') || !flags.Contains('v') && !ctx.Shell.IsVariableSet(a) && ctx.Shell.Functions.ContainsKey(a)) ctx.Shell.Functions.Remove(a);
                     else ctx.Shell.Unset(a, nameref: flags.Contains('n'));
                 }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"bash: unset: {e.Message}"); code = 1; }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}unset: {e.Message}"); code = 1; }
             }
             return code;
         }, "Remove variables or functions (-f)");
@@ -363,7 +369,7 @@ internal static partial class Builtins
                 int eq = a.IndexOf('=');
                 if (eq > 0) ctx.Shell.Aliases[a[..eq]] = a[(eq + 1)..];
                 else if (ctx.Shell.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"alias {a}='{v}'");
-                else { ctx.Stderr.WriteLine($"alias: {a}: not found"); code = 1; }
+                else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}alias: {a}: not found"); code = 1; }
             }
             return code;
         }, "Define or list aliases");
@@ -450,7 +456,8 @@ internal static partial class Builtins
             try { text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0])); }
             catch (ShellException e)
             {
-                ctx.Stderr.WriteLine($"bash: {args[0]}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
+                // a new bash reports its missing script itself, so without a line; source reports it at its own line
+                ctx.Stderr.WriteLine($"{(isBash ? "bash: " : ctx.Shell.ErrPrefix)}{args[0]}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
                 return isBash ? 127 : 1;
             }
             if (isBash) return await sh.RunScriptTextAsync(text, io, subshell: true, ctx.CancellationToken, args.Skip(1).ToList(), new(args[0], args[0], Setup));

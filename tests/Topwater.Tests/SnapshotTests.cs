@@ -152,7 +152,7 @@ public class SnapshotTests(ITestOutputHelper output)
         Assert.Equal(expected, probe);
         // and the probe saw real values, not two matching blanks
         foreach (var part in new[] { "status=1 args=3 [p1] [p 2] [p3] pwd=/home/agent/proj", "declare -i n=\"5\"", "declare -r R=\"fixed\"", "declare -x EXP=\"exported\"",
-            "declare -l low=\"abc\"", "declare -n ref=\"target\"", "declare -a arr=([0]=\"one\" [2]=\"three\" [3]=\"four\")", "n=7 ref=val", "up=XYZ", "bash: R: readonly variable",
+            "declare -l low=\"abc\"", "declare -n ref=\"target\"", "declare -a arr=([0]=\"one\" [2]=\"three\" [3]=\"four\")", "n=7 ref=val", "up=XYZ", ": R: readonly variable",
             "hi bob from /home/agent/proj", "0,1,2,", "child sees EXP=exported", "hi child from", "alias gs='git status'", "alias ll='ls -l'", "~/proj /tmp",
             "nullglob       \ton", "globstar       \ton", "dotglob        \toff", "trap -- ':' ERR", "trap -- 'echo int' INT", "key two", "v2", "0 2 3 4", "-rw-------", "-rwxr-xr-x", "one\ntwo\n" })
             Assert.Contains(part, probe);

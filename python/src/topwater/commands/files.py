@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from ..shell import glob_to_regex
 from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, normalize, utc_now
-from . import Args, inputs, parse_date, quote_always, quote_l, split_lines
+from . import Args, inputs, parse_date, quote_always, quote_l, split_lines, strftime
 
 
 def typed(message: str, arg: str, abs_path: str) -> tuple[str, str]:
@@ -49,14 +49,44 @@ def _human(n: int) -> str:
     return "1.0" + "KMGTPE"[u + 1] if v >= 1024 and u < 5 else f"{v:.0f}" + "KMGTPE"[u]
 
 
-def _ls_date(t: datetime, now: datetime) -> str:
-    """ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times)."""
-    if timedelta(0) <= now - t < timedelta(seconds=15778476):
-        return f"{t:%b} {t.day:2} {t:%H:%M}"
-    return f"{t:%b} {t.day:2}  {t:%Y}"
+def _ls_date(t: datetime, now: datetime, style: str | None = None) -> str:
+    """ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times);
+    or in a --time-style: full-iso, long-iso, iso, or +FORMAT (FORMAT for old times, NEWLINE FORMAT for recent ones)."""
+    recent = timedelta(0) <= now - t < timedelta(seconds=15778476)
+    if style == "full-iso":
+        return strftime(t, "%Y-%m-%d %H:%M:%S.%N %z")
+    if style == "long-iso":
+        return strftime(t, "%Y-%m-%d %H:%M")
+    if style == "iso":
+        return strftime(t, "%m-%d %H:%M" if recent else "%Y-%m-%d ")
+    if style and style[0] == "+":
+        f = style[1:].split("\n", 1)
+        return strftime(t, f[1] if recent and len(f) > 1 else f[0])
+    return f"{t:%b} {t.day:2} {t:%H:%M}" if recent else f"{t:%b} {t.day:2}  {t:%Y}"
 
 
-def _long_entries(ctx, entries, human: bool, width_from=()):
+_TIME_STYLES = ["full-iso", "long-iso", "iso", "locale", "posix-full-iso", "posix-long-iso", "posix-iso", "posix-locale"]
+
+
+def _time_style(arg: str) -> str:
+    """ls --time-style: a style name, a unique abbreviation of one, or +FORMAT; posix- styles act as the plain ones,
+    since the locale is not POSIX."""
+    if arg.startswith("+"):
+        return arg
+    hits = [arg] if arg in _TIME_STYLES else [x for x in _TIME_STYLES if x.startswith(arg)]
+    if len(hits) != 1:
+        raise ShellError(f"{'invalid' if not hits else 'ambiguous'} argument {quote_l(arg)} for \u2018time style\u2019\nValid arguments are:\n"
+                         "  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n"
+                         "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.", 2)
+    return hits[0].removeprefix("posix-")
+
+
+def _block_size(st, human: bool) -> str:
+    """ls -s: the space a file takes, in KiB (or -h units)."""
+    return _human(st.blocks * 512) if human else str(st.blocks // 2)
+
+
+def _long_entries(ctx, entries, human: bool, width_from=(), style: str | None = None, blocks: bool = False):
     """ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned).
     width_from: more paths that count toward the widths (ls sizes the columns for its file operands over all operands)."""
     now = utc_now()
@@ -69,18 +99,31 @@ def _long_entries(ctx, entries, human: bool, width_from=()):
         return []
     every = [st for st, _ in rows] + [ctx.fs.stat(p) for p in width_from]
     lw, ow, sw = (max(len(f(st)) for st in every) for f in (lambda st: str(st.links), lambda st: st.owner, size))
-    return [f"{format_mode(st.is_dir, st.mode)} {st.links:>{lw}} {st.owner:<{ow}} {st.owner:<{ow}} {size(st):>{sw}} {_ls_date(st.modified, now)} {name}"
+    bw = max(len(_block_size(st, human)) for st in every)
+    return [(_block_size(st, human).rjust(bw) + " " if blocks else "")
+            + f"{format_mode(st.is_dir, st.mode)} {st.links:>{lw}} {st.owner:<{ow}} {st.owner:<{ow}} {size(st):>{sw}} {_ls_date(st.modified, now, style)} {name}"
             for st, name in rows]
 
 
 def _ls(ctx):
-    a = Args.parse(ctx.args, "alhA1dFrtRSZ", longs="all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R")
+    # \x01: --time-style=STYLE, \x02: --full-time
+    a = Args.parse(ctx.args, "alhA1dFrtRSZsk\x02", "\x01",
+                   "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\x01,full-time=\x02")
     paths = a.positional or ["."]
+    lng, human, blocks = a.has("l") or a.has("\x02"), a.has("h"), a.has("s")
+    style = "full-iso" if a.has("\x02") else _time_style(a.value("\x01")) if lng and a.value("\x01") is not None else None
     code = 0
 
     def show(entries, width_from=()):
         named = [(p, n + "/" if a.has("F") and ctx.fs.is_dir(p) and n not in (".", "..") else n) for p, n in entries]
-        for line in _long_entries(ctx, named, a.has("h"), width_from) if a.has("l") else [n for _, n in named]:
+        if lng:
+            lines = _long_entries(ctx, named, human, width_from, style, blocks)
+        elif blocks:
+            sizes = [_block_size(ctx.fs.stat(p), human) for p, _ in named]
+            lines = [sz.rjust(max(map(len, sizes))) + " " + n for sz, (_, n) in zip(sizes, named)]
+        else:
+            lines = [n for _, n in named]
+        for line in lines:
             ctx.print(line)
 
     for p in paths:
@@ -116,9 +159,9 @@ def _ls(ctx):
             entries = [".", ".."] + entries
         if a.has("r"):
             entries.reverse()
-        if a.has("l"):
+        if lng or blocks:
             kib = sum(ctx.fs.stat(normalize(path, n)).blocks // 2 for n in entries)
-            ctx.print(f"total {_human(kib * 1024) if a.has('h') else kib}")
+            ctx.print(f"total {_human(kib * 1024) if human else kib}")
         show([(normalize(path, n), n) for n in entries])
         if a.has("R"):
             for n in entries:
@@ -279,6 +322,23 @@ def _rmdir(ctx):
     return code
 
 
+def _copy_into_itself(ctx, src: str, to: str, created: set[str]) -> bool:
+    """cp -r d d/x copies d into d/x, entry by entry, until it meets a directory this copy created; there it stops.
+    Returns False once stopped. shortcut: entries go in name order, where GNU goes in the directory's own order."""
+    if not ctx.fs.exists(to):
+        ctx.fs.mkdir(to, False)
+        created.add(to)
+    for name in ctx.fs.listdir(src):
+        child = normalize(src, name)
+        if child in created:
+            return False
+        if not ctx.fs.is_dir(child):
+            ctx.fs.copy(child, normalize(to, name))
+        elif not _copy_into_itself(ctx, child, normalize(to, name), created):
+            return False
+    return True
+
+
 def _copy_or_move(ctx):
     move = ctx.name == "mv"
     a = Args.parse(ctx.args, "fvniZ" if move else "rRfvanpZ", longs="recursive=r,force=f")
@@ -287,12 +347,11 @@ def _copy_or_move(ctx):
     *sources, dest_arg = a.positional
     dest = ctx.resolve(dest_arg)
     dest_is_dir = ctx.fs.is_dir(dest)
-    if (len(sources) > 1 or dest_arg.endswith("/")) and not dest_is_dir:
+    if (len(sources) > 1 or dest_arg.endswith("/") and not ctx.fs.is_dir(ctx.resolve(sources[0]))) and not dest_is_dir:
         if len(sources) == 1 and not ctx.fs.exists(ctx.resolve(sources[0])):
             raise ShellError(f"cannot stat '{sources[0]}': No such file or directory")
         if len(sources) > 1:
-            raise ShellError(f"target '{dest_arg}': No such file or directory" if not ctx.fs.exists(dest)
-                             else f"target '{dest_arg}' is not a directory")
+            raise ShellError(f"target '{dest_arg}': {'Not a directory' if ctx.fs.exists(dest) else 'No such file or directory'}")
         raise ShellError(f"cannot move '{sources[0]}' to '{dest_arg}': Not a directory" if move
                          else f"cannot create regular file '{dest_arg}': Not a directory")
     code = 0
@@ -307,12 +366,34 @@ def _copy_or_move(ctx):
             code = 1
             continue
         target = normalize(dest, get_name(src)) if dest_is_dir else dest
-        if target == src:
-            ctx.error(f"{ctx.name}: '{s}' and '{dest_arg}' are the same file")
-            code = 1
-            continue
         if target == "/dev/null" and not move:
             continue  # copying to /dev/null discards the data
+        shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
+        src_dir = ctx.fs.is_dir(src)
+        qs, qd = quote_always(s), quote_always(shown)
+        if target == src:
+            clash = f"{qs} and {qd} are the same file"
+        elif src_dir and target.startswith(src + "/"):
+            clash = f"cannot move {qs} to a subdirectory of itself, {qd}" if move else f"cannot copy a directory, {qs}, into itself, {qd}"
+        elif not ctx.fs.exists(target):
+            clash = None
+        elif src_dir and not ctx.fs.is_dir(target):
+            clash = f"cannot overwrite non-directory {qd} with directory {qs}"
+        elif not src_dir and ctx.fs.is_dir(target):
+            clash = f"cannot overwrite directory {qd} with non-directory"
+        elif move and src_dir and ctx.fs.listdir(target):
+            clash = f"cannot overwrite {qd}: Directory not empty"
+        else:
+            clash = None
+        if clash:
+            ctx.error(f"{ctx.name}: {clash}")
+            code = 1
+            # cp creates the copy and fills it until it reaches the copy itself
+            if not move and clash.startswith("cannot copy"):
+                _copy_into_itself(ctx, src, target, set())
+            continue
+        if move and src_dir and ctx.fs.is_dir(target):
+            ctx.fs.delete(target)  # an empty directory is replaced
         nonlocal_code = [code]
 
         def denied(p, is_dir, s=s, src=src):
@@ -323,7 +404,6 @@ def _copy_or_move(ctx):
         try:
             ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied)
         except ShellError as e:
-            shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
             if str(e).endswith(NO_SPACE):
                 ctx.error(f"{ctx.name}: error writing '{shown}': {NO_SPACE}")
                 code = 1
@@ -337,7 +417,6 @@ def _copy_or_move(ctx):
             continue
         code = nonlocal_code[0]
         if a.has("v"):
-            shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
             ctx.print(f"{'renamed ' if move else ''}'{s}' -> '{shown}'")
     return code
 
@@ -415,6 +494,8 @@ class _Find:
         left = self.parse_and()
         while self.is_("-o") or self.is_("-or"):
             self.p += 1
+            if self.p >= len(self.args):
+                raise ShellError(f"expected an expression after '{self.args[self.p - 1]}'")
             l, r = left, self.parse_and()
 
             async def either(e, l=l, r=r):
@@ -427,6 +508,8 @@ class _Find:
         while self.p < len(self.args) and not (self.is_("-o") or self.is_("-or") or self.is_(")")):
             if self.is_("-a") or self.is_("-and"):
                 self.p += 1
+                if self.p >= len(self.args):
+                    raise ShellError(f"expected an expression after '{self.args[self.p - 1]}'")
             l, r = left, self.parse_not()
 
             async def both(e, l=l, r=r):
@@ -490,6 +573,8 @@ class _Find:
             return pred(lambda p, n, d: True)
         if tok in ("-mmin", "-mtime"):
             spec = arg()
+            if not re.fullmatch(r"\d+\.?\d*|\.\d+", spec[1:] if spec[:1] in ("+", "-") else spec):
+                raise ShellError(f"invalid argument `{spec}' to `{tok}'")
             unit, num = (60 if tok == "-mmin" else 86400), float(spec.lstrip("+-"))
 
             def age_ok(p, n, d):
@@ -497,12 +582,18 @@ class _Find:
                 return age < num if spec[0] == "-" else age > num if spec[0] == "+" else int(age) == num
             return pred(age_ok)
         if tok == "-newer":
-            ref = fs.stat(ctx.resolve(arg())).modified
+            reference = arg()
+            if not fs.exists(ctx.resolve(reference)):
+                raise ShellError(f"{quote_l(reference)}: {fs.why_missing(ctx.resolve(reference))}")
+            ref = fs.stat(ctx.resolve(reference)).modified
             return pred(lambda p, n, d: fs.stat(p).modified > ref)
         if tok == "-size":
-            m = re.fullmatch(r"([+-]?)(\d+)([cwbkMG]?)", arg())
+            spec = arg()
+            m = re.fullmatch(r"([+-]?)(\d+)([cwbkMG]?)", spec)
+            if not m and (bad := re.match(r"[+-]?\d+(\D)", spec)):
+                raise ShellError(f"invalid -size type `{bad.group(1)}'")
             if not m:
-                raise ShellError("invalid -size argument")
+                raise ShellError(f"invalid argument `{spec}' to `-size'")
             unit = {"c": 1, "w": 2, "k": 1024, "M": 1 << 20, "G": 1 << 30}.get(m.group(3), 512)
             num = int(m.group(2))
 
@@ -560,8 +651,7 @@ class _Find:
             async def run_exec(e):
                 return await ctx.invoke([x.replace("{}", e[2]) for x in cmd]) == 0
             return run_exec
-        raise ShellError(f"unknown predicate `{tok}' (supported: -name -iname -path -regex -type -size -mmin -mtime -newer "
-                         "-empty -maxdepth -mindepth -prune -print -print0 -printf -exec -delete -quit ! -not -a -o ( ))")
+        raise ShellError(f"unknown predicate `{tok}'")
 
 
 class _FindQuit(Exception):
