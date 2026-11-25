@@ -1,4 +1,8 @@
 {
   "bc": "bc is not ported yet",
-  "archives-084": "zip prints zlib's compression ratio (55%), not Info-ZIP's (53%)"
+  "archives-084": "zip prints zlib's compression ratio (55%), not Info-ZIP's (53%)",
+  "error-messages": "GNU message wording not ported yet",
+  "ls-long": "ls -l columns, link counts and dates not ported yet",
+  "review-fixes-010": "bash: prefix on builtin errors not ported yet",
+  "review-fixes-021": "GNU ‘’ quotes not ported yet"
 }

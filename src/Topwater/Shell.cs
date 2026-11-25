@@ -1038,8 +1038,15 @@ public sealed partial class Shell
     {
         "<<" => new StdinBuffer(await ExpandSingleAsync(r.Here!.Body, io, ct)),
         "<<<" => new StdinBuffer(await ExpandSingleAsync(r.Target!, io, ct) + "\n"),
-        _ => new StdinBuffer(Fs.ReadPipeText(ResolvePath(await ExpandSingleAsync(r.Target!, io, ct)))),
+        _ => await ReadRedirectAsync(r, io, ct),
     };
+
+    async Task<StdinBuffer> ReadRedirectAsync(Redirect r, Io io, CancellationToken ct)
+    {
+        var target = await ExpandSingleAsync(r.Target!, io, ct);
+        try { return new StdinBuffer(Fs.ReadPipeText(ResolvePath(target))); }
+        catch (ShellException e) { throw new ShellException($"{target}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}"); }
+    }
 
     /// <summary>The writer for > >> >| &amp;> &amp;>>: /dev/null, /dev/stdout, /dev/stderr, or a file made by <paramref name="open"/>.</summary>
     async Task<TextWriter> OpenOutputAsync(Redirect r, Io io, CancellationToken ct, Func<string, TextWriter> open)
@@ -1238,10 +1245,15 @@ public sealed partial class Shell
         }
         catch (OperationCanceledException) { throw; }
         catch (ControlFlow) { throw; }
+        catch (UsageException e) when (!Builtins.IsShellBuiltin(this, name))
+        {
+            io.Err.Write(Builtins.UsageError(name is "egrep" or "fgrep" ? "grep" : name, e.Message));
+            return name is "ls" or "grep" or "egrep" or "fgrep" or "sort" or "diff" ? 2 : 1;
+        }
         catch (ShellException e)
         {
-            io.Err.WriteLine($"{name}: {e.Message}");
-            return e.ExitCode;
+            io.Err.WriteLine($"{(e is UsageException || Builtins.IsShellBuiltin(this, name) ? "bash: " : "")}{name}: {e.Message}");
+            return e is UsageException ? 2 : e.ExitCode;
         }
         catch (Exception e) when (e is FormatException or OverflowException)
         {

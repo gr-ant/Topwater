@@ -157,7 +157,7 @@ public class AgentFeatureTests
         Assert.Equal("drwxrwxrwt root\n", await Out(sh, "stat -c '%A %U' /tmp"));      // shared scratch space
         Assert.Equal("x\n", await Out(sh, "echo x > /tmp/f && cat /tmp/f"));
         r = await sh.RunAsync("find / -name shadow");                                  // unreadable dirs are reported, not fatal
-        Assert.Equal((1, "find: '/root': Permission denied\n"), (r.ExitCode, r.Stderr));
+        Assert.Equal((1, "find: \u2018/root\u2019: Permission denied\n"), (r.ExitCode, r.Stderr));
 
         // the app itself is unrestricted, and files it creates belong to the directory's owner
         sh.Fs.WriteAllText("/etc/app.conf", "mode=prod");

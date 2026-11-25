@@ -33,6 +33,9 @@ bash 5.2.21 and GNU coreutils 9.4 for the shell areas, GNU date 9.4 with `TZ=UTC
 tar 1.35, gzip 1.12, Zip 3.0 and UnZip 6.00 (`archives`; compressed bytes differ from the real tools', so these cases
 compare listings, messages and round-tripped contents, never sizes). These are the versions on Ubuntu 24.04. Exceptions:
 
+- `error-messages` and `ls-long` were recorded with `--agent` (as the user `agent`, so owners and "Permission denied"
+  match Topwater's shell) and send stderr to stdout so the message wording is compared. Messages from bash itself
+  pass through `sed 's/^bash: line [0-9]*: /bash: /'`, since Topwater leaves out bash's `line N:`.
 - `bc-094`..`bc-096` are Topwater's safety caps (GNU bc would hang or run out of memory): no output, an error, exit 1.
 - `shell-syntax`, `agent-features`, `second-review`, `array-tests` and `review-fixes` came from older hand-written
   tables checked against bash; they leave `exitCode` or `quiet` unchecked where those tables did, and `review-fixes`
@@ -47,6 +50,7 @@ python3 tests/corpus/record.py quoting 'x="a  b"; echo $x'        # runs it in u
 python3 tests/corpus/record.py bc --apt bc "echo 'scale=3; 1/7' | bc"   # installs packages the image lacks first
 python3 tests/corpus/record.py loops --local 'for i in 1 2; do echo $i; done'   # host bash in a temp dir, no docker
 python3 tests/corpus/record.py quoting --dry-run 'echo hi'          # print the case, don't append
+python3 tests/corpus/record.py ls-long --agent 'touch -d 2020-01-01 f; ls -l'   # as the ordinary user agent, like Topwater
 ```
 
 The tool runs the script as `bash -c` in an empty `/tmp/w` (`TZ=UTC`, `LC_ALL=C.UTF-8`, no network), and appends

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Topwater;
@@ -12,13 +13,51 @@ internal static partial class Builtins
         return (path == abs ? arg : path.StartsWith(abs.TrimEnd('/') + "/") ? arg.TrimEnd('/') + path[abs.TrimEnd('/').Length..] : path, e.Message[(i + 2)..]);
     }
 
-    static string HumanSize(long n) => n < 1024 ? n.ToString() : n < 1024 * 1024 ? $"{n / 1024.0:0.#}K" : $"{n / (1024.0 * 1024):0.#}M";
-
-    static string LongEntry(CommandContext ctx, string abs, string name, bool human)
+    /// <summary>touch -t [[CC]YY]MMDDhhmm[.ss]; a two-digit year 69-99 is 19YY, else 20YY.</summary>
+    static DateTime? TouchStamp(string t, DateTime now)
     {
-        var st = ctx.Fs.Stat(abs);
-        var size = human ? HumanSize(st.Size) : st.Size.ToString();
-        return $"{VirtualFileSystem.FormatMode(st.IsDirectory, st.Mode)} 1 {st.Owner,-5} {st.Owner,-5} {size,6} {st.Modified:MMM dd HH:mm} {name}";
+        var m = System.Text.RegularExpressions.Regex.Match(t, @"^(\d{2}|\d{4})?(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d{2}))?$");
+        if (!m.Success) return null;
+        var y = m.Groups[1].Value;
+        int year = y.Length == 0 ? now.Year : y.Length == 4 ? int.Parse(y) : int.Parse(y) + (int.Parse(y) >= 69 ? 1900 : 2000);
+        try
+        {
+            return new DateTime(year, int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value), int.Parse(m.Groups[4].Value), int.Parse(m.Groups[5].Value),
+                m.Groups[6].Success ? int.Parse(m.Groups[6].Value) : 0, DateTimeKind.Utc);
+        }
+        catch (ArgumentOutOfRangeException) { return null; }
+    }
+
+    /// <summary>ls -h: powers of 1024, rounded up; one decimal below 10 (4.0K, 1.1M), whole numbers above (121K).</summary>
+    static string HumanSize(long n)
+    {
+        if (n < 1024) return n.ToString(CultureInfo.InvariantCulture);
+        double v = n;
+        int u = -1;
+        do { v /= 1024; u++; } while (v >= 1024 && u < 5);
+        if (Math.Ceiling(v * 10) / 10 is var tenths and < 10) return tenths.ToString("0.0", CultureInfo.InvariantCulture) + "KMGTPE"[u];
+        v = Math.Ceiling(v);
+        return v >= 1024 && u < 5 ? "1.0" + "KMGTPE"[u + 1] : v.ToString("0", CultureInfo.InvariantCulture) + "KMGTPE"[u];
+    }
+
+    /// <summary>ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times).</summary>
+    static string LsDate(DateTime t, DateTime now) =>
+        string.Format(CultureInfo.InvariantCulture, t <= now && (now - t).TotalSeconds < 15778476 ? "{0:MMM} {1,2} {0:HH:mm}" : "{0:MMM} {1,2}  {0:yyyy}", t, t.Day);
+
+    /// <summary>ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned).</summary>
+    /// <param name="widthFrom">More entries that count toward the widths: ls sizes the columns for its file operands
+    /// over all operands, directories included.</param>
+    static IEnumerable<string> LongEntries(CommandContext ctx, IEnumerable<(string Abs, string Name)> entries, bool human, IEnumerable<string>? widthFrom = null)
+    {
+        var now = ctx.Fs.Clock();
+        string Size(FileStat st) => human ? HumanSize(st.Size) : st.Size.ToString(CultureInfo.InvariantCulture);
+        var rows = entries.Select(e => (St: ctx.Fs.Stat(e.Abs), e.Name)).Select(r => (r.St, r.Name,
+            Links: r.St.Links.ToString(CultureInfo.InvariantCulture), Size: Size(r.St))).ToList();
+        if (rows.Count == 0) yield break;
+        var all = rows.Select(r => r.St).Concat((widthFrom ?? []).Select(ctx.Fs.Stat)).ToList();
+        int lw = all.Max(s => s.Links.ToString(CultureInfo.InvariantCulture).Length), ow = all.Max(s => s.Owner.Length), sw = all.Max(s => Size(s).Length);
+        foreach (var r in rows)
+            yield return $"{VirtualFileSystem.FormatMode(r.St.IsDirectory, r.St.Mode)} {r.Links.PadLeft(lw)} {r.St.Owner.PadRight(ow)} {r.St.Owner.PadRight(ow)} {r.Size.PadLeft(sw)} {LsDate(r.St.Modified, now)} {r.Name}";
     }
 
     static string ShowNonprinting(string line) => string.Concat(line.Select(c =>
@@ -28,12 +67,15 @@ internal static partial class Builtins
     {
         shell.Register("ls", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "alhA1dFrtRS", longs: "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R");
+            var a = Args.Parse(ctx.Args, "alhA1dFrtRSZ", longs: "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R");
             var paths = a.Positional.Count > 0 ? a.Positional : ["."];
             bool lng = a.Has('l'), human = a.Has('h');
             int code = 0;
-            string Show(string abs, string name) =>
-                (lng ? LongEntry(ctx, abs, name, human) : name) + (a.Has('F') && ctx.Fs.IsDirectory(abs) && name is not "." and not ".." ? "/" : "");
+            void Show(IEnumerable<(string Abs, string Name)> entries, IEnumerable<string>? widthFrom = null)
+            {
+                var named = entries.Select(e => (e.Abs, Name: e.Name + (a.Has('F') && ctx.Fs.IsDirectory(e.Abs) && e.Name is not "." and not ".." ? "/" : ""))).ToList();
+                WriteLines(ctx.Stdout, lng ? LongEntries(ctx, named, human, widthFrom) : named.Select(e => e.Name));
+            }
 
             // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
             List<string> Ordered(IEnumerable<string> ps)
@@ -46,7 +88,7 @@ internal static partial class Builtins
             }
             var files = Ordered(paths.Where(p => ctx.Fs.Exists(ctx.ResolvePath(p)) && (a.Has('d') || !ctx.Fs.IsDirectory(ctx.ResolvePath(p)))));
             foreach (var p in paths.Where(p => !ctx.Fs.Exists(ctx.ResolvePath(p)))) { ctx.Stderr.WriteLine($"ls: cannot access '{p}': {ctx.Fs.WhyMissing(ctx.ResolvePath(p))}"); code = 2; }
-            foreach (var f in files) ctx.Stdout.WriteLine(Show(ctx.ResolvePath(f), f));
+            Show(files.Select(f => (ctx.ResolvePath(f), f)), paths.Except(files).Select(ctx.ResolvePath).Where(ctx.Fs.Exists));
 
             var dirs = Ordered(paths.Except(files).Where(p => ctx.Fs.IsDirectory(ctx.ResolvePath(p))));
             bool first = files.Count == 0;
@@ -60,8 +102,12 @@ internal static partial class Builtins
                 if (a.Has('S')) entries = entries.OrderByDescending(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Size).ToList();
                 if (a.Has('a')) entries.InsertRange(0, [".", ".."]);
                 if (a.Has('r')) entries.Reverse();
-                if (lng) ctx.Stdout.WriteLine($"total {entries.Count * 4}");
-                foreach (var n in entries) ctx.Stdout.WriteLine(Show(VirtualFileSystem.Normalize(abs, n), n));
+                if (lng)
+                {
+                    long kib = entries.Sum(n => ctx.Fs.Stat(VirtualFileSystem.Normalize(abs, n)).Blocks / 2);
+                    ctx.Stdout.WriteLine($"total {(human ? HumanSize(kib * 1024) : kib)}");
+                }
+                Show(entries.Select(n => (VirtualFileSystem.Normalize(abs, n), n)));
                 if (!a.Has('R')) return;
                 foreach (var n in entries.Where(n => n is not "." and not ".."))
                 {
@@ -102,29 +148,41 @@ internal static partial class Builtins
 
         shell.Register("mkdir", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "pv", longs: "parents=p");
-            if (a.Positional.Count == 0) throw new ShellException("missing operand", 1);
+            var a = Args.Parse(ctx.Args, "pvZ", longs: "parents=p,verbose=v");
+            if (a.Positional.Count == 0) throw new UsageException("missing operand");
             int code = 0;
             foreach (var p in a.Positional)
             {
                 try { ctx.Fs.CreateDirectory(ctx.ResolvePath(p), a.Has('p')); }
-                catch (ShellException e) when (!e.Message.StartsWith("cannot")) { ctx.Stderr.WriteLine($"mkdir: cannot create directory '{p}': {Typed(e, p, "").Reason}"); code = 1; }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"mkdir: cannot create directory {QuoteL(p)}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}"); code = 1; }
             }
             return code;
         }, "Create directories");
 
         shell.Register("touch", ctx =>
         {
-            // shortcut: -d/-t/-r are accepted but the file just gets the current time; model timestamps if agents rely on them.
+            // shortcut: one modification time per file; -a and -m both set it
             var a = Args.Parse(ctx.Args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h");
-            if (a.Positional.Count == 0) throw new ShellException("missing file operand");
+            if (a.Positional.Count == 0) throw new UsageException("missing file operand");
+            DateTime? when = null;
+            if (a.Value('r') is { } reference)
+            {
+                var abs = ctx.ResolvePath(reference);
+                if (!ctx.Fs.Exists(abs)) throw new ShellException($"failed to get attributes of {QuoteAlways(reference)}: {ctx.Fs.WhyMissing(abs)}");
+                when = ctx.Fs.Stat(abs).Modified;
+            }
+            if (a.Value('d') is { } d)
+                try { when = ParseDate(d, when ?? ctx.Fs.Clock()); }
+                catch (ShellException) { throw new ShellException($"invalid date format {QuoteL(d)}"); }
+            if (a.Value('t') is { } t) when = TouchStamp(t, ctx.Fs.Clock()) ?? throw new ShellException($"invalid date format {QuoteL(t)}");
             int code = 0;
             foreach (var p in a.Positional)
             {
                 var path = ctx.ResolvePath(p);
                 if (a.Has('c') && !ctx.Fs.Exists(path)) continue;
-                try { ctx.Fs.Touch(path); }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"touch: cannot touch '{p}': {Typed(e, p, path).Reason}"); code = 1; }
+                // an explicit time needs ownership, not write permission
+                try { if (when is { } w) { if (!ctx.Fs.Exists(path)) ctx.Fs.Touch(path); ctx.Fs.SetModifiedTime(path, w); } else ctx.Fs.Touch(path); }
+                catch (ShellException e) { ctx.Stderr.WriteLine($"touch: cannot touch {QuoteAlways(p)}: {Typed(e, p, path).Reason}"); code = 1; }
             }
             return code;
         }, "Create empty files / update timestamps");
@@ -133,7 +191,7 @@ internal static partial class Builtins
         {
             var a = Args.Parse(ctx.Args, "rRfvd", longs: "recursive=r,force=f");
             bool recursive = a.Has('r') || a.Has('R');
-            if (a.Positional.Count == 0 && !a.Has('f')) throw new ShellException("missing operand");
+            if (a.Positional.Count == 0 && !a.Has('f')) throw new UsageException("missing operand");
             int code = 0;
             foreach (var p in a.Positional)
             {
@@ -152,21 +210,30 @@ internal static partial class Builtins
 
         shell.Register("rmdir", ctx =>
         {
-            foreach (var p in ctx.Args)
+            var a = Args.Parse(ctx.Args, "pv", longs: "parents=p,verbose=v");
+            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            int code = 0;
+            foreach (var arg in a.Positional)
             {
-                var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"failed to remove '{p}': {(ctx.Fs.Exists(abs) ? "Not a directory" : ctx.Fs.WhyMissing(abs))}");
-                try { ctx.Fs.Delete(abs); }
-                catch (ShellException e) { throw new ShellException($"failed to remove '{p}': {Typed(e, p, abs).Reason}"); }
+                // -p: a/b/c, then a/b, then a
+                for (var p = arg.TrimEnd('/'); p.Length > 0; p = a.Has('p') && p.LastIndexOf('/') is var i and > 0 ? p[..i].TrimEnd('/') : "")
+                {
+                    var abs = ctx.ResolvePath(p);
+                    string? why = !ctx.Fs.IsDirectory(abs) ? (ctx.Fs.Exists(abs) ? "Not a directory" : ctx.Fs.WhyMissing(abs)) : null;
+                    if (why == null)
+                        try { ctx.Fs.Delete(abs); if (a.Has('v')) ctx.Stdout.WriteLine($"rmdir: removing directory, {QuoteAlways(p)}"); }
+                        catch (ShellException e) { why = Typed(e, p, abs).Reason; }
+                    if (why != null) { ctx.Stderr.WriteLine($"rmdir: failed to remove {QuoteAlways(p)}: {why}"); code = 1; break; }
+                }
             }
-            return 0;
+            return code;
         }, "Remove empty directories");
 
         CommandHandler copyOrMove = ctx =>
         {
             bool move = ctx.Name == "mv";
-            var a = Args.Parse(ctx.Args, move ? "fvni" : "rRfvanp", longs: "recursive=r,force=f");
-            if (a.Positional.Count < 2) throw new ShellException(a.Positional.Count == 0 ? "missing file operand" : $"missing destination file operand after '{a.Positional[0]}'");
+            var a = Args.Parse(ctx.Args, move ? "fvniZ" : "rRfvanpZ", longs: "recursive=r,force=f");
+            if (a.Positional.Count < 2) throw new UsageException(a.Positional.Count == 0 ? "missing file operand" : $"missing destination file operand after {QuoteAlways(a.Positional[0])}");
             var sources = a.Positional.Take(a.Positional.Count - 1).ToList();
             var destArg = a.Positional[^1];
             var dest = ctx.ResolvePath(destArg);

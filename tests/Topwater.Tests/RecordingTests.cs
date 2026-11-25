@@ -232,7 +232,7 @@ public class RecordingTests
         var rec = sh.StartRecording();
         await sh.RunAsync("date; mktemp; ls -l f; date +%FT%TZ; date +%s; time true");
         rec.Stop();
-        rec.Recording.Calls[0] = rec.Recording.Calls[0] with { Stdout = "Mon Jan  5 01:02:03 UTC 2026\n/tmp/tmp.AAAAAAAAAA\n-rw-r--r-- 1 agent agent      1 Jan 05 01:02 f\n2026-01-05T01:02:03Z\n1767574923\n", Stderr = "\nreal\t0m0.123s\nuser\t0m0.000s\nsys\t0m0.000s\n" };
+        rec.Recording.Calls[0] = rec.Recording.Calls[0] with { Stdout = "Mon Jan  5 01:02:03 UTC 2026\n/tmp/tmp.AAAAAAAAAA\n-rw-r--r-- 1 agent agent 1 Jan  5 01:02 f\n2026-01-05T01:02:03Z\n1767574923\n", Stderr = "\nreal\t0m0.123s\nuser\t0m0.000s\nsys\t0m0.000s\n" };
         Assert.False((await rec.Recording.ReplayAsync()).Matches);
         var report = await rec.Recording.ReplayAsync(new ReplayOptions { Normalize = ReplayNormalizers.Volatile });
         Assert.True(report.Matches, report.ToString());

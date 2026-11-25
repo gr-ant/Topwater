@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Topwater;
 
@@ -28,8 +29,8 @@ internal sealed class Args
                 var name = a[2..];
                 string? inline = null;
                 if (name.IndexOf('=') is var eq and > 0) { inline = name[(eq + 1)..]; name = name[..eq]; }
-                if (!map.TryGetValue(name, out var c)) throw new ShellException($"unrecognized option '{a}'", 2);
-                if (valued.Contains(c)) r.Values[c] = inline ?? (i + 1 < args.Count ? args[++i] : throw new ShellException($"option '--{name}' requires an argument", 2));
+                if (!map.TryGetValue(name, out var c)) throw new UsageException($"unrecognized option '{a}'");
+                if (valued.Contains(c)) r.Values[c] = inline ?? (i + 1 < args.Count ? args[++i] : throw new UsageException($"option '--{name}' requires an argument"));
                 else r.Flags.Add(c);
                 continue;
             }
@@ -39,10 +40,10 @@ internal sealed class Args
                 char c = a[k];
                 if (valued.Contains(c))
                 {
-                    r.Values[c] = k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Count ? args[++i] : throw new ShellException($"option requires an argument -- '{c}'", 2);
+                    r.Values[c] = k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Count ? args[++i] : throw new UsageException($"option requires an argument -- '{c}'");
                     break;
                 }
-                if (!flags.Contains(c)) throw new ShellException($"invalid option -- '{c}'", 2);
+                if (!flags.Contains(c)) throw new UsageException($"invalid option -- '{c}'");
                 r.Flags.Add(c);
             }
         }
@@ -131,13 +132,60 @@ internal static partial class Builtins
             try { text = read(ctx.ResolvePath(f)); }
             catch (ShellException e)
             {
-                if (!quiet) ctx.Stderr.WriteLine($"{ctx.Name}: {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}");
+                if (!quiet) ctx.Stderr.WriteLine($"{ctx.Name}: {CannotRead(ctx.Name, f, e.Message[(e.Message.LastIndexOf(':') + 2)..])}");
                 onError();
                 continue;
             }
             yield return (f, text);
         }
     }
+
+    /// <summary>A bad command line the way GNU tools report one: the problem, then a pointer to --help.</summary>
+    internal static string UsageError(string cmd, string message) =>
+        (message.Length > 0 ? $"{cmd}: {message}\n" : "") + cmd switch
+        {
+            "grep" => "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n",
+            "diff" => "diff: Try 'diff --help' for more information.\n",
+            _ => $"Try '{cmd} --help' for more information.\n",
+        };
+
+    /// <summary>The message after "NAME: " when an input file can't be read, worded the way each GNU tool words it.</summary>
+    internal static string CannotRead(string cmd, string f, string why) => (cmd, why == "Is a directory") switch
+    {
+        ("sed", false) => $"can't read {f}: {why}",
+        ("sed", true) => $"read error on {f}: {why}",
+        ("head" or "tail", false) => $"cannot open {QuoteAlways(f)} for reading: {why}",
+        ("head" or "tail" or "uniq", true) => $"error reading {QuoteAlways(f)}: {why}",
+        ("tac", false) => $"failed to open {QuoteAlways(f)} for reading: {why}",
+        ("tac", true) => $"{Quote(f)}: read error: Invalid argument",
+        ("sort", false) => $"cannot read: {Quote(f)}: {why}",
+        ("sort", true) => $"read failed: {Quote(f)}: {why}",
+        ("base64", true) => $"read error: {why}",
+        _ => $"{Quote(f)}: {why}",
+    };
+
+    /// <summary>A file name in a GNU message: as is when plain, else shell-quoted like <see cref="QuoteAlways"/>.</summary>
+    internal static string Quote(string s) =>
+        s.Length > 0 && s[0] is not ('~' or '#') && !s.Any(c => c < 32 || c == 127 || " !\"$&'()*;<>?[\\^`|=:".Contains(c)) ? s : QuoteAlways(s);
+
+    /// <summary>A file name shell-quoted even when plain: 'nope', "it's", 'a'$'\t''b'.</summary>
+    internal static string QuoteAlways(string s)
+    {
+        if (s.Any(c => c < 32 || c == 127))
+        {
+            // each control character becomes its own $'\t' piece between quoted runs
+            var sb = new StringBuilder();
+            foreach (var run in Regex.Split(s, @"([\x00-\x1f\x7f])"))
+                if (run.Length == 1 && (run[0] < 32 || run[0] == 127))
+                    sb.Append("$'\\").Append(run[0] switch { '\t' => "t", '\n' => "n", '\r' => "r", _ => Convert.ToString(run[0], 8).PadLeft(3, '0') }).Append('\'');
+                else if (run.Length > 0) sb.Append(QuoteAlways(run));
+            return sb.ToString();
+        }
+        return s.Contains('\'') && !s.Any(c => c is '"' or '$' or '`' or '\\' or '!') ? $"\"{s}\"" : "'" + s.Replace("'", "'\\''") + "'";
+    }
+
+    /// <summary>A value quoted the way GNU tools quote one in a UTF-8 locale: ‘x’.</summary>
+    internal static string QuoteL(string s) => $"‘{s}’";
 
     /// <summary>Backslash escapes: \n \t ..., \xHH, and octal (\NNN, or \0NNN for echo -e).</summary>
     internal static string Unescape(string s, bool keepUnknown = false, bool echo = false)
@@ -397,7 +445,13 @@ internal static partial class Builtins
                 if (!isBash) throw new ShellException("filename argument required", 2);
                 return await sh.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken, [], new(ctx.Name, null, Setup));
             }
-            var text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0]));
+            string text;
+            try { text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0])); }
+            catch (ShellException e)
+            {
+                ctx.Stderr.WriteLine($"bash: {args[0]}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
+                return isBash ? 127 : 1;
+            }
             if (isBash) return await sh.RunScriptTextAsync(text, io, subshell: true, ctx.CancellationToken, args.Skip(1).ToList(), new(args[0], args[0], Setup));
             sh.SourceDepth++;
             try { return await sh.RunScriptTextAsync(text, io, subshell: false, ctx.CancellationToken, args.Count > 1 ? args.Skip(1).ToList() : null, sourced: args[0]); }
@@ -554,7 +608,7 @@ internal static partial class Builtins
     internal static DateTime ParseDate(string text, DateTime now)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var bad = new ShellException($"invalid date '{text}'");
+        var bad = new ShellException($"invalid date {QuoteL(text)}");
         var s = text.Trim().ToLowerInvariant();
         var epoch = System.Text.RegularExpressions.Regex.Match(s, @"^@(-?\d+(?:\.\d+)?)$");
         if (epoch.Success) return DateTime.UnixEpoch.AddSeconds(double.Parse(epoch.Groups[1].Value, inv));

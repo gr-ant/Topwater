@@ -108,7 +108,7 @@ internal static partial class Builtins
     {
         var digits = spec.TrimStart('+', '-');
         return digits.Length > 0 && digits.All(char.IsAsciiDigit) && int.TryParse(digits, out var n) ? n
-            : throw new ShellException($"invalid number of {what}: '{spec}'");
+            : throw new ShellException($"invalid number of {what}: {QuoteL(spec)}");
     }
 
     static Regex BuildRegex(List<string> patterns, bool extended, bool fixedString, bool ignoreCase, bool word = false, bool line = false, bool perl = false)
@@ -185,7 +185,7 @@ internal static partial class Builtins
             var positional = a.Positional.ToList();
             if (patterns.Count == 0)
             {
-                if (positional.Count == 0) throw new ShellException("usage: grep [OPTION]... PATTERNS [FILE]...", 2);
+                if (positional.Count == 0) throw new UsageException("");
                 patterns.Add(positional[0]);
                 positional.RemoveAt(0);
             }
@@ -275,6 +275,8 @@ internal static partial class Builtins
             bool head = ctx.Name == "head";
             // shortcut: tail -f/-F print what is there and return instead of following (nothing else writes the file)
             var a = Args.Parse(Args.NumericShorthand(ctx.Args), head ? "qv" : "qvfF", "nc", "lines=n,bytes=c,quiet=q,silent=q,verbose=v" + (head ? "" : ",follow=f,retry=F"));
+            if (a.Value('n') is { } lines0) CountArg(lines0, "lines"); // a bad count is reported before any file is opened
+            if (a.Value('c') is { } bytes0) CountArg(bytes0, "bytes");
             int code = 0;
             var inputs = InputBytes(ctx, a.Positional, () => code = 1).ToList();
             for (int k = 0; k < inputs.Count; k++)
@@ -344,7 +346,9 @@ internal static partial class Builtins
         shell.Register("uniq", ctx =>
         {
             var a = Args.Parse(ctx.Args, "cdui", longs: "count=c,repeated=d,unique=u,ignore-case=i");
-            var text = a.Positional.Count > 0 ? ctx.Fs.ReadAllText(ctx.ResolvePath(a.Positional[0])) : ctx.StdinText;
+            int code = 0;
+            var text = string.Concat(Inputs(ctx, a.Positional.Take(1).ToList(), () => code = 1).Select(i => i.Text));
+            if (code != 0) return code;
             var cmp = a.Has('i') ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
             var groups = new List<(string Line, int Count)>();
             foreach (var line in SplitLines(text))
@@ -364,7 +368,7 @@ internal static partial class Builtins
             var delim = a.Value('d') ?? "\t";
             if (delim.Length != 1) throw new ShellException("the delimiter must be a single character");
             var chars = a.Value('c') ?? a.Value('b');
-            var spec = chars ?? a.Value('f') ?? throw new ShellException("you must specify a list of bytes, characters, or fields");
+            var spec = chars ?? a.Value('f') ?? throw new UsageException("you must specify a list of bytes, characters, or fields");
             var (wantedSet, openFrom) = ParseList(spec);
             bool complement = a.Has('z');
             var outDelim = a.Value('O');
@@ -386,7 +390,8 @@ internal static partial class Builtins
         shell.Register("tr", ctx =>
         {
             var a = Args.Parse(ctx.Args, "dscC", longs: "delete=d,squeeze-repeats=s,complement=c");
-            if (a.Positional.Count == 0) throw new ShellException("missing operand");
+            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            if (a.Positional.Count > 2) throw new UsageException($"extra operand {QuoteL(a.Positional[2])}");
             var set1 = ExpandSet(a.Positional[0]);
             var set2 = a.Positional.Count > 1 ? ExpandSet(a.Positional[1]) : "";
             bool complement = a.Has('c') || a.Has('C');
@@ -596,7 +601,7 @@ internal static class Sort
         foreach (var spec in specs)
         {
             var km = Regex.Match(spec, @"^(\d+)(?:\.(\d+))?([a-zA-Z]*)(?:,(\d+)(?:\.(\d+))?([a-zA-Z]*))?$");
-            if (!km.Success || int.Parse(km.Groups[1].Value) == 0) throw new ShellException($"invalid number at field start: invalid count at start of '{spec}'", 2);
+            if (!km.Success || int.Parse(km.Groups[1].Value) == 0) throw new ShellException($"invalid number at field start: invalid count at start of {Builtins.QuoteL(spec)}", 2);
             var opts = km.Groups[3].Value + km.Groups[6].Value;
             keys.Add(new Key(int.Parse(km.Groups[1].Value), km.Groups[2].Success ? int.Parse(km.Groups[2].Value) : 1,
                 km.Groups[4].Success ? int.Parse(km.Groups[4].Value) : null, km.Groups[5].Success ? int.Parse(km.Groups[5].Value) : 0,
@@ -634,7 +639,12 @@ internal static class Sort
         }
 
         int code = 0;
-        var named = Builtins.Inputs(ctx, a.Positional, () => code = 2).ToList();
+        var named = new List<(string Name, string Text)>();
+        foreach (var f in a.Positional.DefaultIfEmpty("-"))
+        {
+            named.AddRange(Builtins.Inputs(ctx, [f], () => code = 2));
+            if (code != 0) return code; // sort stops at the first file it can't read
+        }
         var items = named.SelectMany(i => Builtins.SplitLines(i.Text)).Select(l => (Line: l, Values: keys.Select(k => Value(Extract(l, k), k.Opts)).ToArray())).ToList();
         if (a.Has('c') || a.Has('C'))
         {
@@ -758,6 +768,7 @@ internal static class Sed
                 var path = ctx.ResolvePath(f);
                 string original;
                 try { original = ctx.Fs.ReadAllText(path); }
+                catch (ShellException) when (ctx.Fs.IsDirectory(path)) { ctx.Stderr.WriteLine($"sed: couldn't edit {f}: not a regular file"); code = 4; continue; }
                 catch (ShellException e) { ctx.Stderr.WriteLine($"sed: can't read {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}"); code = 2; continue; }
                 var output = new StringWriter();
                 var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes);
@@ -780,7 +791,7 @@ internal static class Sed
             var joined = string.Concat(texts.Select((t, k) => t.EndsWith('\n') || k == texts.Count - 1 ? t : t + "\n"));
             if (Execute(cmds, joined, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes) is { } q) return q;
         }
-        return error ? 2 : 0;
+        return files.Any(f => f != "-" && ctx.Fs.IsDirectory(ctx.ResolvePath(f))) ? 4 : error ? 2 : 0; // 4: a read error (a directory)
     }
 
     /// <summary>Parses a sed script into a flat command list; { } blocks and b/t/T labels become jump targets.</summary>

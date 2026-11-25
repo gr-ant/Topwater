@@ -583,7 +583,7 @@ internal static partial class Builtins
 
         shell.Register("sleep", async ctx =>
         {
-            if (ctx.Args.Count == 0) throw new ShellException("missing operand");
+            if (ctx.Args.Count == 0) throw new UsageException("missing operand");
             var total = ctx.Args.Aggregate(TimeSpan.Zero, (t, a) => t + ParseDuration(a));
             await ctx.Shell.SleepAsync(total, ctx.CancellationToken);
             return 0;
@@ -618,7 +618,7 @@ internal static partial class Builtins
         shell.Register("basename", ctx =>
         {
             var a = Args.Parse(ctx.Args, "az", "s", "multiple=a,suffix=s,zero=z");
-            if (a.Positional.Count == 0) throw new ShellException("missing operand");
+            if (a.Positional.Count == 0) throw new UsageException("missing operand");
             var suffix = a.Value('s') ?? (!a.Has('a') && a.Positional.Count == 2 ? a.Positional[1] : null);
             var names = a.Has('a') || a.Value('s') != null ? a.Positional : a.Positional.Take(1).ToList();
             foreach (var n in names)
@@ -632,12 +632,13 @@ internal static partial class Builtins
 
         shell.Register("dirname", ctx =>
         {
-            if (ctx.Args.Count == 0) throw new ShellException("missing operand");
-            foreach (var n in ctx.Args)
+            var a = Args.Parse(ctx.Args, "z", longs: "zero=z");
+            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            foreach (var n in a.Positional)
             {
                 var t = n.TrimEnd('/');
                 int i = t.LastIndexOf('/');
-                ctx.Stdout.WriteLine(t.Length == 0 ? "/" : i < 0 ? "." : i == 0 ? "/" : t[..i].TrimEnd('/') is var d && d.Length > 0 ? d : "/");
+                ctx.Stdout.Write((t.Length == 0 ? "/" : i < 0 ? "." : i == 0 ? "/" : t[..i].TrimEnd('/') is var d && d.Length > 0 ? d : "/") + (a.Has('z') ? "\0" : "\n"));
             }
             return 0;
         }, "Strip the last component from a path");
@@ -651,7 +652,7 @@ internal static partial class Builtins
             {
                 var abs = ctx.ResolvePath(p);
                 if (!a.Has('m') && !ctx.Fs.Exists(abs) && (a.Has('e') || ctx.Name == "realpath" || !ctx.Fs.IsDirectory(VirtualFileSystem.GetParent(abs))))
-                { ctx.Stderr.WriteLine($"{ctx.Name}: {p}: No such file or directory"); code = 1; continue; }
+                { ctx.Stderr.WriteLine($"{ctx.Name}: {Builtins.Quote(p)}: {ctx.Fs.WhyMissing(abs)}"); code = 1; continue; }
                 ctx.Stdout.WriteLine(abs);
             }
             return Task.FromResult(code);
@@ -684,7 +685,7 @@ internal static partial class Builtins
                         {
                             'n' => p, 's' => st.Size.ToString(), 'F' => type, 'a' => mode, 'A' => rwx, 'U' => owner, 'G' => owner,
                             'u' => uid, 'g' => uid, 'y' => mtime, 'Y' => new DateTimeOffset(st.Modified).ToUnixTimeSeconds().ToString(),
-                            'b' => ((st.Size + 511) / 512).ToString(), 'i' => (Math.Abs(abs.GetHashCode()) % 1000000).ToString(), '%' => "%",
+                            'b' => st.Blocks.ToString(), 'B' => "512", 'h' => st.Links.ToString(), 'i' => (Math.Abs(abs.GetHashCode()) % 1000000).ToString(), '%' => "%",
                             var c => "%" + c,
                         });
                     }
@@ -692,7 +693,7 @@ internal static partial class Builtins
                     continue;
                 }
                 ctx.Stdout.Write(
-                    $"  File: {p}\n  Size: {st.Size,-10}\tBlocks: {(st.Size + 511) / 512 * 8,-10} IO Block: 4096   {type}\n" +
+                    $"  File: {p}\n  Size: {st.Size,-10}\tBlocks: {st.Blocks,-10} IO Block: 4096   {type}\n" +
                     $"Access: ({mode.PadLeft(4, '0')}/{rwx})  Uid: ({uid,5}/{owner,8})   Gid: ({uid,5}/{owner,8})\n" +
                     $"Modify: {mtime}\nChange: {mtime}\n");
             }
@@ -754,7 +755,7 @@ internal static partial class Builtins
         CommandHandler chown = ctx =>
         {
             var files = ctx.Args.Where(x => !x.StartsWith('-')).Skip(1).ToList(); // first operand is the owner
-            if (files.Count == 0) throw new ShellException("missing operand");
+            if (files.Count == 0) throw new UsageException("missing operand");
             var owner = ctx.Args.First(x => !x.StartsWith('-')).Split(':')[0];
             int code = 0;
             foreach (var f in files)
@@ -958,7 +959,7 @@ internal static partial class Builtins
                 else if (x.StartsWith("--format=")) fmt = x[9..];
                 else throw new ShellException($"invalid option -- '{x.TrimStart('-')}'");
             }
-            if (nums.Count is 0 or > 3) throw new ShellException(nums.Count == 0 ? "missing operand" : $"extra operand '{nums[3]}'");
+            if (nums.Count is 0 or > 3) throw new UsageException(nums.Count == 0 ? "missing operand" : $"extra operand {Builtins.QuoteL(nums[3])}");
             var v = nums.Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToList();
             double first = v.Count > 1 ? v[0] : 1, step = v.Count == 3 ? v[1] : 1, last = v[^1];
             if (step == 0) throw new ShellException("invalid Zero increment value: '0'");
@@ -1017,7 +1018,7 @@ internal static class Diff
     public static int Run(CommandContext ctx)
     {
         var a = Args.Parse(ctx.Args, "uqsiwbBNr", "U", "unified=u,brief=q,report-identical-files=s,ignore-case=i,ignore-all-space=w,ignore-space-change=b,recursive=r");
-        if (a.Positional.Count != 2) throw new ShellException(a.Positional.Count < 2 ? $"missing operand after '{a.Positional.LastOrDefault() ?? "diff"}'" : $"extra operand '{a.Positional[2]}'", 2);
+        if (a.Positional.Count != 2) throw new UsageException(a.Positional.Count < 2 ? $"missing operand after '{a.Positional.LastOrDefault() ?? "diff"}'" : $"extra operand '{a.Positional[2]}'");
         string Read(string p)
         {
             if (p == "-") return ctx.StdinText;
@@ -1133,10 +1134,13 @@ internal static class Chmod
             else if (arg is "-v" or "--verbose") verbose = true;
             else if (arg is "-c" or "--changes") changes = true;
             else if (arg is "-f" or "--silent" or "--quiet") quiet = true;
+            else if (arg.StartsWith("--") && arg.Length > 2) throw new UsageException($"unrecognized option '{arg}'");
+            else if (arg.Length > 1 && arg[0] == '-' && arg.FirstOrDefault(c => !"-rwxXstugoa+=,01234567".Contains(c)) is var bad and not '\0')
+                throw new UsageException($"invalid option -- '{bad}'");
             else if (spec == null) spec = arg; // may look like an option, e.g. -x or -w
             else files.Add(arg);
         }
-        if (spec == null || files.Count == 0) throw new ShellException(spec == null ? "missing operand" : $"missing operand after '{spec}'");
+        if (spec == null || files.Count == 0) throw new UsageException(spec == null ? "missing operand" : $"missing operand after {Builtins.QuoteL(spec)}");
         int code = 0;
         void Apply(string display, string path)
         {

@@ -1,1 +1,7 @@
-{ "bc": "bc is not ported to Python yet" }
+{
+  "bc": "bc is not ported to Python yet",
+  "error-messages": "GNU message wording not ported yet",
+  "ls-long": "ls -l columns, link counts and dates not ported yet",
+  "review-fixes-010": "bash: prefix on builtin errors not ported yet",
+  "review-fixes-021": "GNU ‘’ quotes not ported yet"
+}

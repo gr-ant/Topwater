@@ -38,7 +38,7 @@ internal sealed class Find
             if (_prune || depth >= _maxDepth || !_ctx.Fs.IsDirectory(abs)) return;
             IReadOnlyList<string> names;
             try { names = _ctx.Fs.List(abs); }
-            catch (ShellException) { _ctx.Stderr.WriteLine($"find: '{display}': Permission denied"); code = 1; return; }
+            catch (ShellException) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(display)}: Permission denied"); code = 1; return; }
             foreach (var name in names)
                 await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1, start);
         }
@@ -47,7 +47,7 @@ internal sealed class Find
             foreach (var s in starts)
             {
                 var abs = _ctx.ResolvePath(s);
-                if (!_ctx.Fs.Exists(abs)) { _ctx.Stderr.WriteLine($"find: '{s}': No such file or directory"); code = 1; continue; }
+                if (!_ctx.Fs.Exists(abs)) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(s)}: {_ctx.Fs.WhyMissing(abs)}"); code = 1; continue; }
                 await Walk(abs, s, 0, s);
             }
         }

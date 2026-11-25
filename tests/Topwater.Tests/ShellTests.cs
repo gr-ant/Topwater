@@ -104,8 +104,8 @@ public class ShellTests
         Assert.Equal("cat: nope.txt: No such file or directory\n", r.Stderr);
         Assert.Equal("cat: nope.txt: No such file or directory\n[exit code 1]", r.ToToolOutput());
 
-        r = await Run(sh, "ls -Z");
-        Assert.Equal("ls: invalid option -- 'Z'\n", r.Stderr);
+        r = await Run(sh, "ls -y");
+        Assert.Equal("ls: invalid option -- 'y'\nTry 'ls --help' for more information.\n", r.Stderr);
     }
 
     [Fact]

@@ -6,8 +6,16 @@ public class ShellException(string message, int exitCode = 1) : Exception(messag
     public int ExitCode { get; } = exitCode;
 }
 
+/// <summary>A bad command line: printed with GNU's "Try 'cmd --help'" hint; exits 1, or 2 for ls, grep, sort and diff.</summary>
+public sealed class UsageException(string message) : ShellException(message, 1);
+
 /// <param name="Mode">Unix permission bits, e.g. 0x1ED (0755).</param>
-public readonly record struct FileStat(bool IsDirectory, long Size, DateTime Modified, int Mode, string Owner);
+/// <param name="Links">Hard links: 1 for a file; 2 plus one per subdirectory for a directory, as on ext4.</param>
+public readonly record struct FileStat(bool IsDirectory, long Size, DateTime Modified, int Mode, string Owner, int Links = 1)
+{
+    /// <summary>512-byte blocks in use, as `stat %b` and `ls -s` count them: whole 4 KiB filesystem blocks.</summary>
+    public long Blocks => (Size + 4095) / 4096 * 8;
+}
 
 /// <summary>
 /// In-memory Unix-style filesystem with owners and permission bits. All paths are absolute or resolved against "/".
@@ -143,6 +151,8 @@ public sealed class VirtualFileSystem
         chars[0] = isDirectory ? 'd' : '-';
         const string rwx = "rwxrwxrwx";
         for (int i = 0; i < 9; i++) chars[i + 1] = (mode & (1 << (8 - i))) != 0 ? rwx[i] : '-';
+        if ((mode & 0x800) != 0) chars[3] = chars[3] == 'x' ? 's' : 'S'; // setuid (04000)
+        if ((mode & 0x400) != 0) chars[6] = chars[6] == 'x' ? 's' : 'S'; // setgid (02000)
         if ((mode & 0x200) != 0) chars[9] = chars[9] == 'x' ? 't' : 'T'; // sticky bit (01000)
         return new string(chars);
     }
@@ -150,33 +160,32 @@ public sealed class VirtualFileSystem
     Node? Find(string path) => Find(path, out _);
 
     /// <summary>Walks <paramref name="path"/>; like Linux, each directory passed through needs search (x) permission,
-    /// else the result is null with <paramref name="denied"/> set.</summary>
-    Node? Find(string path, out bool denied)
+    /// else the result is null with <paramref name="why"/> saying why: "Permission denied", "Not a directory" (a file in
+    /// the middle of the path) or "No such file or directory".</summary>
+    Node? Find(string path, out string why)
     {
-        denied = false;
+        why = "No such file or directory";
         var user = User;
         Node cur = _root;
         foreach (var seg in Normalize("/", path).Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (cur is not Dir d) return null;
-            if (!Permits(d, user, 1)) { denied = true; return null; }
+            if (cur is not Dir d) { why = "Not a directory"; return null; }
+            if (!Permits(d, user, 1)) { why = "Permission denied"; return null; }
             if (!d.Children.TryGetValue(seg, out var next)) return null;
             cur = next;
         }
         return cur;
     }
 
-    static string Missing(bool denied) => denied ? "Permission denied" : "No such file or directory";
-
-    /// <summary>Why <paramref name="path"/> can't be reached: "Permission denied" or "No such file or directory".</summary>
-    internal string WhyMissing(string path) => Missing(Find(path, out var denied) == null && denied);
+    /// <summary>Why <paramref name="path"/> can't be reached: "Permission denied", "Not a directory" or "No such file or directory".</summary>
+    internal string WhyMissing(string path) => Find(path, out var why) == null ? why : "No such file or directory";
 
     /// <summary>The directory an entry is created in, removed from or renamed in; it needs search permission too.</summary>
     Dir ParentDir(string path)
     {
-        var node = Find(GetParent(path), out var denied);
+        var node = Find(GetParent(path), out var why);
         if (node is Dir d) { Require(d, 1, path); return d; }
-        throw new ShellException($"{path}: {(node == null ? Missing(denied) : "Not a directory")}");
+        throw new ShellException($"{path}: {(node == null ? why : "Not a directory")}");
     }
 
     static bool Permits(Node n, string? user, int bits) => user == null || ((n.Mode >> (n.Owner == user ? 6 : 0)) & bits) == bits;
@@ -201,11 +210,11 @@ public sealed class VirtualFileSystem
     public bool CanWrite(string path) => Find(path) is { } n && Allowed(n, 2);
     public bool CanExecute(string path) => Find(path) is { } n && Allowed(n, 1);
 
-    public FileStat Stat(string path) => Find(path, out var denied) switch
+    public FileStat Stat(string path) => Find(path, out var why) switch
     {
-        Dir d => new(true, 4096, d.Modified, d.Mode, d.Owner),
+        Dir d => new(true, 4096, d.Modified, d.Mode, d.Owner, 2 + d.Children.Values.Count(c => c is Dir)),
         FileNode f => new(false, f.ReportedSize ?? f.Data?.Length ?? System.Text.Encoding.UTF8.GetByteCount(f.Content), f.Modified, f.Mode, f.Owner),
-        _ => throw new ShellException($"{path}: {Missing(denied)}"),
+        _ => throw new ShellException($"{path}: {why}"),
     };
 
     public string ReadAllText(string path) => ReadNode(path) is var f && f.Data == null ? f.Content : System.Text.Encoding.UTF8.GetString(f.Data);
@@ -218,11 +227,11 @@ public sealed class VirtualFileSystem
 
     FileNode ReadNode(string path)
     {
-        switch (Find(path, out var denied))
+        switch (Find(path, out var why))
         {
             case FileNode f: Require(f, 4, path); return f;
             case Dir: throw new ShellException($"{path}: Is a directory");
-            default: throw new ShellException($"{path}: {Missing(denied)}");
+            default: throw new ShellException($"{path}: {why}");
         }
     }
 
@@ -280,7 +289,7 @@ public sealed class VirtualFileSystem
     /// <summary>Sets a modification time (tar and unzip restoring one); as with utime(2), only the owner may.</summary>
     internal void SetModifiedTime(string path, DateTime when)
     {
-        var node = Find(path, out var denied) ?? throw new ShellException($"{path}: {Missing(denied)}");
+        var node = Find(path, out var why) ?? throw new ShellException($"{path}: {why}");
         if (Restricted && node.Owner != RunAs) throw new ShellException($"{path}: Operation not permitted");
         node.Modified = when;
     }
@@ -292,12 +301,12 @@ public sealed class VirtualFileSystem
 
     public void Touch(string path)
     {
-        if (Find(path, out var denied) is { } n)
+        if (Find(path, out var why) is { } n)
         {
             Require(n, 2, path);
             n.Modified = Clock();
         }
-        else if (denied) throw new ShellException($"{path}: Permission denied");
+        else if (why == "Permission denied") throw new ShellException($"{path}: Permission denied");
         else WriteAllText(path, "");
     }
 
@@ -319,11 +328,11 @@ public sealed class VirtualFileSystem
     /// <summary>Entry names in a directory, sorted ordinally.</summary>
     public IReadOnlyList<string> List(string path)
     {
-        switch (Find(path, out var denied))
+        switch (Find(path, out var why))
         {
             case Dir d: Require(d, 4, path); return d.Children.Keys.ToList();
             case FileNode: throw new ShellException($"{path}: Not a directory");
-            default: throw new ShellException($"{path}: {Missing(denied)}");
+            default: throw new ShellException($"{path}: {why}");
         }
     }
 
@@ -331,7 +340,7 @@ public sealed class VirtualFileSystem
     {
         path = Normalize("/", path);
         if (path == "/") throw new ShellException("it is dangerous to operate recursively on '/'");
-        var node = Find(path, out var denied) ?? throw new ShellException($"{path}: {Missing(denied)}");
+        var node = Find(path, out var why) ?? throw new ShellException($"{path}: {why}");
         if (node is Dir d && d.Children.Count > 0 && !recursive) throw new ShellException($"{path}: Directory not empty");
         var parent = ParentDir(path);
         if (node is Dir tree) RequireTreeRemovable(tree, path);
@@ -362,7 +371,7 @@ public sealed class VirtualFileSystem
     internal void Copy(string source, string dest, Action<string, bool> denied)
     {
         source = Normalize("/", source);
-        var node = Find(source, out var blocked) ?? throw new ShellException($"{source}: {Missing(blocked)}");
+        var node = Find(source, out var why) ?? throw new ShellException($"{source}: {why}");
         dest = Normalize("/", dest);
         if (node is Dir && (dest + "/").StartsWith(source + "/"))
             throw new ShellException($"cannot copy a directory, '{source}', into itself, '{dest}'");
@@ -398,7 +407,7 @@ public sealed class VirtualFileSystem
     {
         source = Normalize("/", source);
         dest = Normalize("/", dest);
-        var node = Find(source, out var denied) ?? throw new ShellException($"{source}: {Missing(denied)}");
+        var node = Find(source, out var why) ?? throw new ShellException($"{source}: {why}");
         if ((dest + "/").StartsWith(source + "/")) throw new ShellException($"cannot move '{source}' to a subdirectory of itself, '{dest}'");
         var existing = Find(dest);
         if (existing is Dir) throw new ShellException($"{dest}: Is a directory");
@@ -469,7 +478,7 @@ public sealed class VirtualFileSystem
     /// <summary>Changes permission bits. While restricted, only the owner may do this.</summary>
     public void Chmod(string path, int mode)
     {
-        var node = Find(path, out var denied) ?? throw new ShellException($"cannot access '{path}': {Missing(denied)}");
+        var node = Find(path, out var why) ?? throw new ShellException($"cannot access '{path}': {why}");
         if (Restricted && node.Owner != RunAs) throw new ShellException($"changing permissions of '{path}': Operation not permitted");
         node.Mode = mode & 0xFFF;
     }
@@ -477,7 +486,7 @@ public sealed class VirtualFileSystem
     /// <summary>Changes the owner (and, with <paramref name="recursive"/>, everything below). Unrestricted callers only.</summary>
     public void SetOwner(string path, string owner, bool recursive = false)
     {
-        var node = Find(path, out var denied) ?? throw new ShellException($"cannot access '{path}': {Missing(denied)}");
+        var node = Find(path, out var why) ?? throw new ShellException($"cannot access '{path}': {why}");
         if (Restricted) throw new ShellException($"changing ownership of '{path}': Operation not permitted");
         void Apply(Node n)
         {

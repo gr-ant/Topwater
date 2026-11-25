@@ -24,8 +24,8 @@ public class PermissionTests
     [InlineData("cat /root/notes.txt", "cat: /root/notes.txt: Permission denied\n")]
     [InlineData("cat /root/missing", "cat: /root/missing: Permission denied\n")]
     [InlineData("cat < /root/notes.txt", "bash: /root/notes.txt: Permission denied\n")]
-    [InlineData("source /root/notes.txt", "source: /root/notes.txt: Permission denied\n")] // bash omits "source: "; existing Topwater style
-    [InlineData("cat /root/*", "cat: /root/*: Permission denied\n")]
+    [InlineData("source /root/notes.txt", "bash: /root/notes.txt: Permission denied\n")]
+    [InlineData("cat /root/*", "cat: '/root/*': Permission denied\n")]
     [InlineData("grep -r private /root", "grep: /root: Permission denied\n")]
     [InlineData("ls /root", "ls: cannot open directory '/root': Permission denied\n")]
     [InlineData("ls -l /root/notes.txt", "ls: cannot access '/root/notes.txt': Permission denied\n")]
@@ -120,7 +120,7 @@ public class PermissionTests
         {
             ("touch ro/new", "touch: cannot touch 'ro/new': Permission denied\n"),
             ("echo x > ~/ro/new", "bash: /home/agent/ro/new: Permission denied\n"),
-            ("mkdir ro/d", "mkdir: cannot create directory 'ro/d': Permission denied\n"),
+            ("mkdir ro/d", "mkdir: cannot create directory \u2018ro/d\u2019: Permission denied\n"),
             ("rm ro/b", "rm: cannot remove 'ro/b': Permission denied\n"),
             ("rm -r ro/sub", "rm: cannot remove 'ro/sub/c': Permission denied\n"),
             ("mv ro/b x", "mv: cannot move 'ro/b' to 'x': Permission denied\n"),
