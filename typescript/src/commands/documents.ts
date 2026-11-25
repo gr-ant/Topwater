@@ -302,8 +302,8 @@ function xlsx(pkg: Pkg): string {
       }
       if (cells.size > 0) rows.push(cells);
     }
-    const first = rows.length ? Math.min(...rows.map(r => Math.min(...r.keys()))) : 0;
-    const last = rows.length ? Math.max(...rows.map(r => Math.max(...r.keys()))) : -1;
+    const first = rows.length ? rows.reduce((m, r) => { for (const k of r.keys()) m = Math.min(m, k); return m; }, Infinity) : 0;
+    const last = rows.length ? rows.reduce((m, r) => { for (const k of r.keys()) m = Math.max(m, k); return m; }, -Infinity) : -1;
     const name = sheet.attrs.get('name') ?? '';
     if ((last - first + 1) * rows.length > MAX_SHEET_CELLS) throw new ShellError(`sheet '${name}' is too large`);
     const t = table(rows.map(r => Array.from({ length: last - first + 1 }, (_, k) => r.get(first + k) ?? '')));

@@ -767,7 +767,7 @@ function seq(ctx: CommandContext): number {
     items.push(fmt !== null ? printfFormat(fmt, [String(x)]) : x.toFixed(decimals));
   }
   if (equalWidth && items.length > 0) {
-    const w = Math.max(...items.map(s => s.length));
+    const w = items.reduce((m, s) => Math.max(m, s.length), 0);
     items = items.map(s => (s.startsWith('-') ? '-' + s.slice(1).padStart(w - 1, '0') : s.padStart(w, '0')));
   }
   if (items.length > 0) ctx.stdout.write(items.join(unescape(sep)) + '\n');

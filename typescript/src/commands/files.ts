@@ -43,7 +43,7 @@ function longEntries(ctx: CommandContext, entries: [abs: string, name: string][]
   const rows = entries.map(([abs, name]) => ({ st: ctx.fs.stat(abs), name }));
   if (rows.length === 0) return [];
   const all = [...rows.map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p))];
-  const width = (f: (st: FileStat) => string) => Math.max(...all.map(st => f(st).length));
+  const width = (f: (st: FileStat) => string) => all.reduce((m, st) => Math.max(m, f(st).length), -Infinity);
   const lw = width(st => String(st.links)), ow = width(st => st.owner), sw = width(size);
   return rows.map(({ st, name }) => `${VirtualFileSystem.formatMode(st.isDirectory, st.mode)} ${String(st.links).padStart(lw)} ` +
     `${st.owner.padEnd(ow)} ${st.owner.padEnd(ow)} ${size(st).padStart(sw)} ${lsDate(st.modified, now)} ${name}`);

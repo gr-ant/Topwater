@@ -461,3 +461,14 @@ describe('diff', () => {
     expect(r.exitCode).toBe(1);
   });
 });
+
+describe('very long argument lists', () => {
+  // widths were computed with Math.max(...list), which overflows the call stack past ~125,000 items
+  test('ls -l and seq -w handle 200,000 items', async () => {
+    const sh = new Shell();
+    let r = await sh.run('mkdir big && cd big && seq 1 130000 | xargs -n 5000 touch && ls -l | wc -l');
+    expect(r.stdout.trim()).toBe('130001');
+    r = await sh.run('seq -w 1 200000 | tail -1');
+    expect(r.stdout).toBe('200000\n');
+  }, 120_000);
+});
