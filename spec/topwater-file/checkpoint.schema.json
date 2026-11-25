@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/topwater/spec/topwater-file/checkpoint.schema.json",
+  "title": "Topwater checkpoint",
+  "description": "checkpoints/<n>.json of a .topwater file with history: the machine after n calls (0: before the first). The same shape as manifest.json, sharing its blobs/.",
+  "$ref": "manifest.schema.json"
+}

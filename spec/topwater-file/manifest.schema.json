@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/topwater/spec/topwater-file/manifest.schema.json",
+  "title": "Topwater machine manifest",
+  "description": "manifest.json of a .topwater file (and of a snapshot, which is a .topwater without history): one machine, its files and its session. File contents are in blobs/<sha256>. Readers also enforce the limits in spec/topwater-file/README.md, which a schema cannot express.",
+  "type": "object",
+  "required": ["format", "version", "created", "user", "hostname", "cwd", "secondsBase"],
+  "properties": {
+    "format": { "const": "topwater-snapshot" },
+    "version": {
+      "type": "integer", "minimum": 1, "maximum": 2,
+      "description": "1, or 2 when a file entry is a symbolic link or has a link. A writer uses 1 when it can, so older readers load it. A reader refuses a newer version than it knows."
+    },
+    "created": { "$ref": "#/$defs/time" },
+    "user": { "$ref": "#/$defs/userName" },
+    "hostname": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$" },
+    "cwd": { "$ref": "#/$defs/path" },
+    "files": {
+      "type": "array", "items": { "$ref": "#/$defs/file" },
+      "description": "Every file, directory and link, each parent before its children. At most MaxExtractEntries entries; the sizes add up to at most MaxFileSystemBytes."
+    },
+    "variables": { "type": "array", "items": { "$ref": "#/$defs/variable" }, "description": "Sorted by name; each name once." },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["name", "body"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "body": { "type": "string", "description": "As written after `name()`; `name() body` must parse as exactly one function definition." },
+          "exported": { "type": "boolean" }
+        }
+      }
+    },
+    "aliases": { "type": "object", "additionalProperties": { "type": "string" }, "propertyNames": { "pattern": "^[^\\s=/\\u0000]+$" } },
+    "set": { "type": "array", "items": { "enum": ["errexit", "pipefail", "nounset", "noglob", "xtrace", "noclobber"] } },
+    "ifsUnset": { "type": "boolean" },
+    "shopt": { "type": "array", "items": { "$ref": "#/$defs/word" } },
+    "traps": { "type": "object", "additionalProperties": { "type": "string" }, "propertyNames": { "$ref": "#/$defs/word" } },
+    "positional": { "$ref": "#/$defs/strings" },
+    "dirStack": { "$ref": "#/$defs/strings" },
+    "history": { "$ref": "#/$defs/strings" },
+    "lastExitCode": { "$ref": "#/$defs/exitCode" },
+    "secondsBase": { "$ref": "#/$defs/time" },
+    "lastArg": { "type": "string" },
+    "pipeStatus": { "type": "array", "items": { "$ref": "#/$defs/exitCode" } },
+    "getopts": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 2, "maxItems": 2, "description": "[OPTIND, position in the current word]" },
+    "jobs": {
+      "type": "array", "description": "Finished background jobs: [pid, exit code], each pid once.",
+      "items": { "type": "array", "prefixItems": [{ "type": "integer" }, { "$ref": "#/$defs/exitCode" }], "minItems": 2, "maxItems": 2 }
+    },
+    "lastBackgroundPid": { "type": "integer" },
+    "nextPid": { "type": "integer" },
+    "clock": { "$ref": "#/$defs/time", "description": "The virtual clock, for a shell made with a start time." },
+    "random": { "type": "string", "pattern": "^[0-9]{1,20}$", "description": "The seeded random generator's state (an unsigned 64-bit number), for a shell made with a seed." }
+  },
+  "$defs": {
+    "time": {
+      "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,7})?)?(Z|[+-][0-9]{2}:?[0-9]{2})?$",
+      "description": "ISO 8601. Writers use UTC with seven fraction digits: 2026-11-25T09:00:00.0000000Z. No zone means UTC."
+    },
+    "userName": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$" },
+    "word": { "type": "string", "pattern": "^[A-Za-z0-9_+-]{1,32}$" },
+    "path": {
+      "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/([^/\\u0000]+(/[^/\\u0000]+)*)?$",
+      "description": "Absolute and normal: no empty, . or .. segment, no trailing slash (readers check the segments)."
+    },
+    "strings": { "type": "array", "items": { "type": "string" } },
+    "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "file": {
+      "type": "object", "required": ["path", "type", "mode", "owner", "mtime"],
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "type": { "enum": ["dir", "file", "symlink"] },
+        "mode": { "type": "string", "pattern": "^[0-7]{1,4}$", "description": "Octal permission bits, written as four digits." },
+        "owner": { "$ref": "#/$defs/userName" },
+        "mtime": { "$ref": "#/$defs/time" },
+        "size": { "type": "integer", "minimum": 0, "description": "A file's length in bytes (left out when 0)." },
+        "binary": { "type": "boolean", "description": "The content is bytes, not UTF-8 text." },
+        "reportedSize": { "type": "integer", "minimum": 0, "description": "The size ls and stat show, when it differs from the content (a sparse or placeholder file)." },
+        "blob": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the content, which is blobs/<blob>. Required for a file with size > 0 and no link." },
+        "target": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Version 2: a symbolic link's target, as written (relative or absolute)." },
+        "link": { "$ref": "#/$defs/path", "description": "Version 2: another name of a file or symbolic link: the path of its first name, which comes earlier in files. Never a directory." }
+      }
+    },
+    "variable": {
+      "type": "object", "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "value": { "type": "string" },
+        "attrs": { "type": "string", "pattern": "^[A-Za-z]{0,16}$", "description": "declare attributes, e.g. \"ix\"." },
+        "exported": { "type": "boolean" },
+        "array": {
+          "type": "object",
+          "properties": {
+            "assoc": { "type": "boolean" },
+            "next": { "type": "integer", "minimum": 0, "description": "An indexed array's next append index; at least the highest index + 1." },
+            "items": {
+              "type": "array", "description": "[key, value] pairs; an indexed array's keys are canonical non-negative integers.",
+              "items": { "type": "array", "prefixItems": [{ "type": "string" }, { "type": "string" }], "minItems": 2, "maxItems": 2 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

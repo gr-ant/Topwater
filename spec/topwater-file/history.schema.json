@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/topwater/spec/topwater-file/history.schema.json",
+  "title": "Topwater history line",
+  "description": "One line of history.jsonl in a .topwater file: the first line is the header, every later line one call, in order.",
+  "oneOf": [{ "$ref": "#/$defs/header" }, { "$ref": "#/$defs/call" }],
+  "$defs": {
+    "header": {
+      "type": "object", "required": ["format", "version", "options"],
+      "properties": {
+        "format": { "const": "topwater-history" },
+        "version": { "type": "integer", "minimum": 1, "maximum": 1, "description": "A reader refuses a newer version than it knows." },
+        "created": { "$ref": "manifest.schema.json#/$defs/time" },
+        "topwater": { "type": "string", "description": "The Topwater that wrote it (informational): a version, or the port's name." },
+        "options": {
+          "type": "object", "description": "The shell's options. A reader uses the limits only to lower its own, never to raise them.",
+          "properties": {
+            "user": { "$ref": "manifest.schema.json#/$defs/userName" },
+            "hostname": { "type": "string" },
+            "startTime": { "$ref": "manifest.schema.json#/$defs/time", "description": "The virtual clock's start; with randomSeed the run is deterministic." },
+            "randomSeed": { "type": "integer" },
+            "maxLoopIterations": { "type": "integer", "minimum": 0 },
+            "maxExtractBytes": { "type": "integer", "minimum": 0 },
+            "maxExtractEntries": { "type": "integer", "minimum": 0 },
+            "maxCallDurationMs": { "type": "integer", "minimum": -1, "description": "-1: no limit." },
+            "maxFileSystemBytes": { "type": "integer", "minimum": 0 },
+            "maxStringBytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "appCommands": { "type": "array", "items": { "type": "string" }, "description": "The app's own commands the shell had; a replay needs them registered." },
+        "metadata": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form facts: model, task, harness, ..." }
+      }
+    },
+    "call": {
+      "type": "object", "required": ["index", "command", "stdout", "stderr", "exitCode"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "description": "0 for the first call, then 1, 2, ..." },
+        "command": { "type": "string" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "exitCode": { "type": "integer" },
+        "trailer": { "type": "string", "description": "The note a limit added (time limit, output cut), when there was one." },
+        "elapsedMs": { "type": "number", "minimum": 0, "description": "Wall time; informational, never compared." },
+        "time": { "$ref": "manifest.schema.json#/$defs/time", "description": "The shell's clock when the call started (the virtual clock on a deterministic shell)." },
+        "files": {
+          "type": "array", "items": { "$ref": "manifest.schema.json#/$defs/path" }, "uniqueItems": true,
+          "description": "Paths the call added, changed or removed (content, type, mode, owner, mtime or link), sorted. Left out when none."
+        }
+      }
+    }
+  }
+}
