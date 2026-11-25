@@ -68,3 +68,27 @@ export function utf8Length(text: string): number {
 /** Text as written by the text API: lossy UTF-8 of raw bytes. */
 export function bytesToText(data: Uint8Array): string { return lossy.decode(data); }
 export function textToBytes(text: string): Uint8Array { return encodeText(text); }
+
+// Portable stand-ins for Node's Buffer, so the core runs in browsers too.
+export function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+export const toHex = (data: Uint8Array) => Array.from(data, b => b.toString(16).padStart(2, '0')).join('');
+export function toBase64(data: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < data.length; i += 0x8000) s += String.fromCharCode(...data.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+/** Lenient like Buffer.from(s, 'base64'): skips characters outside the alphabet, accepts URL-safe and missing padding. */
+export function fromBase64(text: string): Uint8Array {
+  let s = text.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = s.indexOf('=');
+  if (pad >= 0) s = s.slice(0, pad); // Buffer stops at the first padding character
+  s = s.replace(/[^A-Za-z0-9+/]/g, '');
+  if (s.length % 4 === 1) s = s.slice(0, -1);
+  s += '='.repeat((4 - s.length % 4) % 4);
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
