@@ -494,3 +494,6 @@ runs/
 
 # Product team agents: roles, discussions, decisions (local only)
 .team/
+
+# Local release notes
+release.md
