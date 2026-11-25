@@ -5,11 +5,11 @@
   </picture>
 </p>
 
-Topwater is a .NET 8 library that gives an LLM agent one `bash` tool backed by a simulated Linux shell running
-inside your process. Your C# methods and MCP servers show up in it as command-line programs.
-[Python](#python-and-typescript) and [TypeScript](#python-and-typescript) versions are in preview.
+Topwater gives an LLM agent one `bash` tool backed by a simulated Linux shell that runs inside your application.
+Your own functions, MCP servers and HTTP APIs show up in it as command-line programs. It is available for
+**.NET**, **Python** and **TypeScript**.
 
-You register a method:
+You register a function:
 
 ```csharp
 public class Tools
@@ -43,57 +43,73 @@ You send the model one tool definition instead of one per function, and it can p
 
 ## Install
 
-```bash
-dotnet add package Topwater --prerelease
-dotnet add package Topwater.Mcp --prerelease   # optional: MCP servers as commands
-dotnet add package Topwater.AI --prerelease    # optional: Microsoft.Extensions.AI tool
-```
+| | |
+|---|---|
+| **.NET 8+** | `dotnet add package Topwater --prerelease` (add `Topwater.Mcp` for MCP servers, `Topwater.AI` for Microsoft.Extensions.AI) |
+| **Python 3.10+** | `pip install "git+https://github.com/gr-ant/Topwater@python#subdirectory=python"` (preview, not on PyPI yet) |
+| **TypeScript, Node 20+** | `git clone -b typescript https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
+
+None of them has runtime dependencies in its core.
 
 ## Use
+
+Give the model one tool (named `bash`, with the description and input schema Topwater provides). When it calls the
+tool, run the command and send the text back.
+
+**C#**
 
 ```csharp
 using Topwater;
 
 var shell = new Shell();
 shell.Fs.WriteAllText("/home/agent/notes.txt", "hello");
-
-// Give your model one tool: BashTool.Name, BashTool.Description, BashTool.InputSchemaJson.
-// When it calls the tool, run the command and send the text back:
-string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");
+string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");   // BashTool.Name, .Description, .InputSchemaJson
 ```
 
-Files, variables and the working directory persist between calls. Use one `Shell` per conversation.
-`shell.Snapshot()` / `shell.Restore(snap)` undo a turn, `shell.Fork()` copies the machine, and `shell.Save(stream)` /
-`Shell.Load(stream)` keep it across restarts; see [Snapshots](docs/reference.md#snapshots).
+With Microsoft.Extensions.AI, skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
 
-With `Microsoft.Extensions.AI`, add the `Topwater.AI` package and skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
+**Python**
+
+```python
+import topwater
+from topwater import Shell
+
+shell = Shell()
+output = await topwater.execute_tool(shell, "echo hello | tr a-z A-Z")   # TOOL_NAME, TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA
+# or, outside async code: shell.run(command).to_tool_output()
+```
+
+**TypeScript**
+
+```ts
+import { Shell, BashTool } from 'topwater';
+
+const shell = new Shell();
+const output = await BashTool.execute(shell, 'echo hello | tr a-z A-Z');   // BashTool.name, .description, .inputSchema
+```
+
+Files, variables and the working directory persist between calls. Use one shell per conversation.
 
 ## Add your own programs
 
-C# methods, as above. Parameters become `--options`, and the return value is printed as JSON.
+| | C# | Python | TypeScript |
+|---|---|---|---|
+| Your functions | `[Command]` methods, `shell.Register(...)` | `@command` methods, `shell.register(...)` | `shell.register(name, handler)` |
+| Tools described by JSON Schema | `shell.RegisterTools(...)` | `register_tools(shell, ...)` | `registerTools(shell, ...)` |
+| An MCP server | `shell.MountMcpAsync(...)` (Topwater.Mcp) | `mount_mcp(shell, ...)` | `mountMcp(shell, ...)` |
+| An HTTP API, credentials hidden from the model | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `registerApi(shell, ...)` |
+| A real program from your machine | `shell.RegisterHostCommand("git")` | `register_host_command(shell, "git")` | not yet |
+| Snapshots: undo, fork, save and load the machine | `shell.Snapshot()`, `Fork()`, `Save()`, `Load()` | not yet | not yet |
 
-An MCP server (add the `Topwater.Mcp` package):
-
-```csharp
-await using var github = await shell.MountMcpAsync("github", client);   // github list-issues --repo acme/api
-```
-
-An HTTP API, without showing the model the credentials or letting it pick the host:
-
-```csharp
-shell.RegisterApi("api", new Dictionary<string, ApiEndpoint>
-{
-    ["jira"] = new("https://acme.atlassian.net/rest/api/3") { Auth = () => $"Bearer {token}", Paths = ["/issue/"] },
-});                                                      // api get jira /issue/PROJ-123 | jq .fields.status
-```
-
-A real program from your machine:
-
-```csharp
-using var git = shell.RegisterHostCommand("git");
-```
+An MCP server becomes one program with a subcommand per tool (`github list-issues --repo acme/api`). An API is
+called by alias, never by host, and the model never sees the credential
+(`api get jira /issue/PROJ-123 | jq .fields.status`). The [reference](docs/reference.md) covers each of these in
+detail using the C# API, and each port's README maps it onto its own
+([Python](https://github.com/gr-ant/Topwater/tree/python/python), [TypeScript](https://github.com/gr-ant/Topwater/tree/typescript/typescript)).
 
 ## What is in the machine
+
+The same in all three:
 
 - A shell language: pipes, redirects, loops, functions, arrays, heredocs, scripts.
 - About 110 standard commands, including `grep`, `sed`, `awk`, `jq`, `find`, `tar` and `bc`.
@@ -103,50 +119,19 @@ using var git = shell.RegisterHostCommand("git");
 There is no Python, git or open network access unless you add them. The [reference](docs/reference.md) has the full list.
 
 Each command is written from POSIX, the man pages and comparison against the real tool's output — never by copying
-or porting its source — and is checked by differential tests that run the real binary. The command set was audited
-for provenance in November 2026.
+or porting its source — and is checked by differential tests that run the real binary. All three implementations
+check themselves against the same recorded outputs. The command set was audited for provenance in November 2026.
 
 ## Safety
 
 The shell is simulated: commands are interpreted in your process and only touch the in-memory filesystem.
-Runaway loops, slow regular expressions, oversized output, calls that run too long and runaway memory or disk use are all cut off.
+Runaway loops, slow regular expressions, oversized output, calls that run too long and runaway memory or disk use are
+all cut off.
 
-MCP calls and host programs are real. A host program runs with your process's permissions, and Topwater does not
-sandbox it unless you ask: `Launcher = HostSandbox.Bubblewrap()` runs it under bubblewrap, where it can see only its
-private copy of the agent's files and has no network. See [Real host programs](docs/reference.md#real-host-programs)
-before registering one.
-
-## Python and TypeScript
-
-The same shell is also written in Python and TypeScript. Both run the same recorded tests as the C# version and have
-the same limits, but they are previews and not on PyPI or npm yet.
-
-Python 3.10+, no dependencies, on the [`python` branch](https://github.com/gr-ant/Topwater/tree/python/python):
-
-```bash
-pip install "git+https://github.com/gr-ant/Topwater@python#subdirectory=python"
-```
-
-```python
-from topwater import Shell
-shell = Shell()
-print(shell.run("echo hello | tr a-z A-Z").to_tool_output())
-```
-
-TypeScript for Node 20+, no runtime dependencies, on the
-[`typescript` branch](https://github.com/gr-ant/Topwater/tree/typescript/typescript):
-
-```bash
-git clone -b typescript https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build
-```
-
-```ts
-import { Shell, BashTool } from 'topwater';
-const shell = new Shell();
-const result = await BashTool.execute(shell, 'echo hello | tr a-z A-Z');
-```
-
-Each folder's README maps the C# API onto its own. Real host programs are C# and Python only for now.
+MCP calls, registered APIs and host programs are real. A host program runs with your process's permissions, and
+Topwater does not sandbox it unless you ask: `Launcher = HostSandbox.Bubblewrap()` in C# (`bubblewrap()` in Python)
+runs it under bubblewrap, where it can see only its private copy of the agent's files and has no network. See
+[Real host programs](docs/reference.md#real-host-programs) before registering one.
 
 ## Try it
 
@@ -155,6 +140,8 @@ dotnet run --project examples/McpShell    # a terminal on the simulated machine
 dotnet run --project examples/WebShell    # the same, as a web page on port 8765
 dotnet test
 ```
+
+For the ports, run `pytest` in `python/` on the `python` branch, and `npm test` in `typescript/` on the `typescript` branch.
 
 `examples/` also has three agents run against Gemini Flash: one triages issues through an MCP server (6 / 6
 checks), one writes a Word document with the real OfficeCLI (5 / 5), and one answers questions over CSV files with
