@@ -62,6 +62,22 @@ public class HostCommandTests
         Assert.Contains("timed out", r.Stderr);
     }
 
+    /// <summary>Virtual symlinks never lead a host program anywhere: a loop or a link to / is not followed, a link to a file
+    /// outside the workspace is left out, one to a file inside goes as a copy; no real link is made, and nothing hangs.</summary>
+    [Fact]
+    public async Task VirtualLinksNeverLeadOutOfTheMirror()
+    {
+        if (OperatingSystem.IsWindows() || !File.Exists("/bin/sh") && !File.Exists("/usr/bin/sh")) return;
+        var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(20) });
+        using var real = sh.RegisterHostCommand("realsh", "sh");
+        await Out(sh, "mkdir -p proj/d && cd proj && echo in > d/f && echo secret > /tmp/outside && ln -s .. d/up && ln -s / root && ln -s /tmp/outside out && ln -s d/f inside && ln -s d dl");
+        var r = await sh.RunAsync("cd ~/proj && realsh -c 'find . | sort; cat inside; find . -type l | wc -l'");
+        Assert.True(r.Stderr == "", r.Stderr);
+        Assert.Equal(".\n./d\n./d/f\n./inside\nin\n0\n", r.Stdout);
+        // the program's run leaves the agent's links as they were
+        Assert.Equal("..\n/\n/tmp/outside\nd/f\nd\n", await Out(sh, "cd ~/proj && readlink d/up root out inside dl"));
+    }
+
     [Fact]
     public async Task TmpIsSharedAndKeyValuePathsAreRedirected()
     {

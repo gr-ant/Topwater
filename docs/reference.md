@@ -368,7 +368,8 @@ What the program sees:
   `HOME`, `USER`, a private `TMPDIR`, and your `Environment` on top. Nothing else from your process is passed.
 - **File modes.** The execute bit travels both ways. Other permission bits do not.
 - **Symlinks.** A link the program creates stays on disk for later calls but is not visible in the agent's
-  filesystem, and is never written through.
+  filesystem, and is never written through. The agent's own links never become real ones: a link to a file inside the
+  shared directories goes out as a copy of that file, and links to directories or to anything outside are left out.
 - **Exit codes.** The program's own, or 124 on timeout and 126 if it cannot be started.
 
 Programs that keep running in the background do not fit well: the call returns once the main process exits, and

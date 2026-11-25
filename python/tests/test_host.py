@@ -54,6 +54,20 @@ class HostCommandTests(unittest.TestCase):
         self.assertEqual(124, r.exit_code)
         self.assertIn("timed out", r.stderr)
 
+    @unittest.skipUnless(shutil.which("sh") and shutil.which("find"), "sh or find not installed")
+    def test_virtual_links_never_lead_out_of_the_mirror(self):
+        # a loop or a link to / is not followed, a link to a file outside the workspace is left out, one to a file inside goes
+        # as a copy; no real link is made, and nothing hangs
+        sh = Shell()
+        real = register_host_command(sh, "realsh", "sh")
+        self.addCleanup(real.close)
+        out(sh, "mkdir -p proj/d && cd proj && echo in > d/f && echo secret > /tmp/outside && ln -s .. d/up && ln -s / root && "
+                "ln -s /tmp/outside out && ln -s d/f inside && ln -s d dl")
+        r = sh.run("cd ~/proj && realsh -c 'find . | sort; cat inside; find . -type l | wc -l'")
+        self.assertEqual("", r.stderr)
+        self.assertEqual(".\n./d\n./d/f\n./inside\nin\n0\n", r.stdout)
+        self.assertEqual("..\n/\n/tmp/outside\nd/f\nd\n", out(sh, "cd ~/proj && readlink d/up root out inside dl"))
+
 
 if __name__ == "__main__":
     unittest.main()

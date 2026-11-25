@@ -122,6 +122,7 @@ class HostCommand:
         fs = self.shell.fs
         files: set[str] = set()
         dirs: set[str] = {""}
+        ws_real = fs.real_path(ws)[0] or ws
 
         def walk(vpath: str, rel: str) -> None:
             if not fs.can_read(vpath):
@@ -130,7 +131,13 @@ class HostCommand:
                 if self._skip(entry):
                     continue
                 child, crel = normalize(vpath, entry), f"{rel}/{entry}".lstrip("/")
-                if fs.is_dir(child):
+                # a symbolic link is never followed into a directory (it could lead back up, or out of the workspace), and
+                # goes out as a copy of its file only when that file is inside the workspace; no real link is ever made
+                if fs.is_symlink(child):
+                    real = fs.real_path(child)[0]
+                    if fs.is_file(child) and real is not None and real.startswith(ws_real + "/") and fs.can_read(child):
+                        files.add(crel)
+                elif fs.is_dir(child):
                     dirs.add(crel)
                     walk(child, crel)
                 elif fs.can_read(child):
@@ -232,7 +239,7 @@ class HostCommand:
                 return
             for entry in fs.listdir(vpath):
                 child, crel = normalize(vpath, entry), f"{rel}/{entry}".lstrip("/")
-                if self._skip(entry) or not fs.is_dir(child):
+                if self._skip(entry) or not fs.is_dir(child, follow=False):  # a link to a directory was never exported
                     continue
                 if not (root / crel).is_dir():
                     try:

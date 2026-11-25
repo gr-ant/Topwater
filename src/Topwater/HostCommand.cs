@@ -111,6 +111,7 @@ public sealed class HostCommand : IDisposable
         var fs = _shell.Fs;
         var files = new HashSet<string>(StringComparer.Ordinal);
         var dirs = new HashSet<string>(StringComparer.Ordinal) { "" };
+        var wsReal = fs.RealPath(ws, out _) ?? ws;
         void Walk(string vpath, string rel)
         {
             if (!fs.CanRead(vpath)) return;
@@ -119,7 +120,14 @@ public sealed class HostCommand : IDisposable
                 if (Skip(entry)) continue;
                 var child = VirtualFileSystem.Normalize(vpath, entry);
                 var crel = Rel(rel, entry);
-                if (fs.IsDirectory(child)) { dirs.Add(crel); Walk(child, crel); }
+                // a symbolic link is never followed into a directory (it could lead back up, or out of the workspace), and
+                // goes out as a copy of its file only when that file is inside the workspace; no real link is ever made
+                if (fs.IsSymlink(child))
+                {
+                    if (fs.IsFile(child) && fs.RealPath(child, out _) is { } real && real.StartsWith(wsReal + "/", StringComparison.Ordinal) && fs.CanRead(child))
+                        files.Add(crel);
+                }
+                else if (fs.IsDirectory(child)) { dirs.Add(crel); Walk(child, crel); }
                 else if (fs.CanRead(child)) files.Add(crel);
             }
         }
@@ -222,7 +230,7 @@ public sealed class HostCommand : IDisposable
             foreach (var entry in fs.List(vpath))
             {
                 var child = VirtualFileSystem.Normalize(vpath, entry);
-                if (Skip(entry) || !fs.IsDirectory(child)) continue;
+                if (Skip(entry) || !fs.IsDirectory(child, follow: false)) continue; // a link to a directory was never exported
                 var crel = Rel(rel, entry);
                 if (!Directory.Exists(Path.Combine(root, crel.Replace('/', Path.DirectorySeparatorChar))))
                 {
