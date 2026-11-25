@@ -573,12 +573,12 @@ class VirtualFileSystem:
             if isinstance(child, _Dir):
                 self._require_tree_removable(child, f"{path}/{name}")
 
-    def copy(self, source: str, dest: str, denied=None, follow_top: bool = True, follow_all: bool = False, broken=None) -> None:
+    def copy(self, source: str, dest: str, denied=None, follow_top: bool = True, follow_all: bool = False, broken=None, tick=None) -> None:
         """Copies a file or tree. Entries the user can't read are passed to `denied(path, is_dir)` and skipped, like
         `cp -r`; without a callback the whole copy fails. follow_top: copy what `source` leads to when it is a symbolic link
         (cp without -r, or -H), rather than the link. follow_all: copy what every link in the tree leads to (cp -L); a link
         back into a directory being copied goes to `broken(path, "cyclic")`, one leading nowhere to `broken(path, reason)`
-        (None to raise)."""
+        (None to raise). tick: called for each entry copied (the caller's time limit: links can make a copy far bigger than the tree)."""
         source, dest = normalize("/", source), normalize("/", dest)
         n, why = self._find_why(source, follow_top or follow_all)
         if n is None:
@@ -594,25 +594,38 @@ class VirtualFileSystem:
         user = self.run_as if self._restricted else None
         owner = self.run_as or parent.owner
         copying: set[int] = set()  # directories on the way down, so -L can't loop
+        cloned = 0
 
         def clone(node, p: str):
             if isinstance(node, _Link):
                 if not follow_all:
                     return _Link(node.target, owner=owner, mode=node.mode)
                 to, reason = self._find_why(p)
-                if to is None or (isinstance(to, _Dir) and id(to) in copying):
-                    reason = reason if to is None else "cyclic"
+                if to is None:
                     if broken is None:
                         raise ShellError(f"{p}: {reason}")
                     broken(p, reason)
                     return None
                 node = to
+            # a directory already being copied further up, reached through a link (even one higher up), as cp -L reports it
+            if isinstance(node, _Dir) and id(node) in copying:
+                if broken is None:
+                    raise ShellError(f"{p}: cyclic")
+                broken(p, "cyclic")
+                return None
+            if tick:
+                tick()
             if not self._permits(node, user, 5 if isinstance(node, _Dir) else 4):
                 if denied is None:
                     raise ShellError(f"{p}: Permission denied")
                 denied(p, isinstance(node, _Dir))
                 return None
             if isinstance(node, _File):
+                # the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
+                nonlocal cloned
+                cloned += node.size
+                if self.run_as is not None and self.used_bytes + cloned > self.capacity:
+                    raise ShellError(f"{dest}: {NO_SPACE}")
                 return _File(node.text(), owner=owner, mode=node.mode, data=node.data, size=node.size)
             c = _Dir(owner=owner, mode=node.mode)
             copying.add(id(node))

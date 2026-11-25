@@ -340,6 +340,11 @@ def _rm(ctx):
             ctx.error(f"rm: cannot remove '{p}': Is a directory")
             code = 1
             continue
+        if p.endswith("/") and ctx.fs.is_symlink(path) and not ctx.fs.is_dir(path):  # "link/" names what it leads to, which is no directory
+            if not a.has("f"):
+                ctx.error(f"rm: cannot remove '{p}': Not a directory")
+                code = 1
+            continue
         if recursive and p.endswith("/") and ctx.fs.is_symlink(path) and ctx.fs.is_dir(path):
             # like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
             for n in ctx.fs.listdir(path):
@@ -367,6 +372,10 @@ def _rmdir(ctx):
         raise UsageException("missing operand")
     code = 0
     for arg in a.positional:
+        if arg.endswith("/") and ctx.fs.is_symlink(ctx.resolve(arg)):
+            ctx.error(f"rmdir: failed to remove {quote_always(arg)}: Symbolic link not followed")
+            code = 1
+            continue
         p = arg.rstrip("/")
         while p:  # -p: a/b/c, then a/b, then a
             path = ctx.resolve(p)
@@ -446,7 +455,10 @@ def _copy_or_move(ctx):
         shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
         src_dir = ctx.fs.is_dir(src, follow_top)
         qs, qd = quote_always(s), quote_always(shown)
-        if target == src:
+        # mv onto another name of the same file, or onto the file a link names, loses it; mv refuses as GNU mv does
+        same = target == src or move and (ctx.fs.same_file(src, target, follow=False)
+                                          or ctx.fs.is_symlink(src) and not ctx.fs.is_symlink(target) and ctx.fs.same_file(src, target))
+        if same:
             clash = f"{qs} and {qd} are the same file"
         elif src_dir and target.startswith(src + "/"):
             clash = f"cannot move {qs} to a subdirectory of itself, {qd}" if move else f"cannot copy a directory, {qs}, into itself, {qd}"
@@ -482,7 +494,7 @@ def _copy_or_move(ctx):
             nonlocal_code[0] = 1
 
         try:
-            ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied, follow_top, a.has("L"), broken)
+            ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied, follow_top, a.has("L"), broken, ctx.check_time)
         except ShellError as e:
             shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
             if " into itself, " in str(e) or " to a subdirectory of itself, " in str(e):
@@ -624,6 +636,7 @@ class _Find:
             raise ShellError(f"unexpected `{args[self.p]}'")
 
         async def walk(path, display, depth, start, follow):
+            ctx.check_time()  # -L can make the walk far bigger than the tree: the call's time limit
             self.prune = False
             is_dir = fs.is_dir(path, follow)
             real = (fs.real_path(path)[0] or path) if is_dir and follow else path

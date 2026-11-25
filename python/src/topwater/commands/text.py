@@ -404,6 +404,7 @@ def _grep(ctx):
                 errors()
                 return
             for name in names:
+                ctx.check_time()  # -R can make the walk far bigger than the tree: the call's time limit
                 child = normalize(d, name)
                 child_display = name if display == "." and implicit_dot else display.rstrip("/") + "/" + name
                 if not a.has("R") and ctx.fs.is_symlink(child):
@@ -1608,6 +1609,8 @@ def _sed(ctx):
             if suffix:
                 backup = suffix.replace("*", f.rsplit("/", 1)[-1]) if "*" in suffix else f + suffix
                 ctx.fs.write_text(ctx.resolve(backup), original)
+            if ctx.fs.is_symlink(path):
+                ctx.fs.delete(path)  # like GNU sed -i, the edited text replaces the link; its target stays as it was
             ctx.fs.write_text(path, buf.getvalue())
             if quit_code is not None:
                 return quit_code

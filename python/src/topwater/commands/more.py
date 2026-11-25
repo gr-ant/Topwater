@@ -997,7 +997,11 @@ def _chmod(ctx):
             ctx.print(f"mode of '{display}' retained as {fmt(st, mode)}")
         if recursive and st.is_dir and ctx.fs.can_read(path):
             for n in ctx.fs.listdir(path):
-                apply(display.rstrip("/") + "/" + n, normalize(path, n))
+                shown = display.rstrip("/") + "/" + n
+                if not ctx.fs.is_symlink(normalize(path, n)):  # like chmod -R, links met on the way are left alone
+                    apply(shown, normalize(path, n))
+                elif verbose:
+                    ctx.print(f"neither symbolic link '{shown}' nor referent has been changed")
 
     for f in files:
         path = ctx.resolve(f)

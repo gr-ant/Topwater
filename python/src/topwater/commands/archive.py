@@ -653,6 +653,7 @@ def _zip(ctx):
         nonlocal added
         if path == archive_path or not fs.exists(path):  # a dangling link has nothing to store
             return
+        ctx.check_time()  # following links, -r can walk far more than the tree: the call's time limit
         st = fs.stat(path)
         entry_name = "/".join(p for p in name.split("/") if p not in ("", ".")) + ("/" if st.is_dir else "")
         if entry_name != "/":

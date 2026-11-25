@@ -4,6 +4,7 @@ tree, and an archive can't use a link to write outside its target. The cases rec
 import io
 import sys
 import tarfile
+import threading
 import time
 from pathlib import Path
 
@@ -39,6 +40,38 @@ def _saved(sh: Shell) -> bytes:
     b = io.BytesIO()
     sh.save(b)
     return b.getvalue()
+
+
+def run_with_deadline(sh: Shell, script: str, seconds: float = 30):
+    """On its own thread with a deadline: a link followed without end must fail the test, not hang the run."""
+    result = []
+    worker = threading.Thread(target=lambda: result.append(sh.run(script)), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"{script!r} did not finish within {seconds} s"
+    return result[0]
+
+
+@pytest.mark.parametrize("cmd", ["find -L out | wc -l", "cp -rL out o2", "grep -R x out | wc -l", "zip -qr z.zip out", "chmod -R u+w out",
+                                 "ls -RL out | wc -l"])
+def test_link_fan_out_stops_at_the_time_limit(cmd):
+    # two links per level to the level below: no loop, but 2^30 paths
+    sh = Shell(max_call_duration=2)
+    sh.run("mkdir -p /tmp/w/out/d0 && cd /tmp/w && echo x > out/d0/f && for i in $(seq 1 30); do mkdir out/d$i; "
+           "ln -s ../d$((i-1)) out/d$i/a; ln -s ../d$((i-1)) out/d$i/b; done")
+    start = time.monotonic()
+    run_with_deadline(sh, "cd /tmp/w; " + cmd)
+    assert time.monotonic() - start < 10, cmd
+
+
+@pytest.mark.parametrize("setup", ["mkdir -p w/a; cd w; ln -s /tmp/w/w a/abs; mkdir a/b", "mkdir -p w/a/b; cd w; ln -s /tmp/w/w a/abs"])
+def test_copying_through_links_to_a_parent_ends(setup):
+    # cp -rL meets a directory it is already copying (through a link higher up, then down a plain child): a cyclic link, in either order
+    sh = Shell(max_call_duration=5)
+    r = run_with_deadline(sh, f"mkdir -p /tmp/w && cd /tmp/w && {setup}; echo x > a/b/f; ln -s .. a/b/up; ln -s . a/self; ln -s a l; ln -s l l2; "
+                              "cp -rL a zz; echo rc=$?; find zz | wc -l")
+    assert r.stdout == "rc=1\n4\n"  # zz, zz/abs, zz/b, zz/b/f
+    assert sum("cannot copy cyclic symbolic link" in line for line in r.stderr.split("\n")) == 5
 
 
 def test_a_link_grants_nothing_its_target_does_not():
