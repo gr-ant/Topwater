@@ -44,6 +44,7 @@ State persists between tool calls: working directory, variables, functions, alia
 | Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `less` `more` |
 | Text | `echo` `printf` `grep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `diff` `nl` `tac` `rev` `paste` `column` `seq` |
 | Documents and binary | `to-markdown` `xxd` `hexdump` `od` `strings` `base64` `md5sum` `sha1sum` `sha256sum` `sha512sum` |
+| Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
 | Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
 | System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `sudo` `su` |
 
@@ -333,6 +334,11 @@ announcing "this is a simulation" (see the README).
 - Loops stop after 100,000 iterations (`MaxLoopIterations`), and one tool call gets ten times that in total.
   Hitting a limit ends the whole tool call: runaway loops, functions or scripts that call themselves, `sed`
   branches and `jq` generators that never finish, and regular expressions that take more than 5 seconds.
+- Archives are untrusted. `tar` and `unzip` never write outside the target directory: names with `..` are
+  refused (tar) or cleaned (unzip), leading `/` is dropped, symlinks aren't created and hard links only copy files
+  inside the target. One extraction or decompression stops with an error past 64 MB (`MaxExtractBytes`) or
+  100,000 entries (`MaxExtractEntries`). Binary data survives pipes and redirects (`tar czf - . | gzip -l`,
+  `gzip -c f > f.gz`); in the tool output it shows as U+FFFD.
 - Tool output is cut at 30,000 characters with a note saying how much was dropped. Error output is cut
   separately, so the error message and exit code are always shown.
 - `set -e` and `pipefail` reset after every tool call, so one stray `set -e` can't affect later calls.

@@ -141,7 +141,7 @@ public static class ApiCommandExtensions
             {
                 try
                 {
-                    body = data == "-" ? Encoding.UTF8.GetBytes(ctx.StdinText)
+                    body = data == "-" ? ByteText.Encode(ctx.StdinText)
                         : data.StartsWith('@') ? ctx.Fs.ReadAllBytes(ctx.ResolvePath(data[1..]))
                         : Encoding.UTF8.GetBytes(data);
                 }

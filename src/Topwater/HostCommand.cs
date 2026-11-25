@@ -331,7 +331,7 @@ public sealed class HostCommand : IDisposable
             var readers = Task.WhenAll(PumpAsync(proc.StandardOutput.BaseStream, outBuf, readCts.Token), PumpAsync(proc.StandardError.BaseStream, errBuf, readCts.Token));
             try
             {
-                var input = Encoding.UTF8.GetBytes(ctx.StdinText);
+                var input = ByteText.Encode(ctx.StdinText);
                 await proc.StandardInput.BaseStream.WriteAsync(input, cts.Token);
                 proc.StandardInput.Close();
             }

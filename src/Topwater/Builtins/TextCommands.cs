@@ -278,10 +278,10 @@ internal static partial class Builtins
                     byte[] chunk = head
                         ? bytes.StartsWith('-') ? data[..Math.Max(0, data.Length - n)] : data[..Math.Min(n, data.Length)]
                         : bytes.StartsWith('+') ? data[Math.Min(data.Length, Math.Max(0, n - 1))..] : n > 0 ? data[Math.Max(0, data.Length - n)..] : [];
-                    ctx.Stdout.Write(Encoding.UTF8.GetString(chunk));
+                    ctx.Stdout.Write(ByteText.Decode(chunk));
                     continue;
                 }
-                var text = Encoding.UTF8.GetString(data);
+                var text = ByteText.Decode(data);
                 var spec = a.Value('n') ?? "10";
                 int count = CountArg(spec, "lines");
                 var lines = SplitLines(text);

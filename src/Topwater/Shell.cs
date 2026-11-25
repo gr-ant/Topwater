@@ -12,6 +12,10 @@ public sealed class ShellOptions
     public VirtualFileSystem? FileSystem { get; init; }
     /// <summary>Upper bound on iterations of any single loop, so a runaway `while true` can't hang the agent.</summary>
     public int MaxLoopIterations { get; init; } = 100_000;
+    /// <summary>Most bytes one tar/unzip extraction or gzip decompression may produce, so an archive bomb ends with an error instead of filling memory.</summary>
+    public long MaxExtractBytes { get; init; } = 64L << 20;
+    /// <summary>Most entries one tar or unzip run may extract or list.</summary>
+    public int MaxExtractEntries { get; init; } = 100_000;
 }
 
 public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
@@ -376,7 +380,7 @@ public sealed partial class Shell
             _procSubCount = 0;
         }
         LastExitCode = code;
-        return new ShellResult(stdout.ToString(), stderr.ToString(), code);
+        return new ShellResult(ByteText.Printable(stdout.ToString()), ByteText.Printable(stderr.ToString()), code);
     }
 
     /// <summary>A new bash process (bash -c, bash file, ./script.sh): $0, the file it runs (if any), and its own options (bash -e).</summary>
@@ -859,7 +863,7 @@ public sealed partial class Shell
     {
         "<<" => new StdinBuffer(await ExpandSingleAsync(r.Here!.Body, io, ct)),
         "<<<" => new StdinBuffer(await ExpandSingleAsync(r.Target!, io, ct) + "\n"),
-        _ => new StdinBuffer(Fs.ReadAllText(ResolvePath(await ExpandSingleAsync(r.Target!, io, ct)))),
+        _ => new StdinBuffer(Fs.ReadPipeText(ResolvePath(await ExpandSingleAsync(r.Target!, io, ct)))),
     };
 
     /// <summary>The writer for > >> >| &amp;> &amp;>>: /dev/null, /dev/stdout, /dev/stderr, or a file made by <paramref name="open"/>.</summary>

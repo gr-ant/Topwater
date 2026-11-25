@@ -891,7 +891,7 @@ internal static partial class Builtins
             var data = InputBytes(ctx, a.Positional, () => code = 1).SelectMany(i => i.Text).ToArray();
             if (a.Has('d'))
             {
-                try { ctx.Stdout.Write(Encoding.UTF8.GetString(Convert.FromBase64String(string.Concat(Encoding.UTF8.GetString(data).Where(c => !char.IsWhiteSpace(c)))))); }
+                try { ctx.Stdout.Write(ByteText.Decode(Convert.FromBase64String(string.Concat(Encoding.UTF8.GetString(data).Where(c => !char.IsWhiteSpace(c)))))); }
                 catch (FormatException) { throw new ShellException("invalid input"); }
                 return code;
             }

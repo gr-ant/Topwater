@@ -42,6 +42,7 @@ public sealed class VirtualFileSystem
 
         public void Store(string? text, byte[]? bytes, bool append)
         {
+            if (bytes == null && ByteText.HasEscapes(text)) bytes = ByteText.Encode(text!); // binary that came through a pipe
             if (bytes != null || (append && Data != null))
             {
                 bytes ??= System.Text.Encoding.UTF8.GetBytes(text!);
@@ -179,6 +180,9 @@ public sealed class VirtualFileSystem
 
     public string ReadAllText(string path) => ReadNode(path) is var f && f.Data == null ? f.Content : System.Text.Encoding.UTF8.GetString(f.Data);
 
+    /// <summary>What `cat` and `&lt;` put on a pipe: like <see cref="ReadAllText"/>, but a binary file's bytes survive (see <see cref="ByteText"/>).</summary>
+    internal string ReadPipeText(string path) => ReadNode(path) is var f && f.Data == null ? f.Content : ByteText.Decode(f.Data);
+
     /// <summary>The file's exact bytes (UTF-8 for files written as text).</summary>
     public byte[] ReadAllBytes(string path) => ReadNode(path) is var f && f.Data != null ? (byte[])f.Data.Clone() : f.Raw;
 
@@ -241,6 +245,14 @@ public sealed class VirtualFileSystem
             if (recursive && n is Dir d) foreach (var child in d.Children.Values) Walk(child);
         }
         Walk(node);
+    }
+
+    /// <summary>Sets a modification time (tar and unzip restoring one); as with utime(2), only the owner may.</summary>
+    internal void SetModifiedTime(string path, DateTime when)
+    {
+        var node = Find(path, out var denied) ?? throw new ShellException($"{path}: {Missing(denied)}");
+        if (Restricted && node.Owner != RunAs) throw new ShellException($"{path}: Operation not permitted");
+        node.Modified = when;
     }
 
     internal void SetReportedSize(string path, long size)

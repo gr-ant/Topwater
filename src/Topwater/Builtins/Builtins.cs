@@ -77,6 +77,7 @@ internal static partial class Builtins
         Jq.Register(shell);
         RegisterDocumentCommands(shell);
         RegisterBinaryCommands(shell);
+        RegisterArchiveCommands(shell);
     }
 
     static readonly Dictionary<string, string> Versions = new()
@@ -87,6 +88,7 @@ internal static partial class Builtins
         ["file"] = "file-5.45", ["sudo"] = "Sudo version 1.9.15p5", ["less"] = "less 590 (GNU regular expressions)", ["ps"] = "ps from procps-ng 4.0.4",
         ["free"] = "free from procps-ng 4.0.4", ["uptime"] = "uptime from procps-ng 4.0.4", ["column"] = "column from util-linux 2.39.3",
         ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3",
+        ["tar"] = "tar (GNU tar) 1.35", ["gzip"] = "gzip 1.12", ["gunzip"] = "gzip 1.12", ["zcat"] = "gzip 1.12",
     };
 
     static readonly HashSet<string> NoStandardOptions = ["sudo", "su", "echo", "printf", "test", "[", "true", "false", ":", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];
@@ -111,11 +113,11 @@ internal static partial class Builtins
 
     /// <summary>Reads each file argument (or stdin when there are none / "-"), reporting missing files to stderr.</summary>
     internal static IEnumerable<(string Name, string Text)> Inputs(CommandContext ctx, IReadOnlyList<string> files, Action onError, bool quiet = false) =>
-        Inputs(ctx, files, onError, ctx.Fs.ReadAllText, () => ctx.StdinText, quiet);
+        Inputs(ctx, files, onError, ctx.Fs.ReadPipeText, () => ctx.StdinText, quiet);
 
-    /// <summary>Like <see cref="Inputs(CommandContext, IReadOnlyList{string}, Action, bool)"/>, but the exact bytes (stdin as UTF-8).</summary>
+    /// <summary>Like <see cref="Inputs(CommandContext, IReadOnlyList{string}, Action, bool)"/>, but the exact bytes (stdin's too: see <see cref="ByteText"/>).</summary>
     internal static IEnumerable<(string Name, byte[] Text)> InputBytes(CommandContext ctx, IReadOnlyList<string> files, Action onError) =>
-        Inputs(ctx, files, onError, ctx.Fs.ReadAllBytes, () => Encoding.UTF8.GetBytes(ctx.StdinText), false);
+        Inputs(ctx, files, onError, ctx.Fs.ReadAllBytes, () => ByteText.Encode(ctx.StdinText), false);
 
     static IEnumerable<(string Name, T Text)> Inputs<T>(CommandContext ctx, IReadOnlyList<string> files, Action onError, Func<string, T> read, Func<T> stdin, bool quiet)
     {
