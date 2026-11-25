@@ -282,6 +282,9 @@ public sealed partial class Shell
     public int LastExitCode { get; private set; }
 
     internal Dictionary<string, FunctionDef> Functions { get; private set; } = new(StringComparer.Ordinal);
+    /// <summary>bash's hash table: where a command name was found on PATH, and how often it was looked up since.</summary>
+    internal Dictionary<string, (string Path, int Hits)> Hashed { get; private set; } = new(StringComparer.Ordinal);
+    string? _hashedFor; // the PATH the table was filled from: any change to PATH empties it
     internal List<string> Positional { get; set; } = [];
     internal bool Errexit { get; set; }
     internal bool Pipefail { get; set; }
@@ -588,6 +591,7 @@ public sealed partial class Shell
         Aliases = new(StringComparer.Ordinal);
         Functions = Functions.Where(f => ExportedFunctions.Contains(f.Key)).ToDictionary(StringComparer.Ordinal);
         Errexit = Pipefail = Nounset = Xtrace = Noglob = Noclobber = false;
+        Hashed = new(StringComparer.Ordinal);
         _arg0 = process.Arg0;
         process.Setup?.Invoke();
     }
@@ -605,6 +609,7 @@ public sealed partial class Shell
         Dictionary<string, FunctionDef> Functions, List<string> Positional, bool Errexit, bool Pipefail, bool Nounset,
         HashSet<string> Shopts, Dictionary<string, string> Traps, Dictionary<string, ShellArray> Arrays)
     {
+        public required Dictionary<string, (string Path, int Hits)> Hashed { get; init; }
         public required (bool Noglob, bool Xtrace, bool Noclobber, bool IfsUnset) Flags { get; init; }
         public required Dictionary<string, string> Attrs { get; init; }
         public long VariableChars { get; init; }
@@ -617,7 +622,7 @@ public sealed partial class Shell
         _epoch = NextEpoch();
         _subshell++;
         return new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps), new(Arrays))
-            { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs), VariableChars = _variableChars };
+            { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs), VariableChars = _variableChars, Hashed = new(Hashed) };
     }
 
     void RestoreState(State s)
@@ -637,6 +642,7 @@ public sealed partial class Shell
         Nounset = s.Nounset;
         Shopts = s.Shopts;
         Traps = s.Traps;
+        Hashed = s.Hashed;
         _cwd = Fs.IsDirectory(s.Cwd) ? s.Cwd : "/";
     }
 
@@ -1245,6 +1251,22 @@ public sealed partial class Shell
                 name = VirtualFileSystem.GetName(path);
             else return await RunScriptFileAsync(name, path, argv, io, ct);
         }
+        else if (!Builtins.IsShellBuiltin(this, name) && !IsUnfiled(name))
+        {
+            if (HashLookup(name) is not { } found)
+            {
+                found = SearchPath(name);
+                if (found == null)
+                {
+                    io.Err.WriteLine(Environment.GetValueOrDefault("PATH", "") == "" ? $"{ErrPrefix}{name}: No such file or directory"
+                        : $"{argv[0]}: command not found (run 'help' to list available commands)");
+                    return 127;
+                }
+                Hashed[name] = (found, 1);
+            }
+            if (StubCommand(found) is not { } registered) return await RunScriptFileAsync(found, ResolvePath(found), [found, .. argv.Skip(1)], io, ct);
+            name = registered;
+        }
         if (!_commands.TryGetValue(name, out var cmd))
         {
             io.Err.WriteLine($"{argv[0]}: command not found (run 'help' to list available commands)");
@@ -1282,23 +1304,119 @@ public sealed partial class Shell
 
     static readonly Regex BadNumber = new("input string '(.*)' was not", RegexOptions.Singleline);
 
+    /// <summary>A registered command with no program file (a shell-only builtin, or an app command added where there is no
+    /// /usr/bin): it runs whatever PATH says.</summary>
+    internal bool IsUnfiled(string name) => _commands.ContainsKey(name) && !name.Contains('/') && !Fs.IsFile("/usr/bin/" + name) && !Fs.IsFile("/bin/" + name);
+
+    /// <summary>The registered command a program file stands for, or null when <paramref name="path"/> is not one of the stubs.</summary>
+    internal string? StubCommand(string path)
+    {
+        var abs = ResolvePath(path);
+        if (!Fs.IsFile(abs) || !Fs.CanRead(abs) || Fs.ReadAllText(abs) != ExecutableStub) return null;
+        var name = VirtualFileSystem.GetName(Fs.RealPath(abs, out _) ?? abs);
+        return _commands.ContainsKey(name) ? name : null;
+    }
+
+    /// <summary>Where PATH would have <paramref name="name"/>, directory by directory, as written; an empty entry is the cwd.</summary>
+    IEnumerable<string> PathCandidates(string name) =>
+        Environment.GetValueOrDefault("PATH", "").Split(':').Select(d => d.Length == 0 ? "./" + name : d.TrimEnd('/') + "/" + name);
+
+    /// <summary>PATH search as bash does it: the first executable regular file named <paramref name="name"/> in a directory the
+    /// agent can search, else the first one that isn't executable (running it says "Permission denied"), else null.</summary>
+    internal string? SearchPath(string name)
+    {
+        string? denied = null;
+        foreach (var p in PathCandidates(name))
+        {
+            var abs = ResolvePath(p);
+            if (!Fs.IsFile(abs)) continue;
+            if (Fs.CanExecute(abs)) return p;
+            denied ??= p;
+        }
+        return denied;
+    }
+
+    /// <summary>`type -a`, `which -a`: every executable regular file named <paramref name="name"/> on PATH.</summary>
+    internal IEnumerable<string> SearchPathAll(string name) =>
+        PathCandidates(name).Where(p => ResolvePath(p) is var abs && Fs.IsFile(abs) && Fs.CanExecute(abs));
+
+    /// <summary>The hash table's entry for <paramref name="name"/>, counting a hit; the table empties first if PATH changed.</summary>
+    internal string? HashLookup(string name)
+    {
+        SyncHashed();
+        if (!Hashed.TryGetValue(name, out var h)) return null;
+        Hashed[name] = (h.Path, h.Hits + 1);
+        return h.Path;
+    }
+
+    /// <summary>`type`, `command -v`: the program <paramref name="name"/> runs, from the hash table (counting a hit) or PATH; an
+    /// app command with no program file is reported in /usr/bin as before.</summary>
+    internal (string Path, bool Hashed)? Locate(string name)
+    {
+        if (name.Contains('/')) return ResolvePath(name) is var abs && Fs.IsFile(abs) && Fs.CanExecute(abs) ? (name, false) : null;
+        if (HashLookup(name) is { } h) return (h, true);
+        if (SearchPath(name) is { } p) return (p, false);
+        return IsAppOnly(name) ? ("/usr/bin/" + name, false) : null;
+    }
+
+    /// <summary>`type -a`, `which`: every program file <paramref name="name"/> could run, in PATH order.</summary>
+    internal List<string> LocateAll(string name)
+    {
+        if (name.Contains('/')) return Locate(name) is { } l ? [l.Path] : [];
+        var all = SearchPathAll(name).ToList();
+        if (all.Count == 0 && IsAppOnly(name)) all.Add("/usr/bin/" + name);
+        return all;
+    }
+
+    bool IsAppOnly(string name) => IsUnfiled(name) && !Builtins.IsShellBuiltin(this, name);
+
+    internal void SyncHashed()
+    {
+        var path = Environment.GetValueOrDefault("PATH");
+        if (path != _hashedFor) { Hashed.Clear(); _hashedFor = path; }
+    }
+
     async Task<int> RunScriptFileAsync(string name, string path, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
         if (Fs.IsDirectory(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: Is a directory"); return 126; }
         if (!Fs.IsFile(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: No such file or directory"); return 127; }
         if (!Fs.CanExecute(path) || !Fs.CanRead(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: Permission denied"); return 126; }
         var text = Fs.ReadAllText(path);
-        if (text.StartsWith(ExecutableStub[..4])) { io.Err.WriteLine($"{ErrPrefix}{name}: cannot execute binary file"); return 126; }
+        if (text.StartsWith(ExecutableStub[..4]))
+        {
+            if (StubCommand(path) is { } stub) return await InvokeAsync([stub, .. argv.Skip(1)], io, ct, skipFunctions: true);
+            io.Err.WriteLine($"{ErrPrefix}{name}: cannot execute binary file");
+            return 126;
+        }
         if (text.StartsWith("#!"))
         {
-            var interp = text[2..(text.IndexOf('\n') is var nl and >= 0 ? nl : text.Length)].Trim();
-            if (!Regex.IsMatch(interp, @"(^|/|\s)(ba)?sh(\s|$)"))
-            {
-                io.Err.WriteLine($"{ErrPrefix}{name}: {interp.Split(' ')[0]}: bad interpreter: No such file or directory");
-                return 126;
-            }
+            var line = text[2..(text.IndexOf('\n') is var nl and >= 0 ? nl : text.Length)].Trim();
+            if (!Regex.IsMatch(line, @"(^|/|\s)(ba)?sh(\s|$)")) return await RunInterpreterAsync(name, line, argv, io, ct);
         }
         return await RunScriptTextAsync(text, io, subshell: true, ct, argv.Skip(1).ToList(), new NewProcess(name, name));
+    }
+
+    /// <summary>A #! line naming another program: like the kernel, run it with its one optional argument, the script and the
+    /// script's arguments, when it is one of the shell's commands.</summary>
+    async Task<int> RunInterpreterAsync(string name, string line, IReadOnlyList<string> argv, Io io, CancellationToken ct)
+    {
+        var parts = line.Split([' ', '\t'], 2);
+        if (StubCommand(parts[0]) is not { } program)
+        {
+            io.Err.WriteLine($"{ErrPrefix}{name}: cannot execute: required file not found");
+            return 127;
+        }
+        var opt = parts.Length > 1 ? parts[1].Trim() : "";
+        List<string> words = opt == "" ? [] : program == "env" && opt.StartsWith("-S") ? [.. opt[2..].Split((char[])[' ', '\t'], StringSplitOptions.RemoveEmptyEntries)] : [opt];
+        if (program != "env") return await InvokeAsync([program, .. words, name, .. argv.Skip(1)], io, ct, skipFunctions: true);
+        // shortcut: env in a #! line only looks the program up on PATH; env's own options are not supported
+        if (words.Count == 0 || !IsUnfiled(words[0]) && !SearchPathAll(words[0]).Any())
+        {
+            io.Err.WriteLine($"{parts[0]}: \u2018{(words.Count > 0 ? words[0] : "")}\u2019: No such file or directory");
+            if (opt.Contains(' ')) io.Err.WriteLine($"{parts[0]}: use -[v]S to pass options in shebang lines");
+            return 127;
+        }
+        return await InvokeAsync([.. words, name, .. argv.Skip(1)], io, ct, skipFunctions: true);
     }
 
     async Task<int> CallFunctionAsync(Command body, IReadOnlyList<string> argv, Io io, CancellationToken ct)
@@ -1446,6 +1564,7 @@ public sealed partial class Shell
         CheckWritable(name);
         if (name == "SECONDS" && long.TryParse(value, out var seconds)) { _secondsBase = Now.AddSeconds(-seconds); return; }
         if (name == "RANDOM") { _random = (ulong)(long.TryParse(value, out var seed) ? seed : 0); return; }
+        if (name == "PATH") Hashed.Clear(); // even to the same value
         var array = Arrays.ContainsKey(name);
         value = Converted(name, value, !append ? null : array ? GetElement(name, "0") : Environment.GetValueOrDefault(name));
         if (array) SetElement(name, "0", value);

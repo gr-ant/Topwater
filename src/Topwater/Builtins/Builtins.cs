@@ -398,9 +398,13 @@ internal static partial class Builtins
         shell.Register("which", ctx =>
         {
             int code = 0;
+            bool all = ctx.Args.Contains("-a");
             foreach (var a in ctx.Args.Where(a => !a.StartsWith('-')))
-                if (ctx.Shell.Commands.ContainsKey(a)) ctx.Stdout.WriteLine($"/usr/bin/{a}");
-                else code = 1;
+            {
+                var found = ctx.Shell.LocateAll(a);
+                if (found.Count == 0) code = 1;
+                foreach (var p in all ? found : found.Take(1)) ctx.Stdout.WriteLine(p);
+            }
             return code;
         }, "Locate a command");
 
@@ -413,10 +417,12 @@ internal static partial class Builtins
                 if (opts.Has('t') || opts.Has('p') || opts.Has('P'))
                 {
                     var kind = ctx.Shell.Aliases.ContainsKey(a) ? "alias" : ShellKeywords.Contains(a) ? "keyword" : ctx.Shell.Functions.ContainsKey(a) ? "function"
-                        : IsShellBuiltin(ctx.Shell, a) ? "builtin" : ctx.Shell.Commands.ContainsKey(a) ? "file" : null;
+                        : IsShellBuiltin(ctx.Shell, a) ? "builtin" : null;
+                    List<string> paths = kind != null && !opts.Has('P') ? [] : opts.Has('a') ? ctx.Shell.LocateAll(a) : ctx.Shell.Locate(a) is { } l ? [l.Path] : [];
+                    kind ??= paths.Count > 0 ? "file" : null;
                     if (kind == null) { code = 1; continue; }
                     if (opts.Has('t')) ctx.Stdout.WriteLine(kind);
-                    else if (kind == "file" || (opts.Has('P') && ctx.Shell.Commands.ContainsKey(a))) ctx.Stdout.WriteLine($"/usr/bin/{a}");
+                    else foreach (var p in paths) ctx.Stdout.WriteLine(p);
                     continue;
                 }
                 if (!Describe(ctx, a, opts.Has('a'))) code = 1;

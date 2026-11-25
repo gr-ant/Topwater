@@ -35,7 +35,7 @@ public class CorpusTests
         string? Str(string name) => c.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         var script = Str("script")!;
         var sh = new Shell();
-        await sh.RunAsync("mkdir -p /tmp/w && cd /tmp/w");
+        await sh.RunAsync("mkdir -p /tmp/w && cd /tmp/w && hash -r");
         if (Str("setup") is { } setup) await sh.RunAsync(setup);
         var r = await sh.RunAsync(script);
         if (Str("toolOutput") is { } toolOutput)

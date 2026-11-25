@@ -60,12 +60,16 @@ internal static partial class Builtins
     internal static bool Describe(CommandContext ctx, string a, bool all)
     {
         var sh = ctx.Shell;
-        if (sh.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"{a} is aliased to `{v}'");
-        else if (ShellKeywords.Contains(a)) ctx.Stdout.WriteLine($"{a} is a shell keyword");
-        else if (sh.Functions.TryGetValue(a, out var f)) ctx.Stdout.WriteLine($"{a} is a function\n{a} () \n{f.Source}");
-        else if (IsShellBuiltin(sh, a)) ctx.Stdout.WriteLine($"{a} is a shell builtin");
-        else if (sh.Commands.ContainsKey(a)) ctx.Stdout.WriteLine($"{a} is /usr/bin/{a}");
-        else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}type: {a}: not found"); return false; }
+        var lines = new List<string>();
+        if (sh.Aliases.TryGetValue(a, out var v)) lines.Add($"{a} is aliased to `{v}'");
+        if (ShellKeywords.Contains(a)) lines.Add($"{a} is a shell keyword");
+        if (sh.Functions.TryGetValue(a, out var f)) lines.Add($"{a} is a function\n{a} () \n{f.Source}");
+        if (IsShellBuiltin(sh, a)) lines.Add($"{a} is a shell builtin");
+        if (all) lines.AddRange(sh.LocateAll(a).Select(p => $"{a} is {p}"));
+        else if (lines.Count == 0 && sh.Locate(a) is { } l)
+            lines.Add(!l.Hashed ? $"{a} is {l.Path}" : $"{a} is hashed ({(l.Path.StartsWith('/') || l.Path.StartsWith("./") ? "" : "./")}{l.Path})");
+        if (lines.Count == 0) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}type: {a}: not found"); return false; }
+        foreach (var line in all ? lines : lines.Take(1)) ctx.Stdout.WriteLine(line);
         return true;
     }
 
@@ -481,9 +485,37 @@ internal static partial class Builtins
 
         shell.Register("hash", ctx =>
         {
-            int code = 0;
-            foreach (var n in ctx.Args.Where(a => !a.StartsWith('-')))
-                if (!ctx.Shell.Commands.ContainsKey(n)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}hash: {n}: not found"); code = 1; }
+            var sh = ctx.Shell;
+            sh.SyncHashed();
+            int code = 0, i = 0;
+            bool show = false, delete = false;
+            string? path = null;
+            for (; i < ctx.Args.Count && ctx.Args[i].Length > 1 && ctx.Args[i][0] == '-'; i++)
+            {
+                if (ctx.Args[i] == "--") { i++; break; }
+                foreach (var ch in ctx.Args[i][1..])
+                    if (ch == 'r') sh.Hashed.Clear();
+                    else if (ch == 't') show = true;
+                    else if (ch == 'd') delete = true;
+                    else if (ch == 'p') { path = i + 1 < ctx.Args.Count ? ctx.Args[++i] : throw new UsageException("-p: option requires an argument"); break; }
+                    else if (ch != 'l') throw new UsageException($"-{ch}: invalid option");
+            }
+            var names = ctx.Args.Skip(i).ToList();
+            if (i == 0 && names.Count == 0)
+            {
+                if (sh.Hashed.Count == 0) ctx.Stdout.WriteLine("hash: hash table empty");
+                else ctx.Stdout.Write("hits\tcommand\n" + string.Concat(sh.Hashed.Values.Select(h => $"{h.Hits,4}\t{h.Path}\n")));
+            }
+            foreach (var n in names)
+            {
+                if (show && sh.HashLookup(n) is { } hashed) ctx.Stdout.WriteLine(names.Count > 1 ? $"{n}\t{hashed}" : hashed);
+                else if (delete && sh.Hashed.Remove(n)) { }
+                else if (path != null) sh.Hashed[n] = (path, 0);
+                else if (show || delete || n.Contains('/')) { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
+                else if (IsShellBuiltin(sh, n) || sh.Functions.ContainsKey(n) || sh.IsUnfiled(n)) { }
+                else if (sh.SearchPathAll(n).FirstOrDefault() is { } found) sh.Hashed[n] = (found, 0);
+                else { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
+            }
             return code;
         }, "Remember command locations");
 
@@ -571,7 +603,7 @@ internal static partial class Builtins
                 if (args[0] == "-V") { if (!Describe(ctx, n, false)) code = 1; continue; }
                 if (ctx.Shell.Aliases.TryGetValue(n, out var al)) ctx.Stdout.WriteLine($"alias {n}='{al}'");
                 else if (ShellKeywords.Contains(n) || ctx.Shell.Functions.ContainsKey(n) || IsShellBuiltin(ctx.Shell, n)) ctx.Stdout.WriteLine(n);
-                else if (ctx.Shell.Commands.ContainsKey(n)) ctx.Stdout.WriteLine($"/usr/bin/{n}");
+                else if (ctx.Shell.Locate(n) is { } l) ctx.Stdout.WriteLine(l.Path);
                 else code = 1;
             }
             return code;

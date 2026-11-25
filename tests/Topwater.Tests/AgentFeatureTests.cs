@@ -13,6 +13,19 @@ public class AgentFeatureTests
     }
 
     [Fact]
+    public async Task AppCommandsGoThroughPathLikePrograms()
+    {
+        var sh = new Shell().Register("greet", ctx => { ctx.Stdout.WriteLine("app " + string.Join(' ', ctx.Args)); return 0; });
+        Assert.Equal("app a\n/usr/bin/greet\n", await Out(sh, "greet a; command -v greet"));
+        // a script earlier on PATH shadows it, as a wrapper would
+        await Out(sh, "mkdir -p ~/bin && printf '#!/bin/sh\\necho wrapped; /usr/bin/greet \"$@\"\\n' > ~/bin/greet && chmod +x ~/bin/greet");
+        Assert.Equal("wrapped\napp b\n", await Out(sh, "PATH=~/bin:$PATH greet b"));
+        Assert.Equal(127, (await sh.RunAsync("PATH=/nowhere greet")).ExitCode);
+        // shell builtins have no program file and keep working whatever PATH holds
+        Assert.Equal("x\n", await Out(sh, "PATH=/nowhere; cd /tmp; echo x"));
+    }
+
+    [Fact]
     public async Task ScriptsRunWithArguments()
     {
         var sh = new Shell();
@@ -21,8 +34,8 @@ public class AgentFeatureTests
         Assert.Equal("script a  (1)\narg: a\n", await Out(sh, "bash run.sh a"));
         await Out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py && chmod +x p.py");
         var r = await sh.RunAsync("./p.py");
-        Assert.Equal(126, r.ExitCode);
-        Assert.Contains("bad interpreter", r.Stderr);
+        Assert.Equal(127, r.ExitCode);
+        Assert.Contains("python3\u2019: No such file or directory", r.Stderr);
         Assert.Equal(127, (await sh.RunAsync("./missing.sh")).ExitCode);
         Assert.Equal(2, (await sh.RunAsync("exit 2")).ExitCode);
         var e = await sh.RunAsync("set -e; echo one; false; echo two");

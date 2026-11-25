@@ -437,6 +437,7 @@ public sealed partial class Shell
         Fs.ReplaceWith(snapshot.Fs);
         ApplyState(snapshot.State);
         SyncProgramFiles();
+        Hashed.Clear(); // the restored machine's programs may be elsewhere
     }
 
     /// <summary>
