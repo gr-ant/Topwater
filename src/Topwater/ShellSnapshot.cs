@@ -87,6 +87,7 @@ public sealed class ShellSnapshot
             SecondsBase = FormatTime(st.SecondsBase), LastArg = st.LastArg, PipeStatus = st.PipeStatus,
             Getopts = [st.Getopts.Optind, st.Getopts.Pos], Jobs = st.Jobs.Select(j => new[] { j.Key, j.Value }).ToList(),
             LastBackgroundPid = st.LastBackgroundPid, NextPid = st.NextPid,
+            Clock = st.Clock is { } clock ? FormatTime(clock) : null, Random = st.Random?.ToString(CultureInfo.InvariantCulture),
         };
         using var m = zip.CreateEntry("manifest.json", CompressionLevel.Fastest).Open();
         JsonSerializer.Serialize(m, manifest, Json);
@@ -267,6 +268,8 @@ public sealed class ShellSnapshot
             LastExitCode = m.LastExitCode, SecondsBase = ParseTime(m.SecondsBase, "secondsBase"), LastArg = m.LastArg ?? "",
             PipeStatus = m.PipeStatus ?? [], Getopts = m.Getopts is [var i, var p] ? (i, p) : default, Jobs = jobs,
             LastBackgroundPid = m.LastBackgroundPid, NextPid = m.NextPid,
+            Clock = m.Clock is null ? null : ParseTime(m.Clock, "clock"),
+            Random = m.Random is null ? null : ulong.TryParse(m.Random, NumberStyles.None, CultureInfo.InvariantCulture, out var r) ? r : throw Bad("bad random state"),
         };
     }
 
@@ -328,6 +331,9 @@ public sealed class ShellSnapshot
         public List<int[]>? Jobs { get; set; }
         public int LastBackgroundPid { get; set; }
         public int NextPid { get; set; }
+        // added in version 1 as optional fields: set only by a shell with a virtual clock / a random seed
+        public string? Clock { get; set; }
+        public string? Random { get; set; }
     }
 
     sealed class FileEntry
@@ -396,6 +402,9 @@ internal sealed class ShellState
     public required Dictionary<int, int> Jobs { get; init; }
     public int LastBackgroundPid { get; init; }
     public int NextPid { get; init; }
+    /// <summary>The virtual clock's time (ShellOptions.StartTime) and the seeded random generator's state, when the shell has them.</summary>
+    public DateTime? Clock { get; init; }
+    public ulong? Random { get; init; }
 
     public bool IsExported(string name) =>
         Attributes.TryGetValue(name, out var a) && a.Contains('x') || Variables.ContainsKey(name) && !Unexported.Contains(name);
@@ -405,7 +414,7 @@ public sealed partial class Shell
 {
     /// <summary>Captures the machine (files and session) as an immutable <see cref="ShellSnapshot"/>. Cheap: file contents
     /// and arrays are shared, not copied. Call it between calls, not from inside a running command.</summary>
-    public ShellSnapshot Snapshot() => new(Fs.Clone(), CaptureState(), Options.User, Options.Hostname, DateTime.UtcNow);
+    public ShellSnapshot Snapshot() => new(Fs.Clone(), CaptureState(), Options.User, Options.Hostname, Now);
 
     /// <summary>Puts the machine back as <paramref name="snapshot"/> captured it. This shell keeps its own registered commands
     /// (and the /usr/bin entries that list them); the snapshot is unchanged and can be restored again.</summary>
@@ -461,7 +470,7 @@ public sealed partial class Shell
             SetOptions = [.. OptionList.Where(o => o.On && SnapshotSetOptions.Contains(o.Name)).Select(o => o.Name)], IfsUnset = _ifsUnset, Shopts = [.. Shopts],
             Positional = [.. Positional], DirStack = [.. DirStack], History = [.. _history], LastExitCode = LastExitCode,
             SecondsBase = _secondsBase, LastArg = _lastArg, PipeStatus = [.. _pipeStatus], Getopts = GetoptsState, Jobs = new(_jobs),
-            LastBackgroundPid = _lastBg, NextPid = _nextPid,
+            LastBackgroundPid = _lastBg, NextPid = _nextPid, Clock = _virtualNow, Random = _random,
         };
     }
 
@@ -495,6 +504,9 @@ public sealed partial class Shell
         _jobs.Clear(); foreach (var (pid, code) in s.Jobs) _jobs[pid] = code;
         _lastBg = s.LastBackgroundPid;
         _nextPid = s.NextPid;
+        // a deterministic shell picks up the time and random state where the snapshot left them; another keeps its own
+        if (_virtualNow != null && s.Clock is { } clock) _virtualNow = clock;
+        if (_random != null && s.Random is { } random) _random = random;
         _variableChars = Environment.Sum(e => (long)e.Key.Length + e.Value.Length) + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length));
         _cwd = Fs.IsDirectory(s.Cwd) ? s.Cwd : "/";
     }

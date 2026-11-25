@@ -77,6 +77,9 @@ public sealed class VirtualFileSystem
 
     Dir _root = new() { Mode = DefaultDirMode };
 
+    /// <summary>Where new modification times come from: the owning shell's clock (virtual when ShellOptions.StartTime is set).</summary>
+    internal Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
+
     /// <summary>Most bytes the files may hold in total; the agent's writes past it fail with "No space left on device".
     /// Writes from your app are counted but never refused. <see cref="Shell"/> sets it from <see cref="ShellOptions.MaxFileSystemBytes"/>.</summary>
     public long Capacity { get; set; } = long.MaxValue;
@@ -250,16 +253,16 @@ public sealed class VirtualFileSystem
             if (existing is not FileNode f) throw new ShellException($"{path}: Is a directory");
             Require(f, 2, path);
             f.Store(content, data, append, d => Reserve(d, path));
-            f.Modified = DateTime.UtcNow;
+            f.Modified = Clock();
         }
         else
         {
             Require(dir, 2, path);
-            var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode };
+            var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode, Modified = Clock() };
             file.Store(content, data, false, d => Reserve(d, path));
             dir.Children[name] = file;
         }
-        dir.Modified = DateTime.UtcNow;
+        dir.Modified = Clock();
     }
 
     /// <summary>Back-dates a path (and optionally everything under it), so system files don't all look brand new.</summary>
@@ -292,7 +295,7 @@ public sealed class VirtualFileSystem
         if (Find(path, out var denied) is { } n)
         {
             Require(n, 2, path);
-            n.Modified = DateTime.UtcNow;
+            n.Modified = Clock();
         }
         else if (denied) throw new ShellException($"{path}: Permission denied");
         else WriteAllText(path, "");
@@ -309,8 +312,8 @@ public sealed class VirtualFileSystem
         if (parents && !Exists(GetParent(path))) CreateDirectory(GetParent(path), true);
         var dir = ParentDir(path);
         Require(dir, 2, path);
-        dir.Children[GetName(path)] = new Dir { Owner = RunAs ?? dir.Owner, Mode = DefaultDirMode };
-        dir.Modified = DateTime.UtcNow;
+        dir.Children[GetName(path)] = new Dir { Owner = RunAs ?? dir.Owner, Mode = DefaultDirMode, Modified = Clock() };
+        dir.Modified = Clock();
     }
 
     /// <summary>Entry names in a directory, sorted ordinally.</summary>
@@ -375,15 +378,15 @@ public sealed class VirtualFileSystem
                 denied(path, n is Dir);
                 return null;
             }
-            if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode };
-            var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode };
+            if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode, Modified = Clock() };
+            var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode, Modified = Clock() };
             foreach (var (k, v) in ((Dir)n).Children)
                 if (Clone(v, path + "/" + k) is { } c) copy.Children[k] = c;
             return copy;
         }
         if (Clone(node, source) is not { } clone) return;
         // copying onto an existing file writes into it, keeping its owner and mode, as cp does
-        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = DateTime.UtcNow; }
+        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = Clock(); }
         else
         {
             Reserve(TreeSize(clone) - (target == null ? 0 : TreeSize(target)), dest);

@@ -585,7 +585,7 @@ internal static partial class Builtins
         {
             if (ctx.Args.Count == 0) throw new ShellException("missing operand");
             var total = ctx.Args.Aggregate(TimeSpan.Zero, (t, a) => t + ParseDuration(a));
-            await Task.Delay(total, ctx.CancellationToken);
+            await ctx.Shell.SleepAsync(total, ctx.CancellationToken);
             return 0;
         }, "Pause for a number of seconds");
 
@@ -595,15 +595,15 @@ internal static partial class Builtins
             if (args.Count < 2) throw new ShellException("missing operand", 125);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
             cts.CancelAfter(ParseDuration(args[0]));
-            try { return await ctx.Shell.InvokeAsync(args.Skip(1).ToList(), ctx.Io, cts.Token); }
+            try { return await ctx.Shell.WithVirtualTimeoutAsync(ParseDuration(args[0]), () => ctx.Shell.InvokeAsync(args.Skip(1).ToList(), ctx.Io, cts.Token)) ?? 124; }
             catch (OperationCanceledException) when (!ctx.CancellationToken.IsCancellationRequested) { return 124; }
         }, "Run a command with a time limit");
 
         shell.Register("time", async ctx =>
         {
-            var sw = Stopwatch.StartNew();
+            var elapsed = ctx.Shell.StartTimer();
             int code = ctx.Args.Count == 0 ? 0 : await ctx.Shell.InvokeAsync(ctx.Args.ToList(), ctx.Io, ctx.CancellationToken);
-            var t = sw.Elapsed;
+            var t = elapsed();
             ctx.Stderr.Write($"\nreal\t{(int)t.TotalMinutes}m{t.TotalSeconds % 60:0.000}s\nuser\t0m0.000s\nsys\t0m0.000s\n");
             return code;
         }, "Time a command");
@@ -931,7 +931,7 @@ internal static partial class Builtins
             var a = Args.Parse(ctx.Args, "dqu", "pt", "directory=d,quiet=q,tmpdir=p");
             var template = a.Positional.FirstOrDefault() ?? "tmp.XXXXXXXXXX";
             const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            var name = System.Text.RegularExpressions.Regex.Replace(template, "X{3,}$", m => new string(Enumerable.Range(0, m.Length).Select(_ => chars[Random.Shared.Next(chars.Length)]).ToArray()));
+            var name = System.Text.RegularExpressions.Regex.Replace(template, "X{3,}$", m => new string(Enumerable.Range(0, m.Length).Select(_ => chars[ctx.Shell.NextRandom(chars.Length)]).ToArray()));
             var path = template.Contains('/') && a.Value('p') == null ? ctx.ResolvePath(name) : VirtualFileSystem.Normalize(a.Value('p') ?? "/tmp", name);
             if (a.Has('d')) ctx.Fs.CreateDirectory(path); else ctx.Fs.WriteAllText(path, "");
             ctx.Stdout.WriteLine(path);
@@ -988,7 +988,7 @@ internal static partial class Builtins
         }, "Print user and group IDs");
         shell.Register("uptime", ctx =>
         {
-            ctx.Stdout.WriteLine(ctx.Args.Contains("-p") ? "up 3 days, 4 hours, 12 minutes" : $" {DateTime.UtcNow:HH:mm:ss} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01");
+            ctx.Stdout.WriteLine(ctx.Args.Contains("-p") ? "up 3 days, 4 hours, 12 minutes" : $" {ctx.Shell.Now:HH:mm:ss} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01");
             return 0;
         }, "Show how long the system has been running");
         shell.Register("free", ctx =>

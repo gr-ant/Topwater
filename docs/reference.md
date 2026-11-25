@@ -16,6 +16,7 @@ show their APIs and list what they don't have yet.
 - [The tool description](#the-tool-description)
 - [Snapshots](#snapshots)
 - [Containers](#containers)
+- [Deterministic runs](#deterministic-runs)
 - [Limits and safety](#limits-and-safety)
 - [Not supported](#not-supported)
 
@@ -440,8 +441,10 @@ What is not captured, on purpose:
   connection serves both shells). Host programs are not carried into a fork, because they are bound to the parent's
   files and disk mirror: register them again on the fork. `Load` gives a shell with only the built-ins, so register
   your commands again, or configure a shell and restore into it as shown above.
-- **`RANDOM`**, which has no seed to save, and the shell's options (`ShellOptions`: limits, user, host name), which
-  belong to whoever creates the shell. Without options, `Shell.Load` uses the snapshot's user and host name.
+- **The shell's options** (`ShellOptions`: limits, user, host name, clock, seed), which belong to whoever creates the
+  shell. Without options, `Shell.Load` uses the snapshot's user and host name. A shell made with a virtual clock or a
+  random seed (see [Deterministic runs](#deterministic-runs)) also saves the clock's time and the generator's state,
+  and restoring into such a shell carries on from there; otherwise `RANDOM` stays unpredictable.
 
 `Restore` replaces the filesystem object's contents in place. If several shells share one `ShellOptions.FileSystem`,
 they all see the restored files.
@@ -457,7 +460,9 @@ contents of different files can be read one at a time. It contains:
   UTF-8 text), an optional `reportedSize` and the `blob` that holds the contents. Parents come before their
   children. `variables` lists `name`, `value`, `attrs` (the `declare` letters), `exported` and `array` (`assoc`,
   `next`, `items` as `[key, value]` pairs). `functions` lists `name`, `body` as written, and `exported`. Then
-  `aliases`, `set`, `shopt`, `traps`, `positional`, `dirStack`, `history`, `lastExitCode` and the rest.
+  `aliases`, `set`, `shopt`, `traps`, `positional`, `dirStack`, `history`, `lastExitCode` and the rest. A
+  deterministic shell adds `clock` (the virtual time, ISO 8601 UTC) and `random` (the generator's state, a decimal
+  string); both are optional and absent otherwise.
 - `blobs/<sha256>`: each distinct file content once, named by its SHA-256. Identical files (all the `/usr/bin` stubs)
   are stored once, and after loading they share one copy in memory again.
 
@@ -685,6 +690,31 @@ Container content is untrusted, like `ShellSnapshot.Load`:
 Building an image runs the generated `setup.sh` as root inside the image build. That is docker's sandbox, not your host.
 
 The docker tests are marked `[DockerFact]` and skip when docker isn't available.
+
+## Deterministic runs
+
+By default the machine reads the host's clock and picks random numbers unpredictably, like a real one. To make a run
+repeat exactly (for recordings, regression tests and replays) give it a virtual clock and a seed:
+
+```csharp
+var shell = new Shell(new ShellOptions
+{
+    StartTime = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),   // the machine's time starts here
+    RandomSeed = 1,                                                       // $RANDOM, mktemp names
+});
+await shell.RunAsync("date; sleep 3600; date");   // returns at once: Fri Jan  2 03:04:05 UTC 2026, then 04:04:05
+```
+
+| Option | Effect when set |
+|---|---|
+| `StartTime` | The clock starts at this time and stands still. `sleep` moves it forward instantly instead of waiting; `timeout N` measures virtual time, so `timeout 5 sleep 10` returns 124 at once with the clock 5 s on. `date`, file modification times, `SECONDS`, `EPOCHSECONDS`, `EPOCHREALTIME`, `uptime`, `time`, `find -mmin`/`-mtime`, jq's `now` and printf's `%(fmt)T` all read it. The system files' "install" date is 142 days before it, instead of before today. |
+| `RandomSeed` | `$RANDOM` and the names `mktemp` makes come from a generator seeded with it. `RANDOM=n` reseeds it, as in bash (with or without the option). |
+
+Both are off (null) by default. Everything else is already deterministic: process ids (`$$`, `$!`, `ps`), the host
+name and user, `/proc` contents, awk's `rand()` (seeded with 0, as in gawk), and the order in which awk's `for (k in a)`
+and jq's object keys come out (insertion order, which depends only on the input). The per-call time limit
+(`MaxCallDuration`) still runs on real time, so a runaway loop is stopped either way. A snapshot of a deterministic
+shell carries the clock and the generator's state, so restoring it and running the same commands gives the same output.
 
 ## Limits and safety
 

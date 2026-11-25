@@ -858,6 +858,7 @@ internal static class Jq
 
     // jq runs synchronously on one thread, so the string limit can ride along with it instead of through every call
     [ThreadStatic] static long t_maxString;
+    [ThreadStatic] static DateTime t_now;
 
     static T Sized<T>(T value, long size)
     {
@@ -1290,7 +1291,7 @@ internal static class Jq
         ["recurse"] = v => Recurse(v).ToList(),
         ["empty"] = _ => [],
         ["error"] = v => throw new JqError(v),
-        ["now"] = _ => [DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0],
+        ["now"] = _ => [new DateTimeOffset(t_now).ToUnixTimeMilliseconds() / 1000.0],
         ["todate"] = v => [ToDate(v)],
         ["todateiso8601"] = v => [ToDate(v)],
         ["fromdate"] = v => [FromDate(v)],
@@ -2090,6 +2091,7 @@ internal static class Jq
         var unit = flags.Contains('c') ? "" : flags.Contains('t') ? "\t" : indent;
         var interp = new Interpreter(ctx.Shell.Environment, ctx.CancellationToken);
         t_maxString = ctx.Shell.Options.MaxStringBytes;
+        t_now = ctx.Shell.Now;
         object? last = null;
         bool any = false;
         var output = new List<(bool Err, string Text)>();

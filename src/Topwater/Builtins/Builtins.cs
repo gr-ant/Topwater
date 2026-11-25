@@ -218,7 +218,7 @@ internal static partial class Builtins
             if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
             if (args.Count == 0) throw new ShellException("usage: printf [-v var] format [arguments]", 2);
             var errors = new List<string>();
-            var text = Printf.Format(args[0], args.Skip(1).ToList(), errors);
+            var text = Printf.Format(args[0], args.Skip(1).ToList(), errors, ctx.Shell.Now);
             if (variable == null) ctx.Stdout.Write(text);
             else ctx.Shell.SetVar(variable, text);
             foreach (var e in errors) ctx.Stderr.WriteLine(e);
@@ -450,7 +450,7 @@ internal static partial class Builtins
         {
             // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
             var a = Args.Parse(ctx.Args, "uIR", "dr", "utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R");
-            var now = DateTime.UtcNow;
+            var now = ctx.Shell.Now;
             if (a.Value('d') is { } d) now = ParseDate(d, now);
             else if (a.Value('r') is { } r) now = ctx.Fs.Stat(ctx.ResolvePath(r)).Modified.ToUniversalTime();
             var fmt = a.Positional.FirstOrDefault(p => p.StartsWith('+'));
@@ -908,7 +908,7 @@ internal static class Printf
     /// <summary>bash printf: C conversions, the format is reused while arguments remain; bad numbers are reported in errors.</summary>
     const char StopMark = '\uE001';
 
-    public static string Format(string format, List<string> args, List<string>? errors = null)
+    public static string Format(string format, List<string> args, List<string>? errors = null, DateTime? now = null)
     {
         var fmt = Builtins.Unescape(format, keepUnknown: true);
         var sb = new StringBuilder();
@@ -946,7 +946,7 @@ internal static class Printf
                     {
                         'b' => Builtins.Unescape(arg, keepUnknown: true, echo: true), 'q' => ShellQuote(arg), 'c' => arg.Length > 0 ? arg[..1] : "",
                         // %(fmt)T: a time in seconds since the epoch; -1 or nothing is now (UTC, like the rest of this machine)
-                        'T' => Builtins.Strftime(arg is "" or "-1" or "-2" ? DateTime.UtcNow : DateTime.UnixEpoch.AddSeconds(CInteger(arg).Value), m.Groups[4].Value),
+                        'T' => Builtins.Strftime(arg is "" or "-1" or "-2" ? now ?? DateTime.UtcNow : DateTime.UnixEpoch.AddSeconds(CInteger(arg).Value), m.Groups[4].Value),
                         _ => arg,
                     };
                     if (prec is { } p && p < text.Length && conv != 'c') text = text[..p];

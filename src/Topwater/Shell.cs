@@ -24,6 +24,13 @@ public sealed class ShellOptions
     /// <summary>Longest one string may be (a command's buffered output, a variable, an expansion, an awk/sed/jq value), and the most
     /// all variables may hold together, counted in characters. Past it the call stops with exit code 1 and a note in the tool output.</summary>
     public long MaxStringBytes { get; init; } = 32L << 20;
+    /// <summary>A virtual clock for repeatable runs: when set, the machine's time starts here and stands still except that
+    /// `sleep` (and a `timeout` that expires) moves it forward instantly instead of waiting. `date`, file times, SECONDS,
+    /// EPOCHSECONDS, `uptime`, `time`, `find -mmin`, jq's `now` and printf's %(fmt)T all read it. Null (the default): the host's clock.</summary>
+    public DateTimeOffset? StartTime { get; init; }
+    /// <summary>Seeds every random choice the machine makes ($RANDOM, mktemp names), so a run repeats exactly.
+    /// Null (the default): unpredictable. Assigning RANDOM=n in the shell reseeds it either way, as in bash.</summary>
+    public int? RandomSeed { get; init; }
 }
 
 public sealed record ShellResult(string Stdout, string Stderr, int ExitCode)
@@ -182,6 +189,10 @@ public sealed partial class Shell
         Options = options;
         Fs = forked ?? Options.FileSystem ?? new VirtualFileSystem();
         Fs.Capacity = Options.MaxFileSystemBytes;
+        _virtualNow = Options.StartTime?.UtcDateTime;
+        if (Options.RandomSeed is { } seed) _random = (ulong)seed;
+        Fs.Clock = () => Now;
+        _secondsBase = Now;
         if (forked != null) return;
         var user = Options.User;
         var home = "/home/" + user;
@@ -251,7 +262,7 @@ public sealed partial class Shell
         Seed(home + "/.bashrc", "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n# If not running interactively, don't do anything\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\n\nshopt -s checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\nalias ls='ls --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n");
     }
 
-    static readonly DateTime InstalledAt = DateTime.Today.AddDays(-142).AddHours(9).AddMinutes(13);
+    DateTime InstalledAt => (_virtualNow is null ? DateTime.Today : Options.StartTime!.Value.UtcDateTime.Date).AddDays(-142).AddHours(9).AddMinutes(13);
 
     // bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
     static readonly HashSet<string> NoProgramFile = ["alias", "break", "cd", "command", "continue", "declare", "eval", "exit", "export", "help",
@@ -296,7 +307,55 @@ public sealed partial class Shell
     /// <summary>`export -f name`: functions a child bash (bash -c, a script) also gets.</summary>
     internal HashSet<string> ExportedFunctions { get; } = [];
     readonly Dictionary<int, int> _jobs = [];
-    DateTime _secondsBase = DateTime.UtcNow;
+    DateTime _secondsBase;
+    DateTime? _virtualNow, _virtualDeadline;
+    ulong? _random;
+
+    /// <summary>The machine's time (UTC): the virtual clock when <see cref="ShellOptions.StartTime"/> is set, else the host's.</summary>
+    internal DateTime Now => _virtualNow ?? DateTime.UtcNow;
+
+    /// <summary>`sleep`: waits, or on the virtual clock just moves time on (to the deadline of an enclosing `timeout`, which then fires).</summary>
+    internal Task SleepAsync(TimeSpan duration, CancellationToken ct)
+    {
+        if (_virtualNow is not { } now) return Task.Delay(duration, ct);
+        if (_virtualDeadline is { } deadline && now + duration >= deadline) { _virtualNow = deadline; throw new VirtualTimeout(); }
+        _virtualNow = now + duration;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>`timeout`: runs <paramref name="body"/>; on the virtual clock its limit is measured in virtual time. Returns null if it timed out.</summary>
+    internal async Task<int?> WithVirtualTimeoutAsync(TimeSpan limit, Func<Task<int>> body)
+    {
+        if (_virtualNow is not { } now) return await body();
+        var saved = _virtualDeadline;
+        var mine = now + limit;
+        if (saved is null || mine < saved) _virtualDeadline = mine;
+        try { return await body(); }
+        catch (VirtualTimeout) when (_virtualNow >= mine) { return null; }
+        finally { _virtualDeadline = saved; }
+    }
+
+    sealed class VirtualTimeout : OperationCanceledException;
+
+    /// <summary>How long something took: on the virtual clock, the virtual time that passed (only `sleep` moves it).</summary>
+    internal Func<TimeSpan> StartTimer()
+    {
+        if (_virtualNow is null) { var sw = System.Diagnostics.Stopwatch.StartNew(); return () => sw.Elapsed; }
+        var start = Now;
+        return () => Now - start;
+    }
+
+    /// <summary>A random number in [0, max): from the seeded generator (splitmix64, so its state fits in a snapshot) or the shared one.</summary>
+    internal int NextRandom(int max)
+    {
+        if (_random is not { } state) return Random.Shared.Next(max);
+        state += 0x9E3779B97F4A7C15;
+        _random = state;
+        ulong z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
+        return (int)((z ^ (z >> 31)) % (ulong)max);
+    }
     /// <summary>shopt -s names: nullglob, dotglob, globstar.</summary>
     internal HashSet<string> Shopts { get; private set; } =
         ["cmdhist", "complete_fullquote", "extquote", "force_fignore", "globasciiranges", "globskipdots", "hostcomplete", "interactive_comments", "patsub_replacement", "progcomp", "promptvars", "sourcepath"];
@@ -628,9 +687,9 @@ public sealed partial class Shell
     {
         if (p.Timed)
         {
-            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var elapsed = StartTimer();
             int status = p.Commands.Count == 0 ? 0 : await ExecPipelineAsync(p with { Timed = false }, io, ct);
-            var t = clock.Elapsed;
+            var t = elapsed();
             io.Err.Write(p.PosixTime ? FormattableString.Invariant($"real {t.TotalSeconds:0.00}\nuser 0.00\nsys 0.00\n")
                 : FormattableString.Invariant($"\nreal\t{(int)t.TotalMinutes}m{t.TotalSeconds % 60:0.000}s\nuser\t0m0.000s\nsys\t0m0.000s\n"));
             return LastExitCode = status;
@@ -1344,7 +1403,8 @@ public sealed partial class Shell
         }
         if (!Parser.IsName(name)) throw new ShellException($"`{name}': not a valid identifier");
         CheckWritable(name);
-        if (name == "SECONDS" && long.TryParse(value, out var seconds)) { _secondsBase = DateTime.UtcNow.AddSeconds(-seconds); return; }
+        if (name == "SECONDS" && long.TryParse(value, out var seconds)) { _secondsBase = Now.AddSeconds(-seconds); return; }
+        if (name == "RANDOM") { _random = (ulong)(long.TryParse(value, out var seed) ? seed : 0); return; }
         var array = Arrays.ContainsKey(name);
         value = Converted(name, value, !append ? null : array ? GetElement(name, "0") : Environment.GetValueOrDefault(name));
         if (array) SetElement(name, "0", value);
@@ -1405,9 +1465,9 @@ public sealed partial class Shell
         "MACHTYPE" => "x86_64-pc-linux-gnu",
         "HOSTTYPE" => "x86_64",
         "LINENO" => _lineno.ToString(CultureInfo.InvariantCulture),
-        "SECONDS" => ((long)(DateTime.UtcNow - _secondsBase).TotalSeconds).ToString(CultureInfo.InvariantCulture),
-        "EPOCHSECONDS" => DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
-        "EPOCHREALTIME" => (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0).ToString("0.000000", CultureInfo.InvariantCulture),
+        "SECONDS" => ((long)(Now - _secondsBase).TotalSeconds).ToString(CultureInfo.InvariantCulture),
+        "EPOCHSECONDS" => new DateTimeOffset(Now).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+        "EPOCHREALTIME" => (new DateTimeOffset(Now).ToUnixTimeMilliseconds() / 1000.0).ToString("0.000000", CultureInfo.InvariantCulture),
         _ => null,
     };
 
@@ -1638,7 +1698,7 @@ public sealed partial class Shell
             "-" => OptionFlags,
             "_" => _lastArg,
             "PWD" => _cwd,
-            "RANDOM" => Random.Shared.Next(32768).ToString(CultureInfo.InvariantCulture),
+            "RANDOM" => NextRandom(32768).ToString(CultureInfo.InvariantCulture),
             _ => LookUp(name) ?? "",
         };
     }
