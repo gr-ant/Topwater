@@ -120,6 +120,77 @@ public class RecordingTests
         Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(broken))));
     }
 
+    static async Task<string> RecordingText(int snapshotEvery = 0)
+    {
+        var ms = new MemoryStream();
+        (await Record(snapshotEvery)).Save(ms);
+        return System.Text.Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    static Recording LoadText(string text, Func<string, Stream>? open = null, ShellOptions? limits = null) =>
+        Recording.Load(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text)), open, limits);
+
+    [Fact]
+    public async Task Limits_in_the_file_can_lower_but_never_raise_the_replay_shells()
+    {
+        var header = System.Text.Json.Nodes.JsonNode.Parse((await RecordingText()).Split('\n')[0])!;
+        var o = header["options"]!;
+        o["maxLoopIterations"] = int.MaxValue; o["maxCallDurationMs"] = long.MaxValue / 2; o["maxFileSystemBytes"] = 1L << 50;
+        o["maxStringBytes"] = 1L << 50; o["maxExtractBytes"] = -5; o["maxExtractEntries"] = 10;
+        var raised = LoadText(header.ToJsonString() + "\n");
+        var d = new ShellOptions();
+        Assert.Equal(d.MaxLoopIterations, raised.MaxLoopIterations);
+        Assert.Equal(d.MaxCallDuration, raised.MaxCallDuration);
+        Assert.Equal(d.MaxFileSystemBytes, raised.MaxFileSystemBytes);
+        Assert.Equal(d.MaxStringBytes, raised.MaxStringBytes);
+        Assert.Equal(0, raised.MaxExtractBytes);    // lowered, never below zero
+        Assert.Equal(10, raised.MaxExtractEntries); // lowered
+        var tight = LoadText(header.ToJsonString() + "\n", limits: new ShellOptions { MaxLoopIterations = 50 });
+        Assert.Equal(50, tight.CreateShell().Options.MaxLoopIterations);
+    }
+
+    [Theory]
+    [InlineData("/etc/x.zip")]
+    [InlineData("../x.zip")]
+    [InlineData("a/../../x.zip")]
+    [InlineData("C:x.zip")]
+    [InlineData("C:\\Windows\\x.zip")]
+    [InlineData("a\\..\\..\\x.zip")]
+    [InlineData("\\\\server\\share\\x.zip")]
+    [InlineData("https://evil.example/x.zip")]
+    [InlineData("file:///etc/x.zip")]
+    public async Task Side_car_paths_must_be_plain_relative_names(string path)
+    {
+        var text = (await RecordingText()).Split('\n')[0];
+        var header = System.Text.Json.Nodes.JsonNode.Parse(text)!;
+        header["start"] = new System.Text.Json.Nodes.JsonObject { ["file"] = path };
+        var opened = false;
+        Assert.Throws<InvalidDataException>(() => LoadText(header.ToJsonString() + "\n", _ => { opened = true; return new MemoryStream(); }));
+        Assert.False(opened);
+    }
+
+    [Fact]
+    public async Task Caps_the_number_and_total_size_of_snapshots()
+    {
+        var lines = (await RecordingText(snapshotEvery: 1)).TrimEnd('\n').Split('\n');
+        var many = lines[0] + "\n" + string.Concat(Enumerable.Repeat(lines[1] + "\n", Recording.MaxSnapshots));
+        Assert.Contains("more than 1000 snapshots", Assert.Throws<InvalidDataException>(() => LoadText(many)).Message);
+        Assert.Equal(Recording.MaxSnapshots - 1, LoadText(lines[0] + "\n" + string.Concat(Enumerable.Repeat(lines[1] + "\n", Recording.MaxSnapshots - 1))).Calls.Count);
+
+        // each snapshot is within the limit, all of them together are not
+        var big = new Shell(new ShellOptions { MaxFileSystemBytes = 4096 });
+        big.Fs.WriteAllText("/home/agent/big.txt", new string('x', 1500));
+        using (var rec = big.StartRecording(new RecordingOptions { SnapshotEvery = 1 }))
+        {
+            for (int i = 0; i < 12; i++) await big.RunAsync("true");
+            var ms = new MemoryStream();
+            rec.Recording.Save(ms);
+            ms.Position = 0;
+            var e = Assert.Throws<InvalidDataException>(() => Recording.Load(ms, limits: new ShellOptions { MaxFileSystemBytes = 4096 }));
+            Assert.Contains("MaxFileSystemBytes", e.Message);
+        }
+    }
+
     [Fact]
     public async Task Reports_differences_per_call()
     {

@@ -50,7 +50,7 @@ export interface ShellOptions {
 (globalThis as { process?: { getBuiltinModule?: (id: string) => { setFlagsFromString(f: string): void } | undefined } })
   .process?.getBuiltinModule?.('node:v8')?.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
 
-const DEFAULTS: ShellOptions = {
+export const DEFAULTS: ShellOptions = {
   user: 'agent', hostname: 'topwater', maxLoopIterations: 100_000, maxExtractBytes: 64 << 20, maxExtractEntries: 100_000,
   maxCallDurationMs: 120_000, maxFileSystemBytes: 128 << 20, maxStringBytes: 32 << 20,
 };

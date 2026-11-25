@@ -105,18 +105,19 @@ async function openSample() {
 // ---------- rendering ----------
 function renderSummary(name: string) {
   const r = rec!;
-  $('rec-title').textContent = r.metadata.task ? 'Task' : name;
+  $('rec-title').textContent = 'Recording';
   const meta = $('meta');
   meta.replaceChildren();
   const add = (k: string, v: string) => meta.append(el('dt', { textContent: k }), el('dd', { textContent: v }));
   if (r.metadata.task) add('Task', r.metadata.task);
   add('File', name);
   add('Turns', String(r.calls.length));
-  for (const [k, v] of Object.entries(r.metadata)) if (k !== 'task') add(k[0].toUpperCase() + k.slice(1), v);
+  for (const [k, v] of Object.entries(r.metadata)) if (k !== 'task') add(k.charAt(0).toUpperCase() + k.slice(1), v);
   add('Machine', `${r.user}@${r.hostname}`);
   add('Recorded by', r.topwater ? `Topwater ${r.topwater}` : 'Topwater');
-  add('Replays exactly', r.deterministic
-    ? `yes: virtual clock from ${fmtTime(r.startTime!)}, random seed ${r.randomSeed}`
+  // whether a re-run turn matched is checked and shown per turn; this only says what the recording pins down
+  add('Deterministic', r.deterministic
+    ? `virtual clock from ${fmtTime(r.startTime!)}, random seed ${r.randomSeed} (each re-run turn says whether it matched the recording)`
     : 'no: recorded on the real clock, so times and random numbers differ when turns are re-run');
   if (r.appCommands.length) add('App commands', `${r.appCommands.join(', ')} (not available here: re-run turns that use them differ)`);
   slider.max = String(r.calls.length);

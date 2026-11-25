@@ -58,7 +58,7 @@ Cursor, VS Code and other clients take the same `command` and `args`.
 |---|---|
 | `topwater` or `topwater shell` | interactive shell: prompt, line editing, history (up/down), Ctrl+C stops the running command, `exit` or Ctrl+D quits. Output is the text the model would get (`[exit code N]` and limit notes included). With stdin piped, runs it as one script. |
 | `topwater run "<cmd>"` | runs one command; stdout and stderr go to yours, and the exit code is passed through. Several words are joined with spaces and parsed by the shell, like `ssh`. |
-| `topwater mcp` | MCP server over stdio with one tool, `bash` (one string argument `command`), with the same description and output as `BashTool`. Calls run one at a time. Logs go to stderr. |
+| `topwater mcp` | MCP server over stdio with one tool, `bash` (one string argument `command`), with the same output as `BashTool` (and its description, minus the sentence about app programs, since there are none). Calls run one at a time. Logs go to stderr. |
 | `topwater snapshot save FILE` | builds a machine from the options (e.g. `--import`) and writes it to FILE |
 | `topwater snapshot load FILE` | interactive shell on FILE; FILE is not changed |
 | `topwater snapshot info FILE` | checks FILE and prints its creation time, user, files and session size |

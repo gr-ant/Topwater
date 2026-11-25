@@ -183,18 +183,17 @@ The model sees it as `shell-bash` (Semantic Kernel prefixes the plugin name), wi
 
 The `Topwater.Cli` package is a .NET global tool, `topwater`:
 
-Not on NuGet yet. From a clone of the repository:
-
 ```bash
-dotnet pack src/Topwater.Cli -o nupkg && dotnet tool install -g Topwater.Cli --add-source nupkg --prerelease
+dotnet tool install -g Topwater.Cli --prerelease
 topwater                                   # interactive shell
 topwater run "ls -la /etc | head"          # one command, exit code passed through
 topwater mcp --state ~/.topwater/m.zip     # MCP server over stdio, machine kept across restarts
 topwater snapshot save|load|info FILE
 ```
 
-`topwater mcp` serves one tool, `bash`, built from `shell.AsAIFunction()`: the name, description, schema and output text
-are those of `BashTool`, `[exit code N]` and limit notes included. Calls run one at a time. Claude Desktop
+`topwater mcp` serves one tool, `bash`, built from `shell.AsAIFunction()`: the name, schema and output text are those of
+`BashTool`, `[exit code N]` and limit notes included; the description is `BashTool`'s without the last sentence about
+the app's own programs, since the standalone server has none. Calls run one at a time. Claude Desktop
 (`claude_desktop_config.json`):
 
 ```json
@@ -505,10 +504,8 @@ The manifest's real paths, octal modes, owner names, UTC modification times, use
 
 The `Topwater.Containers` package moves a machine between Topwater and a real Docker container, in both directions.
 
-Not on NuGet yet. Reference the project from a clone of the repository:
-
 ```bash
-dotnet add reference path/to/Topwater/src/Topwater.Containers/Topwater.Containers.csproj
+dotnet add package Topwater.Containers --prerelease
 ```
 
 Two uses:
@@ -783,8 +780,8 @@ viewer that steps through a run turn by turn can use this, and `SnapshotEvery` b
 
 ### Recordings as regression tests
 
-The `Topwater.Replay` package turns a recording file into a test. It works with any test framework: a mismatch throws
-`ReplayMismatchException` carrying the report.
+The `Topwater.Replay` package (`dotnet add package Topwater.Replay --prerelease`) turns a recording file into a test.
+It works with any test framework: a mismatch throws `ReplayMismatchException` carrying the report.
 
 ```csharp
 [Fact]
@@ -875,7 +872,10 @@ Version rules: readers ignore fields they don't know, so later versions may add 
 `version`. A change that older readers would misread raises `version`; loading a newer version fails with
 `NotSupportedException`, and later Topwater versions keep reading version 1. Loading treats the file as untrusted:
 snapshots load under the default limits or the `ShellOptions` passed to `Load` (never limits the file names) with every check
-[`ShellSnapshot.Load`](#loading-untrusted-snapshots) makes, and side-car paths may not leave the recording's directory.
+[`ShellSnapshot.Load`](#loading-untrusted-snapshots) makes. The replay shell's limits are the file's, clamped to the same
+bound: a recording can lower limits, never raise them. At most 1,000 snapshots load, and their files together may hold at
+most 4 x `MaxFileSystemBytes`. A side-car path must be a plain relative file name (no leading `/`, drive, URL, backslash or
+`..`); a custom `openSnapshot` must treat it as nothing else.
 
 ## Limits and safety
 

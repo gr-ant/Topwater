@@ -226,13 +226,24 @@ public sealed class Recording
         return full.StartsWith(Path.GetFullPath(dir) + Path.DirectorySeparatorChar, StringComparison.Ordinal) ? full : throw Bad($"snapshot path {rel} leaves the recording's directory");
     }
 
+    /// <summary>Most snapshots one recording may hold (the start included).</summary>
+    public const int MaxSnapshots = 1000;
+    /// <summary>The files of all a recording's snapshots together may hold at most this many times the limits' MaxFileSystemBytes.</summary>
+    public const int MaxSnapshotsFileSystems = 4;
+
+    // a side-car name is only ever a relative file name: no rooted path, drive (C:), URL (x://), backslash or .. segment
+    static bool IsPlainRelativePath(string rel) =>
+        rel.Length > 0 && !rel.StartsWith('/') && !rel.Contains('\\') && !rel.Contains(':') && !rel.Split('/').Contains("..");
+
     const string Invalid = "not a valid Topwater recording: ";
     static InvalidDataException Bad(string why) => new(Invalid + why);
 
     /// <summary>
     /// Reads a recording written by <see cref="Save(Stream)"/>. <paramref name="openSnapshot"/> opens a side-car snapshot by the
-    /// relative path the file names. Snapshots are loaded as untrusted (see <see cref="ShellSnapshot.Load"/>) under
-    /// <paramref name="limits"/>, or else the default limits (never the ones the file names). Throws <see cref="InvalidDataException"/> for a malformed
+    /// relative path the file names; it is only ever a relative file name (no drive, URL, backslash or ..), and the opener must
+    /// treat it as nothing else. Snapshots are loaded as untrusted (see <see cref="ShellSnapshot.Load"/>) under
+    /// <paramref name="limits"/>, or else the default limits (never the ones the file names); the replay shell's limits are the file's
+    /// clamped to the same bound, so a recording can lower limits but never raise them. Throws <see cref="InvalidDataException"/> for a malformed
     /// file and <see cref="NotSupportedException"/> for a newer format version.
     /// </summary>
     public static Recording Load(Stream stream, Func<string, Stream>? openSnapshot = null, ShellOptions? limits = null)
@@ -248,27 +259,45 @@ public sealed class Recording
         if (h.Version < 1) throw Bad($"unknown format version {h.Version}");
         var o = h.Options ?? throw Bad("options are missing");
         var d = new ShellOptions();
+        limits ??= d; // never the file's own limits: a hostile header could raise them
+        // the file's limits can lower the caller's (or the default) limits, never raise them
+        static long Cap(long? file, long max) => Math.Clamp(file ?? max, 0, max);
         var options = new ShellOptions
         {
             User = o.User ?? d.User, Hostname = o.Hostname ?? d.Hostname,
             StartTime = o.StartTime is { } st ? DateTimeOffset.Parse(st, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal) : null,
             RandomSeed = o.RandomSeed,
-            MaxLoopIterations = o.MaxLoopIterations ?? d.MaxLoopIterations, MaxExtractBytes = o.MaxExtractBytes ?? d.MaxExtractBytes,
-            MaxExtractEntries = o.MaxExtractEntries ?? d.MaxExtractEntries,
-            MaxCallDuration = o.MaxCallDurationMs is { } ms ? TimeSpan.FromMilliseconds(ms) : d.MaxCallDuration,
-            MaxFileSystemBytes = o.MaxFileSystemBytes ?? d.MaxFileSystemBytes, MaxStringBytes = o.MaxStringBytes ?? d.MaxStringBytes,
+            MaxLoopIterations = (int)Cap(o.MaxLoopIterations, limits.MaxLoopIterations), MaxExtractBytes = Cap(o.MaxExtractBytes, limits.MaxExtractBytes),
+            MaxExtractEntries = (int)Cap(o.MaxExtractEntries, limits.MaxExtractEntries),
+            MaxCallDuration = TimeSpan.FromMilliseconds(Cap(o.MaxCallDurationMs, (long)limits.MaxCallDuration.TotalMilliseconds)),
+            MaxFileSystemBytes = Cap(o.MaxFileSystemBytes, limits.MaxFileSystemBytes), MaxStringBytes = Cap(o.MaxStringBytes, limits.MaxStringBytes),
         };
-        limits ??= d; // never the file's own limits: a hostile header could raise them
+        // each snapshot is capped by limits; these cap them all together
+        int snapshots = 0;
+        long snapshotBytes = 0, maxSnapshotBytes = MaxSnapshotsFileSystems * limits.MaxFileSystemBytes;
         ShellSnapshot Snap(SnapshotRef? r, string what)
         {
-            if (r?.Embedded is { } b64) return ShellSnapshot.Load(new MemoryStream(Convert.FromBase64String(b64)), limits);
-            if (r?.File is { } rel)
+            if (++snapshots > MaxSnapshots) throw Bad($"more than {MaxSnapshots} snapshots");
+            var snap = Read();
+            if ((snapshotBytes += snap.Fs.UsedBytes) > maxSnapshotBytes)
+                throw Bad($"the snapshots hold more than {maxSnapshotBytes} bytes of files together ({MaxSnapshotsFileSystems} x MaxFileSystemBytes)");
+            return snap;
+            ShellSnapshot Read()
             {
-                if (openSnapshot == null) throw Bad($"{what} is in a side-car file ({rel}); load the recording from its path");
-                using var s = openSnapshot(rel);
-                return ShellSnapshot.Load(s, limits);
+                if (r?.Embedded is { } b64)
+                {
+                    try { return ShellSnapshot.Load(new MemoryStream(Convert.FromBase64String(b64)), limits); }
+                    catch (FormatException) { throw Bad($"{what}: the embedded snapshot is not base64"); }
+                }
+                if (r?.File is { } rel)
+                {
+                    if (openSnapshot == null) throw Bad($"{what} is in a side-car file ({rel}); load the recording from its path");
+                    if (!IsPlainRelativePath(rel)) throw Bad($"snapshot path {rel} is not a plain relative path inside the recording's directory");
+                    using var s = openSnapshot(rel);
+                    return ShellSnapshot.Load(s, limits);
+                }
+                throw Bad($"{what} has no snapshot");
             }
-            throw Bad($"{what} has no snapshot");
         }
         var rec = new Recording(Snap(h.Start, "the start"), options)
         {

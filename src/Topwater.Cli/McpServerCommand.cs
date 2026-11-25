@@ -6,7 +6,7 @@ using Topwater.AI;
 
 namespace Topwater.Cli;
 
-/// <summary>The machine as an MCP server with one tool, <c>bash</c>: the same name, description, schema and output as <see cref="BashTool"/>.</summary>
+/// <summary>The machine as an MCP server with one tool, <c>bash</c>: the same name, schema and output as <see cref="BashTool"/>.</summary>
 static class McpServerCommand
 {
     public static McpServer Create(Machine machine, ITransport transport) => McpServer.Create(transport, new McpServerOptions
@@ -15,11 +15,15 @@ static class McpServerCommand
         ToolCollection = [McpServerTool.Create(new SavingFunction(machine))],
     });
 
+    /// <summary><see cref="BashTool.Description"/> without its last sentence about the app's own programs: this server has none.</summary>
+    public static string Description { get; } =
+        BashTool.Description[..BashTool.Description.IndexOf("Other programs", StringComparison.Ordinal)] + "Run `help` to list the commands and `<command> --help` for usage.";
+
     public static string Version { get; } =
         typeof(McpServerCommand).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "0.0.0";
 
     /// <summary>The shell's AIFunction, with the state file written after each call while no other call can change the machine.</summary>
-    sealed class SavingFunction(Machine machine) : DelegatingAIFunction(machine.Shell.AsAIFunction())
+    sealed class SavingFunction(Machine machine) : DelegatingAIFunction(machine.Shell.AsAIFunction(McpServerCommand.Description))
     {
         readonly SemaphoreSlim _gate = new(1, 1);
 

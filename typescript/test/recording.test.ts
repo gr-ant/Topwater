@@ -125,8 +125,38 @@ describe('recordings in the C# format', () => {
     await expect(Recording.load('{"format":"topwater-recording","version":2}\n')).rejects.toThrow(/newer/);
     await expect(Recording.load('nope\n')).rejects.toThrow(/not a valid Topwater recording/);
     await expect(Recording.load('{"format":"topwater-recording","version":1,"options":{},"start":{"file":"x.snapshots/start.zip"}}\n')).rejects.toThrow(/side-car/);
-    await expect(Recording.load('{"format":"topwater-recording","version":1,"options":{},"start":{"file":"../start.zip"}}\n', async () => new Uint8Array())).rejects.toThrow(/leaves/);
   });
+
+  it('refuses side-car paths that are not plain relative names, before opening anything', async () => {
+    let opened = false;
+    const open = async () => { opened = true; return new Uint8Array(); };
+    for (const file of ['/etc/x.zip', '../x.zip', 'a/../../x.zip', 'C:x.zip', 'C:\\Windows\\x.zip', 'a\\..\\..\\x.zip', '\\\\server\\share\\x.zip', 'https://evil.example/x.zip', 'file:///etc/x.zip', ''])
+      await expect(Recording.load(JSON.stringify({ format: 'topwater-recording', version: 1, options: {}, start: { file } }) + '\n', open)).rejects.toThrow(/plain relative path|no snapshot/);
+    expect(opened).toBe(false);
+  });
+
+  it('takes limits from the file only to lower them', async () => {
+    const header = JSON.parse((await new Recording(ShellSnapshot.capture(new Shell()), {}).save()).split('\n')[0]);
+    Object.assign(header.options, { maxLoopIterations: 1e15, maxCallDurationMs: 1e15, maxFileSystemBytes: 1e15, maxStringBytes: 1e15, maxExtractBytes: -5, maxExtractEntries: 10 });
+    const text = JSON.stringify(header) + '\n';
+    const raised = await Recording.load(text);
+    const d = new Shell().options;
+    expect(raised.options).toMatchObject({ maxLoopIterations: d.maxLoopIterations, maxCallDurationMs: d.maxCallDurationMs, maxFileSystemBytes: d.maxFileSystemBytes, maxStringBytes: d.maxStringBytes, maxExtractBytes: 0, maxExtractEntries: 10 });
+    const tight = await Recording.load(text, undefined, { maxLoopIterations: 50 });
+    expect(tight.createShell().options.maxLoopIterations).toBe(50);
+  });
+
+  it('caps the number and total size of snapshots', async () => {
+    const sh = new Shell({ maxFileSystemBytes: 65536 });
+    sh.fs.writeText('/home/agent/big.txt', 'x'.repeat(30000));
+    const { recording, stop } = startRecording(sh, { snapshotEvery: 1 });
+    for (let i = 0; i < 12; i++) await sh.run('true');
+    stop();
+    const lines = (await recording.save()).trimEnd().split('\n');
+    // each snapshot is within the limit, all of them together are not
+    await expect(Recording.load(lines.join('\n'), undefined, { maxFileSystemBytes: 65536 })).rejects.toThrow(/maxFileSystemBytes/);
+    await expect(Recording.load(lines[0] + '\n' + (lines[1] + '\n').repeat(1000))).rejects.toThrow(/more than 1000 snapshots/);
+  }, 60_000);
 });
 
 import { diffLines } from '../browser/diff.js';

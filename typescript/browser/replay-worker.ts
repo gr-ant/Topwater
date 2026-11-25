@@ -13,6 +13,8 @@ const states = new Map<number, ShellSnapshot>();
 /** calls this worker re-ran: whether the output matched the recording */
 const reran = new Map<number, { matches: boolean; stdout: string; stderr: string; exitCode: number }>();
 const MAX_TEXT = 256 << 10;
+/** recordings may come from anyone: tighter than the defaults, so one can't exhaust the tab (the page also kills slow answers) */
+const VIEWER_LIMITS = { maxFileSystemBytes: 32 << 20, maxStringBytes: 8 << 20, maxExtractBytes: 16 << 20, maxCallDurationMs: 30_000 };
 
 const post = (m: ReplayReply, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
 
@@ -24,7 +26,7 @@ async function load(text: string, sidecars: Record<string, Uint8Array>) {
     if (!data) throw new Error(`this recording keeps its snapshots in separate files: open ${name} together with it`);
     return Promise.resolve(data);
   };
-  recording = await Recording.load(text, byName);
+  recording = await Recording.load(text, byName, VIEWER_LIMITS);
   states.set(-1, recording.start);
   const calls: CallInfo[] = recording.calls.map(c => ({
     index: c.index, command: c.command, stdout: c.stdout, stderr: c.stderr, exitCode: c.exitCode, trailer: c.trailer, elapsedMs: c.elapsedMs, hasSnapshot: !!c.snapshot,

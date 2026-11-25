@@ -1,10 +1,15 @@
 // Recordings in the C# port's file format (docs/reference.md "Recordings"): JSON Lines, a header then one line per call,
 // with snapshots embedded (base64 zip) or in side-car files. A recording made by either port loads in the other.
-import { Shell, type ShellOptions, type ShellResult } from './shell.js';
+import { DEFAULTS, Shell, type ShellOptions, type ShellResult } from './shell.js';
 import { ShellSnapshot } from './snapshot.js';
 
 export const RECORDING_FORMAT_VERSION = 1;
 const FORMAT = 'topwater-recording';
+/** Most snapshots one recording may hold (the start included). */
+export const MAX_SNAPSHOTS = 1000;
+/** The files of all a recording's snapshots together may hold at most this many times the limits' maxFileSystemBytes. */
+export const MAX_SNAPSHOTS_FILE_SYSTEMS = 4;
+const LIMITS = ['maxLoopIterations', 'maxExtractBytes', 'maxExtractEntries', 'maxCallDurationMs', 'maxFileSystemBytes', 'maxStringBytes'] as const;
 
 /** The ShellOptions a recording stores (everything but the filesystem). */
 export type RecordedOptions = Partial<Omit<ShellOptions, 'fileSystem'>>;
@@ -97,8 +102,10 @@ export class Recording {
   }
 
   /**
-   * Reads a recording saved by either port. `openSnapshot` opens a side-car snapshot by the relative path the file names.
-   * Snapshots load as untrusted (see ShellSnapshot.load) under `limits` or the defaults, never limits the file names.
+   * Reads a recording saved by either port. `openSnapshot` opens a side-car snapshot by the relative path the file names;
+   * that is only ever a relative file name (no drive, URL, backslash or ..), and the opener must treat it as nothing else.
+   * Snapshots load as untrusted (see ShellSnapshot.load) under `limits` or the defaults, never limits the file names; the
+   * replay shell's limits are the file's clamped to the same bound, so a recording can lower limits but never raise them.
    */
   static async load(text: string, openSnapshot?: (path: string) => Promise<Uint8Array>, limits: RecordedOptions = {}): Promise<Recording> {
     const lines = text.split('\n');
@@ -119,7 +126,19 @@ export class Recording {
       maxFileSystemBytes: num(o.maxFileSystemBytes, 'maxFileSystemBytes'), maxStringBytes: num(o.maxStringBytes, 'maxStringBytes'),
     };
     for (const k of Object.keys(options) as (keyof RecordedOptions)[]) if (options[k] === undefined) delete options[k];
+    const bound = { ...DEFAULTS, ...limits };
+    for (const k of LIMITS) options[k] = Math.min(Math.max(options[k] ?? bound[k], 0), bound[k]);
+    // each snapshot is capped by the limits; these cap them all together
+    let snapshots = 0, snapshotBytes = 0;
+    const maxSnapshotBytes = MAX_SNAPSHOTS_FILE_SYSTEMS * bound.maxFileSystemBytes;
     const snap = async (r: any, what: string): Promise<ShellSnapshot> => {
+      if (++snapshots > MAX_SNAPSHOTS) throw bad(`more than ${MAX_SNAPSHOTS} snapshots`);
+      const s = await read(r, what);
+      for (const e of s.entries) snapshotBytes += e.data?.length ?? e.text?.length ?? 0;
+      if (snapshotBytes > maxSnapshotBytes) throw bad(`the snapshots hold more than ${maxSnapshotBytes} bytes of files together (${MAX_SNAPSHOTS_FILE_SYSTEMS} x maxFileSystemBytes)`);
+      return s;
+    };
+    const read = async (r: any, what: string): Promise<ShellSnapshot> => {
       if (typeof r?.embedded === 'string') {
         let bytes: Uint8Array;
         try { bytes = fromBase64(r.embedded); } catch { throw bad(`${what}: the embedded snapshot is not base64`); }
@@ -127,7 +146,9 @@ export class Recording {
       }
       if (typeof r?.file === 'string') {
         if (!openSnapshot) throw bad(`${what} is in a side-car file (${r.file}); open it together with the recording`);
-        if (r.file.startsWith('/') || r.file.split(/[\\/]/).includes('..')) throw bad(`snapshot path ${r.file} leaves the recording's directory`);
+        // no rooted path, drive (C:), URL (x://), backslash or .. segment
+        if (!r.file || r.file.startsWith('/') || /[\\:]/.test(r.file) || r.file.split('/').includes('..'))
+          throw bad(`snapshot path ${r.file} is not a plain relative path inside the recording's directory`);
         return ShellSnapshot.load(await openSnapshot(r.file), limits);
       }
       throw bad(`${what} has no snapshot`);

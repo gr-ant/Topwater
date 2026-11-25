@@ -54,7 +54,9 @@ public sealed class CliTests : IDisposable
             Assert.Equal("topwater", client.ServerInfo.Name);
             var tool = Assert.Single(await client.ListToolsAsync());
             Assert.Equal("bash", tool.Name);
-            Assert.Equal(BashTool.Description, tool.Description);
+            Assert.Equal(McpServerCommand.Description, tool.Description);
+            Assert.StartsWith("Run a command in a sandboxed Linux shell", tool.Description);
+            Assert.DoesNotContain("live interfaces", tool.Description); // no app programs behind the standalone server
             Assert.True(JsonElement.DeepEquals(JsonDocument.Parse(BashTool.InputSchemaJson).RootElement, tool.JsonSchema));
 
             Assert.Equal("(no output)", await Bash(client, "cd /tmp && x=5 && echo hi > a.txt"));
