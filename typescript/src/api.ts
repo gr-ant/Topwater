@@ -224,7 +224,7 @@ export function registerApi(shell: Shell, program: string, endpoints: Record<str
     const maxBytes = ep.maxResponseBytes ?? 1_000_000;
     let response: Response, text: string, truncated: boolean;
     try {
-      response = await fetchImpl(url, { method, headers: reqHeaders, body: body === null ? undefined : body, redirect: 'manual', signal: controller.signal });
+      response = await fetchImpl(url, { method, headers: reqHeaders, body: body === null ? undefined : body as Uint8Array<ArrayBuffer>, redirect: 'manual', signal: controller.signal });
       // read past the cap by the longest secret, so a credential cut in half at the cap still gets scrubbed
       const limit = maxBytes + (secrets[0]?.length ?? 0);
       const chunks: Uint8Array[] = [];
