@@ -82,3 +82,29 @@ Where Python differs from the reference:
 - Nesting is bounded by Python's recursion limit instead of the .NET stack. Memory use has not been measured; text is
   held as Python strings.
 - `shell.run()` wraps `asyncio.run`; inside an event loop use `await shell.run_async()`.
+
+## LangChain and LlamaIndex
+
+```bash
+pip install "topwater[langchain]"     # or "topwater[llamaindex]"
+```
+
+Both adapters expose `bash_tool(shell=None, description=None)`: a tool named `bash` with the standard description.
+Calls on one tool are serialized, and the shell keeps its state between calls.
+
+```python
+from topwater import Shell
+from topwater.integrations.langchain import bash_tool
+
+shell = Shell()
+llm_with_bash = llm.bind_tools([bash_tool(shell)])   # or pass it to a LangGraph agent's `tools=[...]`
+```
+
+```python
+from llama_index.core.agent.workflow import FunctionAgent
+from topwater.integrations.llamaindex import bash_tool
+
+agent = FunctionAgent(tools=[bash_tool(shell)], llm=llm)
+```
+
+See the [main README](../README.md) and the [reference](../docs/reference.md) for everything else.

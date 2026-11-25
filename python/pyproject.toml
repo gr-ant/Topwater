@@ -25,6 +25,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.3"]
+llamaindex = ["llama-index-core>=0.12"]
+
 [project.urls]
 Homepage = "https://github.com/gr-ant/Topwater"
 Repository = "https://github.com/gr-ant/Topwater"
