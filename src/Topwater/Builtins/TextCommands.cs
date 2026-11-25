@@ -261,6 +261,12 @@ internal static partial class Builtins
             return error && !(a.Has('q') && code == 0) ? 2 : code;
         }, "Search text with regular expressions");
 
+        // Ubuntu's egrep and fgrep are scripts that run `grep -E` / `grep -F`, so messages say "grep:"
+        foreach (var (alias, flag) in new[] { ("egrep", "-E"), ("fgrep", "-F") })
+            shell.Register(alias, ctx => shell.Commands["grep"].Handler(
+                new CommandContext(ctx.Shell, "grep", [flag, .. ctx.Args], ctx.Io.Stdin, ctx.Stdout, ctx.Stderr, ctx.CancellationToken) { Fds = ctx.Fds }),
+                $"Search text, like grep {flag}");
+
         CommandHandler headTail = ctx =>
         {
             bool head = ctx.Name == "head";

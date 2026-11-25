@@ -87,7 +87,7 @@ internal static partial class Builtins
         ["bash"] = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)", ["sh"] = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
         ["file"] = "file-5.45", ["sudo"] = "Sudo version 1.9.15p5", ["less"] = "less 590 (GNU regular expressions)", ["ps"] = "ps from procps-ng 4.0.4",
         ["free"] = "free from procps-ng 4.0.4", ["uptime"] = "uptime from procps-ng 4.0.4", ["column"] = "column from util-linux 2.39.3",
-        ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3",
+        ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3", ["egrep"] = "grep (GNU grep) 3.11", ["fgrep"] = "grep (GNU grep) 3.11",
         ["tar"] = "tar (GNU tar) 1.35", ["gzip"] = "gzip 1.12", ["gunzip"] = "gzip 1.12", ["zcat"] = "gzip 1.12",
     };
 
