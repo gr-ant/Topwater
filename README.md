@@ -45,7 +45,7 @@ You send the model one tool definition instead of one per function, and it can p
 
 | | |
 |---|---|
-| **.NET 8+** | `dotnet add package Topwater --prerelease` (add `Topwater.Mcp` for MCP servers, `Topwater.AI` for Microsoft.Extensions.AI) |
+| **.NET 8+** | `dotnet add package Topwater --prerelease` (add `Topwater.Mcp` for MCP servers, `Topwater.AI` for Microsoft.Extensions.AI, `Topwater.Containers` for Docker) |
 | **Python 3.10+** | `pip install "git+https://github.com/gr-ant/Topwater@python#subdirectory=python"` (preview, not on PyPI yet) |
 | **TypeScript, Node 20+** | `git clone -b typescript https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build` (preview, not on npm yet) |
 
@@ -100,6 +100,7 @@ Files, variables and the working directory persist between calls. Use one shell 
 | An HTTP API, credentials hidden from the model | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `registerApi(shell, ...)` |
 | A real program from your machine | `shell.RegisterHostCommand("git")` | `register_host_command(shell, "git")` | not yet |
 | Snapshots: undo, fork, save and load the machine | `shell.Snapshot()`, `Fork()`, `Save()`, `Load()` | not yet | not yet |
+| Turn the machine into a real Docker image, and a container back into a machine | `snapshot.BuildImageAsync(...)`, `ContainerImport.FromContainerAsync(...)` (Topwater.Containers) | not yet | not yet |
 
 An MCP server becomes one program with a subcommand per tool (`github list-issues --repo acme/api`). An API is
 called by alias, never by host, and the model never sees the credential
