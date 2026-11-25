@@ -193,8 +193,11 @@ The `Topwater.Cli` package is a .NET global tool, `topwater`:
 dotnet tool install -g Topwater.Cli --prerelease
 topwater                                   # interactive shell
 topwater run "ls -la /etc | head"          # one command, exit code passed through
-topwater mcp --state ~/.topwater/m.zip     # MCP server over stdio, machine kept across restarts
+topwater mcp --state ~/.topwater/m.topwater   # MCP server over stdio, machine kept across restarts
 topwater snapshot save|load|info FILE
+topwater export copy.topwater --state ~/.topwater/m.topwater
+topwater import run.topwater --state ~/.topwater/m.topwater
+topwater replay run.topwater
 ```
 
 `topwater mcp` serves one tool, `bash`, built from `shell.AsAIFunction()`: the name, schema and output text are those of
@@ -219,8 +222,15 @@ Every command takes the same options:
 Without `--import` and `--export`, the only host files the command touches are the `--state` and `--from` snapshots,
 which are loaded as untrusted (see [Loading untrusted snapshots](#loading-untrusted-snapshots)). The machine runs inside the
 `topwater` process with no network and no host programs; the process itself has your permissions, like any program.
-`topwater export`, `import` (container images) and `replay` (recorded runs) are reserved names that report "not
-available in this build" for now. The full security notes are in the package README (`src/Topwater.Cli/README.md`).
+
+| Command | Effect |
+|---|---|
+| `topwater export FILE` | writes the machine the options give (`--state`, `--from`, `--import`) to FILE as a [`.topwater` file](#the-file-format). If the source has history (a recording, or an older `.jsonl` one), the history comes along, which also converts old recordings |
+| `topwater import FILE --state STATE` | checks FILE (a `.topwater` file, a snapshot or an older `.jsonl` recording) and writes its machine to STATE: the manifest, or for an old recording the machine after its last call |
+| `topwater replay FILE` | replays a recording on a fresh machine and prints the report; exit code 0 when every call matches, 1 when one doesn't. A run without a virtual clock is compared with `ReplayNormalizers.Volatile` |
+
+None of these is reachable from the agent's `bash` tool, and none touches Docker; container images are built from
+code with `Topwater.Containers`. The full security notes are in the package README (`src/Topwater.Cli/README.md`).
 
 ## Authenticated API calls
 
@@ -419,9 +429,9 @@ shell.Restore(before);                     // src is back, and so are variables,
 
 Shell attempt = shell.Fork();              // an independent copy to try something on
 
-using (var file = File.Create("machine.zip")) shell.Save(file);   // or before.Save(file)
-Shell later = Shell.Load(File.OpenRead("machine.zip"));            // built-ins only: register your commands again
-shell.Restore(ShellSnapshot.Load(File.OpenRead("machine.zip"), shell.Options));  // or load into a shell you configured
+using (var file = File.Create("machine.topwater")) shell.Save(file);   // or before.Save(file)
+Shell later = Shell.Load(File.OpenRead("machine.topwater"));            // built-ins only: register your commands again
+shell.Restore(ShellSnapshot.Load(File.OpenRead("machine.topwater"), shell.Options));  // or load into a shell you configured
 ```
 
 A snapshot is immutable. Later changes to the shell never reach it, restoring it twice gives the same machine, and a
@@ -461,8 +471,9 @@ they all see the restored files.
 
 ### The saved format
 
-`Save` writes a zip file. Zip is self-describing, every platform can open it (`unzip -l machine.zip`), and the
-contents of different files can be read one at a time. It contains:
+`Save` writes a [`.topwater` file](#the-file-format) without history: a zip. Zip is self-describing, every platform
+can open it (`unzip -l machine.topwater`), and the contents of different files can be read one at a time. The JSON
+Schemas for everything in it are in [`spec/topwater-file`](../spec/topwater-file/README.md). It contains:
 
 - `manifest.json`: `"format": "topwater-snapshot"`, `"version": 1` or `2`, the creation time, `user`, `hostname` and
   `cwd`, then `files` and the session. Each file entry has its absolute `path`, `type` (`dir`, `file` or `symlink`),
@@ -485,13 +496,16 @@ Topwater are meant to keep reading versions 1 and 2.
 
 ### Loading untrusted snapshots
 
-`Load` treats the file as hostile and reads it only into memory. Nothing is written to disk. Anything wrong fails the
+`Load` treats the file as hostile and reads it only into memory. Given a `.topwater` file with history, it loads
+`manifest.json`, the machine after the last call. Nothing is written to disk. Anything wrong fails the
 whole load with `InvalidDataException` (`not a valid Topwater snapshot: ...`), and nothing is half-loaded. The limits
 come from the `ShellOptions` you pass (the defaults otherwise):
 
 - The file contents together may hold at most `MaxFileSystemBytes`. A snapshot of a shell whose app wrote more than
   that (the app's writes are never refused) needs a larger value to load.
-- Files and directories, and zip entries, may number at most `MaxExtractEntries`.
+- Files and directories may number at most `MaxExtractEntries`. The zip's entry count is read from the end of the
+  file before any entry is listed, and may be at most 4 × `MaxExtractEntries` + 1,002 (room for a recording's
+  checkpoints).
 - Variables and array elements together may hold at most `MaxStringBytes` characters, and so may function bodies.
 - `manifest.json` may be at most 4 × `MaxStringBytes` plus 1 KB per allowed entry. The whole file may be at most
   twice `MaxFileSystemBytes` plus that, and a stream that can't seek is read only up to that size.
@@ -758,15 +772,18 @@ using var recorder = shell.StartRecording(new RecordingOptions
 });
 // run the agent: RunAsync, BashTool.ExecuteAsync and AsAIFunction calls are all recorded
 recorder.Stop();                             // before your own checks, which also go through RunAsync
-recorder.Save("runs/todo.jsonl");            // or Save(stream); Save(path, sidecarSnapshots: true)
+recorder.Save("runs/todo.topwater");         // or Save(stream)
 
-var recording = Recording.Load("runs/todo.jsonl");
+var recording = Recording.Load("runs/todo.topwater");   // also reads snapshots and older .jsonl recordings
 ReplayReport report = await recording.ReplayAsync(configure: s => s.Register(new OrderTools()));
 Console.WriteLine(report);                   // "replay on topwater 0.1.0-preview.1: 12/12 calls match"
 ```
 
 `StartRecording` snapshots the machine as the recording's start; every `RunAsync` call after it is added until `Stop`.
-Only one recording runs per shell at a time. `recorder.SnapshotNow()` attaches a snapshot to the last call on demand.
+Only one recording runs per shell at a time. Each `RecordedCall` holds the command, stdout, stderr, exit code, trailer,
+wall time, `Time` (the shell's clock when the call started) and `Files` (the paths it added, changed or removed). The
+last call always keeps a snapshot, so the file holds the end state; `SnapshotEvery` keeps more, and
+`recorder.SnapshotNow()` attaches one to the last call on demand.
 
 ### Replaying
 
@@ -809,13 +826,14 @@ It works with any test framework: a mismatch throws `ReplayMismatchException` ca
 ```csharp
 [Fact]
 public Task Todo_session_still_behaves() =>
-    Replay.AssertMatches("recordings/todo.jsonl", configure: s => s.Register(new OrderTools()));
+    Replay.AssertMatches("recordings/todo.topwater", configure: s => s.Register(new OrderTools()));
 ```
 
 A relative path is relative to the test's source file, so recordings sit next to the tests without being copied to
 the output folder. A deterministic recording is compared exactly; others with `ReplayNormalizers.Volatile`. When a
 change is intended, run the tests with `TOPWATER_RERECORD=1`: `AssertMatches` then rewrites each file with what this
-Topwater returns instead of comparing (header, metadata and start kept; snapshots retaken where there were some).
+Topwater returns instead of comparing (header, metadata and start kept; snapshots retaken where there were some),
+as a `.topwater` file even if it was an older `.jsonl` one.
 Review the diff and commit it. `recording.RerecordAsync(target)` does the same in code.
 
 ### Real bash in Docker
@@ -853,57 +871,71 @@ The example harness itself now saves a deterministic recording of every run next
 
 ### In TypeScript and in the browser
 
-The TypeScript port reads and writes the same files (`Recording`, `ShellSnapshot`, `startRecording`; see
-`typescript/README.md`), with the same virtual clock and random generator, so a deterministic recording made here
-re-runs there with the same times and random numbers. Its demo site has a recording viewer (`replay.html`) that steps
+All three ports read and write the same `.topwater` files. The TypeScript port (`Recording`, `ShellSnapshot`,
+`startRecording`; see `typescript/README.md`) has the same virtual clock and random generator, so a deterministic recording made here
+re-runs there with the same times and random numbers. Python (`shell.start_recording()`, `Recording.load()`; see
+`python/README.md`) has no virtual clock, so a replay of its recordings needs a normalizer for anything that prints the time. The TypeScript demo site has a recording viewer (`replay.html`) that steps
 through a recording turn by turn, shows the files after each turn and what the turn changed, and opens a terminal on
 the machine as of any turn.
 
 ### The file format
 
-A recording is a JSON Lines file (UTF-8, one JSON object per line, `\n` endings). JSON Lines because a run is a
-sequence of turns: each turn is one line, so a recording can be written as the agent goes and a crash leaves a valid
-prefix, a viewer can stream it turn by turn, `git diff` shows exactly which calls changed after a re-record, and `jq`
-and `grep` work on it. Snapshots are the [snapshot zip](#the-saved-format), base64-encoded inline by default so one
-file holds the whole run, or side-car zip files referenced by relative path (`Save(path, sidecarSnapshots: true)`
-writes them to `<name>.snapshots/`), which keeps the `.jsonl` small and its diffs readable.
+Snapshots and recordings are one format, the `.topwater` file: a zip. A snapshot is a `.topwater` file without
+history. The JSON Schemas are in [`spec/topwater-file`](../spec/topwater-file/README.md).
 
-Line 1 is the header:
+| Entry | |
+|---|---|
+| `manifest.json` | the machine: [the snapshot manifest](#the-saved-format). With history, the machine after the last call |
+| `blobs/<sha256>` | file contents, each stored once for the whole file, shared by the manifest and every checkpoint |
+| `history.jsonl` | with history only: a header line, then one line per call |
+| `checkpoints/<n>.json` | with history only: the machine after `n` calls, the manifest's shape. `0` is the start and always there |
+
+Because the machine is always `manifest.json`, a recording opens anywhere a snapshot does (`Shell.Load`, `--state`,
+`snapshot info`), also in a Topwater that predates history.
+
+`history.jsonl` is JSON Lines (UTF-8, `\n` endings): one line per call, so `jq` and `grep` work on it after
+`unzip -p run.topwater history.jsonl`. Line 1 is the header:
 
 ```json
-{"format":"topwater-recording","version":1,"created":"2026-11-25T09:00:00.0000000Z","topwater":"0.1.0-preview.1+...",
+{"format":"topwater-history","version":1,"created":"2026-11-25T09:00:00.0000000Z","topwater":"0.1.0-preview.1+...",
  "options":{"user":"agent","hostname":"topwater","startTime":"2026-11-25T09:00:00.0000000Z","randomSeed":1,
             "maxLoopIterations":100000,"maxExtractBytes":67108864,"maxExtractEntries":100000,"maxCallDurationMs":120000,
             "maxFileSystemBytes":134217728,"maxStringBytes":33554432},
  "appCommands":["orders"],
- "metadata":{"model":"gemini-flash-latest","task":"Find every TODO"},
- "start":{"embedded":"UEsDBBQAAAAI..."}}
+ "metadata":{"model":"gemini-flash-latest","task":"Find every TODO"}}
 ```
 
 (shown wrapped; in the file it is one line)
 
-- `options` are the `ShellOptions` that shape behaviour. `startTime` and `randomSeed` are absent when not set.
+- `options` are the `ShellOptions` that shape behaviour. `startTime` and `randomSeed` are absent when not set;
+  `maxCallDurationMs` is -1 for no limit.
 - `appCommands` (optional) are the registered commands that aren't built-ins; a replay target needs them.
 - `metadata` (optional) is free-form string pairs.
-- `start` is the machine before the first call: `{"embedded": "<base64 zip>"}` or `{"file": "<relative path>"}`.
 
 Every later line is one call, in order:
 
 ```json
-{"index":0,"command":"grep -rn TODO ~/project","stdout":"...","stderr":"","exitCode":0,"elapsedMs":12.5,"trailer":"[stopped: ...]","snapshot":{"embedded":"..."}}
+{"index":0,"command":"grep -rn TODO ~/project","stdout":"...","stderr":"","exitCode":0,"trailer":"[stopped: ...]","elapsedMs":12.5,"time":"2026-11-25T09:00:00.0000000Z","files":["/home/agent/project/notes.txt"]}
 ```
 
-`trailer` (the note a safety limit adds) and `snapshot` (the machine right after this call) are present only when
-set. `elapsedMs` is wall time, kept for information and never compared. `index` counts from 0.
+`trailer` (the note a safety limit adds) and `files` (paths the call added, changed or removed, sorted) are present
+only when set. `time` is the shell's clock when the call started. `elapsedMs` is wall time, kept for information and
+never compared. `index` counts from 0. The checkpoint after call `index` is `checkpoints/<index + 1>.json`, if there is one.
 
 Version rules: readers ignore fields they don't know, so later versions may add optional fields without changing
 `version`. A change that older readers would misread raises `version`; loading a newer version fails with
 `NotSupportedException`, and later Topwater versions keep reading version 1. Loading treats the file as untrusted:
-snapshots load under the default limits or the `ShellOptions` passed to `Load` (never limits the file names) with every check
-[`ShellSnapshot.Load`](#loading-untrusted-snapshots) makes. The replay shell's limits are the file's, clamped to the same
-bound: a recording can lower limits, never raise them. At most 1,000 snapshots load, and their files together may hold at
-most 4 x `MaxFileSystemBytes`. A side-car path must be a plain relative file name (no leading `/`, drive, URL, backslash or
-`..`); a custom `openSnapshot` must treat it as nothing else.
+every manifest and checkpoint loads under the default limits or the `ShellOptions` passed to `Load` (never limits the
+file names) with every check [`ShellSnapshot.Load`](#loading-untrusted-snapshots) makes. The replay shell's limits are
+the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000 checkpoints load,
+their files together may hold at most 4 x `MaxFileSystemBytes`, `history.jsonl` is read up to the manifest's size cap,
+and checkpoint names must be `0` or a number without leading zeros no greater than the number of calls.
+
+Older files still load: snapshot zips are `.topwater` files already, and the JSON Lines recordings that came before
+(header `"format":"topwater-recording"`, snapshots embedded as base64 zips or in side-car files) load with the same
+checks. A side-car name must be plain segments of letters, digits, `.`, `_` and `-` separated by `/`, none made only of
+dots; a custom `openSnapshot` must treat it as nothing else. `Save` always writes `.topwater`, so loading and saving
+converts an old recording.
 
 ## Limits and safety
 
