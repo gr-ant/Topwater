@@ -98,7 +98,7 @@ internal static partial class Builtins
     {
         if (arg is not ("--version" or "--help") || NoStandardOptions.Contains(cmd.Name)) return false;
         if (arg == "--version") ctx.Stdout.WriteLine(Versions.GetValueOrDefault(cmd.Name, $"{cmd.Name} (GNU coreutils) 9.4"));
-        else ctx.Stdout.WriteLine($"Usage: {cmd.Name} [OPTION]... [ARG]...\n{cmd.Description}.");
+        else ctx.Stdout.Write(cmd.Usage ?? $"Usage: {cmd.Name} [OPTION]... [ARG]...\n{cmd.Description}.\n");
         return true;
     }
 
@@ -454,7 +454,7 @@ internal static partial class Builtins
             var fmt = a.Positional.FirstOrDefault(p => p.StartsWith('+'));
             ctx.Stdout.WriteLine(Strftime(now, a.Has('I') ? "%Y-%m-%d" : a.Has('R') ? "%a, %d %b %Y %H:%M:%S +0000" : fmt != null ? fmt[1..] : "%a %b %e %H:%M:%S %Z %Y"));
             return 0;
-        }, "Print the date and time");
+        }, "Print the date and time", DateUsage);
 
         shell.Register("ps", ctx =>
         {
@@ -510,40 +510,154 @@ internal static partial class Builtins
         ["second"] = 1, ["sec"] = 1, ["minute"] = 60, ["min"] = 60, ["hour"] = 3600, ["day"] = 86400, ["week"] = 604800, ["fortnight"] = 1209600,
     };
 
-    /// <summary>date -d: @EPOCH, YYYY-MM-DD[ HH:MM[:SS]], now/today/yesterday/tomorrow, and "[+-]N unit[s] [ago]" offsets (UTC).</summary>
+    // our own summary of what this date supports (not GNU's help text)
+    const string DateUsage = """
+        Usage: date [OPTION]... [+FORMAT]
+        Print the current date and time, or the one given with -d, in UTC.
+
+          -d, --date=STRING        show the time described by STRING instead of now
+          -r, --reference=FILE     show FILE's last modification time
+          -u, --utc, --universal   use UTC (the clock is already UTC)
+          -I, --iso-8601           print the date as YYYY-MM-DD
+          -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000
+
+        STRING can combine, in any order:
+          dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120
+          times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)
+          zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)
+          weekdays   Monday, fri   (moves forward to that day)
+          words      now  today  yesterday  tomorrow
+          relative   3 days ago   +2 hours   next week   last month   1 year
+          epoch      @1795168800
+
+        FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,
+        and %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s
+
+        """;
+
+    static readonly string[] MonthAbbr = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    static readonly string[] DayAbbr = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    static readonly Dictionary<string, int> ZoneHours = new()
+    {
+        ["utc"] = 0, ["gmt"] = 0, ["ut"] = 0, ["z"] = 0, ["est"] = -5, ["edt"] = -4, ["cst"] = -6, ["cdt"] = -5,
+        ["mst"] = -7, ["mdt"] = -6, ["pst"] = -8, ["pdt"] = -7,
+    };
+
+    /// <summary>
+    /// date -d, from GNU date's documented input formats: items in any order, each optional. Calendar dates
+    /// (2026-11-20, 11/20/2026, 20 Nov 2026, Nov 20, 2026, 20261120), times (13:30[:00[.5]], 1pm), zones
+    /// (UTC, Z, EST..., +0100, +01:00), a day of the week, today/now/yesterday/tomorrow, @EPOCH, and relative items
+    /// ("3 days ago", "next week", "+2 hours") applied last. Results are UTC, the simulated machine's zone.
+    /// </summary>
     internal static DateTime ParseDate(string text, DateTime now)
     {
-        var s = text.Trim().ToLowerInvariant();
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var m = System.Text.RegularExpressions.Regex.Match(s, @"^@(-?\d+(?:\.\d+)?)$");
-        if (m.Success) return DateTime.UnixEpoch.AddSeconds(double.Parse(m.Groups[1].Value, inv));
         var bad = new ShellException($"invalid date '{text}'");
-        var t = now;
-        m = System.Text.RegularExpressions.Regex.Match(s, @"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[t ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?(z|utc|[+-]00:?00)?");
-        if (m.Success)
+        var s = text.Trim().ToLowerInvariant();
+        var epoch = System.Text.RegularExpressions.Regex.Match(s, @"^@(-?\d+(?:\.\d+)?)$");
+        if (epoch.Success) return DateTime.UnixEpoch.AddSeconds(double.Parse(epoch.Groups[1].Value, inv));
+
+        int? year = null, month = null, day = null, zone = null; // zone in minutes east of UTC
+        TimeSpan? time = null;
+        int? weekday = null, dayShift = null;
+        var relative = new List<(int N, string Unit)>();
+        const string Months = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?";
+        System.Text.RegularExpressions.Match m;
+        bool Eat(string pattern)
         {
-            int G(int g) => m.Groups[g].Success ? int.Parse(m.Groups[g].Value, inv) : 0;
-            try { t = new DateTime(G(1), G(2), G(3), G(4), G(5), G(6), DateTimeKind.Utc); }
-            catch (ArgumentOutOfRangeException) { throw bad; }
-            s = s[m.Length..].Trim();
+            m = System.Text.RegularExpressions.Regex.Match(s, "^(?:" + pattern + ")");
+            if (!m.Success) return false;
+            s = s[m.Length..].TrimStart(' ', '\t', ',');
+            return true;
         }
-        else
-            foreach (var (word, days) in new[] { ("yesterday", -1), ("tomorrow", 1), ("today", 0), ("now", 0) })
-                if (s.StartsWith(word, StringComparison.Ordinal)) { t = now.AddDays(days); s = s[word.Length..].Trim(); break; }
-        foreach (System.Text.RegularExpressions.Match r in System.Text.RegularExpressions.Regex.Matches(s,
-                     @"(next|last|[+-]?\s*\d+)?\s*(second|sec|minute|min|hour|day|week|fortnight|month|year)s?(\s+ago)?|(\S+)"))
+        int G(int g) => int.Parse(m.Groups[g].Value, inv);
+        int MonthOf(int g) => Array.IndexOf(MonthAbbr, m.Groups[g].Value[..3]) + 1;
+        static int FullYear(int y, int digits) => digits > 2 ? y : y < 69 ? 2000 + y : 1900 + y;
+        void SetDate(int? y, int mo, int d) { if (day != null) throw bad; year = y ?? year; month = mo; day = d; }
+        void SetZone(int minutes) { if (zone != null) throw bad; zone = minutes; }
+
+        bool afterTime = false;
+        while (s.Length > 0)
         {
-            if (r.Groups[4].Success || !r.Groups[2].Success) throw bad;
-            var word = (r.Groups[1].Success ? r.Groups[1].Value : "1").Replace(" ", "");
-            int n = word == "next" ? 1 : word == "last" ? -1 : int.Parse(word, inv);
-            if (r.Groups[3].Success) n = -n;
-            var unit = r.Groups[2].Value;
+            // a signed number right after a time of day is its zone ("10:00 +2" is UTC+2), anywhere else it's relative
+            if (afterTime && Eat(@"([+-])\s*(\d{1,2}:\d{2}|\d{1,4})\b"))
+            {
+                afterTime = false;
+                var v = m.Groups[2].Value.Replace(":", "");
+                int minutes = v.Length <= 2 ? int.Parse(v, inv) * 60 : int.Parse(v[..^2], inv) * 60 + int.Parse(v[^2..], inv);
+                SetZone(m.Groups[1].Value == "-" ? -minutes : minutes);
+                continue;
+            }
+            bool wasTime = false;
+            if (Eat(@"(\d{4})-(\d{1,2})-(\d{1,2})(?:t(?=\d))?")) SetDate(G(1), G(2), G(3));
+            else if (Eat(@"(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?\b"))
+                SetDate(m.Groups[3].Success ? FullYear(G(3), m.Groups[3].Length) : null, G(1), G(2));
+            else if (Eat(@"(\d{4})(\d{2})(\d{2})\b")) SetDate(G(1), G(2), G(3));
+            else if (Eat(@"(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?\s*(?:(a|p)\.?m\.?\b)?"))
+            {
+                if (time != null) throw bad;
+                int h = G(1);
+                if (m.Groups[5].Success) { if (h is < 1 or > 12) throw bad; h = h % 12 + (m.Groups[5].Value == "p" ? 12 : 0); }
+                double frac = m.Groups[4].Success ? double.Parse("0." + m.Groups[4].Value, inv) : 0;
+                if (h > 23 || G(2) > 59 || (m.Groups[3].Success && G(3) > 60)) throw bad;
+                time = new TimeSpan(h, G(2), m.Groups[3].Success ? G(3) : 0) + TimeSpan.FromSeconds(frac);
+                wasTime = true;
+            }
+            else if (Eat(@"(\d{1,2})\s*(a|p)\.?m\.?\b"))
+            {
+                if (time != null || G(1) is < 1 or > 12) throw bad;
+                time = TimeSpan.FromHours(G(1) % 12 + (m.Groups[2].Value == "p" ? 12 : 0));
+                wasTime = true;
+            }
+            else if (Eat(@"(\d{1,2})(?:st|nd|rd|th)?[\s-]*" + Months + @"(?:[\s-]+(\d{4})\b)?"))
+                SetDate(m.Groups[3].Success ? G(3) : null, MonthOf(2), G(1));
+            else if (Eat(Months + @"\s*(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s*(\d{4})\b)?"))
+                SetDate(m.Groups[3].Success ? G(3) : null, MonthOf(1), G(2));
+            else if (Eat(@"(next|last|this|[+-]?\s*\d+)?\s*(second|sec|minute|min|hour|day|week|fortnight|month|year)s?\b(\s+ago\b)?"))
+            {
+                var word = m.Groups[1].Success ? m.Groups[1].Value.Replace(" ", "") : "1";
+                int n = word switch { "next" => 1, "last" => -1, "this" => 0, _ => int.Parse(word, inv) };
+                relative.Add((m.Groups[3].Success ? -n : n, m.Groups[2].Value));
+            }
+            else if (Eat(@"(utc|gmt|ut|z|[ecmp][sd]t)\b(?:([+-])(\d{1,2})(?::?(\d{2}))?)?"))
+            {
+                int offset = ZoneHours[m.Groups[1].Value] * 60;
+                if (m.Groups[2].Success) offset += (m.Groups[2].Value == "-" ? -1 : 1) * (G(3) * 60 + (m.Groups[4].Success ? G(4) : 0));
+                SetZone(offset);
+            }
+            else if (Eat(@"([+-])(\d{2}):?(\d{2})\b")) SetZone((m.Groups[1].Value == "-" ? -1 : 1) * (G(2) * 60 + G(3)));
+            else if (Eat(@"(sun|mon|tue|wed|thu|fri|sat)[a-z]*\.?\b"))
+            {
+                if (weekday != null) throw bad;
+                weekday = Array.IndexOf(DayAbbr, m.Groups[1].Value);
+            }
+            else if (Eat(@"(today|now|yesterday|tomorrow)\b"))
+            {
+                if (dayShift != null) throw bad;
+                dayShift = m.Groups[1].Value switch { "yesterday" => -1, "tomorrow" => 1, _ => 0 };
+            }
+            else if (year == null && day != null && Eat(@"(\d{4})\b")) year = G(1); // "Fri Nov 20 13:30:00 UTC 2026", date's own output
+            else throw bad;
+            afterTime = wasTime;
+        }
+
+        // absolute items set the date and time; anything not given comes from now, and a date alone means midnight
+        bool absolute = day != null || time != null || weekday != null;
+        DateTime t;
+        try { t = new DateTime(year ?? now.Year, month ?? now.Month, day ?? now.Day, 0, 0, 0, DateTimeKind.Utc); }
+        catch (ArgumentOutOfRangeException) { throw bad; }
+        t += time ?? (absolute ? TimeSpan.Zero : now.TimeOfDay);
+        if (zone is { } z) t = t.AddMinutes(-z);
+        if (weekday is { } w) t = t.AddDays(((w - (int)t.DayOfWeek) % 7 + 7) % 7);
+        if (dayShift is { } shift) t = t.AddDays(shift);
+        foreach (var (n, unit) in relative)
+        {
             if (unit is "month" or "year")
             {
                 // like GNU date, a day past the end of the month rolls over (Jan 31 + 1 month = Mar 2 or 3)
                 int months = t.Month - 1 + n * (unit == "year" ? 12 : 1);
-                int year = t.Year + (int)Math.Floor(months / 12.0), month = ((months % 12) + 12) % 12 + 1;
-                t = new DateTime(year, month, 1, t.Hour, t.Minute, t.Second, DateTimeKind.Utc).AddTicks(t.Ticks % TimeSpan.TicksPerSecond).AddDays(t.Day - 1);
+                int y = t.Year + (int)Math.Floor(months / 12.0), mo = ((months % 12) + 12) % 12 + 1;
+                t = new DateTime(y, mo, 1, t.Hour, t.Minute, t.Second, DateTimeKind.Utc).AddTicks(t.Ticks % TimeSpan.TicksPerSecond).AddDays(t.Day - 1);
             }
             else t = t.AddSeconds((double)n * DateUnits[unit]);
         }
