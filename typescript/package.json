@@ -30,17 +30,13 @@
   },
   "peerDependencies": {
     "ai": "^7.0.0",
-    "@openai/agents": "^0.22.0",
-    "zod": "^4.0.0"
+    "@openai/agents": ">=0.22.0 <1"
   },
   "peerDependenciesMeta": {
     "ai": {
       "optional": true
     },
     "@openai/agents": {
-      "optional": true
-    },
-    "zod": {
       "optional": true
     }
   },
