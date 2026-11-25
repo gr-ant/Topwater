@@ -50,7 +50,8 @@ public sealed class DockerTarget : IReplayTarget
         shell.Restore(start);
         var pristine = new Shell(new ShellOptions { User = start.User, Hostname = start.Hostname });
         var container = "topwater-replay-" + Guid.NewGuid().ToString("N")[..12];
-        var run = new List<string> { "run", "-d", "--rm", "--name", container, "--hostname", start.Hostname };
+        // commands may come from untrusted recordings: bound memory and processes
+        var run = new List<string> { "run", "-d", "--rm", "--name", container, "--hostname", start.Hostname, "--memory", "1g", "--pids-limit", "512" };
         if (!o.Network) run.AddRange(["--network", "none"]);
         run.AddRange([image, "sleep", "infinity"]);
         await RunDockerAsync(o, run, null, ct, check: true);
@@ -65,7 +66,7 @@ public sealed class DockerTarget : IReplayTarget
                 if (name != "root" && name != start.User) setup.Append($"id -u {name} >/dev/null 2>&1 || useradd -M -u {uid} {name}\n");
             setup.Append($"mkdir -p {StateDir}\nchown {start.User} {StateDir}\n");
             await target.ExecAsync(["-u", "root"], ["bash", "-c", setup.ToString()], null, ct, check: true);
-            await target.ExecAsync(["-i", "-u", "root"], ["tar", "-xpf", "-", "-C", "/", "--numeric-owner"], tar, ct, check: true);
+            if (tar.Length > 0) await target.ExecAsync(["-i", "-u", "root"], ["tar", "-xpf", "-", "-C", "/", "--numeric-owner"], tar, ct, check: true);
 
             // the session: exported variables become the environment, the rest (and functions) the saved state
             var env = new StringBuilder();

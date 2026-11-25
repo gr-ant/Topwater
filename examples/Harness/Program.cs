@@ -5,13 +5,15 @@
 //   OPENROUTER_API_KEY=... MODEL=openai/gpt-5 dotnet run --project examples/Harness   (Claude, GPT, ... via OpenRouter)
 //   VARIANTS=plain,restricted,fake REPEAT=2 TASK_IDS=2,4 WORKERS=3 SYSTEM_PROMPT="..."   (all optional)
 //
-// Every run is saved to runs/harness-<time>.json as it goes (LOG=file.json to choose the path).
+// Every run is saved to runs/harness-<time>.json as it goes (LOG=file.json to choose the path), and each one also as a
+// replayable recording in runs/harness-<time>/ (see "Recordings" in docs/reference.md).
+//   EXPORT_START=start.zip dotnet run --project examples/Harness   (save the starting machine and exit)
 using System.Text.RegularExpressions;
 using Topwater;
 
 var openRouterKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
 var key = string.IsNullOrEmpty(openRouterKey) ? Environment.GetEnvironmentVariable("GEMINI_API_KEY") : openRouterKey;
-if (string.IsNullOrEmpty(key)) { Console.Error.WriteLine("set GEMINI_API_KEY or OPENROUTER_API_KEY"); return 2; }
+if (string.IsNullOrEmpty(key) && Environment.GetEnvironmentVariable("EXPORT_START") is not { Length: > 0 }) { Console.Error.WriteLine("set GEMINI_API_KEY or OPENROUTER_API_KEY"); return 2; }
 var model = string.IsNullOrEmpty(openRouterKey) ? Environment.GetEnvironmentVariable("MODEL") ?? "gemini-flash-latest" : OpenRouterAgent.Model;
 
 var descriptions = new Dictionary<string, string>
@@ -60,7 +62,8 @@ var probe = new Regex(@"python|\bgit\b|grade|eval|\bhistory\b|(^|[;&|]\s*)env\b|
 
 Shell MakeShell()
 {
-    var sh = new Shell().Register(new OrderTools());
+    // a virtual clock and a seed, so every recorded run replays exactly
+    var sh = new Shell(new ShellOptions { StartTime = new DateTimeOffset(2026, 11, 24, 9, 0, 0, TimeSpan.Zero), RandomSeed = 1 }).Register(new OrderTools());
     var fs = sh.Fs;
     fs.CreateDirectory("/home/agent/project/src", parents: true);
     fs.CreateDirectory("/home/agent/data", parents: true);
@@ -73,6 +76,14 @@ Shell MakeShell()
     Incident.AddFixture(fs);
     fs.SetOwner("/home/agent", "agent", recursive: true);
     return sh;
+}
+
+if (Environment.GetEnvironmentVariable("EXPORT_START") is { Length: > 0 } startPath)
+{
+    using var file = File.Create(startPath);
+    MakeShell().Save(file);
+    Console.WriteLine($"starting machine: {startPath}");
+    return 0;
 }
 
 if (Environment.GetEnvironmentVariable("REFERENCE") is { Length: > 0 })
@@ -101,6 +112,11 @@ await Task.WhenAll(jobs.Select(async job =>
     {
         var (prompt, check) = tasks[job.task - 1];
         var shell = MakeShell();
+        var recorder = shell.StartRecording(new RecordingOptions
+        {
+            Metadata = { ["harness"] = "examples/Harness", ["model"] = model, ["variant"] = job.variant, ["task"] = prompt, ["taskId"] = job.task.ToString(), ["rep"] = job.rep.ToString() },
+            SnapshotEvery = 5,
+        });
         AgentRun run;
         try
         {
@@ -109,6 +125,9 @@ await Task.WhenAll(jobs.Select(async job =>
                 : await OpenRouterAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25);
         }
         catch (Exception e) { run = new AgentRun($"(API error: {e.Message})", []); }
+        recorder.Stop(); // before the checks, which run commands of their own
+        Directory.CreateDirectory(Path.ChangeExtension(logPath, null));
+        recorder.Save(Path.Combine(Path.ChangeExtension(logPath, null), $"{job.variant}-task{job.task}-rep{job.rep}.jsonl"));
         var result = new Result(job.variant, job.task, job.rep, check(run.Answer, shell), run.Answer, run.Commands, run.Commands.Count(c => probe.IsMatch(c.Command)));
         lock (results)
         {

@@ -816,6 +816,11 @@ each call and restored before the next, so state carries over as in Topwater. Al
 don't carry over. `DockerTarget.IsAvailableAsync()` tells tests whether to skip. It is a minimal docker-run and tar
 copy, meant to be swapped for the snapshot export in `Topwater.Containers`.
 
+`tools/ReplayGaps` uses this to measure Topwater against Linux on many sessions at once: it converts the example
+harness's saved transcripts (`runs/*.json`) and public agent trajectories into recordings, replays each on Topwater
+and in a container, and ranks the differences (missing commands, unsupported options, wrong exit codes, wrong output).
+The example harness itself now saves a deterministic recording of every run next to its transcript.
+
 ### The file format
 
 A recording is a JSON Lines file (UTF-8, one JSON object per line, `\n` endings). JSON Lines because a run is a
