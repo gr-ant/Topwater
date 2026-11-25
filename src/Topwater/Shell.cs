@@ -957,13 +957,20 @@ public sealed partial class Shell
         var assigned = new List<(string Name, string Value, bool Append)>();
         foreach (var a in c.Assignments)
         {
-            if (a.Elements != null || a.Index != null) { await AssignArrayAsync(a, io, ct); continue; }
-            var v = await ExpandAssignmentAsync(a.Value, io, ct);
-            if (Xtrace) io.Err.WriteLine($"+ {a.Name}{(a.Append ? "+=" : "=")}{TraceQuote(v)}");
-            if (words.Count > 0) { assigned.Add((a.Name, v, a.Append)); continue; }
-            // with no command, assignments apply left to right: IFS=, parts=($csv) splits on the comma
-            try { SetVar(a.Name, v, a.Append); }
-            catch (ShellException e) { io.Err.WriteLine($"bash: {e.Message}"); throw new ExitSignal(1); } // like bash, a failed assignment ends the script
+            try
+            {
+                if (a.Elements != null || a.Index != null) { await AssignArrayAsync(a, io, ct); continue; }
+                var v = await ExpandAssignmentAsync(a.Value, io, ct);
+                if (Xtrace) io.Err.WriteLine($"+ {a.Name}{(a.Append ? "+=" : "=")}{TraceQuote(v)}");
+                if (words.Count > 0) { assigned.Add((a.Name, v, a.Append)); continue; }
+                // with no command, assignments apply left to right: IFS=, parts=($csv) splits on the comma
+                SetVar(a.Name, v, a.Append);
+            }
+            catch (ShellException e) when (words.Count == 0 && e.Message.EndsWith("readonly variable"))
+            {
+                io.Err.WriteLine($"bash: {e.Message}");
+                throw new ExitSignal(1); // like bash, assigning a read-only variable ends the script
+            }
         }
 
         if (argv.Count == 0)
@@ -1482,7 +1489,7 @@ public sealed partial class Shell
         if (flags.Contains('p') || flags.Contains('f') || flags.Contains('F')) return null;
         bool local = words[0].Is("local") || InFunction && !flags.Contains('g');
         bool assoc = flags.Contains('A'), any = false;
-        var attrs = string.Concat(flags.Where(c => c is 'r' or 'x'));
+        var attrs = string.Concat(flags.Where(c => c is 'r' or 'x')) + (words[0].Is("readonly") ? "r" : "");
         var keep = new List<Word> { words[0] };
         foreach (var w in words.Skip(1))
         {
