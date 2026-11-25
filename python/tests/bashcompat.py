@@ -1,4 +1,4 @@
-"""The check behind the test_bashcompat_* tables: a script run in a fresh shell (in an empty directory, like the
+"""A helper for the clock tests: a script run in a fresh shell (in an empty directory, like the
 differential runs against real bash) gives bash's stdout and exit status, and writes to stderr only when bash did."""
 import sys
 from pathlib import Path

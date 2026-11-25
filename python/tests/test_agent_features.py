@@ -14,54 +14,7 @@ def out(shell: Shell, cmd: str) -> str:
     return r.stdout
 
 
-LANGUAGE_CASES = [
-    # control flow
-    ("if [ -d /tmp ]; then echo yes; else echo no; fi", "yes\n"),
-    ("x=3; if (( x > 5 )); then echo big; elif (( x > 1 )); then echo mid; else echo small; fi", "mid\n"),
-    ('for f in a b c; do echo "item $f"; done', "item a\nitem b\nitem c\n"),
-    ("for i in {1..3}; do echo -n $i; done; echo", "123\n"),
-    ("for ((i=0; i<3; i++)); do echo $i; done", "0\n1\n2\n"),
-    ("i=0; while [ $i -lt 3 ]; do i=$((i+1)); done; echo $i", "3\n"),
-    ("n=0; until [ $n -ge 2 ]; do ((n++)); done; echo $n", "2\n"),
-    ("for i in 1 2 3 4; do [ $i = 3 ] && break; echo $i; done", "1\n2\n"),
-    ("for i in 1 2 3; do [ $i = 2 ] && continue; echo $i; done", "1\n3\n"),
-    ("case foo.txt in *.md) echo md;; *.txt|*.log) echo text;; *) echo other;; esac", "text\n"),
-    ('greet() { echo "hi $1, $# args"; }; greet bob x', "hi bob, 2 args\n"),
-    ("function f { local v=inner; echo $v; }; v=outer; f; echo $v", "inner\nouter\n"),
-    ("f() { return 3; }; f; echo $?", "3\n"),
-    ('sum() { echo $(( $1 + $2 )); }; echo "total: $(sum 2 5)"', "total: 7\n"),
-    ("printf 'a\\nb\\nc\\n' | while read line; do echo \"<$line>\"; done", "<a>\n<b>\n<c>\n"),
-    ("echo 'k1,v1' | while IFS=, read -r k v; do echo \"$k=$v\"; done", "k1=v1\n"),
-    ("[[ -n $HOME && $HOME == /home/* ]] && echo match", "match\n"),
-    ("v=abc123; [[ $v =~ ^[a-z]+[0-9]+$ ]] && echo ok", "ok\n"),
-    ("f=report.txt; [[ $f != *.md ]] && echo notmd", "notmd\n"),
-    # arithmetic
-    ("echo $((2 + 3 * 4)) $(( (2+3)*4 )) $((7 / 2)) $((7 % 3)) $((2 ** 10))", "14 20 3 1 1024\n"),
-    ("a=5; b=3; echo $((a > b ? a : b)) $((a == 5 && b == 3))", "5 1\n"),
-    ("c=0; ((c++)); ((c += 10)); let c=c*2; echo $c", "22\n"),
-    ("printf 'a\\nb\\nc\\n' > f.txt; echo $(( $(wc -l < f.txt) * 2 ))", "6\n"),
-    ("fact() { if [ $1 -le 1 ]; then echo 1; else echo $(( $1 * $(fact $(($1-1))) )); fi; }; fact 5", "120\n"),
-    # parameter expansion
-    ("f=/var/log/app.tar.gz; echo ${f##*/} ${f%.*} ${f%%.*} ${f#*.}", "app.tar.gz /var/log/app.tar /var/log/app tar.gz\n"),
-    ("s=hello; echo ${#s} ${s^^} ${s:1:3} ${s: -2} ${s/l/L} ${s//l/L}", "5 HELLO ell lo heLlo heLLo\n"),
-    ("echo ${UNSET:-fallback} ${HOME:+set} [${UNSET:+x}]", "fallback set []\n"),
-    ("echo {a,b}.txt pre{1..3} {x..z}", "a.txt b.txt pre1 pre2 pre3 x y z\n"),
-    ("echo file{01..03}", "file01 file02 file03\n"),
-    # set -e / exit / scripts
-    ("set -e; false || echo recovered; echo after", "recovered\nafter\n"),
-    ("set -o pipefail; false | true; echo $?", "1\n"),
-    ("echo before; exit 0; echo after", "before\n"),
-    ("command -v grep && command -v nosuch; echo $?", "/usr/bin/grep\n1\n"),
-    ("eval 'x=42'; echo $x", "42\n"),
-]
-
-
 class AgentFeatureTests(unittest.TestCase):
-    def test_shell_language(self):
-        for cmd, expected in LANGUAGE_CASES:
-            with self.subTest(cmd=cmd):
-                self.assertEqual(expected, out(Shell(), cmd))
-
     def test_scripts_run_with_arguments(self):
         sh = Shell()
         out(sh, "cat > run.sh <<'EOF'\n#!/bin/bash\nset -e\necho \"script $1 $2 ($#)\"\nfor a in \"$@\"; do echo \"arg: $a\"; done\nEOF\nchmod +x run.sh")

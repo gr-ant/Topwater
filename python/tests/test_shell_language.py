@@ -1,73 +1,11 @@
-"""Ported from main's ArrayTests, ShellLanguageTests, SecondReviewTests (shell parts), BashCompatClock and the
-realism tests in AgentFeatureTests: behaviour the BashCompat tables cannot express (host state, limits, persistence)."""
+"""Ported from main's ShellLanguageTests, SecondReviewTests (shell parts), BashCompatClock and the realism tests in
+AgentFeatureTests: behaviour the shared corpus cannot express (host state, limits, persistence)."""
 import time
 
 import pytest
 
 from bashcompat import Shell, check
 
-ARRAY_CASES = [
-    ('a=(x \'y z\' w); echo ${#a[@]} "${a[1]}" $a', '3 y z x\n'),
-    ('a=(x \'y z\'); for e in "${a[@]}"; do echo "[$e]"; done', '[x]\n[y z]\n'),
-    ('a=(x \'y z\'); for e in ${a[@]}; do echo "[$e]"; done', '[x]\n[y]\n[z]\n'),
-    ('a=(x \'y z\'); printf \'%s|\' "${a[*]}"; echo', 'x y z|\n'),
-    ('a=(); echo ${#a[@]}; for e in "${a[@]}"; do echo no; done; echo end', '0\nend\n'),
-    ('a=(1 2); a+=(3 4); a+=(5); echo "${a[@]}"', '1 2 3 4 5\n'),
-    ('a=(); for i in 1 2 3; do a+=("n $i"); done; echo ${#a[@]} "${a[2]}"', '3 n 3\n'),
-    ('a[2]=c; a[0]=a; echo "${a[@]}" ${#a[@]} "${!a[@]}"', 'a c 2 0 2\n'),
-    ('a=(a b c d); echo "${a[-1]}" "${a[@]:1:2}" "${a[@]:2}"', 'd b c c d\n'),
-    ('a=(a b c); i=1; echo ${a[i]} ${a[$i]} ${a[i+1]} ${a[${#a[@]}-1]}', 'b b c c\n'),
-    ('a=(a b c); for i in "${!a[@]}"; do echo "$i=${a[$i]}"; done', '0=a\n1=b\n2=c\n'),
-    ('a=(a b c); for ((i=0; i<${#a[@]}; i++)); do printf \'%s\' "${a[i]}"; done; echo', 'abc\n'),
-    ('a=(a b c); unset \'a[1]\'; echo "${a[@]}" ${#a[@]}; unset a; echo "[${a[@]}]"', 'a c 2\n[]\n'),
-    ('a=(one two); a[1]=TWO; a[5]=six; echo "${a[@]}"; echo ${#a[1]}', 'one TWO six\n3\n'),
-    ('a=(a.txt b.txt); echo "${a[@]%.txt}" "${a[@]/#/x-}" "${a[@]^^}"', 'a b x-a.txt x-b.txt A.TXT B.TXT\n'),
-    ('a=($(echo one two three)); echo ${#a[@]} ${a[2]}', '3 three\n'),
-    ('touch f1.log f2.log; a=(*.log); echo ${#a[@]} "${a[@]}"', '2 f1.log f2.log\n'),
-    ('a=(\n  one   # comment\n  "two words"\n)\necho ${#a[@]} "${a[1]}"', '2 two words\n'),
-    ('a=(1 2 3); b=("${a[@]}" 4); echo "${b[@]}"; c=("${a[@]:1}"); echo "${c[@]}"', '1 2 3 4\n2 3\n'),
-    ('a=(3 4); echo $(( a[0] + a[1] )) $(( ${a[0]} * 2 ))', '7 6\n'),
-    ('a=(1 2); (( a[0]++ )); (( a[1] += 10 )); echo "${a[@]}"', '2 12\n'),
-    ('a=(x); echo "${a[5]:-none}" "${a[0]:-none}" "${a[5]+set}|"', 'none x |\n'),
-    ('x=scalar; echo "${x[0]}" "${x[@]}" ${#x[@]}', 'scalar scalar 1\n'),
-    ('declare -A m; m[one]=1; m["two words"]=2; echo "${m[one]}" "${m[two words]}" ${#m[@]}', '1 2 2\n'),
-    ('declare -A m=([a]=1 [b]=2); for k in "${!m[@]}"; do echo "$k=${m[$k]}"; done | sort', 'a=1\nb=2\n'),
-    ('declare -A c; for w in a b a; do (( c[$w]++ )); done; echo ${c[a]} ${c[b]}', '2 1\n'),
-    ('declare -A m; k=key; m[$k]=v; [[ -n "${m[$k]+x}" ]] && echo has; [[ -z "${m[nope]+x}" ]] && echo not', 'has\nnot\n'),
-    ("declare -A m=([a]=1); unset 'm[a]'; echo ${#m[@]}", '0\n'),
-    ('IFS=, read -ra parts <<< \'a,b c,d\'; echo ${#parts[@]} "${parts[1]}"', '3 b c\n'),
-    ('printf \'l1\\nl 2\\n\' > f; mapfile -t lines < f; echo ${#lines[@]} "${lines[1]}"', '2 l 2\n'),
-    ('readarray -t lines < <(printf \'a\\nb\\n\'); echo "${lines[@]}"', 'a b\n'),
-    ('a=(outer); f(){ local a=(inner more); echo ${#a[@]}; }; f; echo "${a[@]}"', '2\nouter\n'),
-    ('f(){ local -a acc; acc+=(x); acc+=(y); echo "${acc[@]}"; }; f; echo "[${acc[@]}]"', 'x y\n[]\n'),
-    ('a=(1); (a+=(2); echo ${#a[@]}); echo ${#a[@]}', '2\n1\n'),
-    ('a=(1 2); echo "${a[@]}" | (read x y; echo $y); echo ${#a[@]}', '2\n2\n'),
-    ('a=(\'x y\' z); IFS=,; echo "${a[*]}"; unset IFS', 'x y,z\n'),
-    ('list=(3 1 2); IFS=$\'\\n\' sorted=($(sort <<<"${list[*]}")); unset IFS; echo "${sorted[@]}"', '1 2 3\n'),
-    ('a=(a b c); unset \'a[0]\'; a=("${a[@]}"); echo "${!a[@]}"', '0 1\n'),
-    ('args=(-l -a); set -- "${args[@]}" extra; echo $# "$2"', '3 -a\n'),
-    ('f() { local -a r=("$@"); echo "${#r[@]}:${r[1]}"; }; f p \'q r\' s', '3:q r\n'),
-    ('x=a; echo ${x/#/pre-} ${x/%/-post}', 'pre-a a-post\n'),
-]
-SECOND_MATCHESBASH = [
-    ('source ~/.bashrc && echo ok', 'ok\n'),
-    ('echo a; break; echo b', 'a\nb\n'),
-    ('x=$(cat <<EOF\nit\'s fine\nEOF\n); echo "$x"', "it's fine\n"),
-    ('x=$(cat <<EOF\n1) item\nEOF\n); echo "$x"', '1) item\n'),
-    ('a=5 b=-3; echo $(($a-$b))', '8\n'),
-    ('echo $((-2**2))', '4\n'),
-    ("alias cnt='echo a b | wc -w'; cnt", '2\n'),
-    ('x=outer; f(){ local x; echo "[$x]"; }; f', '[]\n'),
-    ('set -- foo bar baz; echo "${@:2}"', 'bar baz\n'),
-    ('echo x | exit 3; echo after', 'after\n'),
-    ('false; $empty; echo $?', '0\n'),
-    ('echo hi 3>/dev/null', 'hi\n'),
-    ('touch a; sleep 0.02; touch b; [ b -nt a ] && [ a -ot b ] && echo newer', 'newer\n'),
-    ('echo hi > f.txt; grep -r hi f.txt', 'hi\n'),
-    ("mkdir d; echo hi > d/a.txt; echo hi > d/a.log; grep -r --include '*.txt' hi d", 'd/a.txt:hi\n'),
-    ("echo foobar | grep -oP 'foo\\K\\w+'", 'bar\n'),
-    ('awk \'BEGIN{while(i++<25000)printf "x";print ""}\' | cut -c5- | wc -c', '24997\n'),
-]
 SECOND_STOPSINSTEADOFHANGING = [
     ('while :; do while :; do :; done; done; echo survived'),
     ('f(){ f; f; }; f; echo survived'),
@@ -89,18 +27,6 @@ LANG_RUNAWAYCONSTRUCTSEND = [
 
 def run(cmd: str, shell: Shell | None = None):
     return (shell or Shell()).run(cmd)
-
-
-@pytest.mark.parametrize("cmd,expected", ARRAY_CASES)
-def test_arrays_match_bash(cmd, expected):
-    r = run(cmd)
-    assert r.stderr == ""
-    assert r.stdout == expected
-
-
-@pytest.mark.parametrize("cmd,expected", SECOND_MATCHESBASH)
-def test_second_review_matches_bash(cmd, expected):
-    assert run(cmd).stdout == expected
 
 
 @pytest.mark.parametrize("cmd", [c[0] for c in SECOND_STOPSINSTEADOFHANGING])
