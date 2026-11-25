@@ -7,6 +7,7 @@
 
 Topwater is a .NET 8 library that gives an LLM agent one `bash` tool backed by a simulated Linux shell running
 inside your process. Your C# methods and MCP servers show up in it as command-line programs.
+[Python](#python-and-typescript) and [TypeScript](#python-and-typescript) versions are in preview.
 
 You register a method:
 
@@ -95,7 +96,7 @@ using var git = shell.RegisterHostCommand("git");
 ## What is in the machine
 
 - A shell language: pipes, redirects, loops, functions, arrays, heredocs, scripts.
-- About 100 standard commands, including `grep`, `sed`, `awk`, `jq` and `find`.
+- About 110 standard commands, including `grep`, `sed`, `awk`, `jq`, `find`, `tar` and `bc`.
 - An in-memory filesystem laid out like Ubuntu, with a regular user who cannot `sudo`.
 - `to-markdown` for reading Word, Excel, PowerPoint and HTML files.
 
@@ -114,6 +115,38 @@ MCP calls and host programs are real. A host program runs with your process's pe
 sandbox it unless you ask: `Launcher = HostSandbox.Bubblewrap()` runs it under bubblewrap, where it can see only its
 private copy of the agent's files and has no network. See [Real host programs](docs/reference.md#real-host-programs)
 before registering one.
+
+## Python and TypeScript
+
+The same shell is also written in Python and TypeScript. Both run the same recorded tests as the C# version and have
+the same limits, but they are previews and not on PyPI or npm yet.
+
+Python 3.10+, no dependencies, on the [`python` branch](https://github.com/gr-ant/Topwater/tree/python/python):
+
+```bash
+pip install "git+https://github.com/gr-ant/Topwater@python#subdirectory=python"
+```
+
+```python
+from topwater import Shell
+shell = Shell()
+print(shell.run("echo hello | tr a-z A-Z").to_tool_output())
+```
+
+TypeScript for Node 20+, no runtime dependencies, on the
+[`typescript` branch](https://github.com/gr-ant/Topwater/tree/typescript/typescript):
+
+```bash
+git clone -b typescript https://github.com/gr-ant/Topwater && cd Topwater/typescript && npm install && npm run build
+```
+
+```ts
+import { Shell, BashTool } from 'topwater';
+const shell = new Shell();
+const result = await BashTool.execute(shell, 'echo hello | tr a-z A-Z');
+```
+
+Each folder's README maps the C# API onto its own. Real host programs are C# and Python only for now.
 
 ## Try it
 
