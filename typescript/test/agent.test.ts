@@ -21,6 +21,36 @@ describe('agent features', () => {
     expect(await out(sh, 'PATH=/nowhere; cd /tmp; echo x')).toBe('x\n');
   });
 
+  it.each([
+    "printf '#!/usr/bin/env foo\\n' > b/foo",
+    "printf '#!/usr/bin/timeout 5\\n' > b/foo",
+    "printf '#!/usr/bin/env -S bar\\n' > b/foo; printf '#!/usr/bin/env -S foo\\n' > b/bar; chmod +x b/bar",
+  ])('stops a #! loop at the script nesting limit: %s', async setup => {
+    const sh = new Shell();
+    await out(sh, `mkdir b; ${setup}; chmod +x b/foo`);
+    const r = await sh.run('PATH=$PWD/b:$PATH foo');
+    expect(r.exitCode).toBe(1);
+    expect(r.toToolOutput()).toContain('[stopped: maximum script nesting level exceeded (100).');
+    expect(await out(sh, 'echo ok')).toBe('ok\n');
+  }, 60_000); // a deadline, so a regression fails the test instead of hanging it
+
+  it('PATH lookup details', async () => {
+    const sh = new Shell();
+    await out(sh, "mkdir -p ~/bin b && printf 'echo hi\\n' > ~/bin/x && printf 'echo b\\n' > b/y && chmod +x ~/bin/x b/y");
+    // a ~ at the start of a PATH entry is expanded during the search
+    expect(await out(sh, 'PATH="~/bin:$PATH"; x; type x')).toBe('hi\nx is hashed (/home/agent/bin/x)\n');
+    expect(await out(sh, 'hash -l')).toBe('builtin hash -p /home/agent/bin/x x\n');
+    expect(await out(sh, 'hash -lt x')).toBe('builtin hash -p /home/agent/bin/x x\n');
+    expect(await out(sh, 'hash b/y; hash -r; hash -l')).toBe('');
+    for (const o of ['t', 'd', 'lt']) {
+      const r = await sh.run('hash -' + o);
+      expect([r.exitCode, r.stderr]).toEqual([1, `bash: line 1: hash: -${o.slice(-1)}: option requires an argument\n`]);
+    }
+    // a hashed program whose directory can no longer be searched
+    const d = await sh.run('PATH=$PWD/b:$PATH; y; chmod 000 b; y; echo $?; chmod 755 b');
+    expect([d.stdout, d.stderr]).toEqual(['b\n126\n', 'bash: line 1: /home/agent/b/y: Permission denied\n']);
+  });
+
   it('runs scripts with arguments', async () => {
     const sh = new Shell();
     await out(sh, "cat > run.sh <<'EOF'\n#!/bin/bash\nset -e\necho \"script $1 $2 ($#)\"\nfor a in \"$@\"; do echo \"arg: $a\"; done\nEOF\nchmod +x run.sh");

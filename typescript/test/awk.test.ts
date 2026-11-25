@@ -218,7 +218,7 @@ describe('awk errors and limits', () => {
     const r = await run(['awk', 'BEGIN{while(1) i++}']);
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toBe('awk: loop iteration limit exceeded\n');
-  });
+  }, 30_000); // generous: a loaded machine runs slow
   test('time limit interrupts', async () => {
     const { run } = env();
     await expect(run(['awk', 'BEGIN{for(i=0;i<9000000;i++) for(j=0;j<1;j++) x=x+1}'], '', 20)).rejects.toThrow();

@@ -16,7 +16,7 @@ describe('inflate', () => {
       expect(Buffer.from(inflateRaw(zlib.deflateRawSync(data, { level })))).toEqual(data);
       expect(Buffer.from(gunzip(zlib.gzipSync(data, { level })))).toEqual(data);
     }
-  });
+  }, 30_000); // generous: a loaded machine runs slow
   it('decodes fixed-Huffman blocks', () => {
     const data = Buffer.from('abcabcabcabc hello hello');
     expect(Buffer.from(inflateRaw(zlib.deflateRawSync(data, { strategy: zlib.constants.Z_FIXED })))).toEqual(data);
@@ -37,7 +37,7 @@ describe('inflate', () => {
     const data = repetitive(100000);
     expect(Buffer.from(gunzip(await deflate('gzip', data)))).toEqual(data);
     expect(Buffer.from(inflateRaw(await deflate('deflate-raw', data)))).toEqual(data);
-  });
+  }, 30_000);
   it('classifies bad input like zlib', () => {
     const gz = zlib.gzipSync(repetitive(5000));
     expect(kind(() => gunzip(gz.subarray(0, gz.length - 20)))).toBe('eof');

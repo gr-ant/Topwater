@@ -969,7 +969,7 @@ export function registerBuiltins(shell: Shell) {
     const sh = ctx.shell;
     sh.syncHashed();
     const args = ctx.args;
-    let code = 0, i = 0, show = false, del = false, path: string | null = null;
+    let code = 0, i = 0, show = false, del = false, list = false, path: string | null = null;
     for (; i < args.length && args[i].length > 1 && args[i][0] === '-'; i++) {
       if (args[i] === '--') { i++; break; }
       for (const ch of args[i].slice(1)) {
@@ -977,22 +977,30 @@ export function registerBuiltins(shell: Shell) {
         else if (ch === 't') show = true;
         else if (ch === 'd') del = true;
         else if (ch === 'p') { if (i + 1 >= args.length) throw new UsageException('-p: option requires an argument'); path = args[++i]; break; }
-        else if (ch !== 'l') throw new UsageException(`-${ch}: invalid option`);
+        else if (ch === 'l') list = true;
+        else throw new UsageException(`-${ch}: invalid option`);
       }
     }
     const names = args.slice(i);
-    if (i === 0 && !names.length) {
+    if ((show || del) && !names.length) {
+      ctx.stderr.write(`${sh.errPrefix}hash: -${show ? 't' : 'd'}: option requires an argument\n`);
+      return 1;
+    }
+    // -l: each entry as the command that would hash it again
+    const reusable = (n: string, p: string) => `builtin hash -p ${p} ${n}`;
+    if (list && !names.length) ctx.stdout.write([...sh.hashed].map(([n, [p]]) => reusable(n, p) + '\n').join(''));
+    else if (i === 0 && !names.length) {
       if (!sh.hashed.size) line(ctx, 'hash: hash table empty');
       else ctx.stdout.write('hits\tcommand\n' + [...sh.hashed.values()].map(([p, n]) => `${String(n).padStart(4)}\t${p}\n`).join(''));
     }
     const notFound = (n: string) => { ctx.stderr.write(`${sh.errPrefix}hash: ${n}: not found\n`); code = 1; };
     for (const n of names) {
       const hashed = show ? sh.hashLookup(n) : null;
-      if (hashed !== null) line(ctx, names.length > 1 ? `${n}\t${hashed}` : hashed);
+      if (hashed !== null) line(ctx, list ? reusable(n, hashed) : names.length > 1 ? `${n}\t${hashed}` : hashed);
       else if (del && sh.hashed.delete(n)) { /* removed */ }
       else if (path !== null) sh.hashed.set(n, [path, 0]);
-      else if (show || del || n.includes('/')) notFound(n);
-      else if (isShellBuiltin(sh, n) || sh.functions.has(n) || sh.isUnfiled(n)) { /* nothing to remember */ }
+      else if (show || del) notFound(n);
+      else if (n.includes('/') || isShellBuiltin(sh, n) || sh.functions.has(n) || sh.isUnfiled(n)) { /* nothing to remember */ }
       else { const found = sh.searchPathAll(n)[0]; if (found) sh.hashed.set(n, [found, 0]); else notFound(n); }
     }
     return code;

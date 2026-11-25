@@ -1267,7 +1267,11 @@ export class Shell implements ArithHost {
     if (text.startsWith('#!')) {
       const nl = text.indexOf('\n');
       const line = text.slice(2, nl >= 0 ? nl : text.length).trim();
-      if (!/(^|\/|\s)(ba)?sh(\s|$)/.test(line)) return this.runInterpreter(name, line, argv, io);
+      if (!/(^|\/|\s)(ba)?sh(\s|$)/.test(line)) {
+        // the hand-off can lead back to this script (#!/usr/bin/env self), so it counts as a nesting level
+        if (++this.scriptDepth > 100) throw new LimitExceeded('maximum script nesting level exceeded (100)');
+        try { return await this.runInterpreter(name, line, argv, io); } finally { this.scriptDepth--; }
+      }
     }
     return this.runScriptText(text, io, true, argv.slice(1), { arg0: name, file: name });
   }
@@ -1307,9 +1311,11 @@ export class Shell implements ArithHost {
     return this.commands.has(name) ? name : null;
   }
 
-  /** Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd. */
+  /** Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd, and a leading ~ is
+   * expanded as bash does during the search. */
   private pathCandidates(name: string): string[] {
-    return (this.environment.get('PATH') ?? '').split(':').map(d => d ? d.replace(/\/+$/, '') + '/' + name : './' + name);
+    return (this.environment.get('PATH') ?? '').split(':').map(d => { const tp = this.tildePrefix(d); return tp ? tp[0] + d.slice(tp[1]) : d; })
+      .map(d => d ? d.replace(/\/+$/, '') + '/' + name : './' + name);
   }
 
   /** @internal PATH search as bash does it: the first executable regular file named `name` in a directory the agent can
