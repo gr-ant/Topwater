@@ -1,11 +1,11 @@
-// The zip container: reading and writing archives with node:zlib's raw deflate and a CRC-32. Shared by zip/unzip and
+// The zip container: reading and writing archives with a CRC-32. Shared by zip/unzip and
 // the Office-document converter.
 
-import * as zlib from 'node:zlib';
+import { concatBytes } from '../bytes.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const concat = (parts: Uint8Array[]) => Buffer.concat(parts);
+const concat = concatBytes;
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, i) => { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 export function crc32(data: Uint8Array): number {
@@ -61,32 +61,46 @@ export function writeZip(entries: ZipEntry[]): Uint8Array {
   for (const e of entries) {
     const name = enc.encode(e.name);
     const flags = e.flags | (/[^\x00-\x7f]/.test(e.name) ? 0x800 : 0);
-    const lh = Buffer.alloc(30);
-    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(e.method === 0 ? 10 : 20, 4); lh.writeUInt16LE(flags, 6); lh.writeUInt16LE(e.method, 8);
-    lh.writeUInt16LE(e.time, 10); lh.writeUInt16LE(e.date, 12); lh.writeUInt32LE(e.crc, 14); lh.writeUInt32LE(e.data.length, 18);
-    lh.writeUInt32LE(e.usize, 22); lh.writeUInt16LE(name.length, 26);
-    const ch = Buffer.alloc(46);
-    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(0x031e, 4); ch.writeUInt16LE(e.method === 0 ? 10 : 20, 6); ch.writeUInt16LE(flags, 8);
-    ch.writeUInt16LE(e.method, 10); ch.writeUInt16LE(e.time, 12); ch.writeUInt16LE(e.date, 14); ch.writeUInt32LE(e.crc, 16);
-    ch.writeUInt32LE(e.data.length, 20); ch.writeUInt32LE(e.usize, 24); ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE(e.ext >>> 0, 38);
-    ch.writeUInt32LE(offset, 42);
+    const lh = new Uint8Array(30), l = new DataView(lh.buffer);
+    l.setUint32(0, 0x04034b50, true); l.setUint16(4, e.method === 0 ? 10 : 20, true); l.setUint16(6, flags, true); l.setUint16(8, e.method, true);
+    l.setUint16(10, e.time, true); l.setUint16(12, e.date, true); l.setUint32(14, e.crc, true); l.setUint32(18, e.data.length, true);
+    l.setUint32(22, e.usize, true); l.setUint16(26, name.length, true);
+    const ch = new Uint8Array(46), c = new DataView(ch.buffer);
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 0x031e, true); c.setUint16(6, e.method === 0 ? 10 : 20, true); c.setUint16(8, flags, true);
+    c.setUint16(10, e.method, true); c.setUint16(12, e.time, true); c.setUint16(14, e.date, true); c.setUint32(16, e.crc, true);
+    c.setUint32(20, e.data.length, true); c.setUint32(24, e.usize, true); c.setUint16(28, name.length, true); c.setUint32(38, e.ext >>> 0, true);
+    c.setUint32(42, offset, true);
     out.push(lh, name, e.data);
     central.push(ch, name);
     offset += 30 + name.length + e.data.length;
   }
   const dir = concat(central);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(dir.length, 12); end.writeUInt32LE(offset, 16);
+  const end = new Uint8Array(22), ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, dir.length, true); ev.setUint32(16, offset, true);
   return concat([...out, dir, end]);
 }
 
-/** A zip of the given files (text or bytes), deflated; for building archives in code and tests. */
+/** A valid DEFLATE stream of stored blocks (no compression), so zips can be built synchronously. */
+export function storedDeflate(raw: Uint8Array): Uint8Array {
+  const blocks = Math.max(1, Math.ceil(raw.length / 65535));
+  const out = new Uint8Array(raw.length + blocks * 5);
+  let o = 0;
+  for (let i = 0; i < blocks; i++) {
+    const chunk = raw.subarray(i * 65535, (i + 1) * 65535);
+    out[o++] = i === blocks - 1 ? 1 : 0;
+    out[o++] = chunk.length & 255; out[o++] = chunk.length >> 8; out[o++] = ~chunk.length & 255; out[o++] = (~chunk.length >> 8) & 255;
+    out.set(chunk, o); o += chunk.length;
+  }
+  return out;
+}
+
+/** A zip of the given files (text or bytes), as stored-block deflate entries; for building archives in code and tests. */
 export function buildZip(files: [name: string, content: string | Uint8Array][], when = Date.UTC(2020, 0, 1)): Uint8Array {
   const [time, date] = dosTime(when);
   return writeZip(files.map(([name, content]) => {
     const raw = typeof content === 'string' ? enc.encode(content) : content;
-    return { name, method: 8, flags: 0, crc: crc32(raw), usize: raw.length, time, date, ext: (0o100644 << 16) >>> 0, data: zlib.deflateRawSync(raw) };
+    return { name, method: 8, flags: 0, crc: crc32(raw), usize: raw.length, time, date, ext: (0o100644 << 16) >>> 0, data: storedDeflate(raw) };
   }));
 }
 

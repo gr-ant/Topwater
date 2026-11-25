@@ -2,7 +2,7 @@
 // with no dependencies. PDF is not converted: that needs the host's pdftotext, and nothing here starts a process.
 // Malformed input throws ShellError, never anything else.
 
-import * as zlib from 'node:zlib';
+import { OutputLimitError, inflateRaw } from '../inflate.js';
 import { Args, ShellError, reason, type CommandContext } from '../command.js';
 import type { VirtualFileSystem } from '../vfs.js';
 import type { Shell } from '../shell.js';
@@ -79,8 +79,8 @@ class Pkg {
     let out: Uint8Array;
     if (e.method === 0) out = e.data;
     else if (e.method === 8) {
-      try { out = zlib.inflateRawSync(e.data, { maxOutputLength: Math.max(1, this.budget) }); } catch (err) {
-        if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') throw new ShellError(`archive expands to more than ${Math.floor(converterLimits.maxUncompressedBytes / (1024 * 1024))} MB`);
+      try { out = inflateRaw(e.data, Math.max(1, this.budget)); } catch (err) {
+        if (err instanceof OutputLimitError) throw new ShellError(`archive expands to more than ${Math.floor(converterLimits.maxUncompressedBytes / (1024 * 1024))} MB`);
         throw err;
       }
     } else throw new XmlError(`unsupported compression method ${e.method}`);
