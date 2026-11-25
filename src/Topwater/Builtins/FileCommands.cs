@@ -81,14 +81,22 @@ internal static partial class Builtins
     {
         var now = ctx.Fs.Clock();
         string Size(FileStat st) => human ? HumanSize(st.Size) : st.Size.ToString(CultureInfo.InvariantCulture);
-        var rows = entries.Select(e => (St: ctx.Fs.Stat(e.Abs, follow), e.Name, e.Abs)).Select(r => (r.St, r.Name, r.Abs,
+        // Broken: -L meets a link leading nowhere, shown as a row of question marks
+        var rows = entries.Select(e => (Broken: follow && !ctx.Fs.Exists(e.Abs), e.Name, e.Abs))
+            .Select(e => (St: ctx.Fs.Stat(e.Abs, follow && !e.Broken), e.Broken, e.Name, e.Abs)).Select(r => (r.St, r.Broken, r.Name, r.Abs,
             Links: r.St.Links.ToString(CultureInfo.InvariantCulture), Size: Size(r.St))).ToList();
         if (rows.Count == 0) yield break;
-        var all = rows.Select(r => r.St).Concat((widthFrom ?? []).Select(p => ctx.Fs.Stat(p, follow))).ToList();
-        int lw = all.Max(s => s.Links.ToString(CultureInfo.InvariantCulture).Length), ow = all.Max(s => s.Owner.Length), sw = all.Max(s => Size(s).Length);
-        int bw = all.Max(s => BlockSize(s, human).Length);
+        var all = rows.Where(r => !r.Broken).Select(r => r.St).Concat((widthFrom ?? []).Select(p => ctx.Fs.Stat(p, follow))).ToList();
+        int Width(Func<FileStat, string> f) => all.Select(s => f(s).Length).DefaultIfEmpty(1).Max();
+        int lw = Width(s => s.Links.ToString(CultureInfo.InvariantCulture)), ow = Width(s => s.Owner), sw = Width(Size), bw = Width(s => BlockSize(s, human));
+        int dw = Width(s => LsDate(s.Modified, now, style));
         foreach (var r in rows)
         {
+            if (r.Broken)
+            {
+                yield return (blocks ? "?".PadLeft(bw) + " " : "") + $"l????????? {"?".PadLeft(lw)} {"?".PadRight(ow)} {"?".PadRight(ow)} {"?".PadLeft(sw)} {"?".PadLeft(dw)} {r.Name}";
+                continue;
+            }
             // a link shows where it points; -F marks that target's type
             var name = r.St.LinkTarget is { } t ? r.Name + " -> " + t + (classify != null && ctx.Fs.Exists(r.Abs) ? classify(ctx.Fs.Stat(r.Abs)) : "")
                 : r.Name + (classify?.Invoke(r.St) ?? "");
@@ -119,7 +127,7 @@ internal static partial class Builtins
                 var named = entries.Select(e => (e.Abs, Name: e.Name + (!lng && a.Has('F') && fs.Exists(e.Abs, follow) ? Classify(fs.Stat(e.Abs, follow)) : ""))).ToList();
                 if (lng) { WriteLines(ctx.Stdout, LongEntries(ctx, named, human, widthFrom, style, blocks, follow, a.Has('F') ? Classify : null)); return; }
                 if (!blocks) { WriteLines(ctx.Stdout, named.Select(e => e.Name)); return; }
-                var sizes = named.Select(e => BlockSize(fs.Stat(e.Abs, follow && fs.Exists(e.Abs)), human)).ToList();
+                var sizes = named.Select(e => follow && !fs.Exists(e.Abs) ? "?" : BlockSize(fs.Stat(e.Abs, follow), human)).ToList();
                 int w = sizes.Select(x => x.Length).DefaultIfEmpty(0).Max();
                 WriteLines(ctx.Stdout, named.Select((e, k) => sizes[k].PadLeft(w) + " " + e.Name));
             }
@@ -159,11 +167,11 @@ internal static partial class Builtins
                 first = false;
                 if (!fs.CanRead(abs)) { ctx.Stderr.WriteLine($"ls: cannot open directory '{label}': Permission denied"); code = 2; return; }
                 var entries = fs.List(abs).Where(n => a.Has('a') || a.Has('A') || !n.StartsWith('.')).ToList();
-                if (deref)
-                    foreach (var n in entries.Where(n => !fs.Exists(VirtualFileSystem.Normalize(abs, n))).ToList())
+                if (deref && (lng || blocks)) // a link leading nowhere: an error, then a row of question marks
+                    foreach (var n in entries.Where(n => !fs.Exists(VirtualFileSystem.Normalize(abs, n))))
                     {
-                        // shortcut: GNU also lists such an entry as "l????????? ? ..."; it is left out
-                        if (lng) { ctx.Stderr.WriteLine($"ls: cannot access '{label.TrimEnd('/')}/{n}': {fs.WhyMissing(VirtualFileSystem.Normalize(abs, n))}"); code = 1; entries.Remove(n); }
+                        ctx.Stderr.WriteLine($"ls: cannot access '{(label == "." ? "" : label.TrimEnd('/') + "/")}{n}': {fs.WhyMissing(VirtualFileSystem.Normalize(abs, n))}");
+                        code = 1;
                     }
                 FileStat St(string n) => fs.Stat(VirtualFileSystem.Normalize(abs, n), deref && fs.Exists(VirtualFileSystem.Normalize(abs, n)));
                 if (a.Has('t')) entries = entries.OrderByDescending(n => St(n).Modified).ToList();
@@ -270,6 +278,15 @@ internal static partial class Builtins
                     continue;
                 }
                 if (ctx.Fs.IsDirectory(abs, follow: p.EndsWith('/')) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Is a directory"); code = 1; continue; }
+                if (recursive && p.EndsWith('/') && ctx.Fs.IsSymlink(abs) && ctx.Fs.IsDirectory(abs))
+                {
+                    // like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
+                    foreach (var n in ctx.Fs.List(abs))
+                        try { ctx.Fs.Delete(abs + "/" + n, recursive: true); }
+                        catch (ShellException e) { var (path, why) = Typed(e, p.TrimEnd('/') + "/" + n, abs + "/" + n); ctx.Stderr.WriteLine($"rm: cannot remove '{path}': {why}"); }
+                    if (!a.Has('f')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Not a directory"); code = 1; }
+                    continue;
+                }
                 try { ctx.Fs.Delete(abs, recursive); }
                 catch (ShellException e) { var (path, why) = Typed(e, p, abs); ctx.Stderr.WriteLine($"rm: cannot remove '{path}': {why}"); code = 1; }
             }
@@ -323,8 +340,8 @@ internal static partial class Builtins
                 if (!move && ctx.Fs.IsDirectory(src, followTop) && !(a.Has('r') || a.Has('R') || a.Has('a')))
                 { ctx.Stderr.WriteLine($"cp: -r not specified; omitting directory '{s}'"); code = 1; continue; }
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
-                if (target == src || !move && followTop && ctx.Fs.SameFile(src, target))
-                { ctx.Stderr.WriteLine($"{ctx.Name}: '{s}' and '{destArg}' are the same file"); code = 1; continue; }
+                if (target != src && !move && followTop && ctx.Fs.SameFile(src, target)) // through a link or another hard link; the plain case is a clash below
+                { ctx.Stderr.WriteLine($"cp: {QuoteAlways(s)} and {QuoteAlways(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)} are the same file"); code = 1; continue; }
                 if (!move && ctx.Fs.IsFile(src, followTop) && ctx.Fs.IsSymlink(target) && !ctx.Fs.Exists(target))
                 { ctx.Stderr.WriteLine($"cp: not writing through dangling symlink '{(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)}'"); code = 1; continue; }
                 if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data

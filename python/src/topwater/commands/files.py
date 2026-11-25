@@ -94,14 +94,22 @@ def _long_entries(ctx, entries, human: bool, width_from=(), style: str | None = 
     def size(st):
         return _human(st.size) if human else str(st.size)
 
-    rows = [(ctx.fs.stat(p, follow), name, p) for p, name in entries]
+    # broken: -L meets a link leading nowhere, shown as a row of question marks
+    rows = [(ctx.fs.stat(p, follow and not broken), name, p, broken) for p, name in entries for broken in [follow and not ctx.fs.exists(p)]]
     if not rows:
         return []
-    every = [st for st, _, _ in rows] + [ctx.fs.stat(p, follow) for p in width_from]
-    lw, ow, sw = (max(len(f(st)) for st in every) for f in (lambda st: str(st.links), lambda st: st.owner, size))
-    bw = max(len(_block_size(st, human)) for st in every)
+    every = [st for st, _, _, broken in rows if not broken] + [ctx.fs.stat(p, follow) for p in width_from]
+
+    def width(f):
+        return max((len(f(st)) for st in every), default=1)
+
+    lw, ow, sw, bw = (width(f) for f in (lambda st: str(st.links), lambda st: st.owner, size, lambda st: _block_size(st, human)))
+    dw = width(lambda st: _ls_date(st.modified, now, style))
     out = []
-    for st, name, p in rows:
+    for st, name, p, broken in rows:
+        if broken:
+            out.append(("?".rjust(bw) + " " if blocks else "") + f"l????????? {'?':>{lw}} {'?':<{ow}} {'?':<{ow}} {'?':>{sw}} {'?':>{dw}} {name}")
+            continue
         # a link shows where it points; -F marks that target's type
         if st.is_symlink:
             name += " -> " + st.link_target + (classify(ctx.fs.stat(p)) if classify and ctx.fs.exists(p) else "")
@@ -131,7 +139,7 @@ def _ls(ctx):
         else:
             named = [(p, n + (classify(fs.stat(p, follow)) if a.has("F") and fs.exists(p, follow) else "")) for p, n in entries]
             if blocks:
-                sizes = [_block_size(fs.stat(p, follow and fs.exists(p)), human) for p, _ in named]
+                sizes = ["?" if follow and not fs.exists(p) else _block_size(fs.stat(p, follow), human) for p, _ in named]
                 lines = [sz.rjust(max(map(len, sizes))) + " " + n for sz, (_, n) in zip(sizes, named)]
             else:
                 lines = [n for _, n in named]
@@ -185,12 +193,10 @@ def _ls(ctx):
             code = 2
             return
         entries = [n for n in fs.listdir(path) if a.has("a") or a.has("A") or not n.startswith(".")]
-        if deref and lng:
-            # shortcut: GNU also lists such an entry as "l????????? ? ..."; it is left out
+        if deref and (lng or blocks):  # a link leading nowhere: an error, then a row of question marks
             for n in [n for n in entries if not fs.exists(normalize(path, n))]:
-                ctx.error(f"ls: cannot access '{label.rstrip('/')}/{n}': {fs.why_missing(normalize(path, n))}")
+                ctx.error(f"ls: cannot access '{'' if label == '.' else label.rstrip('/') + '/'}{n}': {fs.why_missing(normalize(path, n))}")
                 code = 1
-                entries.remove(n)
 
         def st(n):
             child = normalize(path, n)
@@ -334,6 +340,18 @@ def _rm(ctx):
             ctx.error(f"rm: cannot remove '{p}': Is a directory")
             code = 1
             continue
+        if recursive and p.endswith("/") and ctx.fs.is_symlink(path) and ctx.fs.is_dir(path):
+            # like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
+            for n in ctx.fs.listdir(path):
+                try:
+                    ctx.fs.delete(path + "/" + n, True)
+                except ShellError as e:
+                    shown, why = typed(str(e), p.rstrip("/") + "/" + n, path + "/" + n)
+                    ctx.error(f"rm: cannot remove '{shown}': {why}")
+            if not a.has("f"):
+                ctx.error(f"rm: cannot remove '{p}': Not a directory")
+                code = 1
+            continue
         try:
             ctx.fs.delete(path, recursive)
         except ShellError as e:
@@ -415,8 +433,8 @@ def _copy_or_move(ctx):
             code = 1
             continue
         target = normalize(dest, get_name(src)) if dest_is_dir else dest
-        if target == src or not move and follow_top and ctx.fs.same_file(src, target):
-            ctx.error(f"{ctx.name}: '{s}' and '{dest_arg}' are the same file")
+        if target != src and not move and follow_top and ctx.fs.same_file(src, target):  # through a link or another hard link; the plain case is a clash below
+            ctx.error(f"cp: {quote_always(s)} and {quote_always(dest_arg.rstrip('/') + '/' + get_name(src) if dest_is_dir else dest_arg)} are the same file")
             code = 1
             continue
         if not move and ctx.fs.is_file(src, follow_top) and ctx.fs.is_symlink(target) and not ctx.fs.exists(target):

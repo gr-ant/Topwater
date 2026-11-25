@@ -81,12 +81,18 @@ function longEntries(ctx: CommandContext, entries: [abs: string, name: string][]
   style?: string, blocks = false, follow = false, classify?: (st: FileStat) => string): string[] {
   const now = ctx.fs.clock();
   const size = (st: FileStat) => (human ? humanSize(st.size) : String(st.size));
-  const rows = entries.map(([abs, name]) => ({ st: ctx.fs.stat(abs, follow), name, abs }));
+  // broken: -L meets a link leading nowhere, shown as a row of question marks
+  const rows = entries.map(([abs, name]) => {
+    const broken = follow && !ctx.fs.exists(abs);
+    return { st: ctx.fs.stat(abs, follow && !broken), name, abs, broken };
+  });
   if (rows.length === 0) return [];
-  const all = [...rows.map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p, follow))];
-  const width = (f: (st: FileStat) => string) => all.reduce((m, st) => Math.max(m, f(st).length), -Infinity);
+  const all = [...rows.filter(r => !r.broken).map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p, follow))];
+  const width = (f: (st: FileStat) => string) => all.reduce((m, st) => Math.max(m, f(st).length), 1);
   const lw = width(st => String(st.links)), ow = width(st => st.owner), sw = width(size), bw = width(st => blockSize(st, human));
-  return rows.map(({ st, name, abs }) => {
+  const dw = width(st => lsDate(st.modified, now, style));
+  return rows.map(({ st, name, abs, broken }) => {
+    if (broken) return (blocks ? '?'.padStart(bw) + ' ' : '') + `l????????? ${'?'.padStart(lw)} ${'?'.padEnd(ow)} ${'?'.padEnd(ow)} ${'?'.padStart(sw)} ${'?'.padStart(dw)} ${name}`;
     // a link shows where it points; -F marks that target's type
     const shown = st.linkTarget !== null ? name + ' -> ' + st.linkTarget + (classify && ctx.fs.exists(abs) ? classify(ctx.fs.stat(abs)) : '') : name + (classify?.(st) ?? '');
     return (blocks ? blockSize(st, human).padStart(bw) + ' ' : '') + `${VirtualFileSystem.formatMode(st)} ${String(st.links).padStart(lw)} ` +
@@ -433,7 +439,7 @@ export function registerFiles(shell: Shell) {
       if (lng) { for (const l of longEntries(ctx, entries, human, widthFrom, style, blocks, follow, a.has('F') ? classify : undefined)) line(ctx, l); return; }
       const named = entries.map(([abs, name]): [string, string] => [abs, name + (a.has('F') && fs.exists(abs, follow) ? classify(fs.stat(abs, follow)) : '')]);
       if (!blocks) { for (const e of named) line(ctx, e[1]); return; }
-      const sizes = named.map(e => blockSize(fs.stat(e[0], follow && fs.exists(e[0])), human));
+      const sizes = named.map(e => (follow && !fs.exists(e[0]) ? '?' : blockSize(fs.stat(e[0], follow), human)));
       const w = Math.max(0, ...sizes.map(x => x.length));
       named.forEach((e, k) => line(ctx, sizes[k].padStart(w) + ' ' + e[1]));
     };
@@ -467,10 +473,11 @@ export function registerFiles(shell: Shell) {
       first = false;
       if (!fs.canRead(abs)) { ctx.stderr.write(`ls: cannot open directory '${label}': Permission denied\n`); code = 2; return; }
       let entries = fs.list(abs).filter(n => a.has('a') || a.has('A') || !n.startsWith('.'));
-      if (deref && lng) {
-        // shortcut: GNU also lists such an entry as "l????????? ? ..."; it is left out
-        for (const n of entries.filter(n => !fs.exists(norm(abs, n)))) { ctx.stderr.write(`ls: cannot access '${trimEnd(label, '/')}/${n}': ${fs.whyMissing(norm(abs, n))}\n`); code = 1; }
-        entries = entries.filter(n => fs.exists(norm(abs, n)));
+      if (deref && (lng || blocks)) { // a link leading nowhere: an error, then a row of question marks
+        for (const n of entries.filter(n => !fs.exists(norm(abs, n)))) {
+          ctx.stderr.write(`ls: cannot access '${label === '.' ? '' : trimEnd(label, '/') + '/'}${n}': ${fs.whyMissing(norm(abs, n))}\n`);
+          code = 1;
+        }
       }
       const st = (n: string) => fs.stat(norm(abs, n), deref && fs.exists(norm(abs, n)));
       if (a.has('t')) entries = [...entries].sort((x, y) => st(y).modified - st(x).modified);
@@ -584,6 +591,18 @@ export function registerFiles(shell: Shell) {
         continue;
       }
       if (ctx.fs.isDirectory(abs, p.endsWith('/')) && !recursive && !a.has('d')) { ctx.stderr.write(`rm: cannot remove '${p}': Is a directory\n`); code = 1; continue; }
+      if (recursive && p.endsWith('/') && ctx.fs.isSymlink(abs) && ctx.fs.isDirectory(abs)) {
+        // like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
+        for (const n of ctx.fs.list(abs)) {
+          try { ctx.fs.delete(abs + '/' + n, true); } catch (e) {
+            if (!(e instanceof ShellError)) throw e;
+            const [path, why] = typed(e, trimEnd(p, '/') + '/' + n, abs + '/' + n);
+            ctx.stderr.write(`rm: cannot remove '${path}': ${why}\n`);
+          }
+        }
+        if (!a.has('f')) { ctx.stderr.write(`rm: cannot remove '${p}': Not a directory\n`); code = 1; }
+        continue;
+      }
       if (recursive && /(^|\/)\.\.?\/*$/.test(p)) { ctx.stderr.write(`rm: refusing to remove '.' or '..' directory: skipping '${p}'\n`); code = 1; continue; }
       try {
         ctx.fs.delete(abs, recursive);
@@ -645,7 +664,9 @@ export function registerFiles(shell: Shell) {
       if (!fs.exists(src, followTop)) { ctx.stderr.write(`${ctx.name}: cannot stat '${s}': ${fs.whyMissing(src, followTop)}\n`); code = 1; continue; }
       if (!move && fs.isDirectory(src, followTop) && !(a.has('r') || a.has('R') || a.has('a'))) { ctx.stderr.write(`cp: -r not specified; omitting directory '${s}'\n`); code = 1; continue; }
       const target = destIsDir ? norm(dest, nameOf(src)) : dest;
-      if (target === src || (!move && followTop && fs.sameFile(src, target))) { ctx.stderr.write(`${ctx.name}: '${s}' and '${destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg}' are the same file\n`); code = 1; continue; }
+      if (target !== src && !move && followTop && fs.sameFile(src, target)) { // through a link or another hard link; the plain case is a clash below
+        ctx.stderr.write(`cp: ${quoteAlways(s)} and ${quoteAlways(destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg)} are the same file\n`); code = 1; continue;
+      }
       if (!move && fs.isFile(src, followTop) && fs.isSymlink(target) && !fs.exists(target)) {
         ctx.stderr.write(`cp: not writing through dangling symlink '${destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg}'\n`);
         code = 1;
