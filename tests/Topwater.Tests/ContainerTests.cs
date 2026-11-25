@@ -58,6 +58,21 @@ public class ContainerTests
         Assert.Equal(["etc/topwater", "etc/topwater/paths", "etc/topwater/session.sh"], Read(ctx.Layer).Keys.Order());
     }
 
+    /// <summary>The agent chooses its working directory and variables; a line break in either must not add a Dockerfile instruction.</summary>
+    [Fact]
+    public async Task LineBreaksCannotInjectDockerfileInstructions()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("mkdir -p $'/tmp/x\\nRUN touch /pwned' && cd $'/tmp/x\\nRUN touch /pwned'; export EVIL=$'a\\nRUN touch /pwned2'; export OK=fine");
+        var ctx = sh.Snapshot().ToBuildContext();
+        var lines = ctx.Dockerfile.Split('\n');
+        Assert.Single(lines, l => l.StartsWith("RUN"));                        // only the generator's own setup step
+        Assert.DoesNotContain(lines, l => l.Contains("pwned"));
+        Assert.Contains("ENV OK=\"fine\"", lines);                           // ordinary variables still carry over
+        Assert.Contains(ctx.Report.NotCarried, i => i.What == "working directory");
+        Assert.DoesNotContain(lines, l => l.Contains("EVIL"));              // a multi-line value goes to the quoted session script, never to ENV
+    }
+
     /// <summary>/proc, /dev and the /bin command stubs never go into the layer.</summary>
     [Fact]
     public async Task SimulatedPathsAndStubsAreNotExported()
