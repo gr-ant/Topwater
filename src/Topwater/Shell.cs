@@ -185,7 +185,6 @@ public sealed partial class Shell
         Environment["LANG"] = "C.UTF-8";
         Environment["TERM"] = "xterm-256color";
         Cwd = home;
-        foreach (var name in Environment.Keys) VarAttrs[name] = "x";
         Builtins.RegisterAll(this);
         _builtinNames = [.. _commands.Keys];
         // the system was "installed" months ago; only the agent's home and the temp directories are fresh
@@ -426,7 +425,7 @@ public sealed partial class Shell
     /// <summary>What a child bash inherits: exported variables (not their other attributes) and exported functions, no arrays, aliases or options.</summary>
     void BecomeNewProcess(NewProcess process)
     {
-        Environment = Environment.Where(e => HasAttr(e.Key, 'x')).ToDictionary(StringComparer.Ordinal);
+        Environment = Environment.Where(e => IsExported(e.Key)).ToDictionary(StringComparer.Ordinal);
         VarAttrs = Environment.Keys.ToDictionary(k => k, _ => "x", StringComparer.Ordinal);
         Arrays = new(StringComparer.Ordinal);
         Aliases = new(StringComparer.Ordinal);
@@ -1169,12 +1168,31 @@ public sealed partial class Shell
     {
         if (_locals.Count == 0) throw new ShellException("can only be used in a function");
         if (_locals.Peek().TryAdd(name, (Environment.TryGetValue(name, out var old) ? old : null, VarAttrs.GetValueOrDefault(name)))) VarAttrs.Remove(name);
+        MarkShellVariable(name);
         Environment[name] = value ?? "";
     }
 
     // ---------- variables ----------
 
     internal bool HasAttr(string name, char attr) => VarAttrs.Count > 0 && VarAttrs.TryGetValue(name, out var f) && f.Contains(attr);
+
+    // variables the shell itself created; anything else in Environment came from the host and is exported
+    readonly HashSet<string> _unexported = new(StringComparer.Ordinal);
+
+    /// <summary>Whether a child bash (bash -c, a script) sees the variable: declared -x, or put in Environment by the host.</summary>
+    internal bool IsExported(string name) => HasAttr(name, 'x') || Environment.ContainsKey(name) && !_unexported.Contains(name);
+
+    /// <summary>Records that the shell (not the host) is about to create name, so it is not exported until `export`.</summary>
+    internal void MarkShellVariable(string name)
+    {
+        if (!Environment.ContainsKey(name)) _unexported.Add(name);
+    }
+
+    internal void Unexport(string name)
+    {
+        SetAttrs(name, "", "x");
+        _unexported.Add(name);
+    }
 
     internal void SetAttrs(string name, string on, string off = "")
     {
@@ -1211,7 +1229,12 @@ public sealed partial class Shell
         if (name == "SECONDS" && long.TryParse(value, out var seconds)) { _secondsBase = DateTime.UtcNow.AddSeconds(-seconds); return; }
         var array = Arrays.ContainsKey(name);
         value = Converted(name, value, !append ? null : array ? GetElement(name, "0") : Environment.GetValueOrDefault(name));
-        if (array) SetElement(name, "0", value); else Environment[name] = value;
+        if (array) SetElement(name, "0", value);
+        else
+        {
+            MarkShellVariable(name);
+            Environment[name] = value;
+        }
     }
 
     string Converted(string name, string value, string? old)
@@ -1337,6 +1360,7 @@ public sealed partial class Shell
         Environment.Remove(name);
         Arrays.Remove(name);
         VarAttrs.Remove(name);
+        _unexported.Remove(name);
         if (name == "IFS") _ifsUnset = true;
     }
 
@@ -1973,7 +1997,7 @@ public sealed partial class Shell
                         AddEach(elements, vp.Quoted);
                         continue;
                     }
-                    if (!vp.Quoted && await AlternativeWordAsync(name, io, ct) is { } alternative)
+                    if (!vp.Quoted && name.AsSpan().IndexOfAny('-', '+') >= 0 && await AlternativeWordAsync(name, io, ct) is { } alternative)
                     {
                         parts = [.. parts.Take(i), .. alternative, .. parts.Skip(i + 1)];
                         i--;

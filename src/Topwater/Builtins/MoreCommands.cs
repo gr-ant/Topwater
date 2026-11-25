@@ -87,7 +87,7 @@ internal static partial class Builtins
     {
         var attrs = sh.VarAttrs.GetValueOrDefault(name, "");
         sh.Arrays.TryGetValue(name, out var array);
-        return string.Concat("aAinrtxlu".Where(c => c == 'a' ? array is { Assoc: false } : c == 'A' ? array is { Assoc: true } : attrs.Contains(c)));
+        return string.Concat("aAinrtxlu".Where(c => c == 'a' ? array is { Assoc: false } : c == 'A' ? array is { Assoc: true } : c == 'x' ? sh.IsExported(name) : attrs.Contains(c)));
     }
 
     /// <summary>`declare -p NAME`: a line that recreates the variable when evaluated; null when there is no such variable.</summary>
@@ -286,13 +286,14 @@ internal static partial class Builtins
                     {
                         // a nameref holds the name of the variable it stands for
                         sh.SetAttrs(name, "n");
+                        sh.MarkShellVariable(name);
                         if (value != null) sh.Environment[name] = value;
                         continue;
                     }
                     var target = sh.Resolve(name);
                     sh.SetAttrs(target, on.Replace("r", ""), off);
                     if (value != null) sh.SetVar(name, value, append);
-                    else if (!sh.Environment.ContainsKey(target) && !sh.Arrays.ContainsKey(target)) sh.Environment[target] = "";
+                    else if (!sh.Environment.ContainsKey(target) && !sh.Arrays.ContainsKey(target)) { sh.MarkShellVariable(target); sh.Environment[target] = ""; }
                     if (on.Contains('r')) sh.SetAttrs(target, "r");
                 }
                 catch (ShellException e) { ctx.Stderr.WriteLine($"bash: {ctx.Name}: {e.Message}"); code = 1; }

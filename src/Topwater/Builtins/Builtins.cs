@@ -255,7 +255,7 @@ internal static partial class Builtins
             if (args.Count == 0)
             {
                 foreach (var k in sh.Environment.Keys.Concat(sh.Arrays.Keys).Distinct().Order(StringComparer.Ordinal))
-                    if (sh.HasAttr(k, 'x') && DeclareLine(sh, k) is { } line) ctx.Stdout.WriteLine(line);
+                    if (sh.IsExported(k) && DeclareLine(sh, k) is { } line) ctx.Stdout.WriteLine(line);
                 return 0;
             }
             int code = 0;
@@ -268,8 +268,8 @@ internal static partial class Builtins
                 {
                     if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException($"`{a}': not a valid identifier");
                     if (eq > 0) sh.SetVar(name, a[(eq + 1)..], append);
-                    else if (!sh.Arrays.ContainsKey(sh.Resolve(name))) sh.Environment.TryAdd(sh.Resolve(name), "");
-                    if (remove) sh.SetAttrs(sh.Resolve(name), "", "x"); else sh.SetAttrs(sh.Resolve(name), "x");
+                    else if (!sh.Arrays.ContainsKey(sh.Resolve(name)) && !sh.Environment.ContainsKey(sh.Resolve(name))) { sh.MarkShellVariable(sh.Resolve(name)); sh.Environment[sh.Resolve(name)] = ""; }
+                    if (remove) sh.Unexport(sh.Resolve(name)); else sh.SetAttrs(sh.Resolve(name), "x");
                 }
                 catch (ShellException e) { ctx.Stderr.WriteLine($"bash: export: {e.Message}"); code = 1; }
             }
