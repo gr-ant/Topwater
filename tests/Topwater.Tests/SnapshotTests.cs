@@ -397,6 +397,19 @@ public class SnapshotTests(ITestOutputHelper output)
         Assert.Equal(want, (await sh.RunAsync(probe)).Stdout);
     }
 
+    /// <summary>snapshots/links-from-csharp.zip (format version 2), which the Python and TypeScript tests load too. Made with:
+    /// mkdir -p d/s; echo hi > d/f; ln -s f d/l; ln -s /etc d/etc; ln -s nowhere d/dang; ln -s . d/s/self; ln -s loop2 loop1;
+    /// ln -s loop1 loop2; ln d/f d/h; ln -s f d/sl; ln d/sl d/sl2; cd d</summary>
+    [Fact]
+    public async Task ASnapshotWithLinksLoads()
+    {
+        using var stream = File.OpenRead(Path.Combine(AppContext.BaseDirectory, "../../../snapshots/links-from-csharp.zip"));
+        var sh = Shell.Load(stream);
+        var r = await sh.RunAsync("pwd; readlink l etc dang s/self ../loop1 sl2; cat l s/self/self/../f; stat -c '%h %F' f h sl2; echo more >> h; cat f; cat ../loop1 2>&1");
+        Assert.Equal("/home/agent/d\nf\n/etc\nnowhere\n.\nloop2\nf\nhi\nhi\n2 regular file\n2 regular file\n2 symbolic link\nhi\nmore\n" +
+            "cat: ../loop1: Too many levels of symbolic links\n", r.Stdout);
+    }
+
     [Fact]
     public void LinksInASnapshotAreChecked()
     {
