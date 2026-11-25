@@ -14,7 +14,7 @@ const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
 /** A unary test (-f, -z, ...). */
 export function testUnary(shell: Shell, op: string, arg: string): boolean {
   const path = shell.resolvePath(arg);
-  const fs = shell.fs;
+  const fs = shell.agentFs;
   switch (op) {
     case '-z': return arg.length === 0;
     case '-n': return arg.length > 0;
@@ -35,7 +35,7 @@ export function testUnary(shell: Shell, op: string, arg: string): boolean {
 
 /** -nt / -ot: a missing file is older than any existing one, as in bash. */
 export function testNewer(shell: Shell, left: string, right: string): boolean {
-  const time = (p: string) => (shell.fs.exists(shell.resolvePath(p)) ? shell.fs.stat(shell.resolvePath(p)).modified : null);
+  const time = (p: string) => (shell.agentFs.exists(shell.resolvePath(p)) ? shell.agentFs.stat(shell.resolvePath(p)).modified : null);
   const l = time(left), r = time(right);
   return l !== null && (r === null || l > r);
 }
@@ -50,7 +50,7 @@ function testBinary(shell: Shell, left: string, op: string, right: string): bool
     case '>': return left > right;
     case '-nt': return testNewer(shell, left, right);
     case '-ot': return testNewer(shell, right, left);
-    case '-ef': return shell.resolvePath(left) === shell.resolvePath(right) && shell.fs.exists(shell.resolvePath(left));
+    case '-ef': return shell.resolvePath(left) === shell.resolvePath(right) && shell.agentFs.exists(shell.resolvePath(left));
   }
   const okL = /^\s*[-+]?\d+\s*$/.test(left), okR = /^\s*[-+]?\d+\s*$/.test(right);
   if (!okL || !okR) throw new ShellError(`${okL ? right : left}: integer expression expected`, 2);
@@ -1019,7 +1019,7 @@ export function registerBuiltins(shell: Shell) {
       if (al !== undefined) line(ctx, `alias ${n}='${al}'`);
       else if (SHELL_KEYWORDS.has(n) || sh.functions.has(n) || isShellBuiltin(sh, n)) line(ctx, n);
       else if (sh.commands.has(n)) line(ctx, `/usr/bin/${n}`);
-      else if (n.includes('/') && sh.fs.isFile(sh.resolvePath(n)) && sh.fs.canExecute(sh.resolvePath(n))) line(ctx, n);
+      else if (n.includes('/') && sh.agentFs.isFile(sh.resolvePath(n)) && sh.agentFs.canExecute(sh.resolvePath(n))) line(ctx, n);
       else code = 1;
     }
     return code;

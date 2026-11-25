@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { decodeBytes, encodeText, hasEscapes, utf8Length, bytesToText } from './bytes.js';
 
 /** Thrown by commands and the filesystem; becomes "cmd: message" on stderr with the given exit code. */
@@ -69,31 +68,38 @@ export const DEFAULT_FILE_MODE = 0o644;
 export const DEFAULT_DIR_MODE = 0o755;
 export const NO_SPACE = 'No space left on device';
 
-interface RunAsStore { user: string | null }
+/** The state every view of one filesystem shares. */
+interface Store { root: Dir; capacity: number; usedBytes: number }
 
 /**
  * In-memory Unix-style filesystem with owners and permission bits. Calls from your app are unrestricted (root).
- * While the shell runs the agent's commands it runs them as the agent (see `runAs`), so the agent is an ordinary user:
+ * While the shell runs the agent's commands it runs them as the agent (a view made by `as`), so the agent is an ordinary user:
  * it can't write to root-owned places such as /etc or /usr/bin. New files belong to the owner of their directory
  * (or to the agent, when it creates them). Binary files keep their exact bytes; the text API reads them as lossy UTF-8.
  * shortcut: no groups, no symlinks; add them if group permissions are needed.
  */
 export class VirtualFileSystem {
-  private readonly root: Dir = Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE });
-  private readonly als = new AsyncLocalStorage<RunAsStore>();
+  private readonly store: Store;
+  /** The user this view acts as, or null for unrestricted access (your app). */
+  readonly runAs: string | null = null;
+
+  constructor() { this.store = { root: Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE }), capacity: Number.MAX_SAFE_INTEGER, usedBytes: 0 }; }
+
+  /**
+   * A view of the same files that acts as `user` (null lifts the restrictions). The shell hands its commands such a
+   * view of the agent, so whose call it is travels with the object instead of an ambient async context.
+   */
+  as(user: string | null): VirtualFileSystem {
+    return Object.assign(Object.create(VirtualFileSystem.prototype) as VirtualFileSystem, { store: this.store, runAs: user });
+  }
 
   /** Most bytes the files may hold in total; the agent's writes past it fail with "No space left on device". */
-  capacity = Number.MAX_SAFE_INTEGER;
+  get capacity(): number { return this.store.capacity; }
+  set capacity(v: number) { this.store.capacity = v; }
   /** Bytes all files hold now (what `df` reports as used). */
-  usedBytes = 0;
-
-  /** The user the current async flow acts as, or null for unrestricted access (your app). */
-  get runAs(): string | null { return this.als.getStore()?.user ?? null; }
-
-  /** Runs `fn` (and everything it awaits) as `user`; null lifts the restrictions. */
-  withUser<T>(user: string | null, fn: () => T): T { return this.als.run({ user }, fn); }
-  /** Runs `fn` unrestricted (for shell internals). */
-  asRoot<T>(fn: () => T): T { return this.withUser(null, fn); }
+  get usedBytes(): number { return this.store.usedBytes; }
+  set usedBytes(v: number) { this.store.usedBytes = v; }
+  private get root(): Dir { return this.store.root; }
 
   private get user(): string | null { const u = this.runAs; return u === 'root' ? null : u; }
   private get restricted(): boolean { return this.user !== null; }

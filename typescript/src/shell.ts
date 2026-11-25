@@ -1,4 +1,3 @@
-import { setFlagsFromString } from 'node:v8';
 import { VirtualFileSystem, ShellError, ordinal } from './vfs.js';
 import {
   StdinBuffer, LimitExceeded, DeadlineExceeded, tooLarge, nullWriter, sizeText,
@@ -41,7 +40,10 @@ export interface ShellOptions {
 // A JS regex match can't be interrupted, so an agent's catastrophically backtracking pattern (grep -E '(a|aa)+$') could
 // hang the call. This V8 flag switches such a match to V8's linear-time engine (same results); patterns with
 // backreferences have no linear engine and remain a risk. It is process-wide and only changes speed, never results.
-setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
+// Node only (looked up at run time, so bundles for browsers carry no Node import); a browser host runs the shell in a
+// Web Worker and terminates it at the time limit instead.
+(globalThis as { process?: { getBuiltinModule?: (id: string) => { setFlagsFromString(f: string): void } | undefined } })
+  .process?.getBuiltinModule?.('node:v8')?.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
 
 const DEFAULTS: ShellOptions = {
   user: 'agent', hostname: 'topwater', maxLoopIterations: 100_000, maxExtractBytes: 64 << 20, maxExtractEntries: 100_000,
@@ -212,7 +214,10 @@ const unquote = (s: string) => (s.length >= 2 && (s[0] === '"' || s[0] === "'") 
  */
 export class Shell implements ArithHost {
   readonly options: ShellOptions;
+  /** The files, unrestricted: your app's view. */
   readonly fs: VirtualFileSystem;
+  /** @internal The same files as the agent sees them; the shell and its commands work through this view. */
+  readonly agentFs: VirtualFileSystem;
   /** Scalar variables. Entries the host puts here are exported to child processes. */
   environment = new Map<string, string>();
   aliases = new Map<string, string>();
@@ -279,9 +284,10 @@ export class Shell implements ArithHost {
     const fs = this.fs = options.fileSystem ?? new VirtualFileSystem();
     fs.capacity = this.options.maxFileSystemBytes;
     const user = this.options.user, home = '/home/' + user;
+    this.agentFs = fs.as(user);
     const now = new Date();
     this.installedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - 142 * DAY + (9 * 60 + 13) * 60_000;
-    fs.asRoot(() => {
+    {
       for (const dir of [home, '/tmp', '/var/tmp', '/usr/bin', '/bin', '/usr/local/bin', '/opt', '/etc', '/dev/fd', '/var/log']) fs.mkdir(dir, true);
       this.seedSystemFiles(user, home);
       fs.mkdir('/root', true);
@@ -291,11 +297,11 @@ export class Shell implements ArithHost {
       fs.chmod('/tmp', 0o1777);
       fs.chmod('/var/tmp', 0o1777);
       fs.chmod('/dev/null', 0o666);
-    });
+    }
     for (const [k, v] of [['HOME', home], ['USER', user], ['LOGNAME', user], ['HOSTNAME', this.options.hostname], ['SHELL', '/bin/bash'],
       ['PATH', '/usr/local/bin:/usr/bin:/bin'], ['LANG', 'C.UTF-8'], ['TERM', 'xterm-256color']]) this.environment.set(k, v);
     this.cwd = home;
-    fs.asRoot(() => registerAll(this));
+    registerAll(this);
     this.builtinNames = new Set(this.commands.keys());
     // the system was "installed" months ago; only the agent's home and the temp directories are fresh
     for (const dir of ['/bin', '/usr', '/etc', '/dev', '/opt', '/root', '/var/log', '/var/lib', '/var/cache', '/boot', '/lib', '/lib64', '/media', '/mnt', '/sbin', '/srv'])
@@ -355,7 +361,7 @@ export class Shell implements ArithHost {
     this.builtinNames?.delete(name); // an app command replacing a built-in owns its own --help/--version
     const shellOnly = this.builtinNames === null && NO_PROGRAM_FILE.has(name);
     if (!shellOnly && !name.includes('/') && name !== '.' && name !== '..' && name !== ':' && name !== '[' && this.fs.isDirectory('/usr/bin')) {
-      this.fs.asRoot(() => {
+      {
         for (const dir of ['/usr/bin/', '/bin/']) {
           if (!this.fs.isDirectory(dir)) continue;
           this.fs.writeText(dir + name, EXECUTABLE_STUB);
@@ -367,7 +373,7 @@ export class Shell implements ArithHost {
           this.fs.setReportedSize(dir + name, 14_000 + Math.floor((h % 180_000) / 8) * 8);
           this.fs.setModified(dir, this.installedAt);
         }
-      });
+      }
     }
     return this;
   }
@@ -390,7 +396,7 @@ export class Shell implements ArithHost {
   }
 
   unregister(name: string): boolean {
-    this.fs.asRoot(() => { for (const dir of ['/usr/bin/', '/bin/']) if (this.fs.isFile(dir + name)) this.fs.delete(dir + name); });
+    for (const dir of ['/usr/bin/', '/bin/']) if (this.fs.isFile(dir + name)) this.fs.delete(dir + name);
     return this.commands.delete(name);
   }
 
@@ -409,10 +415,8 @@ export class Shell implements ArithHost {
     const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(stdout), err: new SwitchWriter(stderr) };
     const raw = (s: string) => { stderr.clear; (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
-      code = await this.fs.withUser(this.options.user, async () => {
-        // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
-        try { return await this.execScript(parse(commandLine), io); } finally { await this.runExitTrap(io); }
-      });
+      // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
+      try { code = await this.execScript(parse(commandLine), io); } finally { await this.runExitTrap(io); }
     } catch (e) {
       if (e instanceof ParseError) { raw(`bash: ${e.message}\n`); code = 2; }
       else if (e instanceof ExitSignal) code = e.code;
@@ -435,7 +439,7 @@ export class Shell implements ArithHost {
       this.fds.clear();
       this.deadline = { at: Infinity };
       if (this.procSubCount > 0 && this.fs.isDirectory('/dev/fd'))
-        this.fs.asRoot(() => { for (const f of this.fs.list('/dev/fd')) this.fs.delete('/dev/fd/' + f, true); });
+        for (const f of this.fs.list('/dev/fd')) this.fs.delete('/dev/fd/' + f, true);
       this.procSubCount = 0;
       this.locals.length = this.localArrays.length = this.funcNames.length = 0;
     }
@@ -551,7 +555,7 @@ export class Shell implements ArithHost {
     this.functions = s.functions;
     this.shopts = s.shopts;
     this.traps = s.traps;
-    this.cwdPath = this.fs.isDirectory(s.cwd) ? s.cwd : '/';
+    this.cwdPath = this.agentFs.isDirectory(s.cwd) ? s.cwd : '/';
   }
 
   private async execScript(script: Script, io: Io): Promise<number> {
@@ -847,7 +851,7 @@ export class Shell implements ArithHost {
         } else if (r.op === '>&' || r.op === '<&') {
           const target = await this.expandSingle(r.target!, io);
           if (target !== '-' && !/^\d+$/.test(target) && r.op === '>&') { // >&file is &>file
-            const w = await this.openOutput({ ...r, op: '&>' }, io, path => { const s = new FileSink(this.fs, path); sinks.push(s); return s; });
+            const w = await this.openOutput({ ...r, op: '&>' }, io, path => { const s = new FileSink(this.agentFs, path); sinks.push(s); return s; });
             io = { ...io, out: w, err: w };
             continue;
           }
@@ -860,7 +864,7 @@ export class Shell implements ArithHost {
           }
           io = withFd(io, r.fd, dup);
         } else {
-          const w = await this.openOutput(r, io, path => { const s = new FileSink(this.fs, path); sinks.push(s); return s; });
+          const w = await this.openOutput(r, io, path => { const s = new FileSink(this.agentFs, path); sinks.push(s); return s; });
           io = r.op.startsWith('&') ? { ...io, out: w, err: w } : withFd(io, r.fd, w);
         }
       } catch (e) {
@@ -878,7 +882,7 @@ export class Shell implements ArithHost {
     const target = await this.expandSingle(r.target!, io);
     const path = this.resolvePath(target);
     if (path === '/dev/stdin') return io.stdin;
-    try { return new StdinBuffer(this.fs.readPipeText(path)); } catch (e) {
+    try { return new StdinBuffer(this.agentFs.readPipeText(path)); } catch (e) {
       if (e instanceof ShellError) throw new ShellError(`${target}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}`);
       throw e;
     }
@@ -896,10 +900,10 @@ export class Shell implements ArithHost {
       if (d && !(d instanceof StdinBuffer)) return d;
     }
     if (target === '') throw new ShellError(': No such file or directory');
-    if (this.fs.isDirectory(path)) throw new ShellError(`${target}: Is a directory`);
-    if (this.noclobber && (r.op === '>' || r.op === '&>') && this.fs.isFile(path)) throw new ShellError(`${target}: cannot overwrite existing file`);
+    if (this.agentFs.isDirectory(path)) throw new ShellError(`${target}: Is a directory`);
+    if (this.noclobber && (r.op === '>' || r.op === '&>') && this.agentFs.isFile(path)) throw new ShellError(`${target}: cannot overwrite existing file`);
     try {
-      if (!r.op.endsWith('>>') || !this.fs.exists(path)) this.fs.writeText(path, ''); // truncate on open, like bash
+      if (!r.op.endsWith('>>') || !this.agentFs.exists(path)) this.agentFs.writeText(path, ''); // truncate on open, like bash
     } catch (e) {
       if (e instanceof ShellError) throw new ShellError(`${target}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}`);
       throw e;
@@ -932,7 +936,7 @@ export class Shell implements ArithHost {
             if (!d) throw new ShellError(`${t}: Bad file descriptor`);
             target = d instanceof SwitchWriter ? d.target : d;
           }
-        } else target = await this.openOutput(r, io, path => new FileAppender(this.fs, path));
+        } else target = await this.openOutput(r, io, path => new FileAppender(this.agentFs, path));
         let named = r.fd;
         if (r.fdVar !== undefined) {
           if (target === null) named = /^\d+$/.test(this.getVariable(r.fdVar)) ? Number(this.getVariable(r.fdVar)) : -1; // {fd}>&- closes it
@@ -1079,7 +1083,7 @@ export class Shell implements ArithHost {
     let stdinText: string | undefined;
     const shell = this;
     return {
-      shell, name, args, stdout: io.out, stderr: io.err, fs: this.fs, fds: io.fds, stdin: io.stdin,
+      shell, name, args, stdout: io.out, stderr: io.err, fs: this.agentFs, fds: io.fds, stdin: io.stdin,
       get stdinText() { return stdinText ??= io.stdin.readAll(); },
       readLine: d => io.stdin.readLine(d),
       resolvePath: p => this.resolvePath(p),
@@ -1090,10 +1094,10 @@ export class Shell implements ArithHost {
   }
 
   private async runScriptFile(name: string, path: string, argv: string[], io: Io): Promise<number> {
-    if (this.fs.isDirectory(path)) { io.err.write(`bash: ${name}: Is a directory\n`); return 126; }
-    if (!this.fs.isFile(path)) { io.err.write(`bash: ${name}: ${this.fs.whyMissing(path)}\n`); return this.fs.whyMissing(path) === 'Permission denied' ? 126 : 127; }
-    if (!this.fs.canExecute(path) || !this.fs.canRead(path)) { io.err.write(`bash: ${name}: Permission denied\n`); return 126; }
-    const text = this.fs.readText(path);
+    if (this.agentFs.isDirectory(path)) { io.err.write(`bash: ${name}: Is a directory\n`); return 126; }
+    if (!this.agentFs.isFile(path)) { io.err.write(`bash: ${name}: ${this.agentFs.whyMissing(path)}\n`); return this.agentFs.whyMissing(path) === 'Permission denied' ? 126 : 127; }
+    if (!this.agentFs.canExecute(path) || !this.agentFs.canRead(path)) { io.err.write(`bash: ${name}: Permission denied\n`); return 126; }
+    const text = this.agentFs.readText(path);
     if (text.startsWith(EXECUTABLE_STUB.slice(0, 4))) { io.err.write(`bash: ${name}: cannot execute binary file\n`); return 126; }
     if (text.startsWith('#!')) {
       const nl = text.indexOf('\n');
@@ -1781,7 +1785,7 @@ export class Shell implements ArithHost {
     const output = new BufferWriter(this.options.maxStringBytes);
     await this.runSubstitution(source, { ...io, stdin: new StdinBuffer(''), out: output });
     const path = `/dev/fd/${63 + this.procSubCount++}`;
-    this.fs.asRoot(() => this.fs.writeText(path, output.toString()));
+    this.fs.writeText(path, output.toString());
     return path;
   }
 
@@ -1790,7 +1794,7 @@ export class Shell implements ArithHost {
     if (fileWord) { // $(< file) is the file's contents
       const target = await this.expandSingle(fileWord, io);
       try {
-        const text = this.fs.readText(this.resolvePath(target));
+        const text = this.agentFs.readText(this.resolvePath(target));
         this.lastExitCode = 0;
         return text.replace(/\n+$/, '');
       } catch (e) {
@@ -1969,7 +1973,7 @@ export class Shell implements ArithHost {
       for (const f of fields) {
         const globbing = f.glob && !this.noglob;
         const matches = globbing ? expandGlob({
-          fs: this.fs, cwd: this.cwdPath, dotglob: this.shopts.has('dotglob'), globstar: this.shopts.has('globstar'), nocaseglob: this.shopts.has('nocaseglob'),
+          fs: this.agentFs, cwd: this.cwdPath, dotglob: this.shopts.has('dotglob'), globstar: this.shopts.has('globstar'), nocaseglob: this.shopts.has('nocaseglob'),
         }, f.pattern) : [];
         if (matches.length > 0) result.push(...matches);
         else if (!(globbing && this.shopts.has('nullglob'))) result.push(f.text);
