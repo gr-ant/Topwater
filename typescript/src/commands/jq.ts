@@ -581,7 +581,7 @@ function* substitute(I: Interp, a: Node[], inp: PV, env: Env, all: boolean): Gen
 
 // value builtins
 fn0('length', v => length(v));
-fn0('utf8bytelength', v => Buffer.byteLength(strArg('measured in UTF-8 bytes', v)));
+fn0('utf8bytelength', v => new TextEncoder().encode(strArg('measured in UTF-8 bytes', v)).length);
 fn0('not', v => !truthy(v));
 fn0('keys', v => keys(v));
 fn0('keys_unsorted', v => keys(v, false));

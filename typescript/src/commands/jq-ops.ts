@@ -2,6 +2,7 @@
 
 import { JqError, cmp, cpIndex, cpLength, cpSlice, dump, errType, fmtNum, isObj, typeName, truthy, type J } from './jq-values.js';
 import { tooLarge } from '../command.js';
+import { toBase64, fromBase64 } from '../bytes.js';
 
 /** The `jq: value` limit (ctx.shell.options.maxStringBytes); set per run, which is synchronous. */
 let maxBytes = 32 << 20;
@@ -330,16 +331,16 @@ export function format(name: string, v: J): string {
       }).join(name === 'csv' ? ',' : '\t');
     }
     case 'html': return toStr(v).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[c]!);
-    case 'uri': return [...Buffer.from(toStr(v), 'utf8')].map(b => /[A-Za-z0-9\-_.~]/.test(String.fromCharCode(b)) ? String.fromCharCode(b) : '%' + b.toString(16).toUpperCase().padStart(2, '0')).join('');
+    case 'uri': return [...new TextEncoder().encode(toStr(v))].map(b => /[A-Za-z0-9\-_.~]/.test(String.fromCharCode(b)) ? String.fromCharCode(b) : '%' + b.toString(16).toUpperCase().padStart(2, '0')).join('');
     case 'sh': return (Array.isArray(v) ? v : [v]).map(x => {
       if (Array.isArray(x) || isObj(x)) throw new JqError(`${errType(x)} can not be escaped for shell`);
       return typeof x === 'string' ? "'" + x.replace(/'/g, "'\\''") + "'" : toStr(x);
     }).join(' ');
-    case 'base64': return Buffer.from(toStr(v), 'utf8').toString('base64');
+    case 'base64': return toBase64(new TextEncoder().encode(toStr(v)));
     case 'base64d': {
       const t = toStr(v).replace(/=+$/, '');
       if (!/^[A-Za-z0-9+/]*$/.test(t) || t.length % 4 === 1) throw new JqError(`${errType(v)} is not valid base64 data`);
-      return Buffer.from(t, 'base64').toString('utf8');
+      return new TextDecoder().decode(fromBase64(t));
     }
   }
   throw new JqError(`${name} is not a valid format`);

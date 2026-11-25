@@ -2,9 +2,8 @@
 // The agent picks an alias, an allowed method and a path under the endpoint's base URL; the host, scheme, port and
 // credential are fixed by the application that registers the endpoints.
 
-import { STATUS_CODES } from 'node:http';
 import { DeadlineExceeded, ShellError, type CommandContext } from './command.js';
-import { encodeText } from './bytes.js';
+import { encodeText, concatBytes } from './bytes.js';
 import type { Shell } from './shell.js';
 
 export interface ApiEndpoint {
@@ -26,6 +25,15 @@ export interface ApiEndpoint {
 }
 
 // headers that cannot carry a credential, change the destination or smuggle a second request
+// The reason phrase when a response carries none (HTTP/2 never does); Node's http.STATUS_CODES, trimmed to the common ones.
+const REASONS: Record<number, string> = {
+  200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content', 206: 'Partial Content',
+  301: 'Moved Permanently', 302: 'Found', 303: 'See Other', 304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
+  400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed', 406: 'Not Acceptable',
+  408: 'Request Timeout', 409: 'Conflict', 410: 'Gone', 412: 'Precondition Failed', 413: 'Payload Too Large', 415: 'Unsupported Media Type',
+  422: 'Unprocessable Entity', 429: 'Too Many Requests',
+  500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway', 503: 'Service Unavailable', 504: 'Gateway Timeout',
+};
 const ALLOWED_HEADERS = ['Accept', 'Accept-Language', 'Content-Type', 'If-Match', 'If-None-Match'];
 const MAX_REQUEST_BYTES = 1_000_000; // shortcut: fixed upload cap; make it an ApiEndpoint option when a host needs bigger uploads
 
@@ -231,7 +239,7 @@ export function registerApi(shell: Shell, program: string, endpoints: Record<str
       }
       void reader?.cancel().catch(() => undefined);
       truncated = total > maxBytes;
-      text = scrub(new TextDecoder().decode(Buffer.concat(chunks)));
+      text = scrub(new TextDecoder().decode(concatBytes(chunks)));
       if (truncated && text.length > maxBytes) text = text.slice(0, maxBytes);
     } catch (e) {
       if (controller.signal.aborted) {
@@ -247,7 +255,7 @@ export function registerApi(shell: Shell, program: string, endpoints: Record<str
     } finally { clearTimeout(timer); }
 
     const status = response.status;
-    const statusLine = `HTTP ${status} ${response.statusText || STATUS_CODES[status] || ''}`.trimEnd();
+    const statusLine = `HTTP ${status} ${response.statusText || REASONS[status] || ''}`.trimEnd();
     if (include) {
       let s = statusLine + '\n';
       for (const [k, v] of response.headers) s += `${titleCase(k)}: ${v}\n`;
