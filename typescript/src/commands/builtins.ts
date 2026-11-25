@@ -148,16 +148,22 @@ function readFields(text: string, ifs: string, count: number): string[] {
 }
 
 /** `type NAME` / `command -V NAME`: what the name runs, or false (with a message) when nothing. */
-function describe(ctx: CommandContext, a: string): boolean {
+function describe(ctx: CommandContext, a: string, all = false): boolean {
   const sh = ctx.shell;
   const alias = sh.aliases.get(a);
   const fn = sh.functions.get(a);
-  if (alias !== undefined) line(ctx, `${a} is aliased to \`${alias}'`);
-  else if (SHELL_KEYWORDS.has(a)) line(ctx, `${a} is a shell keyword`);
-  else if (fn) line(ctx, `${a} is a function\n${a} () \n${fn.source}`);
-  else if (isShellBuiltin(sh, a)) line(ctx, `${a} is a shell builtin`);
-  else if (sh.commands.has(a)) line(ctx, `${a} is /usr/bin/${a}`);
-  else { ctx.stderr.write(`${ctx.shell.errPrefix}type: ${a}: not found\n`); return false; }
+  const lines: string[] = [];
+  if (alias !== undefined) lines.push(`${a} is aliased to \`${alias}'`);
+  if (SHELL_KEYWORDS.has(a)) lines.push(`${a} is a shell keyword`);
+  if (fn) lines.push(`${a} is a function\n${a} () \n${fn.source}`);
+  if (isShellBuiltin(sh, a)) lines.push(`${a} is a shell builtin`);
+  if (all) lines.push(...sh.locateAll(a).map(p => `${a} is ${p}`));
+  else if (!lines.length) {
+    const l = sh.locate(a);
+    if (l) lines.push(l[1] ? `${a} is hashed (${l[0].startsWith('/') || l[0].startsWith('./') ? '' : './'}${l[0]})` : `${a} is ${l[0]}`);
+  }
+  if (!lines.length) { ctx.stderr.write(`${ctx.shell.errPrefix}type: ${a}: not found\n`); return false; }
+  for (const l of all ? lines : lines.slice(0, 1)) line(ctx, l);
   return true;
 }
 
@@ -509,9 +515,9 @@ export function registerBuiltins(shell: Shell) {
   reg('which', ctx => {
     let code = 0;
     for (const a of ctx.args.filter(x => !x.startsWith('-'))) {
-      if (a.includes('/')) { if (ctx.fs.canExecute(ctx.resolvePath(a)) && ctx.fs.isFile(ctx.resolvePath(a))) line(ctx, a); else code = 1; }
-      else if (ctx.shell.commands.has(a) && !(SHELL_BUILTINS.has(a) && !ctx.fs.exists('/usr/bin/' + a))) line(ctx, `/usr/bin/${a}`);
-      else code = 1;
+      const found = ctx.shell.locateAll(a);
+      if (!found.length) code = 1;
+      for (const p of ctx.args.includes('-a') ? found : found.slice(0, 1)) line(ctx, p);
     }
     return code;
   }, 'Locate a command');
@@ -522,14 +528,17 @@ export function registerBuiltins(shell: Shell) {
     const opts = Args.parse(ctx.args, 'atpPf');
     for (const a of opts.positional) {
       if (opts.has('t') || opts.has('p') || opts.has('P')) {
-        const kind = sh.aliases.has(a) ? 'alias' : SHELL_KEYWORDS.has(a) ? 'keyword' : sh.functions.has(a) ? 'function'
-          : isShellBuiltin(sh, a) ? 'builtin' : sh.commands.has(a) ? 'file' : null;
+        let kind = sh.aliases.has(a) ? 'alias' : SHELL_KEYWORDS.has(a) ? 'keyword' : sh.functions.has(a) ? 'function'
+          : isShellBuiltin(sh, a) ? 'builtin' : null;
+        let paths: string[] = [];
+        if (kind === null || opts.has('P')) { const l = opts.has('a') ? null : sh.locate(a); paths = opts.has('a') ? sh.locateAll(a) : l ? [l[0]] : []; }
+        kind ??= paths.length ? 'file' : null;
         if (kind === null) { code = 1; continue; }
         if (opts.has('t')) line(ctx, kind);
-        else if (kind === 'file' || (opts.has('P') && sh.commands.has(a))) line(ctx, `/usr/bin/${a}`);
+        else for (const p of paths) line(ctx, p);
         continue;
       }
-      if (!describe(ctx, a)) code = 1;
+      if (!describe(ctx, a, opts.has('a'))) code = 1;
     }
     return code;
   }, 'Describe a command');
@@ -957,8 +966,35 @@ export function registerBuiltins(shell: Shell) {
   }, 'Send a signal to a process (background jobs have always finished already)');
 
   reg('hash', ctx => {
-    let code = 0;
-    for (const n of ctx.args.filter(a => !a.startsWith('-'))) if (!ctx.shell.commands.has(n)) { ctx.stderr.write(`${ctx.shell.errPrefix}hash: ${n}: not found\n`); code = 1; }
+    const sh = ctx.shell;
+    sh.syncHashed();
+    const args = ctx.args;
+    let code = 0, i = 0, show = false, del = false, path: string | null = null;
+    for (; i < args.length && args[i].length > 1 && args[i][0] === '-'; i++) {
+      if (args[i] === '--') { i++; break; }
+      for (const ch of args[i].slice(1)) {
+        if (ch === 'r') sh.hashed.clear();
+        else if (ch === 't') show = true;
+        else if (ch === 'd') del = true;
+        else if (ch === 'p') { if (i + 1 >= args.length) throw new UsageException('-p: option requires an argument'); path = args[++i]; break; }
+        else if (ch !== 'l') throw new UsageException(`-${ch}: invalid option`);
+      }
+    }
+    const names = args.slice(i);
+    if (i === 0 && !names.length) {
+      if (!sh.hashed.size) line(ctx, 'hash: hash table empty');
+      else ctx.stdout.write('hits\tcommand\n' + [...sh.hashed.values()].map(([p, n]) => `${String(n).padStart(4)}\t${p}\n`).join(''));
+    }
+    const notFound = (n: string) => { ctx.stderr.write(`${sh.errPrefix}hash: ${n}: not found\n`); code = 1; };
+    for (const n of names) {
+      const hashed = show ? sh.hashLookup(n) : null;
+      if (hashed !== null) line(ctx, names.length > 1 ? `${n}\t${hashed}` : hashed);
+      else if (del && sh.hashed.delete(n)) { /* removed */ }
+      else if (path !== null) sh.hashed.set(n, [path, 0]);
+      else if (show || del || n.includes('/')) notFound(n);
+      else if (isShellBuiltin(sh, n) || sh.functions.has(n) || sh.isUnfiled(n)) { /* nothing to remember */ }
+      else { const found = sh.searchPathAll(n)[0]; if (found) sh.hashed.set(n, [found, 0]); else notFound(n); }
+    }
     return code;
   }, 'Remember command locations');
 
@@ -1032,9 +1068,7 @@ export function registerBuiltins(shell: Shell) {
       const al = sh.aliases.get(n);
       if (al !== undefined) line(ctx, `alias ${n}='${al}'`);
       else if (SHELL_KEYWORDS.has(n) || sh.functions.has(n) || isShellBuiltin(sh, n)) line(ctx, n);
-      else if (sh.commands.has(n)) line(ctx, `/usr/bin/${n}`);
-      else if (n.includes('/') && sh.agentFs.isFile(sh.resolvePath(n)) && sh.agentFs.canExecute(sh.resolvePath(n))) line(ctx, n);
-      else code = 1;
+      else { const l = sh.locate(n); if (l) line(ctx, l[0]); else code = 1; }
     }
     return code;
   }, 'Run a command, or describe it with -v');

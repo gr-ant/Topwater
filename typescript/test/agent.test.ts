@@ -9,6 +9,18 @@ async function out(sh: Shell, cmd: string) {
 }
 
 describe('agent features', () => {
+  it('looks app commands up on PATH like programs', async () => {
+    const sh = new Shell();
+    sh.register('greet', ctx => { ctx.stdout.write(`app ${ctx.args.join(' ')}\n`); });
+    expect(await out(sh, 'greet a; command -v greet')).toBe('app a\n/usr/bin/greet\n');
+    // a script earlier on PATH shadows it, as a wrapper would
+    await out(sh, "mkdir -p ~/bin && printf '#!/bin/sh\\necho wrapped; /usr/bin/greet \"$@\"\\n' > ~/bin/greet && chmod +x ~/bin/greet");
+    expect(await out(sh, 'PATH=~/bin:$PATH greet b')).toBe('wrapped\napp b\n');
+    expect((await sh.run('PATH=/nowhere greet')).exitCode).toBe(127);
+    // shell builtins have no program file and keep working whatever PATH holds
+    expect(await out(sh, 'PATH=/nowhere; cd /tmp; echo x')).toBe('x\n');
+  });
+
   it('runs scripts with arguments', async () => {
     const sh = new Shell();
     await out(sh, "cat > run.sh <<'EOF'\n#!/bin/bash\nset -e\necho \"script $1 $2 ($#)\"\nfor a in \"$@\"; do echo \"arg: $a\"; done\nEOF\nchmod +x run.sh");
@@ -16,8 +28,8 @@ describe('agent features', () => {
     expect(await out(sh, 'bash run.sh a')).toBe('script a  (1)\narg: a\n');
     await out(sh, "printf '#!/usr/bin/env python3\\nprint(1)\\n' > p.py && chmod +x p.py");
     const r = await sh.run('./p.py');
-    expect(r.exitCode).toBe(126);
-    expect(r.stderr).toContain('bad interpreter');
+    expect(r.exitCode).toBe(127);
+    expect(r.stderr).toContain('python3\u2019: No such file or directory');
     expect((await sh.run('./missing.sh')).exitCode).toBe(127);
     expect((await sh.run('exit 2')).exitCode).toBe(2);
     const e = await sh.run('set -e; echo one; false; echo two');

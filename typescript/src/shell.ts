@@ -177,6 +177,7 @@ interface SavedState {
   cwd: string; env: Map<string, string>; aliases: Map<string, string>; functions: Map<string, FunctionDef>; positional: string[];
   errexit: boolean; pipefail: boolean; nounset: boolean; noglob: boolean; xtrace: boolean; noclobber: boolean; ifsUnset: boolean;
   shopts: Set<string>; traps: Map<string, string>; arrays: Map<string, ShellArray>; attrs: Map<string, string>; variableChars: number;
+  hashed: Map<string, [string, number]>;
 }
 
 interface NewProcess { arg0: string; file?: string; setup?: () => void }
@@ -231,6 +232,8 @@ export class Shell implements ArithHost {
 
   /** @internal */ readonly commands = new Map<string, RegisteredCommand>();
   /** @internal */ functions = new Map<string, FunctionDef>();
+  /** @internal bash's hash table: name -> [path found on PATH, lookups since]. */ hashed = new Map<string, [string, number]>();
+  private hashedFor: string | undefined; // the PATH the table was filled from: any change to PATH empties it
   /** @internal */ arrays = new Map<string, ShellArray>();
   /** @internal declare attributes by variable name: i integer, r readonly, l/u case, n nameref, x exported. */
   varAttrs = new Map<string, string>();
@@ -412,6 +415,7 @@ export class Shell implements ArithHost {
   /** @internal Puts a snapshot's session in place (copies, so the snapshot stays as it was) and lines /usr/bin up with this shell's commands. */
   applyState(s: ShellStateData) {
     this.epoch++;
+    this.hashed = new Map(); // the restored machine's programs may be elsewhere
     this.environment = new Map(s.variables);
     this.varAttrs = new Map(s.attributes);
     this.unexported.clear(); for (const n of s.unexported) this.unexported.add(n);
@@ -649,6 +653,7 @@ export class Shell implements ArithHost {
     this.aliases = new Map();
     this.functions = new Map([...this.functions].filter(([k]) => this.exportedFunctions.has(k)));
     this.errexit = this.pipefail = this.nounset = this.xtrace = this.noglob = this.noclobber = false;
+    this.hashed = new Map();
     this.arg0 = process.arg0;
     process.setup?.();
   }
@@ -671,6 +676,7 @@ export class Shell implements ArithHost {
       positional: this.positional, errexit: this.errexit, pipefail: this.pipefail, nounset: this.nounset, noglob: this.noglob,
       xtrace: this.xtrace, noclobber: this.noclobber, ifsUnset: this.ifsUnset, shopts: new Set(this.shopts), traps: new Map(this.traps),
       arrays: new Map(this.arrays), attrs: new Map(this.varAttrs), variableChars: this.variableChars,
+      hashed: new Map([...this.hashed].map(([k, [p, n]]) => [k, [p, n]])),
     };
   }
 
@@ -686,6 +692,7 @@ export class Shell implements ArithHost {
     this.functions = s.functions;
     this.shopts = s.shopts;
     this.traps = s.traps;
+    this.hashed = s.hashed;
     this.cwdPath = this.agentFs.isDirectory(s.cwd) ? s.cwd : '/';
   }
 
@@ -1190,6 +1197,20 @@ export class Shell implements ArithHost {
       if ((dir === '/usr/bin' || dir === '/bin' || dir === '/usr/local/bin') && this.commands.has(VirtualFileSystem.getName(path)))
         name = VirtualFileSystem.getName(path);
       else return this.runScriptFile(name, path, argv, io);
+    } else if (!isShellBuiltin(this, name) && !this.isUnfiled(name)) {
+      let found = this.hashLookup(name);
+      if (found === null) {
+        found = this.searchPath(name);
+        if (found === null) {
+          io.err.write(!this.environment.get('PATH') ? `${this.errPrefix}${name}: No such file or directory\n`
+            : `${argv[0]}: command not found (run 'help' to list available commands)\n`);
+          return 127;
+        }
+        this.hashed.set(name, [found, 1]);
+      }
+      const registered = this.stubCommand(found);
+      if (registered === null) return this.runScriptFile(found, this.resolvePath(found), [found, ...argv.slice(1)], io);
+      name = registered;
     }
     const cmd = this.commands.get(name);
     if (!cmd) {
@@ -1237,17 +1258,115 @@ export class Shell implements ArithHost {
     if (!this.agentFs.isFile(path)) { io.err.write(`${this.errPrefix}${name}: ${this.agentFs.whyMissing(path)}\n`); return this.agentFs.whyMissing(path) === 'Permission denied' ? 126 : 127; }
     if (!this.agentFs.canExecute(path) || !this.agentFs.canRead(path)) { io.err.write(`${this.errPrefix}${name}: Permission denied\n`); return 126; }
     const text = this.agentFs.readText(path);
-    if (text.startsWith(EXECUTABLE_STUB.slice(0, 4))) { io.err.write(`${this.errPrefix}${name}: cannot execute binary file\n`); return 126; }
+    if (text.startsWith(EXECUTABLE_STUB.slice(0, 4))) {
+      const stub = this.stubCommand(path);
+      if (stub !== null) return this.invoke([stub, ...argv.slice(1)], io, true);
+      io.err.write(`${this.errPrefix}${name}: cannot execute binary file\n`);
+      return 126;
+    }
     if (text.startsWith('#!')) {
       const nl = text.indexOf('\n');
-      const interp = text.slice(2, nl >= 0 ? nl : text.length).trim();
-      if (!/(^|\/|\s)(ba)?sh(\s|$)/.test(interp)) {
-        io.err.write(`${this.errPrefix}${name}: ${interp.split(' ')[0]}: bad interpreter: No such file or directory\n`);
-        return 126;
-      }
+      const line = text.slice(2, nl >= 0 ? nl : text.length).trim();
+      if (!/(^|\/|\s)(ba)?sh(\s|$)/.test(line)) return this.runInterpreter(name, line, argv, io);
     }
     return this.runScriptText(text, io, true, argv.slice(1), { arg0: name, file: name });
   }
+
+  /** A #! line naming another program: like the kernel, run it with its one optional argument, the script and the
+   * script's arguments, when it is one of the shell's commands. */
+  private async runInterpreter(name: string, line: string, argv: string[], io: Io): Promise<number> {
+    const m = /^(\S+)(?:[ \t]+(.*))?$/.exec(line)!;
+    const program = this.stubCommand(m[1]);
+    if (program === null) {
+      io.err.write(`${this.errPrefix}${name}: cannot execute: required file not found\n`);
+      return 127;
+    }
+    const opt = (m[2] ?? '').trim();
+    const words = !opt ? [] : program === 'env' && opt.startsWith('-S') ? opt.slice(2).split(/[ \t]+/).filter(Boolean) : [opt];
+    if (program !== 'env') return this.invoke([program, ...words, name, ...argv.slice(1)], io, true);
+    // shortcut: env in a #! line only looks the program up on PATH; env's own options are not supported
+    if (!words.length || !this.isUnfiled(words[0]) && !this.searchPathAll(words[0]).length) {
+      io.err.write(`${m[1]}: \u2018${words[0] ?? ''}\u2019: No such file or directory\n`);
+      if (opt.includes(' ')) io.err.write(`${m[1]}: use -[v]S to pass options in shebang lines\n`);
+      return 127;
+    }
+    return this.invoke([...words, name, ...argv.slice(1)], io, true);
+  }
+
+  /** @internal A registered command with no program file (a shell-only builtin, or an app command added where there is
+   * no /usr/bin): it runs whatever PATH says. */
+  isUnfiled(name: string): boolean {
+    return this.commands.has(name) && !name.includes('/') && !this.fs.isFile('/usr/bin/' + name) && !this.fs.isFile('/bin/' + name);
+  }
+
+  /** @internal The registered command a program file stands for, or null when `path` is not one of the stubs. */
+  stubCommand(path: string): string | null {
+    const p = this.resolvePath(path);
+    if (!this.agentFs.isFile(p) || !this.agentFs.canRead(p) || this.agentFs.readText(p) !== EXECUTABLE_STUB) return null;
+    const name = VirtualFileSystem.getName(this.agentFs.realPath(p) ?? p);
+    return this.commands.has(name) ? name : null;
+  }
+
+  /** Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd. */
+  private pathCandidates(name: string): string[] {
+    return (this.environment.get('PATH') ?? '').split(':').map(d => d ? d.replace(/\/+$/, '') + '/' + name : './' + name);
+  }
+
+  /** @internal PATH search as bash does it: the first executable regular file named `name` in a directory the agent can
+   * search, else the first one that isn't executable (running it says "Permission denied"), else null. */
+  searchPath(name: string): string | null {
+    let denied: string | null = null;
+    for (const p of this.pathCandidates(name)) {
+      const abs = this.resolvePath(p);
+      if (!this.agentFs.isFile(abs)) continue;
+      if (this.agentFs.canExecute(abs)) return p;
+      denied ??= p;
+    }
+    return denied;
+  }
+
+  /** @internal `type -a`, `which -a`: every executable regular file named `name` on PATH. */
+  searchPathAll(name: string): string[] {
+    return this.pathCandidates(name).filter(p => this.agentFs.isFile(this.resolvePath(p)) && this.agentFs.canExecute(this.resolvePath(p)));
+  }
+
+  /** @internal The hash table's entry for `name`, counting a hit; the table empties first if PATH changed. */
+  hashLookup(name: string): string | null {
+    this.syncHashed();
+    const h = this.hashed.get(name);
+    if (!h) return null;
+    h[1]++;
+    return h[0];
+  }
+
+  /** @internal */
+  syncHashed() {
+    const path = this.environment.get('PATH');
+    if (path !== this.hashedFor) { this.hashed = new Map(); this.hashedFor = path; }
+  }
+
+  /** @internal `type`, `command -v`: the program `name` runs, from the hash table (counting a hit) or PATH; an app command
+   * with no program file is reported in /usr/bin as before. */
+  locate(name: string): [string, boolean] | null {
+    if (name.includes('/')) {
+      const abs = this.resolvePath(name);
+      return this.agentFs.isFile(abs) && this.agentFs.canExecute(abs) ? [name, false] : null;
+    }
+    const h = this.hashLookup(name);
+    if (h !== null) return [h, true];
+    const p = this.searchPath(name);
+    if (p !== null) return [p, false];
+    return this.isAppOnly(name) ? ['/usr/bin/' + name, false] : null;
+  }
+
+  /** @internal `type -a`, `which`: every program file `name` could run, in PATH order. */
+  locateAll(name: string): string[] {
+    if (name.includes('/')) { const l = this.locate(name); return l ? [l[0]] : []; }
+    const all = this.searchPathAll(name);
+    return all.length || !this.isAppOnly(name) ? all : ['/usr/bin/' + name];
+  }
+
+  private isAppOnly(name: string) { return this.isUnfiled(name) && !isShellBuiltin(this, name); }
 
   private async callFunction(body: Command, argv: string[], io: Io): Promise<number> {
     if (this.locals.length >= 200) throw new LimitExceeded(`${argv[0]}: maximum function nesting level exceeded (200)`);
@@ -1382,6 +1501,7 @@ export class Shell implements ArithHost {
     }
     if (!isName(name)) throw new ShellError(`\`${name}': not a valid identifier`);
     this.checkWritable(name);
+    if (name === 'PATH') this.hashed = new Map(); // even to the same value
     if (name === 'RANDOM') { this.random = BigInt.asUintN(64, /^\s*[-+]?\d+\s*$/.test(value) ? BigInt(value.trim()) : 0n); return; }
     if (name === 'SECONDS' && /^-?\d+$/.test(value)) { this.secondsBase = this.now() - Number(value) * 1000; return; }
     const isArray = this.arrays.has(name);

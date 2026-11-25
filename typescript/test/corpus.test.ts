@@ -24,7 +24,7 @@ for (const [area, cases] of Object.entries(areas)) {
       if (reason) { it.skip(`${name} [skipped: ${reason}]`, () => {}); continue; }
       it(name, async () => {
         const sh = new Shell();
-        await sh.run('mkdir -p /tmp/w && cd /tmp/w');
+        await sh.run('mkdir -p /tmp/w && cd /tmp/w && hash -r');
         if (c.setup != null) await sh.run(c.setup);
         const r = await sh.run(c.script);
         if (c.toolOutput != null) return expect(r.toToolOutput()).toBe(c.toolOutput);
