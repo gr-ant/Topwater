@@ -33,6 +33,30 @@ A command handler gets a `CommandContext`: `args`, `stdout`/`stderr` writers, `s
 `resolvePath()`, `checkTime()` (call it in long loops so the call's time limit can stop you) and `invoke()`. Throw
 `ShellError(message, exitCode)` for a `name: message` error; any other exception becomes `name: message`, exit 1.
 
+## Vercel AI SDK and OpenAI Agents
+
+Optional adapters (separate entry points; the core has no dependencies). Install the SDK you use: `npm i ai` or
+`npm i @openai/agents zod`. Both return the `bash` tool wired to a `Shell`; calls through one adapter run one at a time.
+
+```ts
+import { Shell } from 'topwater';
+import { bashTool } from 'topwater/ai-sdk';
+import { generateText, stepCountIs } from 'ai';
+
+const shell = new Shell();
+await generateText({ model, tools: { bash: bashTool(shell) }, stopWhen: stepCountIs(10), prompt: '...' });
+```
+
+```ts
+import { Shell } from 'topwater';
+import { bashTool } from 'topwater/openai-agents';
+import { Agent, run } from '@openai/agents';
+
+const shell = new Shell();
+const agent = new Agent({ name: 'Assistant', instructions: 'Use bash to ...', tools: [bashTool(shell)] });
+await run(agent, '...');
+```
+
 ## Layout
 
 | File | What |
