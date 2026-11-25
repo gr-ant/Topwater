@@ -22,6 +22,8 @@ export interface SessionOptions {
   seed?: [string, string | Uint8Array][];
   /** How long past maxCallDurationMs the page waits before terminating the worker. Default 2000 ms. */
   graceMs?: number;
+  /** Start from a whole machine in the snapshot zip format (a recording's turn, a saved shell) instead of `seed`. */
+  snapshotZip?: Uint8Array;
   /** Called when a command in the shell runs `download FILE`. */
   onDownload?: (name: string, data: Uint8Array) => void;
 }
@@ -112,7 +114,8 @@ export class TopwaterSession {
           case 'put': this.settle(m.id, m); break;
         }
       };
-      const init: ToWorker = snapshot ? { t: 'init', options: this.options.shell ?? {}, snapshot } : { t: 'init', options: this.options.shell ?? {}, seed: this.options.seed };
+      const options = this.options.shell ?? {}, snapshotZip = this.options.snapshotZip?.slice();
+      const init: ToWorker = snapshot ? { t: 'init', options, snapshot, snapshotZip } : { t: 'init', options, seed: this.options.seed, snapshotZip };
       this.worker.postMessage(init);
     });
   }

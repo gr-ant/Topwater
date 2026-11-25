@@ -66,11 +66,32 @@ function save(name: string, data: Uint8Array) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+// ?fork=KEY: the recording viewer left a machine (snapshot zip, base64) in localStorage; this tab keeps it for reloads
+function forkedMachine(): Uint8Array | undefined {
+  const key = q.get('fork');
+  if (!key || !/^[a-z0-9]{1,40}$/.test(key)) return undefined;
+  try {
+    const name = 'topwater-fork:' + key;
+    let b64 = sessionStorage.getItem(name);
+    if (b64 === null) {
+      b64 = localStorage.getItem(name);
+      localStorage.removeItem(name);
+      if (b64 !== null) sessionStorage.setItem(name, b64);
+    }
+    if (b64 === null) return undefined;
+    const s = atob(b64), bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+    return bytes;
+  } catch { return undefined; }
+}
+const fork = forkedMachine();
+
 const session = new TopwaterSession({
   workerUrl: new URL('worker.js', import.meta.url),
   shell: { maxCallDurationMs: limitS * 1000 },
   graceMs: q.has('grace') ? Number(q.get('grace')) : 1500,
-  seed,
+  seed: fork ? undefined : seed,
+  snapshotZip: fork,
   onDownload: save,
 });
 (window as unknown as { topwater: TopwaterSession }).topwater = session;
@@ -189,4 +210,6 @@ themeBtn.addEventListener('click', () => {
 // ---- start ----
 setBusy(true);
 line('Topwater (TypeScript port): simulated bash, running in this tab. Type `help`, or try a command on the right.', 'dim');
+if (fork) line(`Forked from ${q.get('from') || 'a recording'}, ${q.get('turn') === '-1' ? 'before the first turn' : `after turn ${q.get('turn') ?? '?'}`}: this is that machine, and it's yours to change.`, 'dim');
+else if (q.has('fork')) line('The forked machine is no longer available here. Open the fork again from the recording viewer.', 'err');
 session.start().then(() => { refreshPrompt(); setBusy(false); input.focus(); }, e => line(`could not start the shell: ${(e as Error).message}`, 'err'));

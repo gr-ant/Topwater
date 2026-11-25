@@ -97,8 +97,89 @@ try {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check(overflow <= 0, `no horizontal scroll at 375 px (overflow ${overflow}px)`);
 
+  // ---------- the recording viewer, on the bundled sample (recorded with the C# API) ----------
+  const viewer = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const vErrors = [];
+  viewer.on('console', m => { if (m.type() === 'error') vErrors.push(m.text()); });
+  viewer.on('pageerror', e => vErrors.push(String(e)));
+  viewer.on('request', r => { if (!r.url().startsWith(origin) && !r.url().startsWith('blob:') && !r.url().startsWith('data:')) foreign.push(r.url()); });
+  await viewer.goto(`${origin}/replay.html`);
+  const pos = () => viewer.locator('#pos').innerText();
+  const settled = () => viewer.waitForFunction(() => !document.querySelector('#tree[aria-busy]') && document.querySelector('#tree ul'), null, { timeout: 30_000 });
+  await viewer.waitForSelector('#viewer:not([hidden])', { timeout: 30_000 });
+  await settled();
+  check((await viewer.locator('#timeline li').count()) === 10 && (await pos()) === 'Turn 1 of 9', 'viewer: the sample loads as a timeline of 9 turns plus the start');
+  check((await viewer.locator('#meta').innerText()).includes('compute total sales amount per region'), 'viewer: the summary shows the recorded task');
+
+  await viewer.locator('body').press('ArrowRight');
+  await viewer.locator('body').press('ArrowRight');
+  await settled();
+  const turn3 = await viewer.locator('#turn').innerText();
+  check((await pos()) === 'Turn 3 of 9' && turn3.includes('north 220') && turn3.includes("recording's own snapshot"), 'viewer: arrow keys step to turn 3, which shows its output and comes from a snapshot');
+  const changes3 = await viewer.locator('#changes').innerText();
+  check(/added\s+\/home\/agent\/report\.txt/i.test(changes3) && (await viewer.locator('#changes pre.diff-body').first().innerText()).includes('+north 220'), 'viewer: turn 3 lists report.txt as added, with its diff');
+
+  await viewer.getByRole('button', { name: 'Next turn' }).click();
+  await settled();
+  const turn4 = await viewer.locator('#turn').innerText();
+  const diff4 = await viewer.locator('#changes pre.diff-body').first().innerText();
+  check(turn4.includes('rebuilt by re-running') && turn4.includes('same output'), 'viewer: turn 4 is rebuilt by re-running it in the browser, and its output matches the recording');
+  check(diff4.includes('+region total') && diff4.includes(' north 220') && (await viewer.locator('#changes li.change').count()) === 1, 'viewer: turn 4 shows a text diff of report.txt (a header line added) and nothing else');
+
+  await viewer.locator('#timeline button[data-index="6"]').click();
+  await settled();
+  const changes7 = await viewer.locator('#changes').innerText();
+  check(/added\s+\/home\/agent\/archive\.tgz/i.test(changes7) && /removed\s+\/home\/agent\/archive\/sales-2026-11-25\.csv/i.test(changes7), 'viewer: turn 7 shows archive.tgz added and the archive folder removed');
+  await viewer.locator('#tree button.file[data-path="/home/agent/archive.tgz"]').click();
+  await viewer.waitForFunction(() => document.querySelector('#fileview')?.textContent?.includes('Binary'));
+  await viewer.locator('#tree button.file[data-path="/home/agent/report.txt"]').click();
+  await viewer.waitForFunction(() => document.querySelector('#fileview pre')?.textContent?.includes('North 220'));
+  check(!(await viewer.locator('#tree button.file[data-path="/home/agent/archive/sales-2026-11-25.csv"]').count()), 'viewer: the file tree at turn 7 shows the files of that moment (the archive folder is gone; report.txt has the edits)');
+
+  await viewer.getByRole('button', { name: 'Start: before the first turn' }).click();
+  await settled();
+  check((await pos()).startsWith('Start') && !(await viewer.locator('#tree button.file[data-path="/home/agent/report.txt"]').count()), 'viewer: the start has no report.txt yet');
+  await viewer.locator('body').press('End');
+  await settled();
+  check((await pos()) === 'Turn 9 of 9', 'viewer: End jumps to the last turn');
+
+  // fork from turn 6: the terminal opens on that machine and keeps going
+  await viewer.locator('#timeline button[data-index="5"]').click();
+  await settled();
+  const [forked] = await Promise.all([viewer.context().waitForEvent('page'), viewer.getByRole('button', { name: 'Open a terminal here' }).click()]);
+  const fErrors = [];
+  forked.on('pageerror', e => fErrors.push(String(e)));
+  await forked.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false' && document.querySelector('#prompt')?.textContent?.includes('agent@topwater'), null, { timeout: 30_000 });
+  const fin = forked.getByRole('textbox').first();
+  await fin.fill('cat report.txt; ls; echo more >> report.txt; tail -1 report.txt');
+  await fin.press('Enter');
+  await forked.waitForTimeout(50);
+  await forked.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false');
+  const forkOut = await forked.locator('[role="log"]').innerText();
+  check(forkOut.includes('Forked from') && forkOut.includes('North 220') && forkOut.includes('archive') && forkOut.includes('more') && !forkOut.includes('notes.txt'), 'viewer: "Open a terminal here" opens the terminal on the machine after turn 6, and commands run on it');
+  check(vErrors.length === 0 && fErrors.length === 0, `viewer: no console errors${vErrors.length + fErrors.length ? ': ' + [...vErrors, ...fErrors].join(' | ') : ''}`);
+  await viewer.setViewportSize({ width: 375, height: 800 });
+  const vOverflow = await viewer.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  check(vOverflow <= 0, `viewer: no horizontal scroll at 375 px (overflow ${vOverflow}px)`);
+  check(foreign.length === 0, `viewer: no requests outside the page's origin${foreign.length ? ': ' + foreign.join(' ') : ''}`);
+
   if (shots) {
     await mkdir(shots, { recursive: true });
+    for (const scheme of ['light', 'dark']) {
+      const p = await browser.newPage({ viewport: { width: 1280, height: 900 }, colorScheme: scheme });
+      await p.goto(`${origin}/replay.html`);
+      await p.waitForSelector('#viewer:not([hidden])');
+      await p.locator('#timeline button[data-index="3"]').click();
+      await p.waitForFunction(() => document.querySelector('#changes pre.diff-body'));
+      await p.screenshot({ path: join(shots, `replay-${scheme}.png`), fullPage: true });
+      const phone = await browser.newPage({ viewport: { width: 375, height: 812 }, colorScheme: scheme, deviceScaleFactor: 2 });
+      await phone.goto(`${origin}/replay.html`);
+      await phone.waitForSelector('#viewer:not([hidden])');
+      await phone.waitForFunction(() => document.querySelector('#tree ul'));
+      await phone.evaluate(() => window.topwaterReplay.go(3));
+      await phone.waitForFunction(() => document.querySelector('#changes pre.diff-body'));
+      await phone.screenshot({ path: join(shots, `replay-${scheme}-phone.png`), fullPage: true });
+    }
     for (const scheme of ['light', 'dark']) {
       const p = await browser.newPage({ viewport: { width: 1280, height: 900 }, colorScheme: scheme });
       await p.goto(origin);

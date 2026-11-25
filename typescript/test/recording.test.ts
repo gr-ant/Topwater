@@ -128,3 +128,20 @@ describe('recordings in the C# format', () => {
     await expect(Recording.load('{"format":"topwater-recording","version":1,"options":{},"start":{"file":"../start.zip"}}\n', async () => new Uint8Array())).rejects.toThrow(/leaves/);
   });
 });
+
+import { diffLines } from '../browser/diff.js';
+
+describe('the viewer\'s line diff', () => {
+  it('gives unified hunks with context', () => {
+    const a = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+    const b = a.replace('line 3\n', 'line three\n').replace('line 18\n', '').concat('line 21\n');
+    const hunks = diffLines(a, b)!;
+    expect(hunks.length).toBe(2);
+    expect(hunks[0]).toMatchObject({ oldStart: 1, newStart: 1 });
+    expect(hunks[0].lines.filter(l => l.op !== ' ').map(l => l.op + l.text)).toEqual(['-line 3', '+line three']);
+    expect(hunks[1].lines.filter(l => l.op !== ' ').map(l => l.op + l.text)).toEqual(['-line 18', '+line 21']);
+    expect(diffLines('same\n', 'same\n')).toEqual([]);
+    expect(diffLines('', 'new\n')![0].lines).toEqual([{ op: '+', text: 'new', newNo: 1 }]);
+    expect(diffLines('x\n'.repeat(3000), 'y\n'.repeat(3000))).toBeNull(); // too big to diff
+  });
+});

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Topwater recording viewer</title>
+<meta name="description" content="Step through a recorded Topwater agent session turn by turn: commands, output, and the machine's files after each turn. Runs entirely in your browser.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' blob: data:">
+<link rel="icon" href="brand/favicon_32.svg" type="image/svg+xml">
+<link rel="icon" href="brand/favicon_32.png" type="image/png">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="replay.css">
+<script type="module" src="replay.js"></script>
+</head>
+<body>
+<header>
+  <div>
+    <a href="index.html" class="home" aria-label="Topwater demo home">
+      <img class="lockup light" src="brand/topwater_lockup.svg" alt="Topwater" width="537" height="160">
+      <img class="lockup dark" src="brand/topwater_lockup_dark.svg" alt="" width="537" height="160">
+    </a>
+  </div>
+  <div class="row">
+    <a class="navlink" href="index.html">Terminal demo</a>
+    <button id="theme" type="button" class="quiet" title="Switch colour theme">Theme: auto</button>
+  </div>
+</header>
+<main>
+  <section class="intro">
+    <h1>Recording viewer</h1>
+    <p>Step through a recorded agent session turn by turn: each command and what it returned, the machine's files as they were after that turn, and what the turn changed. From any turn you can open a terminal on that machine and carry on yourself.</p>
+    <p>Recordings are the JSON Lines files Topwater writes (<code>shell.StartRecording()</code> in .NET, <code>startRecording(shell)</code> in TypeScript). Everything happens in this tab; nothing is uploaded.</p>
+  </section>
+
+  <section class="loader" aria-label="Open a recording">
+    <div class="row">
+      <button id="open" type="button">Open recording…</button>
+      <button id="sample" type="button" class="secondary">Load the sample</button>
+    </div>
+    <input id="file" type="file" accept=".jsonl,.zip,.json" multiple hidden>
+    <p class="note">Or drop a <code>.jsonl</code> file anywhere on this page, together with its <code>.zip</code> snapshots if it keeps them in separate files.</p>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section id="viewer" hidden aria-labelledby="rec-title">
+    <div class="summary">
+      <h2 id="rec-title">Recording</h2>
+      <dl id="meta"></dl>
+    </div>
+
+    <div class="player" role="group" aria-label="Move through the turns">
+      <button id="first" type="button" class="secondary" aria-label="Start: before the first turn">« Start</button>
+      <button id="prev" type="button" class="secondary" aria-label="Previous turn">‹ Prev</button>
+      <input id="slider" type="range" min="0" max="0" value="0" aria-label="Turn">
+      <button id="next" type="button" class="secondary" aria-label="Next turn">Next ›</button>
+      <button id="last" type="button" class="secondary" aria-label="Last turn">End »</button>
+      <output id="pos" for="slider" aria-live="polite"></output>
+      <button id="fork" type="button" title="Open the terminal demo on the machine as it was after this turn">Open a terminal here</button>
+    </div>
+    <p class="note keys">Keys: <kbd>←</kbd> <kbd>→</kbd> move one turn, <kbd>Home</kbd> <kbd>End</kbd> jump to the start or the end.</p>
+
+    <div class="split">
+      <nav aria-label="Turns" class="timeline-wrap"><ol id="timeline"></ol></nav>
+      <article id="turn" aria-labelledby="turn-title"></article>
+    </div>
+
+    <section class="changes" aria-labelledby="changes-title">
+      <h3 id="changes-title">What this turn changed</h3>
+      <div id="changes"></div>
+    </section>
+
+    <div class="machine">
+      <section aria-labelledby="tree-title">
+        <h3 id="tree-title">Files after this turn</h3>
+        <div id="tree" class="tree"></div>
+      </section>
+      <section aria-labelledby="file-title" class="fileview">
+        <h3 id="file-title">File</h3>
+        <div id="fileview"><p class="note">Choose a file on the left.</p></div>
+      </section>
+    </div>
+  </section>
+</main>
+</body>
+</html>

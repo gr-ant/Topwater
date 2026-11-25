@@ -23,6 +23,7 @@
   <section class="intro">
     <p>Topwater gives an LLM agent one <code>bash</code> tool backed by a simulated Linux shell: an in-process interpreter, an in-memory Ubuntu-like filesystem with users and permissions, about 110 standard commands, and resource limits.</p>
     <p>This page runs the TypeScript port entirely in your tab, in a Web Worker. Nothing you type or upload is sent anywhere: no model, no API keys, no server.</p>
+    <p>Watch an agent's session turn by turn in the <a href="replay.html">recording viewer</a>.</p>
     <p><a href="https://github.com/gr-ant/Topwater">GitHub</a> · <a href="https://www.nuget.org/packages/Topwater">NuGet</a> (the .NET library: <code>dotnet add package Topwater --prerelease</code>)</p>
     <details><summary>What doesn't work here</summary>
       <p>No host programs or MCP servers (a browser has no processes). The <code>api</code> command could only reach CORS-enabled APIs and isn't set up in this demo.</p>

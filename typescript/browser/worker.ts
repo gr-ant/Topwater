@@ -1,6 +1,6 @@
 // Web Worker entry: runs one Topwater shell off the page's thread. The page can terminate this worker at any moment
 // (a call that overruns its time limit), so after every call it receives a snapshot to start a fresh worker from.
-import { Shell, ShellError } from '../src/index.js';
+import { Shell, ShellError, ShellSnapshot } from '../src/index.js';
 import type { FromWorker, Snapshot, ToWorker } from './protocol.js';
 
 /** Where the agent can write; everything else is the read-only system image every new Shell recreates. */
@@ -66,10 +66,12 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
   const m = e.data;
   switch (m.t) {
     case 'init': {
-      shell = new Shell(m.options);
+      const machine = m.snapshotZip ? await ShellSnapshot.load(m.snapshotZip) : null;
+      shell = new Shell(machine ? { ...m.options, user: machine.user, hostname: machine.hostname } : m.options);
       registerDownload(shell);
+      machine?.restore(shell); // after registering, so /usr/bin lists the demo's commands
       if (m.snapshot) await restore(m.snapshot);
-      else {
+      else if (!machine) {
         const agent = shell.fs.as(shell.options.user);
         for (const [p, content] of m.seed ?? []) {
           agent.mkdir(p.slice(0, p.lastIndexOf('/')) || '/', true);

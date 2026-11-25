@@ -826,6 +826,14 @@ harness's saved transcripts (`runs/*.json`) and public agent trajectories into r
 and in a container, and ranks the differences (missing commands, unsupported options, wrong exit codes, wrong output).
 The example harness itself now saves a deterministic recording of every run next to its transcript.
 
+### In TypeScript and in the browser
+
+The TypeScript port reads and writes the same files (`Recording`, `ShellSnapshot`, `startRecording`; see
+`typescript/README.md`), with the same virtual clock and random generator, so a deterministic recording made here
+re-runs there with the same times and random numbers. Its demo site has a recording viewer (`replay.html`) that steps
+through a recording turn by turn, shows the files after each turn and what the turn changed, and opens a terminal on
+the machine as of any turn.
+
 ### The file format
 
 A recording is a JSON Lines file (UTF-8, one JSON object per line, `\n` endings). JSON Lines because a run is a
