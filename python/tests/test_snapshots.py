@@ -357,6 +357,18 @@ echo setup done
         self.assertIn("exit codes", self.rejected(self.tamper(sh, lambda m: m.update(lastExitCode=300))))
         self.assertIn("bad alias", self.rejected(self.tamper(sh, lambda m: m.update(aliases={"a b": "x"}))))
 
+    def test_null_booleans_and_other_digits_are_refused(self):
+        sh = Shell()
+        for getopts in ([None, 1], [True, 1], [0, False], [0, -1]):
+            with self.subTest(getopts=getopts):
+                self.assertIn("bad getopts", self.rejected(self.tamper(sh, lambda m: m.update(getopts=getopts))))
+        for job in ([True, 0], [None, 0], [1, True]):
+            with self.subTest(job=job):
+                self.assertIn("bad job", self.rejected(self.tamper(sh, lambda m: m.update(jobs=[job]))))
+        # \d would take Arabic-Indic and other digits; a time is ASCII digits only
+        self.assertIn("bad created", self.rejected(self.tamper(sh, lambda m: m.update(created="2026-11-25T09:00:0٣Z"))))
+        self.assertIn("bad secondsBase", self.rejected(self.tamper(sh, lambda m: m.update(secondsBase="٢026-11-25T09:00:00Z"))))
+
     def test_links_survive_save_load_fork_and_restore(self):
         sh = Shell()
         sh.run("mkdir -p d/s; echo hi > d/f; ln -s f d/l; ln -s /etc d/etc; ln -s nowhere d/dang; ln -s . d/s/self; ln -s loop2 loop1; "

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import struct
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -59,30 +60,33 @@ class ShellSnapshot:
     def save(self, file) -> None:
         """Writes the snapshot to a path or a binary file as a zip: manifest.json and blobs/<sha256> (each content once)."""
         with zipfile.ZipFile(file, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
-            written: set[str] = set()
-            files = []
-            links = False
-            for path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link in self._entries:
-                kind = "dir" if is_dir else "file" if link_target is None else "symlink"
-                entry = {"path": path, "type": kind, "mode": f"{mode:04o}", "owner": owner, "mtime": format_time(modified)}
-                _put(entry, target=link_target, link=hard_link)
-                links |= link_target is not None or hard_link is not None
-                if kind == "file":
-                    binary = data is not None
-                    if not binary:
-                        try:
-                            data = text.encode("utf-8")
-                        except UnicodeEncodeError:  # bytes carried in text (bytetext escapes): store them exactly
-                            from . import bytetext
-                            data, binary = bytetext.encode(text), True
-                    _put(entry, size=len(data), binary=binary, reportedSize=reported_size)
-                    if data:
-                        blob = entry["blob"] = hashlib.sha256(data).hexdigest()
-                        if blob not in written:
-                            written.add(blob)
-                            zf.writestr("blobs/" + blob, data)
-                files.append(entry)
-            zf.writestr("manifest.json", _dumps(self._manifest(files, 2 if links else 1)))
+            self._write(zf, "manifest.json", set())
+
+    def _write(self, zf: zipfile.ZipFile, name: str, written: set) -> None:
+        """Writes this machine as the manifest `name` and the blobs not in `written` yet (a .topwater file shares them)."""
+        files = []
+        links = False
+        for path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link in self._entries:
+            kind = "dir" if is_dir else "file" if link_target is None else "symlink"
+            entry = {"path": path, "type": kind, "mode": f"{mode:04o}", "owner": owner, "mtime": format_time(modified)}
+            _put(entry, target=link_target, link=hard_link)
+            links |= link_target is not None or hard_link is not None
+            if kind == "file":
+                binary = data is not None
+                if not binary:
+                    try:
+                        data = text.encode("utf-8")
+                    except UnicodeEncodeError:  # bytes carried in text (bytetext escapes): store them exactly
+                        from . import bytetext
+                        data, binary = bytetext.encode(text), True
+                _put(entry, size=len(data), binary=binary, reportedSize=reported_size)
+                if data:
+                    blob = entry["blob"] = hashlib.sha256(data).hexdigest()
+                    if blob not in written:
+                        written.add(blob)
+                        zf.writestr("blobs/" + blob, data)
+            files.append(entry)
+        zf.writestr(name, _dumps(self._manifest(files, 2 if links else 1)))
 
     def _manifest(self, files: list, version: int) -> dict:
         st = self._state
@@ -114,9 +118,9 @@ class ShellSnapshot:
         max_file_system_bytes, max_string_bytes and max_extract_entries of `limits` (a Shell, or any object with those
         attributes; the defaults otherwise) bound it, and nothing is written outside memory. Raises SnapshotError for
         anything malformed or over a limit, SnapshotVersionError for a newer format version."""
-        o = {k: getattr(limits, k, d) for k, d in _DEFAULT_LIMITS.items()}
+        o = _limits(limits)
         try:
-            return _read(file, o)
+            return _read(file, o)[0]
         except (SnapshotError, SnapshotVersionError, MemoryError, KeyboardInterrupt):
             raise
         except Exception as e:  # anything else wrong with the bytes (a bad zip, a bad CRC, a wrong JSON type, ...)
@@ -138,10 +142,18 @@ def _check(value, shape: re.Pattern, what: str) -> str:
     raise SnapshotError(f"bad {what} {json.dumps(value)}")
 
 
+def _limits(limits) -> dict:
+    return {k: getattr(limits, k, d) for k, d in _DEFAULT_LIMITS.items()}
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _int(value, what: str) -> int:
     if value is None:
         return 0
-    if isinstance(value, int) and not isinstance(value, bool):
+    if _is_int(value):
         return value
     raise SnapshotError(f"bad {what} {json.dumps(value)}")
 
@@ -182,50 +194,87 @@ def _read_capped(src, max_bytes: int, what: str) -> bytes:
     return bytes(out)
 
 
-def _open(file, max_archive: int):
+def _max_manifest(o: dict) -> int:
+    return 4 * o["max_string_bytes"] + 1024 * o["max_extract_entries"]
+
+
+def _max_archive(o: dict) -> int:
+    return 2 * o["max_file_system_bytes"] + _max_manifest(o)
+
+
+def _open(file, max_archive: int, what: str = "the snapshot"):
+    """A seekable binary source for `file` (a path, a binary file or bytes), refused when larger than max_archive."""
     if isinstance(file, (bytes, bytearray, memoryview)):
         file = io.BytesIO(bytes(file))
     elif isinstance(file, (str, os.PathLike)):
         if os.path.getsize(file) > max_archive:
-            raise SnapshotError(f"the snapshot is larger than {max_archive} bytes")
+            raise SnapshotError(f"{what} is larger than {max_archive} bytes")
         return open(file, "rb")
     seekable = getattr(file, "seekable", lambda: False)()
     if not seekable:
-        return io.BytesIO(_read_capped(file, max_archive, "the snapshot"))
+        return io.BytesIO(_read_capped(file, max_archive, what))
     pos = file.tell()
     if file.seek(0, io.SEEK_END) - pos > max_archive:
-        raise SnapshotError(f"the snapshot is larger than {max_archive} bytes")
+        raise SnapshotError(f"{what} is larger than {max_archive} bytes")
     file.seek(pos)
     return file
 
 
-def _read(file, o: dict) -> ShellSnapshot:
-    max_manifest = 4 * o["max_string_bytes"] + 1024 * o["max_extract_entries"]
-    max_archive = 2 * o["max_file_system_bytes"] + max_manifest
-    src = _open(file, max_archive)
+def _check_entry_count(src, o: dict) -> None:
+    """Refuses a zip with more entries than any Topwater file holds, before zipfile builds an object for each. The count
+    in the end record comes first; the central directory is then walked too, as zipfile reads it by its size, not that count."""
+    cap = 4 * o["max_extract_entries"] + 1002  # a manifest's and 1000 checkpoints' JSON, history.jsonl, and blobs
+    pos = src.tell()
+    end = src.seek(0, io.SEEK_END)
+    start = max(0, end - (22 + 0xFFFF + 76))  # the end record, its comment, and a zip64 record and locator before it
+    src.seek(start)
+    tail = src.read(end - start)
+    i = tail.rfind(b"PK\x05\x06")
+    if i < 0 or len(tail) - i < 22:
+        raise SnapshotError("not a zip file")
+    count, size, offset = struct.unpack_from("<HII", tail, i + 10)
+    at = start + i
+    if i >= 76 and tail[i - 20:i - 16] == b"PK\x06\x07" and tail[i - 76:i - 72] == b"PK\x06\x06":
+        count, size, offset = struct.unpack_from("<QQQ", tail, i - 76 + 32)
+        at -= 76
+    if count > cap:
+        raise SnapshotError(f"more than {cap} zip entries (4 x MaxExtractEntries + 1002)")
+    src.seek(at - size)  # where zipfile reads it, also with data prepended to the zip
+    cd = src.read(size)
+    p = n = 0
+    while p + 46 <= len(cd):
+        n += 1
+        if n > cap:
+            raise SnapshotError(f"more than {cap} zip entries (4 x MaxExtractEntries + 1002)")
+        p += 46 + sum(struct.unpack_from("<HHH", cd, p + 28))
+    src.seek(pos)
+
+
+def _read(file, o: dict) -> tuple[ShellSnapshot, int]:
+    src = _open(file, _max_archive(o))
     try:
+        _check_entry_count(src, o)
         with zipfile.ZipFile(src) as zf:
-            return _read_zip(zf, o, max_manifest)
+            return _read_manifest(zf, set(zf.namelist()), "manifest.json", o)
     finally:
         if src is not file:
             src.close()
 
 
-def _read_zip(zf: zipfile.ZipFile, o: dict, max_manifest: int) -> ShellSnapshot:
-    if len(zf.infolist()) > o["max_extract_entries"] + 1:
-        raise SnapshotError(f"more than {o['max_extract_entries']} entries (MaxExtractEntries)")
-    names = set(zf.namelist())
-    if "manifest.json" not in names:
-        raise SnapshotError("manifest.json is missing")
-    with zf.open("manifest.json") as f:
-        raw = _read_capped(f, max_manifest, "manifest.json")
+def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: dict | None = None) -> tuple[ShellSnapshot, int]:
+    """Reads and checks the manifest (or checkpoint) `name`; returns the machine and the bytes its files hold. `cache` shares
+    identical contents between the manifests of one file."""
+    if name not in names:
+        raise SnapshotError(f"{name} is missing")
+    with zf.open(name) as f:
+        raw = _read_capped(f, _max_manifest(o), name)
     try:
         m = json.loads(raw.decode("utf-8"))
     except ValueError:
-        raise SnapshotError("manifest.json is not JSON") from None
+        raise SnapshotError(f"{name} is not JSON") from None
     # the version first, so a newer format fails with that, not with whatever it changed
     if not isinstance(m, dict) or m.get("format") != _FORMAT:
-        raise SnapshotError("manifest.json is not a Topwater snapshot manifest")
+        raise SnapshotError(f"{name} is not a Topwater snapshot manifest")
     version = _int(m.get("version"), "format version")
     if version > FORMAT_VERSION:
         raise SnapshotVersionError(f"snapshot format version {version} is newer than this version of Topwater supports "
@@ -234,12 +283,12 @@ def _read_zip(zf: zipfile.ZipFile, o: dict, max_manifest: int) -> ShellSnapshot:
         raise SnapshotError(f"unknown format version {version}")
     user = _check(m.get("user"), _USER, "user")
     hostname = _check(m.get("hostname"), _HOST, "hostname")
-    entries = _read_files(zf, names, _list(m.get("files"), "files"), o)
+    entries, total = _read_files(zf, names, _list(m.get("files"), "files"), o, {} if cache is None else cache)
     state = _read_state(m, o)
-    return ShellSnapshot(entries, state, user, hostname, parse_time(m.get("created"), "created"))
+    return ShellSnapshot(entries, state, user, hostname, parse_time(m.get("created"), "created")), total
 
 
-def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict) -> list:
+def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict, cache: dict) -> tuple[list, int]:
     if len(files) > o["max_extract_entries"]:
         raise SnapshotError(f"more than {o['max_extract_entries']} files and directories (MaxExtractEntries)")
     total = 0
@@ -254,7 +303,7 @@ def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict) -> list:
         if total > o["max_file_system_bytes"]:
             raise SnapshotError(f"the files hold more than {o['max_file_system_bytes']} bytes (MaxFileSystemBytes)")
     entries, seen, dirs, earlier = [], set(), {"/"}, set()  # earlier: the files and links so far, which a hard link may name
-    cache: dict[tuple[str, bool], object] = {}  # identical contents load once and are shared, as in memory
+    # cache: identical contents load once and are shared, as in memory
     for f in files:
         path = f.get("path")
         if not isinstance(path, str) or not 0 < len(path) <= 4096 or path[0] != "/" or "\0" in path or normalize("/", path) != path:
@@ -314,7 +363,7 @@ def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict) -> list:
         else:
             earlier.add(path)
         entries.append((path, kind == "dir", int(mode, 8), owner, mtime, text, data, reported, target if kind == "symlink" else None, link))
-    return entries
+    return entries, total
 
 
 def _read_state(m: dict, o: dict) -> dict:
@@ -410,17 +459,17 @@ def _read_state(m: dict, o: dict) -> dict:
         raise SnapshotError("bad cwd")
 
     def code(n) -> bool:
-        return isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 255
+        return _is_int(n) and 0 <= n <= 255
 
     pipe_status = _list(m.get("pipeStatus"), "pipeStatus")
     if not code(m.get("lastExitCode", 0)) or not all(code(c) for c in pipe_status):
         raise SnapshotError("exit codes must be 0-255")
     g = m.get("getopts")
-    if g is not None and not (isinstance(g, list) and len(g) == 2 and all(_int(x, "getopts") >= 0 for x in g)):
+    if g is not None and not (isinstance(g, list) and len(g) == 2 and all(_is_int(x) and x >= 0 for x in g)):
         raise SnapshotError("bad getopts state")
     jobs = {}
     for j in _list(m.get("jobs"), "jobs"):
-        if not (isinstance(j, list) and len(j) == 2 and isinstance(j[0], int) and code(j[1])) or j[0] in jobs:
+        if not (isinstance(j, list) and len(j) == 2 and _is_int(j[0]) and code(j[1])) or j[0] in jobs:
             raise SnapshotError("bad job")
         jobs[j[0]] = j[1]
     # clock and random belong to a deterministic shell, which this port doesn't have: checked, then left unused
@@ -470,7 +519,8 @@ def format_time(t: datetime) -> str:
     return f"{t.year:04d}-{t:%m-%dT%H:%M:%S}.{t.microsecond:06d}0Z"   # %Y is not zero-padded below year 1000 on Linux
 
 
-_TIME = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.(\d{1,7}))?)?(Z|[+-]\d\d:?\d\d)?")
+# [0-9], not \d, which also matches other scripts' digits
+_TIME = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.([0-9]{1,7}))?)?(Z|[+-][0-9]{2}:?[0-9]{2})?")
 
 
 def parse_time(s, what: str) -> datetime:

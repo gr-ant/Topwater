@@ -65,12 +65,21 @@ text = topwater.convert.to_markdown(data, "report.xlsx")
 from topwater.host import bubblewrap, register_host_command   # real host programs
 git = register_host_command(shell, "git", launcher=bubblewrap(network=True))   # git.close() removes its folder
 
-from topwater import ShellSnapshot                    # snapshots, in the C# zip format: either port loads the other's
+from topwater import ShellSnapshot                    # snapshots: every port loads the others' .topwater files
 before = shell.snapshot(); shell.run("rm -rf src"); shell.restore(before)
 attempt = shell.fork()                                 # shares nothing mutable; registered handlers are shared
-shell.save("machine.zip")                              # a path or a binary file
-later = Shell.load("machine.zip")                      # built-ins only (also bytes or a file); Shell() kwargs set the limits
-shell.restore(ShellSnapshot.load("machine.zip", shell))   # or load into a shell you configured, with its limits
+shell.save("machine.topwater")                         # a path or a binary file
+later = Shell.load("machine.topwater")                 # built-ins only (also bytes or a file); Shell() kwargs set the limits
+shell.restore(ShellSnapshot.load("machine.topwater", shell))   # or load into a shell you configured, with its limits
+
+from topwater import Recording                         # recordings: the calls, in the same .topwater file
+with shell.start_recording(snapshot_every=10, metadata={"task": "..."}) as rec:   # every run()/run_async() call
+    ...                                                # rec.snapshot_now() keeps a checkpoint here
+rec.save("run.topwater")                               # Shell.load() of it gives the machine after the last call
+run = Recording.load("run.topwater", limits=shell)     # also old .jsonl recordings and snapshot zips
+run.calls[3].stdout, run.calls[3].files                # what call 3 printed, the paths it added, changed or removed
+probe = run.shell_at(3)                                # the machine after call 3: nearest checkpoint, then calls re-run
+report = run.replay(run.create_shell(register_mine))  # report.matches, report.differences; normalize= to ignore times
 
 from topwater import containers                        # host code only: no shell command reaches it
 ctx = containers.build_image(shell.snapshot(), "my-agent")   # docker build; print(ctx.report) for what didn't carry over
@@ -84,8 +93,10 @@ Where Python differs from the reference:
 - Not ported yet: `bc`. There is no Microsoft.Extensions.AI equivalent; the plain tool definition works with any
   Python SDK's tool-calling loop.
 - Snapshot load errors are `topwater.snapshot.SnapshotError` (a `ValueError`; C#'s `InvalidDataException`) and
-  `SnapshotVersionError` (C#'s `NotSupportedException`). This port has no virtual clock or random seed, so it writes no
-  `clock` or `random` and ignores them when loading (after checking them).
+  `SnapshotVersionError` (C#'s `NotSupportedException`); a bad recording raises `RecordingError`, a `SnapshotError`.
+  This port has no virtual clock or random seed, so it writes no `clock` or `random` and ignores them when loading
+  (after checking them); a recording's `start_time` and `random_seed` are kept and written back, never used, so a
+  replay here compares wall-clock output (pass `normalize=`). A call's `time` is the wall clock when it started.
 - `topwater.containers` is synchronous (it shells out to the docker CLI, and an import runs `session.sh` with
   `Shell.run`), so call it outside a running event loop. Names: `to_build_context`, `build_image`, `from_container`,
   `from_image`, `from_tar(rootfs, ContainerConfig(user, working_dir, env), changes, options)`, `docker_available()`;

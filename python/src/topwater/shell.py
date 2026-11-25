@@ -452,6 +452,7 @@ class Shell:
         self._in_err_trap = self._in_debug_trap = False
         self._deadline = float("inf")
         self._param_words: dict = {}
+        self._recorder = None
         home = f"/home/{user}"
         for d in (home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log"):
             self.fs.mkdir(d, parents=True)
@@ -640,6 +641,16 @@ class Shell:
         shell.restore(snap)
         return shell
 
+    def start_recording(self, snapshot_every: int = 0, metadata: dict | None = None) -> "ShellRecorder":
+        """Records every run()/run_async() call from now until stop(): the machine now is the start. snapshot_every=N keeps a
+        checkpoint after every Nth call, so shell_at() jumps there without re-running from the start; the machine after
+        the last call is always kept. Stop it before your own checks, which also go through run()."""
+        from .recording import ShellRecorder
+        if self._recorder is not None:
+            raise RuntimeError("this shell is already recording; stop that recording first")
+        self._recorder = ShellRecorder(self, snapshot_every, metadata)
+        return self._recorder
+
     def _capture_state(self) -> dict:
         self._epoch += 1  # the arrays are now shared with the snapshot: each side copies one before its next write
         return {
@@ -722,6 +733,13 @@ class Shell:
         return asyncio.run(self.run_async(command_line))
 
     async def run_async(self, command_line: str) -> ShellResult:
+        started, clock = utc_now(), time.perf_counter()
+        result = await self._run_call(command_line)
+        if self._recorder is not None:
+            self._recorder._add(command_line, result, (time.perf_counter() - clock) * 1000, started)
+        return result
+
+    async def _run_call(self, command_line: str) -> ShellResult:
         self.history.append(command_line)
         out, err = CappedWriter(self), CappedWriter(self)
         trailer = None

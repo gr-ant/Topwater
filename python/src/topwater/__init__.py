@@ -3,6 +3,7 @@ from .api import ApiEndpoint, register_api
 from .binder import command
 from .host import HostCommand, bubblewrap, register_host_command
 from .parser import ParseError
+from .recording import RecordedCall, Recording, RecordingError, ShellRecorder
 from .shell import CommandContext, RegisteredCommand, Shell, ShellResult
 from .snapshot import ShellSnapshot
 from .tools import ToolResult, ToolSpec, register_tools
@@ -32,7 +33,7 @@ async def execute_tool(shell: Shell, command: str) -> str:
 
 
 __all__ = [
-    "Shell", "ShellResult", "ShellSnapshot", "CommandContext", "RegisteredCommand", "command", "ShellError", "ParseError",
+    "Shell", "ShellResult", "ShellSnapshot", "Recording", "RecordedCall", "RecordingError", "ShellRecorder", "CommandContext", "RegisteredCommand", "command", "ShellError", "ParseError",
     "VirtualFileSystem", "FileStat",
     "ApiEndpoint", "register_api", "HostCommand", "bubblewrap", "register_host_command", "ToolSpec", "ToolResult", "register_tools", "TOOL_NAME", "TOOL_DESCRIPTION", "TOOL_INPUT_SCHEMA", "execute_tool",
 ]
