@@ -71,8 +71,8 @@ public class Tools
 }
 ```
 
-Add `Topwater.Mcp` for MCP servers and `Topwater.AI` for Microsoft.Extensions.AI. `Topwater.Containers` is not on
-NuGet yet: reference `src/Topwater.Containers` from a clone.
+Add `Topwater.Mcp` for MCP servers and `Topwater.AI` for Microsoft.Extensions.AI. `Topwater.Containers` turns the machine
+into a Docker image and back, and `Topwater.Replay` replays recordings.
 
 ### Python
 
@@ -141,10 +141,8 @@ TypeScript describes tools with a JSON Schema, so the function appears as a subc
 `topwater mcp` is an MCP server with one sandboxed `bash` tool, for Claude Desktop, Cursor, VS Code or any MCP
 client. `topwater` alone opens a shell on the simulated machine.
 
-Not on NuGet yet; from a clone:
-
 ```bash
-dotnet pack src/Topwater.Cli -o nupkg && dotnet tool install -g Topwater.Cli --add-source nupkg --prerelease
+dotnet tool install -g Topwater.Cli --prerelease
 ```
 
 See [Command line and MCP server](docs/reference.md#command-line-and-mcp-server).
@@ -194,8 +192,7 @@ never by host, and the model never sees the credential (`api get jira /issue/PRO
 | [Recordings](docs/reference.md#recordings): record a session and replay it | `shell.StartRecording()`, `Recording.Load()`, `ReplayAsync()`; as a test with `Replay.AssertMatches()` or on real bash with `DockerTarget` (`Topwater.Replay`) | not yet | `startRecording(shell)`, `Recording.load()`, `replay()` |
 | [Containers](docs/reference.md#containers): turn the machine into a real Docker image, and a container back into a machine | `snapshot.BuildImageAsync(...)`, `ContainerImport.FromContainerAsync(...)` (`Topwater.Containers`) | not yet | not yet |
 
-Snapshot and recording files have one format: .NET and TypeScript read each other's. In .NET all of these are
-newer than the published package; see [Status](#status).
+Snapshot and recording files have one format: .NET and TypeScript read each other's.
 
 ## What is in the machine
 
@@ -251,14 +248,12 @@ Topwater is in preview. APIs may change before 1.0.
 
 | | Where | State |
 |---|---|---|
-| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI) | `0.1.0-preview.1` |
-| **.NET, from source** | `src/Topwater.Containers`, `src/Topwater.Replay`, `src/Topwater.Cli` | not on NuGet yet |
+| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.2` |
 | **Python** | [`python/`](python/README.md) | preview, not on PyPI |
 | **TypeScript** | [`typescript/`](typescript/README.md) | preview, not on npm |
 | **Browser** | [`typescript/`](typescript/README.md#in-the-browser) | build it yourself; runs in a Web Worker |
 
-On `main` but newer than the published .NET package: snapshots, deterministic runs, recordings and the `bc`
-calculator. `bc` is in .NET only; the tables above show what Python and TypeScript do not have yet.
+The `bc` calculator is in .NET only; the tables above show what Python and TypeScript do not have yet.
 
 ## Documentation
 

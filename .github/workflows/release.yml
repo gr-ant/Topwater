@@ -23,7 +23,7 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           prefix="${v%%-*}"; suffix=""; [ "$v" != "$prefix" ] && suffix="${v#*-}"
-          for p in src/Topwater src/Topwater.AI src/Topwater.Mcp src/Topwater.Cli; do
+          for p in src/Topwater src/Topwater.AI src/Topwater.Mcp src/Topwater.Containers src/Topwater.Replay src/Topwater.Cli; do
             dotnet pack "$p" -c Release -o out -p:VersionPrefix="$prefix" -p:VersionSuffix="$suffix"
           done
       - name: NuGet login (OIDC to a one-hour API key)

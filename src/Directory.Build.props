@@ -3,7 +3,7 @@
   <PropertyGroup>
     <!-- one version for all of them; clear the suffix (-p:VersionSuffix=) for a stable release -->
     <VersionPrefix>0.1.0</VersionPrefix>
-    <VersionSuffix>preview.1</VersionSuffix>
+    <VersionSuffix>preview.2</VersionSuffix>
 
     <Authors>Grant Miller</Authors>
     <Copyright>Copyright (c) 2026 Grant Miller</Copyright>

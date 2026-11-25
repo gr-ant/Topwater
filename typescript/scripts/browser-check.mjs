@@ -1,6 +1,7 @@
 // Builds the demo and checks it in headless Chromium: commands run and stream, an upload shows up in `ls`, the
 // interpreter's own time limit answers with a trailer, and a call that can't be interrupted (a catastrophically
-// backtracking regex) is hard-stopped by the page, which restarts the worker with the files it had.
+// backtracking regex) is hard-stopped by the page, which restarts the worker with the files it had. The site is served
+// from a sub-path, as on GitHub Pages.
 // Usage: node scripts/browser-check.mjs [screenshot-dir]
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -15,14 +16,18 @@ execFileSync(process.execPath, [join(root, 'scripts/build-browser.mjs')], { stdi
 
 const site = join(root, 'browser/dist');
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+// served under a sub-path, as GitHub Pages serves it (/Topwater/), so an absolute asset path fails the check
+const base = '/Topwater';
 const server = createServer(async (req, res) => {
-  const path = normalize(join(site, decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/\/$/, '/index.html')));
+  const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (!pathname.startsWith(base + '/')) { res.writeHead(404).end(); return; }
+  const path = normalize(join(site, pathname.slice(base.length).replace(/\/$/, '/index.html')));
   if (!path.startsWith(site)) { res.writeHead(403).end(); return; }
   try { const body = await readFile(path); res.writeHead(200, { 'content-type': types[extname(path)] ?? 'application/octet-stream' }).end(body); }
   catch { res.writeHead(404).end(); }
 });
 await new Promise(r => server.listen(0, '127.0.0.1', r));
-const origin = `http://127.0.0.1:${server.address().port}`;
+const origin = `http://127.0.0.1:${server.address().port}${base}`;
 
 let failures = 0;
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failures++; };
@@ -182,7 +187,7 @@ try {
     }
     for (const scheme of ['light', 'dark']) {
       const p = await browser.newPage({ viewport: { width: 1280, height: 900 }, colorScheme: scheme });
-      await p.goto(origin);
+      await p.goto(`${origin}/`);
       await p.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false');
       const box = p.getByRole('textbox').first();
       for (const cmd of ['ls -la', "jq '.[] | select(.status==\"open\") | .id' data/orders.json", 'for n in 8 16 32 64; do echo "2^$n = $((2**n))"; done']) {
@@ -191,7 +196,7 @@ try {
       }
       await p.screenshot({ path: join(shots, `demo-${scheme}.png`), fullPage: true });
       const phone = await browser.newPage({ viewport: { width: 375, height: 812 }, colorScheme: scheme, deviceScaleFactor: 2 });
-      await phone.goto(origin);
+      await phone.goto(`${origin}/`);
       await phone.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false');
       await phone.screenshot({ path: join(shots, `demo-${scheme}-phone.png`), fullPage: true });
     }

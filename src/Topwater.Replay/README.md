@@ -3,6 +3,10 @@
 Replay [Topwater](https://github.com/gr-ant/Topwater) recordings as regression tests, or against real bash in an
 Ubuntu container to find where the simulation differs from Linux.
 
+```bash
+dotnet add package Topwater.Replay --prerelease
+```
+
 ```csharp
 // a recorded session as a test (any framework: a mismatch throws); TOPWATER_RERECORD=1 updates the file instead
 [Fact]

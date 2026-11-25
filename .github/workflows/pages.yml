@@ -1,0 +1,47 @@
+name: Pages
+
+# Builds the browser demo (terminal and recording viewer, with its samples) and publishes it to GitHub Pages.
+# The site is static files with relative paths only, so it works under the project sub-path (/Topwater/).
+on:
+  push:
+    branches: [main]
+    paths: ['typescript/**', 'assets/brand/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - run: npm ci
+      - run: npm run build:browser   # writes browser/dist: the pages, scripts, samples and brand files
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: typescript/browser/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
