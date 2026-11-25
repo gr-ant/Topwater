@@ -19,16 +19,21 @@ Everything the simulated machine supports, in one place.
 
 | Area | Supported |
 |---|---|
-| Basics | quoting and escapes, `$VAR`, `$(...)`, backticks, `~`, globs (`*` `?` `[...]`), comments |
-| Expansion | braces `{a,b}` `{1..10}` `{01..05}`, process substitution `<(...)`, arithmetic `$(( ))` |
-| Parameters | `${x:-d}` `${x:=d}` `${x:+a}` `${x:?msg}` `${#x}` `${x%pat}` `${x%%pat}` `${x#pat}` `${x##pat}` `${x/a/b}` `${x//a/b}` `${x:1:3}` `${x^^}` `${x,,}` |
-| Control flow | `if`/`elif`/`else`, `for x in`, `for ((;;))`, `while`, `until`, `case`, `break`, `continue` |
-| Functions | `name() { }`, `function name { }`, `local`, `return`, `$1` `$@` `$#`, `shift` |
-| Arrays | `a=(x y)`, `a+=(z)`, `a[i]=v`, `${a[i]}` `${a[-1]}`, `"${a[@]}"`, `${#a[@]}`, `${!a[@]}`, `${a[@]:1:2}`, `unset 'a[i]'`; associative with `declare -A`; `read -a`, `mapfile -t` |
-| Tests | `[ ]`, `test`, `[[ ]]` with globs, `=~`, `&&`, `\|\|`, `(( ))`, `let` |
-| Lists | `\|` `&&` `\|\|` `;` `!` `{ ...; }` `( ... )`, `VAR=x cmd` |
-| Redirects | `>` `>>` `<` `2>` `2>&1` `&>`, heredocs (`<<EOF`, `<<'EOF'`, `<<-`), `<<<`, redirects on loops |
-| Scripts | `./script.sh args` (needs `chmod +x`), `bash script.sh`, `bash -c`, `source`, `eval`, `exit`, `set -e`, `set -o pipefail` |
+| Basics | quoting and escapes, `$'...'`, `$VAR`, `$(...)`, backticks, `~` and `~user`, comments, line continuations |
+| Globs | `*` `?` `[...]` `[[:alpha:]]`, extglob `@(a\|b)` `!(x)` `*(x)` `+(x)` `?(x)`; `shopt` `nullglob` `dotglob` `globstar` `extglob` `nocaseglob` `nocasematch`; `set -f` |
+| Expansion | braces `{a,b}` `{1..10}` `{01..05}` `{a..e..2}` `{$x,y}`, process substitution `<(...)`, arithmetic `$(( ))` and `$[ ]` |
+| Parameters | `${x:-d}` `${x-d}` `${x:=d}` `${x:+a}` `${x:?msg}` `${#x}` `${x%pat}` `${x%%pat}` `${x#pat}` `${x##pat}` `${x/a/b}` `${x//a/b}` `${x/#a/b}` `${x/%a/b}` (`&` is the match), `${x:1:3}` `${x: -2}`, `${x^}` `${x^^}` `${x,,}` `${x^^[ab]}` `${x~~}`, `${x@Q}` `@E` `@U` `@L` `@u` `@a` `@A`, `${!name}`, `${!prefix*}` |
+| Variables | `declare`/`typeset`/`local`/`readonly`/`export` with `-a -A -i -r -x -l -u -n -g -p -f -F`, namerefs, read-only variables; `$0 $# $@ $* $? $$ $! $- $_`, `LINENO` `FUNCNAME` `BASH_SOURCE` `PIPESTATUS` `BASH_REMATCH` `BASH_VERSION` `BASH_VERSINFO` `SECONDS` `EPOCHSECONDS` `RANDOM` `UID` `PPID` `OPTIND` `OPTARG` `REPLY` `IFS` |
+| Control flow | `if`/`elif`/`else`, `for x in`, `for ((;;))`, `while`, `until`, `case` (`;;` `;&` `;;&`), `select`, `break N`, `continue N`, `time` |
+| Functions | `name() { }`, `function name { }`, `local`, `return`, `$1` `$@` `$#`, `shift`, recursion, dynamic scope |
+| Arrays | `a=(x y)`, `a+=(z)`, `a[i]=v` (the subscript can be an expression with spaces), `${a[i]}` `${a[-1]}`, `"${a[@]}"`, `${#a[@]}`, `${!a[@]}`, `${a[@]:1:2}` (sparse arrays slice by index), `"${a[@]/#/x}"`, `unset 'a[i]'`, `(( a[i]++ ))` anywhere in arithmetic; associative with `declare -A`; `read -a`, `mapfile`/`readarray -t -n -s -O -d -u` |
+| Tests | `[ ]`, `test`, `[[ ]]` with globs, `=~` (POSIX classes, groups in `BASH_REMATCH`), `-v` (also `a[k]`), `-o option`, `&&`, `\|\|`, `(( ))`, `let` |
+| Lists | `\|` `&&` `\|\|` `;` `!` `{ ...; }` `( ... )`, `VAR=x cmd`, `cmd &` with `$!` and `wait` |
+| Redirects | `>` `>>` `>\|` `<` `2>` `2>&1` `>&2` `&>` `&>>` `N>file` `N<file` `N>&M` `N>&-`, heredocs (`<<EOF`, `<<'EOF'`, `<<-`), `<<<`, `/dev/stdout` `/dev/stderr` `/dev/fd/N`, redirects on loops, groups and functions, `exec` with only redirections (they last) and `exec {fd}>file` |
+| Options | `set -e` (exempt in conditions, `&&`/`\|\|` lists, `!` and `$(...)`, as in bash), `-u`, `-x`, `-f`, `-C`, `-o pipefail`, `set -o`, `shopt`; options reset at the end of each tool call |
+| Traps | `EXIT`, `ERR`, `RETURN`, `DEBUG` (before each simple command); other signals are accepted and never arrive |
+| Scripts | `./script.sh args` (needs `chmod +x`), `bash script.sh`, `bash -c`, `bash -euo pipefail ...`, `source`, `eval`, `exit`; a child bash sees only exported variables and `export -f` functions, as in bash |
+| Built-ins | `getopts`, `read -r -a -d -n -N -u -t -s -p`, `printf -v` (`%q` `%b` `%(fmt)T` `%*d`), `echo -neE`, `exec`, `wait`, `jobs`, `kill`, `trap`, `type`, `command`, `builtin`, `hash`, `pushd`/`popd`/`dirs`, `ulimit`, `times` |
 
 State persists between tool calls: working directory, variables, functions, aliases and files.
 
@@ -337,6 +342,13 @@ announcing "this is a simulation" (see the README).
 
 ## Not supported
 
-`select` menus, background jobs (`&` runs things in order), `>(...)`, running shell commands from
-inside `awk` (`print | "cmd"`), symlinks and `ln`, group permissions, and a real `python` or network access.
-`sleep` really waits, so wrap calls in your own timeout if that matters.
+Real background jobs (`cmd &` runs to completion before the next command, so `wait` only reports its
+status), job control (`fg`, `bg`, `%1`), `>(...)`, `coproc`, `compgen`/`complete`, `caller`, running shell
+commands from inside `awk` (`print | "cmd"`), symlinks and `ln`, group permissions, and a real `python` or
+network access. `sleep` really waits, so wrap calls in your own timeout if that matters.
+
+A few shell behaviours differ from bash on purpose or for simplicity: the last command of a pipeline runs
+in the current shell (like `shopt -s lastpipe`), so `cmd | while read ...; done` can set variables; aliases
+expand in scripts too; extglob patterns work without `shopt -s extglob`; `declare -f` prints a function as
+it was written; `local x` leaves `x` empty rather than unset; `set -x` traces simple commands only; and
+`printf` pads by characters, not bytes.

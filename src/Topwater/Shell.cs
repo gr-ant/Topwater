@@ -90,7 +90,9 @@ public sealed class CommandContext
     /// <summary>Reads one line of stdin (without the newline), or null at end of input.</summary>
     public string? ReadLine(char delimiter = '\n') => _stdin.ReadLine(delimiter);
 
-    internal Shell.Io Io => new(_stdin, Stdout, Stderr);
+    internal Shell.Io Io => new(_stdin, Stdout, Stderr, Fds);
+    /// <summary>fds 3 and up this command was given (`read -u 3 x 3&lt;file`).</summary>
+    internal Dictionary<int, object>? Fds { get; init; }
     internal bool LastLineTerminated => _stdin.LastTerminated;
     internal StdinBuffer StdinBuffer => _stdin;
 
@@ -1042,7 +1044,7 @@ public sealed partial class Shell
             io.Err.WriteLine($"{argv[0]}: command not found (run 'help' to list available commands)");
             return 127;
         }
-        var ctx = new CommandContext(this, name, argv.Skip(1).ToList(), io.Stdin, io.Out, io.Err, ct);
+        var ctx = new CommandContext(this, name, argv.Skip(1).ToList(), io.Stdin, io.Out, io.Err, ct) { Fds = io.Fds };
         if (argv.Count == 2 && _builtinNames?.Contains(name) == true && Builtins.StandardOption(ctx, cmd, argv[1])) return 0;
         try
         {

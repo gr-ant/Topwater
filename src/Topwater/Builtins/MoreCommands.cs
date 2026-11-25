@@ -312,7 +312,7 @@ internal static partial class Builtins
             var names = a.Positional.Count > 0 ? a.Positional : ["REPLY"];
             var input = ctx.StdinBuffer;
             if (a.Value('u') is { } u && u != "0")
-                input = int.TryParse(u, out var fd) && sh.InputFd(fd) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
+                input = int.TryParse(u, out var fd) && (ctx.Fds?.GetValueOrDefault(fd) as StdinBuffer ?? sh.InputFd(fd)) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
             var delim = a.Value('d') is { } dv ? (dv.Length == 0 ? '\0' : dv[0]) : '\n';
             string? line;
             if (a.Value('N') is { } exact) line = input.ReadChars(int.Parse(exact), null);
@@ -351,7 +351,7 @@ internal static partial class Builtins
             var name = a.Positional.Count > 0 ? a.Positional[0] : "MAPFILE";
             var input = ctx.StdinBuffer;
             if (a.Value('u') is { } u && u != "0")
-                input = int.TryParse(u, out var fd) && sh.InputFd(fd) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
+                input = int.TryParse(u, out var fd) && (ctx.Fds?.GetValueOrDefault(fd) as StdinBuffer ?? sh.InputFd(fd)) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
             var delim = a.Value('d') is { } dv ? (dv.Length == 0 ? '\0' : dv[0]) : '\n';
             long max = a.Value('n') is { } n ? long.Parse(n) : 0, skip = a.Value('s') is { } sk ? long.Parse(sk) : 0;
             long index = a.Value('O') is { } origin ? long.Parse(origin) : 0;
