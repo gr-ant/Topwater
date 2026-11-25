@@ -37,7 +37,7 @@ public class LimitTests
 
     [Fact]
     public async Task SlowRegexOverManyLinesStopsAtTheCallLimit() =>
-        await HitsTimeLimit(Quick(), "x=$(printf 'a%.0s' {1..28})b; for i in {1..200}; do echo $x; done > s.txt; grep -cE '(a|aa)+$' s.txt 2>/dev/null");
+        await HitsTimeLimit(Quick(), "x=$(printf 'a%.0s' {1..22})b; for i in {1..5000}; do echo $x; done > s.txt; grep -cE '(a|aa)+$' s.txt 2>/dev/null");
 
     [Theory]
     [InlineData("awk 'BEGIN { while (1) x++ }'")]
