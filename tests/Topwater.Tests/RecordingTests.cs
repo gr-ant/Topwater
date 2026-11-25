@@ -1,3 +1,6 @@
+using System.IO.Compression;
+using System.Text;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Topwater.AI;
 using Topwater.Replay;
@@ -60,46 +63,163 @@ public class RecordingTests
         Assert.StartsWith("replay on topwater", report.ToString());
     }
 
-    [Fact]
-    public async Task Saves_and_loads_embedded_and_side_car()
+    static byte[] Bytes(Recording r)
     {
-        var r = await Record(snapshotEvery: 2);
         var ms = new MemoryStream();
         r.Save(ms);
-        var text = System.Text.Encoding.UTF8.GetString(ms.ToArray());
-        var lines = text.TrimEnd('\n').Split('\n');
+        return ms.ToArray();
+    }
+
+    static string Entry(byte[] file, string name)
+    {
+        using var zip = new ZipArchive(new MemoryStream(file));
+        using var reader = new StreamReader(zip.GetEntry(name)!.Open());
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>A saved .topwater file with its zip edited.</summary>
+    static byte[] Tamper(byte[] file, Action<ZipArchive> edit)
+    {
+        var ms = new MemoryStream();
+        ms.Write(file);
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true)) edit(zip);
+        return ms.ToArray();
+    }
+
+    static void Put(ZipArchive zip, string name, string text)
+    {
+        zip.GetEntry(name)?.Delete();
+        using var w = new StreamWriter(zip.CreateEntry(name).Open());
+        w.Write(text);
+    }
+
+    /// <summary>The file with history.jsonl's header line edited.</summary>
+    static byte[] TamperHeader(byte[] file, Action<JsonNode> edit)
+    {
+        var lines = Entry(file, "history.jsonl").Split('\n');
+        var header = JsonNode.Parse(lines[0])!;
+        edit(header);
+        lines[0] = header.ToJsonString();
+        return Tamper(file, z => Put(z, "history.jsonl", string.Join('\n', lines)));
+    }
+
+    static Recording LoadBytes(byte[] bytes, ShellOptions? limits = null) => Recording.Load(new MemoryStream(bytes), limits: limits);
+
+    static string Fixture(string name) => Path.Combine(AppContext.BaseDirectory, "../../../recordings", name);
+
+    [Fact]
+    public async Task Saves_and_loads_a_topwater_file()
+    {
+        var r = await Record(snapshotEvery: 2);
+        var file = Bytes(r);
+        using (var zip = new ZipArchive(new MemoryStream(file)))
+        {
+            var names = zip.Entries.Select(e => e.FullName).Where(n => !n.StartsWith("blobs/")).Order(StringComparer.Ordinal);
+            Assert.Equal(["checkpoints/0.json", "checkpoints/2.json", "checkpoints/4.json", "history.jsonl", "manifest.json"], names);
+            // blobs are shared: the start's notes.txt is stored once for every checkpoint
+            Assert.Single(zip.Entries, e => e.FullName.StartsWith("blobs/") && e.Length == "alpha\nbeta\n".Length);
+        }
+        var lines = Entry(file, "history.jsonl").TrimEnd('\n').Split('\n');
         Assert.Equal(5, lines.Length); // header + one line per call
-        Assert.StartsWith("{\"format\":\"topwater-recording\",\"version\":1,", lines[0]);
+        Assert.StartsWith("{\"format\":\"topwater-history\",\"version\":1,", lines[0]);
         Assert.Contains("\"startTime\":\"2026-03-04T05:06:07.0000000Z\"", lines[0]);
         Assert.Contains("\"randomSeed\":42", lines[0]);
-        Assert.Contains("\"snapshot\":{\"embedded\":", lines[2]);
-        Assert.DoesNotContain("\"snapshot\"", lines[1]);
+        Assert.Contains("\"time\":\"2026-03-04T05:06:07.0000000Z\"", lines[1]);
+        Assert.Contains("\"files\":[\"/home/agent/proj\",\"/home/agent/proj/r.txt\",\"/tmp/tmp.72SYu7MDwn\"]", lines[1]);
+        Assert.Contains("\"time\":\"2026-03-04T05:06:07.0000000Z\"", lines[2]); // the virtual clock moves only with sleep
+        Assert.Contains("\"time\":\"2026-03-04T05:06:12.0000000Z\"", lines[3]);
+        Assert.DoesNotContain("\"files\"", lines[2]);
+        Assert.Equal(Entry(file, "checkpoints/4.json"), Entry(file, "manifest.json"));
 
-        ms.Position = 0;
-        var loaded = Recording.Load(ms);
+        var loaded = LoadBytes(file);
         AssertSame(r, loaded);
+        Assert.Equal(r.Calls.Select(c => c.Time), loaded.Calls.Select(c => c.Time));
+        Assert.Equal(r.Calls.Select(c => string.Join(' ', c.Files ?? [])), loaded.Calls.Select(c => string.Join(' ', c.Files ?? [])));
         Assert.True((await loaded.ReplayAsync()).Matches);
+        // a stream that can't seek, and a path
+        AssertSame(r, Recording.Load(new SnapshotTests.ForwardOnly(file)));
+        var path = Path.Combine(Directory.CreateTempSubdirectory("topwater-rec-").FullName, "run.topwater");
+        try
+        {
+            r.Save(path);
+            AssertSame(r, Recording.Load(path));
+            // as a snapshot it is the machine after the last call
+            using var f = File.OpenRead(path);
+            Assert.Equal("/home/agent/proj\n", (await Shell.Load(f).RunAsync("pwd")).Stdout);
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+    }
 
+    [Fact]
+    public async Task Lists_the_files_each_call_changed()
+    {
+        var sh = new Shell(Deterministic); // the clock stands still, so only the calls' own changes count
+        sh.Fs.WriteAllText("/home/agent/a", "1");
+        using var rec = sh.StartRecording();
+        await sh.RunAsync("cat a; ls");
+        await sh.RunAsync("echo 2 > a; mkdir d; ln -s a d/l");
+        await sh.RunAsync("rm a; chmod 700 d");
+        Assert.Null(rec.Recording.Calls[0].Files is { Count: > 0 } ? "changed" : null);
+        Assert.Equal(["/home/agent/a", "/home/agent/d", "/home/agent/d/l"], rec.Recording.Calls[1].Files!);
+        Assert.Equal(["/home/agent/a", "/home/agent/d"], rec.Recording.Calls[2].Files!);
+        // only the last call keeps its snapshot (the end state) unless SnapshotEvery or SnapshotNow asks for more
+        Assert.Equal([false, false, true], rec.Recording.Calls.Select(c => c.SnapshotAfter != null));
+    }
+
+    [Fact]
+    public async Task A_snapshot_is_a_recording_with_no_calls()
+    {
+        var sh = new Shell();
+        await sh.RunAsync("cd /tmp; x=1");
+        var ms = new MemoryStream();
+        sh.Save(ms);
+        var r = LoadBytes(ms.ToArray());
+        Assert.Empty(r.Calls);
+        Assert.Equal("/tmp 1\n", (await (await r.ShellAtAsync(-1)).RunAsync("echo $PWD $x")).Stdout);
+    }
+
+    [Fact]
+    public async Task Loads_old_json_lines_recordings_embedded_and_side_car()
+    {
+        var embedded = Recording.Load(Fixture("basics.jsonl"));
+        Assert.Equal(6, embedded.Calls.Count);
+        Assert.Null(embedded.Calls[0].Files);
+        Assert.True((await embedded.ReplayAsync()).Matches);
+
+        // the side-car layout: snapshots as zips in <name>.snapshots/, the lines naming them
         var dir = Directory.CreateTempSubdirectory("topwater-rec-").FullName;
         try
         {
+            var lines = File.ReadAllLines(Fixture("basics.jsonl"));
+            Directory.CreateDirectory(Path.Combine(dir, "run.snapshots"));
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var node = JsonNode.Parse(lines[i])!;
+                var key = i == 0 ? "start" : "snapshot";
+                if (node[key]?["embedded"] is not { } b64) continue;
+                File.WriteAllBytes(Path.Combine(dir, "run.snapshots", $"{i}.zip"), Convert.FromBase64String((string)b64!));
+                node[key] = new JsonObject { ["file"] = $"run.snapshots/{i}.zip" };
+                lines[i] = node.ToJsonString();
+            }
             var path = Path.Combine(dir, "run.jsonl");
-            r.Save(path, sidecarSnapshots: true);
-            Assert.True(File.Exists(Path.Combine(dir, "run.snapshots", "start.zip")));
-            Assert.True(File.Exists(Path.Combine(dir, "run.snapshots", "call-0001.zip")));
-            Assert.Contains("\"file\":\"run.snapshots/call-0003.zip\"", File.ReadAllText(path));
+            File.WriteAllLines(path, lines);
             var side = Recording.Load(path);
-            AssertSame(r, side);
+            Assert.Equal(embedded.Calls.Select(c => c with { SnapshotAfter = null }), side.Calls.Select(c => c with { SnapshotAfter = null }));
             Assert.True((await side.ReplayAsync()).Matches);
-            ms.Position = 0;
             Assert.Throws<InvalidDataException>(() => Recording.Load(File.OpenRead(path))); // side-car refs need the path
+
+            // converting: Save writes the same recording as a .topwater file
+            var converted = LoadBytes(Bytes(side));
+            AssertSame(side, converted);
+            Assert.True((await converted.ReplayAsync()).Matches);
         }
         finally { Directory.Delete(dir, recursive: true); }
     }
 
     static void AssertSame(Recording a, Recording b)
     {
-        Assert.Equal(a.Calls.Select(c => c with { Elapsed = default, SnapshotAfter = null }), b.Calls.Select(c => c with { Elapsed = default, SnapshotAfter = null }));
+        static RecordedCall Plain(RecordedCall c) => c with { Elapsed = default, SnapshotAfter = null, Files = null };
+        Assert.Equal(a.Calls.Select(Plain), b.Calls.Select(Plain));
         Assert.Equal(a.Calls.Select(c => c.SnapshotAfter != null), b.Calls.Select(c => c.SnapshotAfter != null));
         Assert.Equal(a.Metadata, b.Metadata);
         Assert.Equal(a.StartTime, b.StartTime);
@@ -114,30 +234,31 @@ public class RecordingTests
         Assert.Throws<NotSupportedException>(() => Recording.Load(new MemoryStream("{\"format\":\"topwater-recording\",\"version\":99}\n"u8.ToArray())));
         Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream("{\"format\":\"other\",\"version\":1}\n"u8.ToArray())));
         Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream("not json\n"u8.ToArray())));
-        var ms = new MemoryStream();
-        (await Record()).Save(ms);
-        var broken = System.Text.Encoding.UTF8.GetString(ms.ToArray()) + "{oops\n";
-        Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(broken))));
+        Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream("PK not a zip"u8.ToArray())));
+        var file = Bytes(await Record());
+        var e = Assert.Throws<NotSupportedException>(() => LoadBytes(TamperHeader(file, h => { h["version"] = 2; h["options"] = "changed"; })));
+        Assert.Equal("history format version 2 is newer than this version of Topwater supports (1); upgrade Topwater to read it", e.Message);
+        Assert.Contains("not a topwater-history header", Assert.Throws<InvalidDataException>(() => LoadBytes(TamperHeader(file, h => h["format"] = "topwater-recording"))).Message);
+        Assert.Contains("line 6 is not JSON", Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => Put(z, "history.jsonl", Entry(file, "history.jsonl") + "{oops\n")))).Message);
+        Assert.Contains("checkpoints/0.json (the start) is missing", Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => z.GetEntry("checkpoints/0.json")!.Delete()))).Message);
+        Assert.Contains("past the last call", Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => Put(z, "checkpoints/9.json", Entry(file, "checkpoints/0.json"))))).Message);
+        foreach (var name in new[] { "checkpoints/01.json", "checkpoints/-1.json", "checkpoints/1.json/x", "checkpoints/١.json", "checkpoints/1.zip" })
+            Assert.Contains("unexpected entry", Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => Put(z, name, "{}")))).Message);
+        // a checkpoint is checked like any snapshot
+        Assert.Contains("not a valid Topwater snapshot: bad cwd", Assert.Throws<InvalidDataException>(() =>
+            LoadBytes(Tamper(file, z => Put(z, "checkpoints/0.json", Entry(file, "checkpoints/0.json").Replace("\"cwd\":\"/home/agent\"", "\"cwd\":\"../x\""))))).Message);
     }
-
-    static async Task<string> RecordingText(int snapshotEvery = 0)
-    {
-        var ms = new MemoryStream();
-        (await Record(snapshotEvery)).Save(ms);
-        return System.Text.Encoding.UTF8.GetString(ms.ToArray());
-    }
-
-    static Recording LoadText(string text, Func<string, Stream>? open = null, ShellOptions? limits = null) =>
-        Recording.Load(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text)), open, limits);
 
     [Fact]
     public async Task Limits_in_the_file_can_lower_but_never_raise_the_replay_shells()
     {
-        var header = System.Text.Json.Nodes.JsonNode.Parse((await RecordingText()).Split('\n')[0])!;
-        var o = header["options"]!;
-        o["maxLoopIterations"] = int.MaxValue; o["maxCallDurationMs"] = long.MaxValue / 2; o["maxFileSystemBytes"] = 1L << 50;
-        o["maxStringBytes"] = 1L << 50; o["maxExtractBytes"] = -5; o["maxExtractEntries"] = 10;
-        var raised = LoadText(header.ToJsonString() + "\n");
+        var file = Bytes(await Record());
+        var raised = LoadBytes(TamperHeader(file, h =>
+        {
+            var o = h["options"]!;
+            o["maxLoopIterations"] = int.MaxValue; o["maxCallDurationMs"] = long.MaxValue / 2; o["maxFileSystemBytes"] = 1L << 50;
+            o["maxStringBytes"] = 1L << 50; o["maxExtractBytes"] = -5; o["maxExtractEntries"] = 10;
+        }));
         var d = new ShellOptions();
         Assert.Equal(d.MaxLoopIterations, raised.MaxLoopIterations);
         Assert.Equal(d.MaxCallDuration, raised.MaxCallDuration);
@@ -145,8 +266,17 @@ public class RecordingTests
         Assert.Equal(d.MaxStringBytes, raised.MaxStringBytes);
         Assert.Equal(0, raised.MaxExtractBytes);    // lowered, never below zero
         Assert.Equal(10, raised.MaxExtractEntries); // lowered
-        var tight = LoadText(header.ToJsonString() + "\n", limits: new ShellOptions { MaxLoopIterations = 50 });
+        var tight = LoadBytes(file, new ShellOptions { MaxLoopIterations = 50 });
         Assert.Equal(50, tight.CreateShell().Options.MaxLoopIterations);
+
+        // no time limit, in the caller's limits or the file's
+        var unlimited = new ShellOptions { MaxCallDuration = Timeout.InfiniteTimeSpan };
+        Assert.Equal(TimeSpan.FromMinutes(2), LoadBytes(file, unlimited).MaxCallDuration);
+        Assert.Equal(TimeSpan.FromSeconds(3), LoadBytes(TamperHeader(file, h => h["options"]!["maxCallDurationMs"] = 3000), unlimited).MaxCallDuration);
+        var none = new Recording(new Shell().Snapshot(), unlimited);
+        Assert.Equal(Timeout.InfiniteTimeSpan, LoadBytes(Bytes(none), unlimited).MaxCallDuration);
+        Assert.Equal(d.MaxCallDuration, LoadBytes(Bytes(none)).MaxCallDuration);
+        Assert.Equal(TimeSpan.FromMinutes(2), Recording.Load(Fixture("basics.jsonl"), unlimited).MaxCallDuration);
     }
 
     [Theory]
@@ -159,36 +289,70 @@ public class RecordingTests
     [InlineData("\\\\server\\share\\x.zip")]
     [InlineData("https://evil.example/x.zip")]
     [InlineData("file:///etc/x.zip")]
-    public async Task Side_car_paths_must_be_plain_relative_names(string path)
+    [InlineData("%2e%2e/x.zip")]
+    [InlineData(".%2e/x.zip")]
+    [InlineData(" ../x.zip")]
+    [InlineData("\t../x.zip")]
+    [InlineData("x.zip?y=1")]
+    [InlineData("x.zip#f")]
+    [InlineData("./x.zip")]
+    [InlineData("a//x.zip")]
+    [InlineData("x.zip\n")]
+    [InlineData("")]
+    public void Side_car_names_must_be_plain_relative_names(string path)
     {
-        var text = (await RecordingText()).Split('\n')[0];
-        var header = System.Text.Json.Nodes.JsonNode.Parse(text)!;
-        header["start"] = new System.Text.Json.Nodes.JsonObject { ["file"] = path };
+        var header = JsonNode.Parse(File.ReadLines(Fixture("basics.jsonl")).First())!;
+        header["start"] = new JsonObject { ["file"] = path };
         var opened = false;
-        Assert.Throws<InvalidDataException>(() => LoadText(header.ToJsonString() + "\n", _ => { opened = true; return new MemoryStream(); }));
+        var e = Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(header.ToJsonString() + "\n")), _ => { opened = true; return new MemoryStream(); }));
         Assert.False(opened);
+        Assert.Contains("is not a plain relative name", e.Message);
     }
 
     [Fact]
     public async Task Caps_the_number_and_total_size_of_snapshots()
     {
-        var lines = (await RecordingText(snapshotEvery: 1)).TrimEnd('\n').Split('\n');
-        var many = lines[0] + "\n" + string.Concat(Enumerable.Repeat(lines[1] + "\n", Recording.MaxSnapshots));
-        Assert.Contains("more than 1000 snapshots", Assert.Throws<InvalidDataException>(() => LoadText(many)).Message);
-        Assert.Equal(Recording.MaxSnapshots - 1, LoadText(lines[0] + "\n" + string.Concat(Enumerable.Repeat(lines[1] + "\n", Recording.MaxSnapshots - 1))).Calls.Count);
+        // old recordings: snapshots embedded in the lines
+        var lines = File.ReadAllLines(Fixture("basics.jsonl"));
+        var withSnapshot = lines.Skip(1).First(l => l.Contains("\"snapshot\""));
+        string Text(int calls) => lines[0] + "\n" + string.Concat(Enumerable.Repeat(withSnapshot + "\n", calls));
+        Assert.Contains("more than 1000 snapshots", Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(Text(Recording.MaxSnapshots))))).Message);
+        Assert.Equal(Recording.MaxSnapshots - 1, Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(Text(Recording.MaxSnapshots - 1)))).Calls.Count);
+
+        // .topwater files: checkpoints
+        var sh = new Shell();
+        var rec = sh.StartRecording();
+        for (int i = 0; i < Recording.MaxSnapshots; i++) await sh.RunAsync("true");
+        rec.Stop();
+        var file = Bytes(rec.Recording);
+        var start = Entry(file, "checkpoints/0.json");
+        byte[] WithCheckpoints(int n) => Tamper(file, z => { for (int i = 1; i < n - 1; i++) Put(z, $"checkpoints/{i}.json", start); }); // with 0 and the last call's
+        Assert.Equal(Recording.MaxSnapshots, LoadBytes(WithCheckpoints(Recording.MaxSnapshots)).Calls.Count);
+        Assert.Contains("more than 1000 checkpoints", Assert.Throws<InvalidDataException>(() => LoadBytes(WithCheckpoints(Recording.MaxSnapshots + 1))).Message);
 
         // each snapshot is within the limit, all of them together are not
         var big = new Shell(new ShellOptions { MaxFileSystemBytes = 4096 });
         big.Fs.WriteAllText("/home/agent/big.txt", new string('x', 1500));
-        using (var rec = big.StartRecording(new RecordingOptions { SnapshotEvery = 1 }))
+        using (var r = big.StartRecording(new RecordingOptions { SnapshotEvery = 1 }))
         {
             for (int i = 0; i < 12; i++) await big.RunAsync("true");
-            var ms = new MemoryStream();
-            rec.Recording.Save(ms);
-            ms.Position = 0;
-            var e = Assert.Throws<InvalidDataException>(() => Recording.Load(ms, limits: new ShellOptions { MaxFileSystemBytes = 4096 }));
+            var e = Assert.Throws<InvalidDataException>(() => LoadBytes(Bytes(r.Recording), new ShellOptions { MaxFileSystemBytes = 4096 }));
             Assert.Contains("MaxFileSystemBytes", e.Message);
         }
+    }
+
+    [Fact]
+    public async Task Counts_zip_entries_before_listing_them()
+    {
+        var file = Bytes(await Record());
+        // the end-of-central-directory record claims far more entries than the limits allow
+        int eocd = file.Length - 22;
+        Assert.Equal(0x06054b50u, BitConverter.ToUInt32(file, eocd));
+        BitConverter.GetBytes((ushort)60000).CopyTo(file, eocd + 8);
+        BitConverter.GetBytes((ushort)60000).CopyTo(file, eocd + 10);
+        var limits = new ShellOptions { MaxExtractEntries = 10 };
+        Assert.Contains("60000 zip entries, more than 1042", Assert.Throws<InvalidDataException>(() => LoadBytes(file, limits)).Message);
+        Assert.Contains("60000 zip entries", Assert.Throws<InvalidDataException>(() => ShellSnapshot.Load(new MemoryStream(file), limits)).Message);
     }
 
     [Fact]
@@ -292,6 +456,50 @@ public class RecordingTests
             Assert.False(e.Report.Matches);
         }
         finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    /// <summary>
+    /// The scenario every port records into recordings/from-&lt;port&gt;.topwater (snapshot every 2 calls). Here on a deterministic
+    /// shell (2026-11-25 09:00 UTC, seed 3), as TypeScript does; Python has no virtual clock. Rewrite the C# one with
+    /// TOPWATER_WRITE_FIXTURES=1 dotnet test --filter Cross_port.
+    /// </summary>
+    static readonly string[] CrossPortCalls =
+    [
+        "mkdir -p work && cd work && printf 'buy milk\\nfix bug\\n' > todo.txt && wc -l todo.txt",
+        "greet() { echo \"hi $1\"; }; export TEAM=core; nums=(3 1 2); ln -s todo.txt latest; greet you",
+        "rm todo.txt; echo done > out.txt; ls; cat latest; exit 3",
+    ];
+
+    [Theory]
+    [InlineData("from-csharp.topwater")]
+    [InlineData("from-python.topwater")]
+    [InlineData("from-typescript.topwater")]
+    public async Task Cross_port_topwater_files_load(string file)
+    {
+        if (file == "from-csharp.topwater" && Environment.GetEnvironmentVariable("TOPWATER_WRITE_FIXTURES") == "1")
+        {
+            var sh = new Shell(new ShellOptions { StartTime = new DateTimeOffset(2026, 11, 25, 9, 0, 0, TimeSpan.Zero), RandomSeed = 3 });
+            using var rec = sh.StartRecording(new RecordingOptions { SnapshotEvery = 2, Metadata = { ["source"] = "csharp port", ["task"] = "cross-port fixture" } });
+            foreach (var c in CrossPortCalls) await sh.RunAsync(c);
+            rec.Save(Path.Combine(AppContext.BaseDirectory, "../../../../../tests/Topwater.Tests/recordings", file));
+        }
+        var r = Recording.Load(Fixture(file));
+        Assert.Equal(CrossPortCalls, r.Calls.Select(c => c.Command));
+        Assert.EndsWith(" port", r.Metadata["source"]);
+        Assert.Equal(3, r.Calls[2].ExitCode);
+        Assert.Equal("2 todo.txt\n", r.Calls[0].Stdout);
+        Assert.Contains("/home/agent/work", r.Calls[0].Files!);
+        Assert.Contains("/home/agent/work/todo.txt", r.Calls[0].Files!);
+        Assert.Contains("/home/agent/work/todo.txt", r.Calls[2].Files!);
+        Assert.Contains("/home/agent/work/out.txt", r.Calls[2].Files!);
+        Assert.NotNull(r.Calls[0].Time);
+        var at1 = await r.ShellAtAsync(1);
+        Assert.Equal("hi x\ncore 3 1 2\ntodo.txt\n", (await at1.RunAsync("cd /home/agent/work; greet x; echo $TEAM ${nums[@]}; readlink latest")).Stdout);
+        Assert.Equal("buy milk\nfix bug\n", (await (await r.ShellAtAsync(0)).RunAsync("cat /home/agent/work/todo.txt")).Stdout);
+        using var stream = File.OpenRead(Fixture(file));
+        Assert.Equal("done\n", (await Shell.Load(stream).RunAsync("cat /home/agent/work/out.txt; test -e /home/agent/work/todo.txt")).Stdout);
+        var report = await r.ReplayAsync(new ReplayOptions { Normalize = ReplayNormalizers.Volatile });
+        Assert.True(report.Matches, report.ToString());
     }
 
     [Fact]

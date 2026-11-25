@@ -93,7 +93,7 @@ public class SnapshotTests(ITestOutputHelper output)
     }
 
     /// <summary>A stream that can only be read forward, like a network or a pipe.</summary>
-    sealed class ForwardOnly(byte[] data) : MemoryStream(data)
+    internal sealed class ForwardOnly(byte[] data) : MemoryStream(data)
     {
         public override bool CanSeek => false;
     }

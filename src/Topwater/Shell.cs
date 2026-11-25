@@ -322,6 +322,7 @@ public sealed partial class Shell
 
     /// <summary>The machine's time (UTC): the virtual clock when <see cref="ShellOptions.StartTime"/> is set, else the host's.</summary>
     internal DateTime Now => _virtualNow ?? DateTime.UtcNow;
+    internal DateTimeOffset NowUtc => new(DateTime.SpecifyKind(Now, DateTimeKind.Utc));
 
     /// <summary>`sleep`: waits, or on the virtual clock just moves time on (to the deadline of an enclosing `timeout`, which then fires).</summary>
     internal Task SleepAsync(TimeSpan duration, CancellationToken ct)
@@ -448,9 +449,10 @@ public sealed partial class Shell
     public async Task<ShellResult> RunAsync(string commandLine, CancellationToken cancellationToken = default)
     {
         if (Recorder is not { } recorder) return await RunCallAsync(commandLine, cancellationToken);
+        var started = NowUtc;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await RunCallAsync(commandLine, cancellationToken);
-        recorder.Add(commandLine, result, watch.Elapsed);
+        recorder.Add(commandLine, result, watch.Elapsed, started);
         return result;
     }
 

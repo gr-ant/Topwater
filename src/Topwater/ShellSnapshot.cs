@@ -45,11 +45,18 @@ public sealed class ShellSnapshot
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // file data, never embedded in HTML
     };
 
-    /// <summary>Writes the snapshot as a zip: manifest.json (format, version, files' metadata, session) and blobs/&lt;sha256&gt; (file contents, stored once each).</summary>
+    /// <summary>Writes the snapshot as a .topwater file without history: a zip of manifest.json (format, version, files' metadata,
+    /// session) and blobs/&lt;sha256&gt; (file contents, stored once each). See spec/topwater-file.</summary>
     public void Save(Stream stream)
     {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
-        var written = new HashSet<string>(StringComparer.Ordinal);
+        WriteTo(zip, "manifest.json", new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    /// <summary>Writes this machine's manifest as <paramref name="name"/> and the blobs not yet in <paramref name="written"/>,
+    /// so the manifest and checkpoints of a .topwater file share one set of blobs.</summary>
+    internal void WriteTo(ZipArchive zip, string name, HashSet<string> written)
+    {
         var files = new List<FileEntry>();
         bool links = false;
         foreach (var e in Fs.Entries())
@@ -97,21 +104,32 @@ public sealed class ShellSnapshot
             LastBackgroundPid = st.LastBackgroundPid, NextPid = st.NextPid,
             Clock = st.Clock is { } clock ? FormatTime(clock) : null, Random = st.Random?.ToString(CultureInfo.InvariantCulture),
         };
-        using var m = zip.CreateEntry("manifest.json", CompressionLevel.Fastest).Open();
+        using var m = zip.CreateEntry(name, CompressionLevel.Fastest).Open();
         JsonSerializer.Serialize(m, manifest, Json);
     }
 
     /// <summary>
-    /// Reads a snapshot written by <see cref="Save"/>, treating it as untrusted: <paramref name="limits"/>' MaxFileSystemBytes,
+    /// Reads a snapshot written by <see cref="Save"/>, or the machine (manifest.json) of any .topwater file, treating it as untrusted: <paramref name="limits"/>' MaxFileSystemBytes,
     /// MaxStringBytes and MaxExtractEntries bound it, and nothing is written outside memory. Throws <see cref="InvalidDataException"/>
     /// for anything malformed or over a limit, <see cref="NotSupportedException"/> for a newer format version.
     /// </summary>
     public static ShellSnapshot Load(Stream stream, ShellOptions? limits = null)
     {
-        try { return Read(stream, limits ?? new ShellOptions()); }
-        catch (Exception e) when (e is not (NotSupportedException or OperationCanceledException or OutOfMemoryException) && !e.Message.StartsWith(Invalid))
+        var o = limits ?? new ShellOptions();
+        return Checked(() =>
         {
-            throw new InvalidDataException(Invalid + e.Message, e);
+            using var zip = OpenZip(stream, o, MaxArchiveBytes(o));
+            return ReadManifest(zip, "manifest.json", o);
+        });
+    }
+
+    /// <summary>Runs a read, turning whatever a malformed file makes it throw into <see cref="InvalidDataException"/>.</summary>
+    internal static T Checked<T>(Func<T> read, string invalid = Invalid)
+    {
+        try { return read(); }
+        catch (Exception e) when (e is not (NotSupportedException or OperationCanceledException or OutOfMemoryException) && !e.Message.StartsWith("not a valid Topwater "))
+        {
+            throw new InvalidDataException(invalid + e.Message, e);
         }
     }
 
@@ -124,29 +142,83 @@ public sealed class ShellSnapshot
     const string Invalid = "not a valid Topwater snapshot: ";
     static InvalidDataException Bad(string why) => new(Invalid + why);
 
-    static ShellSnapshot Read(Stream stream, ShellOptions o)
+    /// <summary>The paths whose entry differs between two machines (added, removed, or changed in type, mode, owner, mtime,
+    /// content or link), sorted. Contents are shared between snapshots, so an unchanged file compares by reference.</summary>
+    internal static List<string> ChangedFiles(ShellSnapshot before, ShellSnapshot after)
     {
-        long maxManifest = 4 * o.MaxStringBytes + 1024L * o.MaxExtractEntries;
-        long maxArchive = 2 * o.MaxFileSystemBytes + maxManifest;
+        var old = before.Fs.Entries().ToDictionary(e => e.Path, StringComparer.Ordinal);
+        var changed = new List<string>();
+        foreach (var e in after.Fs.Entries())
+            if (!old.Remove(e.Path, out var o) || o != e) changed.Add(e.Path);
+        changed.AddRange(old.Keys);
+        changed.Sort(StringComparer.Ordinal);
+        return changed;
+    }
+
+    /// <summary>The most bytes one manifest (or checkpoint, or history.jsonl) may take.</summary>
+    internal static long MaxManifestBytes(ShellOptions o) => 4 * o.MaxStringBytes + 1024L * o.MaxExtractEntries;
+    /// <summary>The largest snapshot file: its files' content (twice, for a zip that stores instead of compressing) and a manifest.</summary>
+    internal static long MaxArchiveBytes(ShellOptions o) => 2 * o.MaxFileSystemBytes + MaxManifestBytes(o);
+
+    /// <summary>
+    /// Opens a .topwater (or snapshot) zip of at most <paramref name="maxBytes"/>. The entry count is read from the end of
+    /// the archive and checked before the zip reader lists the entries, so a forged directory never gets materialised.
+    /// </summary>
+    internal static ZipArchive OpenZip(Stream stream, ShellOptions o, long maxBytes)
+    {
         var input = stream;
         if (!stream.CanSeek)
         {
             input = new MemoryStream();
-            ReadCapped(stream, input, maxArchive, "the snapshot");
+            ReadCapped(stream, input, maxBytes, "the file");
             input.Position = 0;
         }
-        else if (stream.Length - stream.Position > maxArchive) throw Bad($"the snapshot is larger than {maxArchive} bytes");
+        else if (stream.Length - stream.Position > maxBytes) throw Bad($"the file is larger than {maxBytes} bytes");
+        long maxEntries = (long)Recording.MaxSnapshotsFileSystems * o.MaxExtractEntries + Recording.MaxSnapshots + 2;
+        if (ZipEntryCount(input) is var count && count > maxEntries) throw Bad($"{count} zip entries, more than {maxEntries} (4 x MaxExtractEntries + 1002)");
+        return new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: input == stream);
+    }
 
-        using var zip = new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: true);
-        if (zip.Entries.Count > o.MaxExtractEntries + 1) throw Bad($"more than {o.MaxExtractEntries} entries (MaxExtractEntries)");
-        var manifestEntry = zip.GetEntry("manifest.json") ?? throw Bad("manifest.json is missing");
+    /// <summary>The entry count the end-of-central-directory record states (zip64 included); -1 when there is none (the zip reader then fails).</summary>
+    static long ZipEntryCount(Stream s)
+    {
+        long start = s.Position, length = s.Length - start;
+        var tail = new byte[(int)Math.Min(length, 22 + 65535)];
+        s.Position = start + length - tail.Length;
+        s.ReadExactly(tail);
+        s.Position = start;
+        for (int i = tail.Length - 22; i >= 0; i--)
+        {
+            if (BitConverter.ToUInt32(tail, i) != 0x06054b50) continue;
+            long count = BitConverter.ToUInt16(tail, i + 10);
+            // zip64: the locator just before points at the zip64 record, which holds the real count
+            if (count == 0xFFFF && i >= 20 && BitConverter.ToUInt32(tail, i - 20) == 0x07064b50)
+            {
+                var offset = BitConverter.ToInt64(tail, i - 12);
+                if (offset < 0 || offset > length - 56) return long.MaxValue;
+                var record = new byte[56];
+                s.Position = start + offset;
+                s.ReadExactly(record);
+                s.Position = start;
+                count = BitConverter.ToUInt32(record, 0) == 0x06064b50 ? (long)Math.Min(BitConverter.ToUInt64(record, 32), long.MaxValue) : long.MaxValue;
+            }
+            return count;
+        }
+        return -1;
+    }
+
+    /// <summary>Reads the manifest <paramref name="name"/> (manifest.json or a checkpoint) and the blobs it names.</summary>
+    internal static ShellSnapshot ReadManifest(ZipArchive zip, string name, ShellOptions o)
+    {
+        long maxManifest = MaxManifestBytes(o);
+        var manifestEntry = zip.GetEntry(name) ?? throw Bad($"{name} is missing");
         var json = new MemoryStream();
-        using (var s = manifestEntry.Open()) ReadCapped(s, json, maxManifest, "manifest.json");
+        using (var s = manifestEntry.Open()) ReadCapped(s, json, maxManifest, name);
         var bytes = json.GetBuffer().AsSpan(0, (int)json.Length);
 
         // the version first, so a newer format fails with that, not with whatever it changed
         var probe = JsonSerializer.Deserialize<Probe>(bytes, Json);
-        if (probe?.Format != FormatName) throw Bad("manifest.json is not a Topwater snapshot manifest");
+        if (probe?.Format != FormatName) throw Bad($"{name} is not a Topwater snapshot manifest");
         if (probe.Version > FormatVersion)
             throw new NotSupportedException($"snapshot format version {probe.Version} is newer than this version of Topwater supports ({FormatVersion}); upgrade Topwater to load it");
         if (probe.Version < 1) throw Bad($"unknown format version {probe.Version}");
@@ -288,7 +360,7 @@ public sealed class ShellSnapshot
         value != null && shape.IsMatch(value) ? value : throw Bad($"bad {what} {JsonSerializer.Serialize(value)}");
 
     /// <summary>Copies at most <paramref name="max"/> bytes, failing past it whatever the source claims its size is.</summary>
-    static void ReadCapped(Stream from, Stream to, long max, string what)
+    internal static void ReadCapped(Stream from, Stream to, long max, string what)
     {
         var buffer = new byte[81920];
         long total = 0;

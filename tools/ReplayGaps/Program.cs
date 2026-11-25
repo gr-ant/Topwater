@@ -65,7 +65,7 @@ int FromRuns(string runsDir, string startZip, string outDir)
                     c.GetProperty("ExitCode").GetInt32(), null, TimeSpan.Zero));
             if (rec.Calls.Count == 0) continue;
             Directory.CreateDirectory(Path.Combine(outDir, "runs"));
-            rec.Save(Path.Combine(outDir, "runs", $"{name}-{id}.jsonl"));
+            rec.Save(Path.Combine(outDir, "runs", $"{name}-{id}.topwater"));
             n++;
         }
     }
@@ -101,7 +101,7 @@ int FromCorpus(string sessionsPath, string outDir, int perSource, int maxCalls)
         }
         int k = taken[source] = taken.GetValueOrDefault(source) + 1;
         Directory.CreateDirectory(Path.Combine(outDir, source));
-        rec.Save(Path.Combine(outDir, source, $"{k:D4}.jsonl"));
+        rec.Save(Path.Combine(outDir, source, $"{k:D4}.topwater"));
     }
     Console.WriteLine(string.Join(", ", taken.Select(t => $"{t.Key}: {t.Value}")) + $" -> {outDir}");
     return 0;
@@ -109,7 +109,7 @@ int FromCorpus(string sessionsPath, string outDir, int perSource, int maxCalls)
 
 async Task<int> Measure(string reportPath, string detailsPath, int workers, string[] dirs)
 {
-    var files = dirs.SelectMany(d => Directory.GetFiles(d, "*.jsonl", SearchOption.AllDirectories)).Order().ToList();
+    var files = dirs.SelectMany(d => Directory.GetFiles(d, "*", SearchOption.AllDirectories).Where(f => f.EndsWith(".topwater") || f.EndsWith(".jsonl"))).Order().ToList();
     var opts = new DockerTargetOptions { CallTimeout = TimeSpan.FromSeconds(20) };
     // build the image once before the workers start
     await (await DockerTarget.StartAsync(new Shell().Snapshot(), opts)).DisposeAsync();

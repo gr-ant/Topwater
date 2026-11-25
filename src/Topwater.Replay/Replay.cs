@@ -28,9 +28,8 @@ public static class Replay
         if (Environment.GetEnvironmentVariable(RerecordVariable) is "1" or "true")
         {
             await using var target = new ShellTarget(recording.CreateShell(configure));
-            var updated = await recording.RerecordAsync(target);
-            var sidecar = Directory.Exists(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, Path.GetFileNameWithoutExtension(path) + ".snapshots"));
-            updated.Save(path, sidecar);
+            // written back as a .topwater file, whatever the old one was (Load tells them apart by content)
+            (await recording.RerecordAsync(target)).Save(path);
             return;
         }
         options ??= new ReplayOptions { Normalize = recording.IsDeterministic ? null : ReplayNormalizers.Volatile };
