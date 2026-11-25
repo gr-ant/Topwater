@@ -609,7 +609,7 @@ def _hash(ctx):
     sh.sync_hashed()
     args = list(ctx.args)
     code = i = 0
-    show = delete = False
+    show = delete = listing = False
     path = None
     while i < len(args) and len(args[i]) > 1 and args[i][0] == "-":
         if args[i] == "--":
@@ -628,11 +628,22 @@ def _hash(ctx):
                 i += 1
                 path = args[i]
                 break
-            elif ch != "l":
+            elif ch == "l":
+                listing = True
+            else:
                 raise UsageException(f"-{ch}: invalid option")
         i += 1
     names = args[i:]
-    if i == 0 and not names:
+    if (show or delete) and not names:
+        ctx.error(f"{sh.err_prefix}hash: -{'t' if show else 'd'}: option requires an argument")
+        return 1
+
+    def reusable(name, path):  # -l: each entry as the command that would hash it again
+        return f"builtin hash -p {path} {name}"
+
+    if listing and not names:
+        ctx.print("".join(reusable(k, h[0]) + "\n" for k, h in sh.hashed.items()), end="")
+    elif i == 0 and not names:
         if not sh.hashed:
             ctx.print("hash: hash table empty")
         else:
@@ -640,15 +651,15 @@ def _hash(ctx):
     for n in names:
         hashed = sh.hash_lookup(n) if show else None
         if hashed is not None:
-            ctx.print(f"{n}\t{hashed}" if len(names) > 1 else hashed)
+            ctx.print(reusable(n, hashed) if listing else f"{n}\t{hashed}" if len(names) > 1 else hashed)
         elif delete and sh.hashed.pop(n, None) is not None:
             pass
         elif path is not None:
             sh.hashed[n] = [path, 0]
-        elif show or delete or "/" in n:
+        elif show or delete:
             ctx.error(f"{sh.err_prefix}hash: {n}: not found")
             code = 1
-        elif is_shell_builtin(sh, n) or n in sh.functions or sh.is_unfiled(n):
+        elif "/" in n or is_shell_builtin(sh, n) or n in sh.functions or sh.is_unfiled(n):
             pass
         elif sh.search_path_all(n):
             sh.hashed[n] = [sh.search_path_all(n)[0], 0]

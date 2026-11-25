@@ -1,5 +1,6 @@
 """Features agents reach for most: control flow, expansions, awk, diff and everyday utilities (same cases as the C# suite)."""
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,37 @@ class AgentFeatureTests(unittest.TestCase):
         self.assertEqual(127, sh.run("PATH=/nowhere greet").exit_code)
         # shell builtins have no program file and keep working whatever PATH holds
         self.assertEqual("x\n", out(sh, "PATH=/nowhere; cd /tmp; echo x"))
+
+    def test_shebang_loops_stop_at_the_script_nesting_limit(self):
+        for setup in ["printf '#!/usr/bin/env foo\\n' > b/foo", "printf '#!/usr/bin/timeout 5\\n' > b/foo",
+                      "printf '#!/usr/bin/env -S bar\\n' > b/foo; printf '#!/usr/bin/env -S foo\\n' > b/bar; chmod +x b/bar"]:
+            with self.subTest(setup=setup):
+                sh = Shell()
+                out(sh, f"mkdir b; {setup}; chmod +x b/foo")
+                # on its own thread with a deadline, so a regression fails the test instead of hanging it
+                result = []
+                worker = threading.Thread(target=lambda: result.append(sh.run("PATH=$PWD/b:$PATH foo")), daemon=True)
+                worker.start()
+                worker.join(60)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(1, result[0].exit_code)
+                self.assertIn("[stopped: maximum script nesting level exceeded (100).", result[0].to_tool_output())
+                self.assertEqual("ok\n", out(sh, "echo ok"))
+
+    def test_path_lookup_details(self):
+        sh = Shell()
+        out(sh, "mkdir -p ~/bin b && printf 'echo hi\\n' > ~/bin/x && printf 'echo b\\n' > b/y && chmod +x ~/bin/x b/y")
+        # a ~ at the start of a PATH entry is expanded during the search
+        self.assertEqual("hi\nx is hashed (/home/agent/bin/x)\n", out(sh, 'PATH="~/bin:$PATH"; x; type x'))
+        self.assertEqual("builtin hash -p /home/agent/bin/x x\n", out(sh, "hash -l"))
+        self.assertEqual("builtin hash -p /home/agent/bin/x x\n", out(sh, "hash -lt x"))
+        self.assertEqual("", out(sh, "hash b/y; hash -r; hash -l"))
+        for o in ["t", "d", "lt"]:
+            r = sh.run("hash -" + o)
+            self.assertEqual((1, f"bash: line 1: hash: -{o[-1]}: option requires an argument\n"), (r.exit_code, r.stderr))
+        # a hashed program whose directory can no longer be searched
+        d = sh.run("PATH=$PWD/b:$PATH; y; chmod 000 b; y; echo $?; chmod 755 b")
+        self.assertEqual(("b\n126\n", "bash: line 1: /home/agent/b/y: Permission denied\n"), (d.stdout, d.stderr))
 
     def test_scripts_run_with_arguments(self):
         sh = Shell()

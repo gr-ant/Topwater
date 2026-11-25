@@ -1448,8 +1448,9 @@ class Shell:
             io_.err.write(f"{self.err_prefix}{name}: Is a directory\n")
             return 126
         if not self.fs.is_file(path):
-            io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n")
-            return 127
+            why = self.fs.why_missing(path)
+            io_.err.write(f"{self.err_prefix}{name}: {why}\n")
+            return 126 if why == "Permission denied" else 127
         if not (self.fs.can_execute(path) and self.fs.can_read(path)):
             io_.err.write(f"{self.err_prefix}{name}: Permission denied\n")
             return 126
@@ -1463,7 +1464,14 @@ class Shell:
         if text.startswith("#!"):
             line = text[2:].split("\n", 1)[0].strip()
             if not re.search(r"(^|/|\s)(ba)?sh(\s|$)", line):
-                return await self._run_interpreter(name, line, argv, io_)
+                # the hand-off can lead back to this script (#!/usr/bin/env self), so it counts as a nesting level
+                self._script_depth += 1
+                if self._script_depth > 100:
+                    raise LimitExceeded("maximum script nesting level exceeded (100)")
+                try:
+                    return await self._run_interpreter(name, line, argv, io_)
+                finally:
+                    self._script_depth -= 1
         return await self._run_script_text(text, io_, subshell=True, positional=list(argv[1:]), process=_NewProcess(name, name))
 
     async def _run_interpreter(self, name: str, line: str, argv: list[str], io_: _Io) -> int:
@@ -1500,8 +1508,10 @@ class Shell:
         return name if name in self.commands else None
 
     def _path_candidates(self, name: str) -> list[str]:
-        """Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd."""
-        return [d.rstrip("/") + "/" + name if d else "./" + name for d in self.env.get("PATH", "").split(":")]
+        """Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd, and a leading ~ is
+        expanded as bash does during the search."""
+        dirs = [tp[0] + d[tp[1]:] if (tp := self._tilde_prefix(d)) else d for d in self.env.get("PATH", "").split(":")]
+        return [d.rstrip("/") + "/" + name if d else "./" + name for d in dirs]
 
     def search_path(self, name: str) -> str | None:
         """PATH search as bash does it: the first executable regular file named `name` in a directory the agent can
