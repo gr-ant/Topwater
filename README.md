@@ -42,10 +42,10 @@ You send the model one tool definition instead of one per function, and it can p
 
 ## Install
 
-Not on NuGet yet. Reference the project from a clone of this repository:
-
 ```bash
-dotnet add reference path/to/Topwater/src/Topwater/Topwater.csproj
+dotnet add package Topwater --prerelease
+dotnet add package Topwater.Mcp --prerelease   # optional: MCP servers as commands
+dotnet add package Topwater.AI --prerelease    # optional: Microsoft.Extensions.AI tool
 ```
 
 ## Use
@@ -63,13 +63,13 @@ string output = await BashTool.ExecuteAsync(shell, "grep -c hello notes.txt");
 
 Files, variables and the working directory persist between calls. Use one `Shell` per conversation.
 
-With `Microsoft.Extensions.AI`, add `src/Topwater.AI` and skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
+With `Microsoft.Extensions.AI`, add the `Topwater.AI` package and skip the wiring: `options.Tools = [shell.AsAIFunction()]`.
 
 ## Add your own programs
 
 C# methods, as above. Parameters become `--options`, and the return value is printed as JSON.
 
-An MCP server (add `src/Topwater.Mcp`):
+An MCP server (add the `Topwater.Mcp` package):
 
 ```csharp
 await using var github = await shell.MountMcpAsync("github", client);   // github list-issues --repo acme/api
