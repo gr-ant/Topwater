@@ -279,6 +279,25 @@ public class SnapshotTests(ITestOutputHelper output)
         Assert.True(zip.Entries.Count(e => e.FullName.StartsWith("blobs/")) < files.Count / 2);
     }
 
+    /// <summary>The ports share the saved format: snapshots/from-python.zip (saved by the Python port, and
+    /// from-csharp.zip, which the Python tests load) give the same machine. Both were made with the setup below.</summary>
+    [Theory]
+    [InlineData("from-python.zip")]
+    [InlineData("from-csharp.zip")]
+    public async Task ASnapshotSavedByAnotherPortLoads(string file)
+    {
+        // setup: mkdir -p proj/src && cd proj; printf 'hello\n' > a.txt; chmod 600 a.txt; echo AAH+/wo= | base64 -d > bin.dat;
+        // echo 'héllo wörld' > u.txt; declare -i n=5; export EXP='exp "q" $x'; plain=$'multi\nline'; arr=(one 'two words' three);
+        // unset 'arr[1]'; declare -A map=([k1]=v1 ['key two']=v2); greet() { echo "hi $1"; }; export -f greet; alias ll='ls -l';
+        // set -- p1 'p 2'; shopt -s nullglob; trap 'echo int' INT
+        using var stream = File.OpenRead(Path.Combine(AppContext.BaseDirectory, "../../../snapshots", file));
+        var sh = Shell.Load(stream);
+        var r = await sh.RunAsync("echo \"$PWD $n $EXP [$plain] ${!arr[@]} ${arr[2]} ${map[key two]} $1|$2\"; greet you; alias ll; shopt nullglob; " +
+            "trap -p INT; ls -l a.txt | cut -c1-10; od -An -tx1 bin.dat; cat u.txt; bash -c 'greet child'; declare -p n arr; whoami");
+        Assert.Equal("/home/agent/proj 5 exp \"q\" $x [multi\nline] 0 2 three v2 p1|p 2\nhi you\nalias ll='ls -l'\nnullglob       \ton\n" +
+            "trap -- 'echo int' INT\n-rw-------\n 00 01 fe ff 0a\nhéllo wörld\nhi child\ndeclare -i n=\"5\"\ndeclare -a arr=([0]=\"one\" [2]=\"three\")\nagent\n", r.Stdout);
+    }
+
     // ---------- untrusted input ----------
 
     /// <summary>A saved snapshot with its manifest (and optionally its zip) edited.</summary>

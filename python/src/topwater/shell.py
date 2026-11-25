@@ -18,7 +18,7 @@ from .parser import (
     FunctionDef, GroupCommand, IfCommand, Lexer, Literal, LoopCommand, Parser, ParseError, Pipeline, ProcSub, Script,
     SimpleCommand, Variable, Word, is_cond_binary, is_name, split_subscript, try_assignment,
 )
-from .vfs import ShellError, VirtualFileSystem, get_name, get_parent, normalize
+from .vfs import ShellError, VirtualFileSystem, get_name, get_parent, normalize, utc_now
 
 _BAD_INT = re.compile(r"invalid literal for int\(\) with base \d+: '(.*)'$", re.S)
 EXECUTABLE_STUB = "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
@@ -318,6 +318,7 @@ class _NewProcess:
 
 
 # bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
+SNAPSHOT_SET_OPTIONS = ("errexit", "pipefail", "nounset", "noglob", "xtrace", "noclobber")  # the set -o options a shell can change
 _NO_PROGRAM_FILE = {"alias", "break", "cd", "command", "continue", "declare", "eval", "exit", "export", "help", "history", "let",
                     "local", "mapfile", "read", "readarray", "readonly", "return", "set", "shift", "shopt", "source", "trap",
                     "type", "typeset", "unalias", "unset"}
@@ -558,8 +559,11 @@ class Shell:
         self.commands[name] = RegisteredCommand(name, description, usage, handler)
         if self._builtin_names is not None:
             self._builtin_names.discard(name)  # an app command replacing a built-in owns its own --help/--version
-        shell_only = self._builtin_names is None and name in _NO_PROGRAM_FILE
-        if not shell_only and "/" not in name and name not in (".", "..", ":") and self.fs.is_dir("/usr/bin"):
+        self._write_program_file(name, self._builtin_names is None)
+        return self
+
+    def _write_program_file(self, name: str, builtin: bool) -> None:
+        if not (builtin and name in _NO_PROGRAM_FILE) and "/" not in name and name not in (".", "..", ":") and self.fs.is_dir("/usr/bin"):
             with self.fs.as_root():
                 for d in ("/usr/bin/", "/bin/"):
                     if self.fs.is_dir(d):
@@ -572,7 +576,6 @@ class Shell:
                             h = (h * 31 + ord(c)) & 0xFFFFFFFF
                         self.fs.set_reported_size(d + name, 14_000 + h % 180_000 // 8 * 8)
                         self.fs.set_modified(d, self.installed_at)
-        return self
 
     def register(self, *targets: Any) -> "Shell":
         """Registers @command-decorated functions, or every @command method on an object, class or module."""
@@ -587,6 +590,102 @@ class Shell:
                 if self.fs.is_file(d + name):
                     self.fs.delete(d + name)
         return self.commands.pop(name, None) is not None
+
+    # ---------- snapshots (see snapshot.py and "Snapshots" in docs/reference.md) ----------
+
+    def snapshot(self) -> "ShellSnapshot":
+        """Captures the machine (files and session) as an immutable ShellSnapshot. Call it between calls."""
+        from .snapshot import ShellSnapshot
+        return ShellSnapshot(list(self.fs.entries()), self._capture_state(), self.user, self.hostname, utc_now())
+
+    def restore(self, snapshot: "ShellSnapshot") -> None:
+        """Puts the machine back as `snapshot` captured it. This shell keeps its own registered commands (and their
+        /usr/bin entries); the snapshot is unchanged and can be restored again."""
+        self.fs.replace_all(snapshot.entries)
+        self._apply_state(snapshot.state)
+
+    def fork(self) -> "Shell":
+        """A new shell with a copy of this machine that shares nothing mutable with it. It shares the registered command
+        handlers, except host programs (register_host_command), which are bound to this shell: register them again."""
+        from .host import HostCommand
+        fork = Shell(self.user, self.hostname, max_loop_iterations=self.max_loop_iterations, max_call_duration=self.max_call_duration,
+                     max_file_system_bytes=self.max_file_system_bytes, max_string_bytes=self.max_string_bytes,
+                     max_extract_bytes=self.max_extract_bytes, max_extract_entries=self.max_extract_entries)
+        fork.commands = {n: c for n, c in self.commands.items() if not isinstance(c.handler, HostCommand)}
+        fork._builtin_names = None if self._builtin_names is None else set(self._builtin_names)
+        fork.restore(self.snapshot())
+        return fork
+
+    def save(self, file) -> None:
+        """Saves the machine to a path or binary file; same as snapshot().save(file)."""
+        self.snapshot().save(file)
+
+    @staticmethod
+    def load(file, **options) -> "Shell":
+        """A new shell from a saved snapshot (a path, binary file or bytes), checked as untrusted input (ShellSnapshot.load).
+        `options` are Shell() arguments; user and hostname default to the snapshot's. Only the built-ins are registered:
+        register your commands again, or restore into a shell you configured: shell.restore(ShellSnapshot.load(f, shell))."""
+        from types import SimpleNamespace
+        from .snapshot import ShellSnapshot
+        snap = ShellSnapshot.load(file, SimpleNamespace(**options))
+        options.setdefault("user", snap.user)
+        options.setdefault("hostname", snap.hostname)
+        shell = Shell(**options)
+        shell.restore(snap)
+        return shell
+
+    def _capture_state(self) -> dict:
+        self._epoch += 1  # the arrays are now shared with the snapshot: each side copies one before its next write
+        return {
+            "cwd": self._cwd, "variables": dict(self.env), "attributes": dict(self.var_attrs), "unexported": frozenset(self._unexported),
+            "arrays": dict(self.arrays), "functions": dict(self.functions), "exported_functions": frozenset(self.exported_functions),
+            "aliases": dict(self.aliases), "traps": dict(self.traps),
+            "set": [o for o in SNAPSHOT_SET_OPTIONS if getattr(self, o)], "ifs_unset": self._ifs_unset, "shopt": sorted(self.shopts),
+            "positional": list(self.positional), "dir_stack": list(self.dir_stack), "history": list(self.history),
+            "last_exit_code": self.last_exit_code, "seconds_base": self._seconds_base, "last_arg": self._last_arg,
+            "pipe_status": list(self._pipe_status), "getopts": tuple(self.getopts_state), "jobs": dict(self._jobs),
+            "last_bg": self._last_bg, "next_pid": self._next_pid,
+        }
+
+    def _apply_state(self, s: dict) -> None:
+        """Copies a snapshot's session in, so the snapshot stays as it was, and lines /usr/bin up with this shell's commands."""
+        self._epoch = max([self._epoch, *(a.epoch for a in s["arrays"].values())]) + 1
+        self.env = dict(s["variables"])
+        self.var_attrs = dict(s["attributes"])
+        self._unexported = set(s["unexported"])
+        self.arrays = dict(s["arrays"])
+        self.functions = dict(s["functions"])
+        self.exported_functions = set(s["exported_functions"])
+        self.aliases = dict(s["aliases"])
+        self.traps = dict(s["traps"])
+        for o in SNAPSHOT_SET_OPTIONS:
+            setattr(self, o, o in s["set"])
+        self._ifs_unset = s["ifs_unset"]
+        self.shopts = set(s["shopt"])
+        self.positional = list(s["positional"])
+        self.dir_stack = list(s["dir_stack"])
+        self.history = list(s["history"])
+        self.last_exit_code = s["last_exit_code"]
+        self._seconds_base = s["seconds_base"]
+        self._last_arg = s["last_arg"]
+        self._pipe_status = list(s["pipe_status"])
+        self.getopts_state = tuple(s["getopts"])
+        self._jobs = dict(s["jobs"])
+        self._last_bg = s["last_bg"]
+        self._next_pid = s["next_pid"]
+        self._variable_chars = sum(len(k) + len(v) for k, v in self.env.items()) + \
+            sum(len(k) + len(v) for a in self.arrays.values() for k, v in a.items.items())
+        self._cwd = s["cwd"] if self.fs.is_dir(s["cwd"]) else "/"
+        # program files for exactly this shell's commands: the snapshot may come from a shell (or port) with others
+        with self.fs.as_root():
+            for d in ("/usr/bin/", "/bin/"):
+                if self.fs.is_dir(d):
+                    for name in self.fs.listdir(d):
+                        if name not in self.commands and self.fs.is_file(d + name) and self.fs.read_text(d + name) == EXECUTABLE_STUB:
+                            self.fs.delete(d + name)
+            for name in self.commands:
+                if not self.fs.is_file("/usr/bin/" + name):
+                    self._write_program_file(name, self._builtin_names is not None and name in self._builtin_names)
 
     # ---------- limits ----------
 

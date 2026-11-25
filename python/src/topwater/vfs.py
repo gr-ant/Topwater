@@ -494,3 +494,43 @@ class VirtualFileSystem:
                     apply(c)
 
         apply(n)
+
+    # ---------- snapshots (see snapshot.py) ----------
+
+    def entries(self):
+        """Every path, parents first: (path, is_dir, mode, owner, modified, text, data, reported_size). Contents are immutable str/bytes."""
+        stack = [("/", self._root)]
+        while stack:
+            path, n = stack.pop()
+            if isinstance(n, _File):
+                yield path, False, n.mode, n.owner, n.modified, n.text() if n.data is None else None, n.data, n.reported_size
+                continue
+            yield path, True, n.mode, n.owner, n.modified, None, None, None
+            for name in reversed(list(n.children)):
+                stack.append(("/" + name if path == "/" else f"{path}/{name}", n.children[name]))
+
+    def replace_all(self, entries) -> None:
+        """Replaces every file with `entries` (as entries() gives them, parents first): a snapshot restore."""
+        root, used = _Dir(), 0
+        for path, is_dir, mode, owner, modified, text, data, reported_size in entries:
+            if is_dir:
+                node = root if path == "/" else _Dir()
+            elif path == "/":
+                raise ShellError("/: Not a directory")
+            else:
+                node = _File(text or "", data=data, reported_size=reported_size)
+                node.size = len(data) if data is not None else len(node.content.encode("utf-8", "surrogatepass"))
+                used += node.size
+            node.mode, node.owner, node.modified = mode, owner, modified
+            if path == "/":
+                continue
+            parent = root
+            for seg in path.split("/")[1:-1]:
+                parent = parent.children.get(seg) if isinstance(parent, _Dir) else None
+            if not isinstance(parent, _Dir):
+                raise ShellError(f"{path}: parent is not a directory")
+            name = get_name(path)
+            if name in parent.children:
+                raise ShellError(f"{path}: File exists")
+            parent.children[name] = node
+        self._root, self.used_bytes = root, used
