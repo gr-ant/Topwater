@@ -75,6 +75,7 @@ internal static partial class Builtins
         RegisterUtilityCommands(shell);
         Awk.Register(shell);
         Jq.Register(shell);
+        Bc.Register(shell);
         RegisterDocumentCommands(shell);
         RegisterBinaryCommands(shell);
         RegisterArchiveCommands(shell);
@@ -89,6 +90,7 @@ internal static partial class Builtins
         ["free"] = "free from procps-ng 4.0.4", ["uptime"] = "uptime from procps-ng 4.0.4", ["column"] = "column from util-linux 2.39.3",
         ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3", ["egrep"] = "grep (GNU grep) 3.11", ["fgrep"] = "grep (GNU grep) 3.11",
         ["tar"] = "tar (GNU tar) 1.35", ["gzip"] = "gzip 1.12", ["gunzip"] = "gzip 1.12", ["zcat"] = "gzip 1.12",
+        ["bc"] = "bc 1.07.1",
     };
 
     static readonly HashSet<string> NoStandardOptions = ["sudo", "su", "echo", "printf", "test", "[", "true", "false", ":", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];

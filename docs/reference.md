@@ -43,7 +43,7 @@ State persists between tool calls: working directory, variables, functions, alia
 | Group | Programs |
 |---|---|
 | Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `less` `more` |
-| Text | `echo` `printf` `grep` `egrep` `fgrep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `diff` `nl` `tac` `rev` `paste` `column` `seq` |
+| Text | `echo` `printf` `grep` `egrep` `fgrep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `bc` `diff` `nl` `tac` `rev` `paste` `column` `seq` |
 | Documents and binary | `to-markdown` `xxd` `hexdump` `od` `strings` `base64` `md5sum` `sha1sum` `sha256sum` `sha512sum` |
 | Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
 | Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
@@ -56,6 +56,17 @@ real ones do. `find` supports `-name -iname -path -regex -type -size -mmin -mtim
 from files, `printf`, and the string functions. `jq` is a real parser with about 90 builtins: object
 construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_entries`, `reduce`, `@csv`,
 `--arg`, `-r`, `-e`, `-s`.
+`bc` is an arbitrary-precision calculator: a `BigInteger` mantissa plus a scale, parsed to an AST and evaluated.
+It matches GNU bc 1.07.1 digit-for-digit on `+ - * / % ^` and `sqrt`, bc's scale rules, truncation, `ibase`/`obase`
+(input bases up to 16, and output bases above 16 as space-separated digit groups) and the 70-column line wrapping
+with a trailing backslash, plus the full language (variables, `a[i]` arrays, `define` functions with `auto`
+locals and array parameters, `if`/`while`/`for`, `break`/`continue`/`return`, `print`, strings, `length`,
+`scale`, relational and boolean operators, `++`/`--`, the assignment ops, and `last`/`.`). With `-l` the math
+library `s c a l e j` is available at the default scale 20; those are computed here from Taylor series and
+argument reduction (not GNU's `libmath.b`) and are accurate to the requested scale, within a last digit or two
+of GNU at large scales. One `bc` invocation is stopped after 5 s and any single number is capped at 100000
+digits, so `while(1){}`, `9^9^9` and `scale=100000; sqrt(2)` end with an error instead of hanging; `read()` is
+not supported.
 
 ## Your own commands
 
@@ -449,6 +460,7 @@ registered commands have no container equivalent and would have to be provided a
 | Nesting | scripts 100, functions 200, arithmetic 100, and the .NET stack | none | `bash: maximum script nesting level exceeded (100)`, `bash: f: maximum function nesting level exceeded (200)`, `bash: arithmetic is nested too deeply`, `bash: maximum nesting level exceeded`, and trailer | 1 | yes |
 | One regular-expression match | 5 s | none | `bash: pattern matching took too long`, and trailer | 1 | yes |
 | One `awk`, `sed`, `jq` run | 10M loop iterations, 10M steps, 20M steps | none | `awk: loop iteration limit exceeded`, `sed: too many steps (a branch loops forever?)`, `jq: error (at <unknown>): too many steps (possible infinite loop)` | 2, 1, 5 | no |
+| One `bc` run | 5 s, and 100000 digits per number | none | `bc: computation stopped: exceeded the 5 s limit (lower scale or use smaller operands)`, `bc: number too large` | 1 | no |
 | Brace expansion, `seq`, `diff` | 10,000 items, 1M numbers, 25M table cells | none | `bash: brace expansion: too many items`, `seq: too many numbers`, `diff: files too large to compare` | 1 (2 for diff) | no |
 | Tool output | 30,000 characters of stdout, 5,000 of stderr | `ToToolOutput(maxChars)` | `... [output truncated, N more characters]` | | |
 | Host programs | 120 s, 1 MB of output | `HostCommandOptions.Timeout`, `MaxOutputBytes` | `prog: timed out after 120s` (the program is killed; the call goes on) | 124 | no |
