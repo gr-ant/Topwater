@@ -3,6 +3,7 @@ import { makeEnv } from './harness.js';
 import { registerText } from '../src/commands/text.js';
 import { StdinBuffer, type CommandContext, type CommandHandler } from '../src/command.js';
 import { decodeBytes } from '../src/bytes.js';
+import { Shell } from '../src/index.js';
 
 function env() {
   const e = makeEnv();
@@ -127,7 +128,7 @@ describe('head and tail', () => {
     const { run } = env();
     const r = await run(['head', '-n', 'x'], 'a\n');
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toBe("head: invalid number of lines: 'x'\n");
+    expect(r.stderr).toBe('head: invalid number of lines: \u2018x\u2019\n');
   });
   test('binary head -c survives', async () => {
     const { run } = env();
@@ -434,8 +435,8 @@ describe('diff', () => {
     expect(r.stderr).toBe('diff: nope: No such file or directory\n');
   });
   test('operand count', async () => {
-    const e = setup('x\n', 'x\n');
-    expect((await e.run(['diff', 'a'])).exitCode).toBe(2);
+    const r = await new Shell().run('diff a');
+    expect([r.exitCode, r.stderr]).toEqual([2, "diff: missing operand after 'a'\ndiff: Try 'diff --help' for more information.\n"]);
   });
   test('too large', async () => {
     const e = setup('', '');

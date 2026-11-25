@@ -1,6 +1,6 @@
 import { VirtualFileSystem, ShellError, ordinal } from './vfs.js';
 import {
-  StdinBuffer, LimitExceeded, DeadlineExceeded, VirtualTimeout, tooLarge, nullWriter, sizeText,
+  StdinBuffer, LimitExceeded, DeadlineExceeded, VirtualTimeout, UsageException, isShellBuiltin, usageError, tooLarge, nullWriter, sizeText,
   type CommandContext, type CommandHandler, type RegisteredCommand, type Writer, type Deadline,
 } from './command.js';
 import {
@@ -1191,7 +1191,14 @@ export class Shell implements ArithHost {
       return typeof r === 'number' ? r : 0;
     } catch (e) {
       if (e instanceof ControlFlow || e instanceof LimitExceeded || e instanceof DeadlineExceeded) throw e;
-      if (e instanceof ShellError) { io.err.write(`${name}: ${e.message}\n`); return e.exitCode; }
+      if (e instanceof UsageException && !isShellBuiltin(this, name)) {
+        io.err.write(usageError(name === 'egrep' || name === 'fgrep' ? 'grep' : name, e.message));
+        return ['ls', 'grep', 'egrep', 'fgrep', 'sort', 'diff'].includes(name) ? 2 : 1;
+      }
+      if (e instanceof ShellError) {
+        io.err.write(`${e instanceof UsageException || isShellBuiltin(this, name) ? 'bash: ' : ''}${name}: ${e.message}\n`);
+        return e instanceof UsageException ? 2 : e.exitCode;
+      }
       if (e instanceof RangeError && /call stack/i.test(e.message)) throw new LimitExceeded('maximum nesting level exceeded');
       io.err.write(`${name}: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;

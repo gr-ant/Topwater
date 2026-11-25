@@ -5,6 +5,11 @@ export class ShellError extends Error {
   constructor(message: string, public readonly exitCode = 1) { super(message); }
 }
 
+/** A bad command line: printed with GNU's "Try 'cmd --help'" hint; exits 1, or 2 for ls, grep, sort and diff. */
+export class UsageException extends ShellError {
+  constructor(message: string) { super(message, 1); }
+}
+
 export interface FileStat {
   isDirectory: boolean;
   size: number;
@@ -13,6 +18,10 @@ export interface FileStat {
   /** Unix permission bits, e.g. 0o755 (plus 0o1000 for sticky). */
   mode: number;
   owner: string;
+  /** Hard links: 1 for a file; 2 plus one per subdirectory for a directory, as on ext4. */
+  links: number;
+  /** 512-byte blocks in use, as `stat %b` and `ls -s` count them: whole 4 KiB filesystem blocks. */
+  blocks: number;
 }
 
 abstract class Node {
@@ -149,32 +158,35 @@ export class VirtualFileSystem {
     const rwx = 'rwxrwxrwx';
     let s = isDirectory ? 'd' : '-';
     for (let i = 0; i < 9; i++) s += mode & (1 << (8 - i)) ? rwx[i] : '-';
+    if (mode & 0o4000) s = s.slice(0, 3) + (s[3] === 'x' ? 's' : 'S') + s.slice(4);
+    if (mode & 0o2000) s = s.slice(0, 6) + (s[6] === 'x' ? 's' : 'S') + s.slice(7);
     if (mode & 0o1000) s = s.slice(0, 9) + (s[9] === 'x' ? 't' : 'T');
     return s;
   }
 
-  private find(path: string): { node: Node | null; denied: boolean } {
+  /** `why` says why a null node is unreachable: "Permission denied", "Not a directory" (a file mid-path) or "No such file or directory". */
+  private find(path: string): { node: Node | null; why: string } {
     const user = this.user;
     let cur: Node = this.root;
     for (const seg of VirtualFileSystem.normalize('/', path).split('/')) {
       if (seg === '') continue;
-      if (!(cur instanceof Dir)) return { node: null, denied: false };
-      if (!permits(cur, user, 1)) return { node: null, denied: true };
+      if (!(cur instanceof Dir)) return { node: null, why: 'Not a directory' };
+      if (!permits(cur, user, 1)) return { node: null, why: 'Permission denied' };
       const next = cur.children.get(seg);
-      if (!next) return { node: null, denied: false };
+      if (!next) return { node: null, why: NOT_FOUND };
       cur = next;
     }
-    return { node: cur, denied: false };
+    return { node: cur, why: NOT_FOUND };
   }
   private node(path: string): Node | null { return this.find(path).node; }
 
-  /** Why `path` can't be reached: "Permission denied" or "No such file or directory". */
-  whyMissing(path: string): string { const f = this.find(path); return missing(f.node === null && f.denied); }
+  /** Why `path` can't be reached: "Permission denied", "Not a directory" or "No such file or directory". */
+  whyMissing(path: string): string { const f = this.find(path); return f.node === null ? f.why : NOT_FOUND; }
 
   private parentDir(path: string): Dir {
-    const { node, denied } = this.find(VirtualFileSystem.getParent(path));
+    const { node, why } = this.find(VirtualFileSystem.getParent(path));
     if (node instanceof Dir) { this.require(node, 1, path); return node; }
-    throw new ShellError(`${path}: ${node === null ? missing(denied) : 'Not a directory'}`);
+    throw new ShellError(`${path}: ${node === null ? why : 'Not a directory'}`);
   }
   private allowed(n: Node, bits: number) { return permits(n, this.user, bits); }
   private require(n: Node, bits: number, path: string) {
@@ -194,11 +206,16 @@ export class VirtualFileSystem {
   canExecute(path: string): boolean { const n = this.node(path); return n !== null && this.allowed(n, 1); }
 
   stat(path: string): FileStat {
-    const { node, denied } = this.find(path);
-    if (node instanceof Dir) return { isDirectory: true, size: 4096, modified: node.modified, mode: node.mode, owner: node.owner };
-    if (node instanceof FileNode)
-      return { isDirectory: false, size: node.reportedSize ?? node.size, modified: node.modified, mode: node.mode, owner: node.owner };
-    throw new ShellError(`${path}: ${missing(denied)}`);
+    const { node, why } = this.find(path);
+    if (node instanceof Dir) {
+      const links = 2 + [...node.children.values()].filter(c => c instanceof Dir).length;
+      return { isDirectory: true, size: 4096, modified: node.modified, mode: node.mode, owner: node.owner, links, blocks: 8 };
+    }
+    if (node instanceof FileNode) {
+      const size = node.reportedSize ?? node.size;
+      return { isDirectory: false, size, modified: node.modified, mode: node.mode, owner: node.owner, links: 1, blocks: Math.floor((size + 4095) / 4096) * 8 };
+    }
+    throw new ShellError(`${path}: ${why}`);
   }
 
   readText(path: string): string { const f = this.readNode(path); return f.data === null ? f.content : bytesToText(f.data); }
@@ -208,10 +225,10 @@ export class VirtualFileSystem {
   readBytes(path: string): Uint8Array { const f = this.readNode(path); return f.data !== null ? f.data.slice() : f.raw; }
 
   private readNode(path: string): FileNode {
-    const { node, denied } = this.find(path);
+    const { node, why } = this.find(path);
     if (node instanceof FileNode) { this.require(node, 4, path); return node; }
     if (node instanceof Dir) throw new ShellError(`${path}: Is a directory`);
-    throw new ShellError(`${path}: ${missing(denied)}`);
+    throw new ShellError(`${path}: ${why}`);
   }
 
   writeText(path: string, content: string) { this.write(path, content, null, false); }
@@ -251,8 +268,8 @@ export class VirtualFileSystem {
 
   /** Sets a modification time (touch -d, tar and unzip restoring one); as with utime(2), only the owner may. */
   setModifiedTime(path: string, when: number) {
-    const { node, denied } = this.find(path);
-    if (!node) throw new ShellError(`${path}: ${missing(denied)}`);
+    const { node, why } = this.find(path);
+    if (!node) throw new ShellError(`${path}: ${why}`);
     if (this.restricted && node.owner !== this.runAs) throw new ShellError(`${path}: Operation not permitted`);
     node.modified = when;
   }
@@ -301,9 +318,9 @@ export class VirtualFileSystem {
   }
 
   touch(path: string) {
-    const { node, denied } = this.find(path);
+    const { node, why } = this.find(path);
     if (node) { this.require(node, 2, path); node.modified = this.store.clock(); }
-    else if (denied) throw new ShellError(`${path}: Permission denied`);
+    else if (why === 'Permission denied') throw new ShellError(`${path}: Permission denied`);
     else this.writeText(path, '');
   }
 
@@ -324,17 +341,17 @@ export class VirtualFileSystem {
 
   /** Entry names in a directory, sorted by code unit (like `LC_ALL=C ls`). */
   list(path: string): string[] {
-    const { node, denied } = this.find(path);
+    const { node, why } = this.find(path);
     if (node instanceof Dir) { this.require(node, 4, path); return [...node.children.keys()].sort(ordinal); }
     if (node instanceof FileNode) throw new ShellError(`${path}: Not a directory`);
-    throw new ShellError(`${path}: ${missing(denied)}`);
+    throw new ShellError(`${path}: ${why}`);
   }
 
   delete(path: string, recursive = false) {
     path = VirtualFileSystem.normalize('/', path);
     if (path === '/') throw new ShellError("it is dangerous to operate recursively on '/'");
-    const { node, denied } = this.find(path);
-    if (!node) throw new ShellError(`${path}: ${missing(denied)}`);
+    const { node, why } = this.find(path);
+    if (!node) throw new ShellError(`${path}: ${why}`);
     if (node instanceof Dir && node.children.size > 0 && !recursive) throw new ShellError(`${path}: Directory not empty`);
     const parent = this.parentDir(path);
     if (node instanceof Dir) this.requireTreeRemovable(node, path);
@@ -360,8 +377,8 @@ export class VirtualFileSystem {
    * (default: fail the whole copy). */
   copy(source: string, dest: string, denied: (path: string, isDir: boolean) => void = p => { throw new ShellError(`${p}: Permission denied`); }) {
     source = VirtualFileSystem.normalize('/', source);
-    const { node, denied: blocked } = this.find(source);
-    if (!node) throw new ShellError(`${source}: ${missing(blocked)}`);
+    const { node, why } = this.find(source);
+    if (!node) throw new ShellError(`${source}: ${why}`);
     dest = VirtualFileSystem.normalize('/', dest);
     if (node instanceof Dir && (dest + '/').startsWith(source + '/'))
       throw new ShellError(`cannot copy a directory, '${source}', into itself, '${dest}'`);
@@ -397,8 +414,8 @@ export class VirtualFileSystem {
   move(source: string, dest: string) {
     source = VirtualFileSystem.normalize('/', source);
     dest = VirtualFileSystem.normalize('/', dest);
-    const { node, denied } = this.find(source);
-    if (!node) throw new ShellError(`${source}: ${missing(denied)}`);
+    const { node, why } = this.find(source);
+    if (!node) throw new ShellError(`${source}: ${why}`);
     if ((dest + '/').startsWith(source + '/')) throw new ShellError(`cannot move '${source}' to a subdirectory of itself, '${dest}'`);
     const existing = this.node(dest);
     if (existing instanceof Dir) throw new ShellError(`${dest}: Is a directory`);
@@ -416,16 +433,16 @@ export class VirtualFileSystem {
 
   /** Changes permission bits. While restricted, only the owner may. */
   chmod(path: string, mode: number) {
-    const { node, denied } = this.find(path);
-    if (!node) throw new ShellError(`cannot access '${path}': ${missing(denied)}`);
+    const { node, why } = this.find(path);
+    if (!node) throw new ShellError(`cannot access '${path}': ${why}`);
     if (this.restricted && node.owner !== this.runAs) throw new ShellError(`changing permissions of '${path}': Operation not permitted`);
     node.mode = mode & 0o7777;
   }
 
   /** Changes the owner (and, with `recursive`, everything below). Unrestricted callers only. */
   setOwner(path: string, owner: string, recursive = false) {
-    const { node, denied } = this.find(path);
-    if (!node) throw new ShellError(`cannot access '${path}': ${missing(denied)}`);
+    const { node, why } = this.find(path);
+    if (!node) throw new ShellError(`cannot access '${path}': ${why}`);
     if (this.restricted) throw new ShellError(`changing ownership of '${path}': Operation not permitted`);
     const apply = (n: Node) => {
       n.owner = owner;
@@ -438,7 +455,7 @@ export class VirtualFileSystem {
 function permits(n: Node, user: string | null, bits: number) {
   return user === null || ((n.mode >> (n.owner === user ? 6 : 0)) & bits) === bits;
 }
-function missing(denied: boolean) { return denied ? 'Permission denied' : 'No such file or directory'; }
+const NOT_FOUND = 'No such file or directory';
 function treeSize(n: Node): number {
   if (n instanceof FileNode) return n.size;
   let s = 0;

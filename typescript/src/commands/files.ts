@@ -1,6 +1,6 @@
 // File commands: ls cat mkdir touch rm rmdir cp mv find tree stat du df chmod chown file mktemp realpath ...
-import { Args, ShellError, inputs, splitLines, type CommandContext, type CommandHandler } from '../command.js';
-import { VirtualFileSystem, NO_SPACE } from '../vfs.js';
+import { Args, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, type CommandContext, type CommandHandler } from '../command.js';
+import { VirtualFileSystem, NO_SPACE, type FileStat } from '../vfs.js';
 import { globRegex } from '../glob.js';
 import { strftime } from '../format.js';
 import { parseDate } from './builtins.js';
@@ -19,13 +19,46 @@ function typed(e: Error, arg: string, abs: string): [string, string] {
   return [path === abs ? arg : path.startsWith(base + '/') ? trimEnd(arg, '/') + path.slice(base.length) : path, e.message.slice(i + 2)];
 }
 
-const humanSize = (n: number) => (n < 1024 ? String(n) : n < 1 << 20 ? `${fmt1(n / 1024)}K` : `${fmt1(n / (1 << 20))}M`);
+/** ls -h: powers of 1024, rounded up; one decimal below 10 (4.0K, 1.1M), whole numbers above (121K). */
+function humanSize(n: number): string {
+  if (n < 1024) return String(n);
+  let v = n, u = -1;
+  do { v /= 1024; u++; } while (v >= 1024 && u < 5);
+  const tenths = Math.ceil(v * 10) / 10;
+  if (tenths < 10) return tenths.toFixed(1) + 'KMGTPE'[u];
+  v = Math.ceil(v);
+  return v >= 1024 && u < 5 ? '1.0' + 'KMGTPE'[u + 1] : String(v) + 'KMGTPE'[u];
+}
+const fail = (message: string): never => { throw new ShellError(message); };
 const fmt1 = (v: number) => String(Math.round(v * 10) / 10);
 
-function longEntry(ctx: CommandContext, abs: string, name: string, human: boolean): string {
-  const st = ctx.fs.stat(abs);
-  const size = human ? humanSize(st.size) : String(st.size);
-  return `${VirtualFileSystem.formatMode(st.isDirectory, st.mode)} 1 ${st.owner.padEnd(5)} ${st.owner.padEnd(5)} ${size.padStart(6)} ${strftime(st.modified, '%b %d %H:%M')} ${name}`;
+/** ls -l's date: "Nov 25 16:52" within the last six months, else "Jan  2  2020" (also for future times). */
+const lsDate = (t: number, now: number) => strftime(t, t <= now && (now - t) / 1000 < 15778476 ? '%b %e %H:%M' : '%b %e  %Y');
+
+/** ls -l rows, each column as wide as its widest entry (owners left-aligned, numbers right-aligned); `widthFrom`
+ * are more paths that count toward the widths (ls sizes the columns for its file operands over all operands). */
+function longEntries(ctx: CommandContext, entries: [abs: string, name: string][], human: boolean, widthFrom: string[] = []): string[] {
+  const now = ctx.fs.clock();
+  const size = (st: FileStat) => (human ? humanSize(st.size) : String(st.size));
+  const rows = entries.map(([abs, name]) => ({ st: ctx.fs.stat(abs), name }));
+  if (rows.length === 0) return [];
+  const all = [...rows.map(r => r.st), ...widthFrom.map(p => ctx.fs.stat(p))];
+  const width = (f: (st: FileStat) => string) => Math.max(...all.map(st => f(st).length));
+  const lw = width(st => String(st.links)), ow = width(st => st.owner), sw = width(size);
+  return rows.map(({ st, name }) => `${VirtualFileSystem.formatMode(st.isDirectory, st.mode)} ${String(st.links).padStart(lw)} ` +
+    `${st.owner.padEnd(ow)} ${st.owner.padEnd(ow)} ${size(st).padStart(sw)} ${lsDate(st.modified, now)} ${name}`);
+}
+
+/** touch -t [[CC]YY]MMDDhhmm[.ss]; a two-digit year 69-99 is 19YY, else 20YY. */
+function touchStamp(t: string, now: number): number | null {
+  const m = /^(\d{2}|\d{4})?(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d{2}))?$/.exec(t);
+  if (!m) return null;
+  const y = m[1] ?? '';
+  const year = y.length === 0 ? new Date(now).getUTCFullYear() : y.length === 4 ? Number(y) : Number(y) + (Number(y) >= 69 ? 1900 : 2000);
+  const [mo, d, h, mi, sec] = [m[2], m[3], m[4], m[5], m[6] ?? '0'].map(Number);
+  const ms = Date.UTC(year, mo - 1, d, h, mi, sec);
+  const back = new Date(ms);
+  return back.getUTCMonth() === mo - 1 && back.getUTCDate() === d && h < 24 && mi < 60 && sec < 60 ? ms : null;
 }
 
 function showNonprinting(s: string): string {
@@ -104,13 +137,13 @@ class Find {
       if (depth >= this.minDepth && (await expr({ abs, name: nameOf(abs), display, depth, start })) && !this.hasAction) line(ctx, display);
       if (this.prune || depth >= this.maxDepth || !ctx.fs.isDirectory(abs)) return;
       let names: string[];
-      try { names = ctx.fs.list(abs); } catch { ctx.stderr.write(`find: '${display}': Permission denied\n`); code = 1; return; }
+      try { names = ctx.fs.list(abs); } catch { ctx.stderr.write(`find: ${quoteL(display)}: Permission denied\n`); code = 1; return; }
       for (const name of names) await walk(norm(abs, name), display.endsWith('/') ? display + name : display + '/' + name, depth + 1, start);
     };
     try {
       for (const s of starts) {
         const abs = ctx.resolvePath(s);
-        if (!ctx.fs.exists(abs)) { ctx.stderr.write(`find: '${s}': ${ctx.fs.whyMissing(abs)}\n`); code = 1; continue; }
+        if (!ctx.fs.exists(abs)) { ctx.stderr.write(`find: ${quoteL(s)}: ${ctx.fs.whyMissing(abs)}\n`); code = 1; continue; }
         await walk(abs, s, 0, s);
       }
     } catch (e) { if (!(e instanceof Quit)) throw e; }
@@ -277,7 +310,7 @@ class Find {
       case '-print': this.hasAction = true; return e => { line(ctx, e.display); return true; };
       case '-print0': this.hasAction = true; return e => { ctx.stdout.write(e.display + '\0'); return true; };
       case '-printf': { this.hasAction = true; const f = arg(); return e => { ctx.stdout.write(this.printf(f, e)); return true; }; }
-      case '-ls': this.hasAction = true; return e => { line(ctx, longEntry(ctx, e.abs, e.display, false)); return true; };
+      case '-ls': this.hasAction = true; return e => { line(ctx, longEntries(ctx, [[e.abs, e.display]], false)[0]); return true; };
       case '-quit': return () => { throw new Quit(); };
       case '-prune': return () => { this.prune = true; return true; };
       case '-delete': this.hasAction = true; return e => { this.deletes.push(e.abs); return true; };
@@ -306,13 +339,15 @@ export function registerFiles(shell: Shell) {
   const reg = (name: string, handler: CommandHandler, description: string, usage?: string) => shell.register(name, handler, description, usage);
 
   reg('ls', ctx => {
-    const a = Args.parse(ctx.args, 'alhA1dFrtRSC', '', 'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1');
+    const a = Args.parse(ctx.args, 'alhA1dFrtRSCZ', '', 'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1');
     const paths = a.positional.length > 0 ? a.positional : ['.'];
     const lng = a.has('l'), human = a.has('h');
     let code = 0;
     const fs = ctx.fs;
-    const show = (abs: string, name: string) =>
-      (lng ? longEntry(ctx, abs, name, human) : name) + (a.has('F') && fs.isDirectory(abs) && name !== '.' && name !== '..' ? '/' : '');
+    const show = (entries: [string, string][], widthFrom?: string[]) => {
+      const named = entries.map(([abs, name]): [string, string] => [abs, name + (a.has('F') && fs.isDirectory(abs) && name !== '.' && name !== '..' ? '/' : '')]);
+      for (const l of lng ? longEntries(ctx, named, human, widthFrom) : named.map(e => e[1])) line(ctx, l);
+    };
     const exists = (p: string) => fs.exists(ctx.resolvePath(p));
     // operands are listed like directory entries: byte order (the C locale), or by -t / -S, reversed by -r
     const ordered = (ps: string[]) => {
@@ -323,7 +358,7 @@ export function registerFiles(shell: Shell) {
     };
     const files = ordered(paths.filter(p => exists(p) && (a.has('d') || !fs.isDirectory(ctx.resolvePath(p)))));
     for (const p of paths.filter(p => !exists(p))) { ctx.stderr.write(`ls: cannot access '${p}': ${fs.whyMissing(ctx.resolvePath(p))}\n`); code = 2; }
-    for (const f of files) line(ctx, show(ctx.resolvePath(f), f));
+    show(files.map(f => [ctx.resolvePath(f), f]), paths.filter(p => !files.includes(p)).map(p => ctx.resolvePath(p)).filter(p => fs.exists(p)));
     const dirs = ordered(paths.filter(p => !files.includes(p) && fs.isDirectory(ctx.resolvePath(p))));
     let first = files.length === 0;
     const listDir = (abs: string, label: string) => {
@@ -336,8 +371,11 @@ export function registerFiles(shell: Shell) {
       if (a.has('S')) entries = [...entries].sort((x, y) => st(y).size - st(x).size);
       if (a.has('a')) entries.unshift('.', '..');
       if (a.has('r')) entries.reverse();
-      if (lng) line(ctx, `total ${entries.length * 4}`);
-      for (const n of entries) line(ctx, show(norm(abs, n), n));
+      if (lng) {
+        const kib = entries.reduce((sum, n) => sum + st(n).blocks / 2, 0);
+        line(ctx, `total ${human ? humanSize(kib * 1024) : kib}`);
+      }
+      show(entries.map(n => [norm(abs, n), n]));
       if (!a.has('R')) return;
       for (const n of entries) {
         if (n === '.' || n === '..') continue;
@@ -373,8 +411,8 @@ export function registerFiles(shell: Shell) {
   }, 'Print files');
 
   reg('mkdir', ctx => {
-    const a = Args.parse(ctx.args, 'pv', 'm', 'parents=p,verbose=v,mode=m');
-    if (a.positional.length === 0) throw new ShellError('missing operand');
+    const a = Args.parse(ctx.args, 'pvZ', 'm', 'parents=p,verbose=v,mode=m');
+    if (a.positional.length === 0) throw new UsageException('missing operand');
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
@@ -386,7 +424,7 @@ export function registerFiles(shell: Shell) {
         if (a.has('v')) line(ctx, `mkdir: created directory '${p}'`);
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`mkdir: cannot create directory '${p}': ${typed(e, p, '')[1]}\n`);
+        ctx.stderr.write(`mkdir: cannot create directory ${quoteL(p)}: ${typed(e, p, '')[1]}\n`);
         code = 1;
       }
     }
@@ -395,27 +433,32 @@ export function registerFiles(shell: Shell) {
 
   reg('touch', ctx => {
     const a = Args.parse(ctx.args, 'acmhf', 'dtr', 'no-create=c,date=d,reference=r,time=f,no-dereference=h');
-    if (a.positional.length === 0) throw new ShellError('missing file operand');
+    if (a.positional.length === 0) throw new UsageException('missing file operand');
     let when: number | undefined;
     const d = a.value('d'), r = a.value('r'), t = a.value('t');
-    if (d !== undefined) when = parseDate(d, ctx.shell.now());
-    else if (r !== undefined) when = ctx.fs.stat(ctx.resolvePath(r)).modified;
-    else if (t !== undefined) {
-      const m = /^(?:(\d{2})?(\d{2}))?(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d{2}))?$/.exec(t);
-      if (!m) throw new ShellError(`invalid date format '${t}'`);
-      const year = m[2] ? Number((m[1] ?? (Number(m[2]) < 69 ? '20' : '19')) + m[2]) : new Date(ctx.shell.now()).getUTCFullYear();
-      when = Date.UTC(year, Number(m[3]) - 1, Number(m[4]), Number(m[5]), Number(m[6]), Number(m[7] ?? 0));
+    if (r !== undefined) {
+      const abs = ctx.resolvePath(r);
+      if (!ctx.fs.exists(abs)) throw new ShellError(`failed to get attributes of ${quoteAlways(r)}: ${ctx.fs.whyMissing(abs)}`);
+      when = ctx.fs.stat(abs).modified;
     }
+    if (d !== undefined) {
+      try { when = parseDate(d, when ?? ctx.fs.clock()); } catch (e) {
+        if (!(e instanceof ShellError)) throw e;
+        throw new ShellError(`invalid date format ${quoteL(d)}`);
+      }
+    }
+    if (t !== undefined) when = touchStamp(t, ctx.fs.clock()) ?? fail(`invalid date format ${quoteL(t)}`);
     let code = 0;
     for (const p of a.positional) {
       const path = ctx.resolvePath(p);
       if (a.has('c') && !ctx.fs.exists(path)) continue;
       try {
-        ctx.fs.touch(path);
-        if (when !== undefined) ctx.fs.setModifiedTime(path, when);
+        // an explicit time needs ownership, not write permission
+        if (when === undefined) ctx.fs.touch(path);
+        else { if (!ctx.fs.exists(path)) ctx.fs.touch(path); ctx.fs.setModifiedTime(path, when); }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`touch: cannot touch '${p}': ${typed(e, p, path)[1]}\n`);
+        ctx.stderr.write(`touch: cannot touch ${quoteAlways(p)}: ${typed(e, p, path)[1]}\n`);
         code = 1;
       }
     }
@@ -425,7 +468,7 @@ export function registerFiles(shell: Shell) {
   reg('rm', ctx => {
     const a = Args.parse(ctx.args, 'rRfvdi', '', 'recursive=r,force=f,verbose=v,dir=d');
     const recursive = a.has('r') || a.has('R');
-    if (a.positional.length === 0 && !a.has('f')) throw new ShellError('missing operand');
+    if (a.positional.length === 0 && !a.has('f')) throw new UsageException('missing operand');
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
@@ -450,21 +493,20 @@ export function registerFiles(shell: Shell) {
 
   reg('rmdir', ctx => {
     const a = Args.parse(ctx.args, 'pv', '', 'parents=p,verbose=v,ignore-fail-on-non-empty=i');
+    if (a.positional.length === 0) throw new UsageException('missing operand');
     let code = 0;
-    for (const p of a.positional) {
-      const targets = [p];
-      if (a.has('p')) for (let q = p; q.includes('/');) { q = trimEnd(q.slice(0, q.lastIndexOf('/')), '/'); if (q) targets.push(q); }
-      for (const t of targets) {
-        const abs = ctx.resolvePath(t);
-        try {
-          if (!ctx.fs.isDirectory(abs)) throw new ShellError(`${abs}: ${ctx.fs.exists(abs) ? 'Not a directory' : ctx.fs.whyMissing(abs)}`);
-          ctx.fs.delete(abs);
-        } catch (e) {
-          if (!(e instanceof ShellError)) throw e;
-          ctx.stderr.write(`rmdir: failed to remove '${t}': ${typed(e, t, abs)[1]}\n`);
-          code = 1;
-          break;
+    for (const arg of a.positional) {
+      // -p: a/b/c, then a/b, then a
+      for (let p = trimEnd(arg, '/'); p.length > 0; p = a.has('p') && p.lastIndexOf('/') > 0 ? trimEnd(p.slice(0, p.lastIndexOf('/')), '/') : '') {
+        const abs = ctx.resolvePath(p);
+        let why: string | null = !ctx.fs.isDirectory(abs) ? (ctx.fs.exists(abs) ? 'Not a directory' : ctx.fs.whyMissing(abs)) : null;
+        if (why === null) {
+          try { ctx.fs.delete(abs); if (a.has('v')) line(ctx, `rmdir: removing directory, ${quoteAlways(p)}`); } catch (e) {
+            if (!(e instanceof ShellError)) throw e;
+            why = typed(e, p, abs)[1];
+          }
         }
+        if (why !== null) { ctx.stderr.write(`rmdir: failed to remove ${quoteAlways(p)}: ${why}\n`); code = 1; break; }
       }
     }
     return code;
@@ -472,13 +514,13 @@ export function registerFiles(shell: Shell) {
 
   const copyOrMove: CommandHandler = ctx => {
     const move = ctx.name === 'mv';
-    const a = Args.parse(ctx.args, move ? 'fvniT' : 'rRfvanpiT', 't', 'recursive=r,force=f,verbose=v,no-clobber=n,archive=a,target-directory=t,no-target-directory=T');
+    const a = Args.parse(ctx.args, move ? 'fvniTZ' : 'rRfvanpiTZ', 't', 'recursive=r,force=f,verbose=v,no-clobber=n,archive=a,target-directory=t,no-target-directory=T');
     const fs = ctx.fs;
     const positional = [...a.positional];
     const targetDir = a.value('t');
     if (targetDir !== undefined) positional.push(targetDir);
     if (positional.length < 2)
-      throw new ShellError(positional.length === 0 ? 'missing file operand' : `missing destination file operand after '${positional[0]}'`);
+      throw new UsageException(positional.length === 0 ? 'missing file operand' : `missing destination file operand after ${quoteAlways(positional[0])}`);
     const sources = positional.slice(0, -1);
     const destArg = positional[positional.length - 1];
     const dest = ctx.resolvePath(destArg);
@@ -568,7 +610,7 @@ export function registerFiles(shell: Shell) {
 
   reg('basename', ctx => {
     const a = Args.parse(ctx.args, 'az', 's', 'multiple=a,suffix=s,zero=z');
-    if (a.positional.length === 0) throw new ShellError('missing operand');
+    if (a.positional.length === 0) throw new UsageException('missing operand');
     const suffix = a.value('s') ?? (!a.has('a') && a.positional.length === 2 ? a.positional[1] : undefined);
     const names = a.has('a') || a.value('s') !== undefined ? a.positional : a.positional.slice(0, 1);
     for (const n of names) {
@@ -580,11 +622,12 @@ export function registerFiles(shell: Shell) {
   }, 'Strip directory and suffix from a path');
 
   reg('dirname', ctx => {
-    if (ctx.args.length === 0) throw new ShellError('missing operand');
-    for (const n of ctx.args) {
+    const a = Args.parse(ctx.args, 'z', '', 'zero=z');
+    if (a.positional.length === 0) throw new UsageException('missing operand');
+    for (const n of a.positional) {
       const t = trimEnd(n, '/');
       const i = t.lastIndexOf('/');
-      line(ctx, t.length === 0 ? (n.length ? '/' : '.') : i < 0 ? '.' : i === 0 ? '/' : trimEnd(t.slice(0, i), '/') || '/');
+      ctx.stdout.write((t.length === 0 ? (n.length ? '/' : '.') : i < 0 ? '.' : i === 0 ? '/' : trimEnd(t.slice(0, i), '/') || '/') + (a.has('z') ? '\0' : '\n'));
     }
   }, 'Strip the last component from a path');
 
@@ -595,7 +638,7 @@ export function registerFiles(shell: Shell) {
     for (const p of a.positional.length ? a.positional : ['.']) {
       const abs = ctx.resolvePath(p);
       if (!a.has('m') && !ctx.fs.exists(abs) && (a.has('e') || ctx.name === 'realpath' || !ctx.fs.isDirectory(VirtualFileSystem.getParent(abs)))) {
-        if (!a.has('q')) ctx.stderr.write(`${ctx.name}: ${p}: No such file or directory\n`);
+        if (!a.has('q')) ctx.stderr.write(`${ctx.name}: ${quote(p)}: ${ctx.fs.whyMissing(abs)}\n`);
         code = 1;
         continue;
       }
@@ -628,14 +671,14 @@ export function registerFiles(shell: Shell) {
           for (const ch of abs) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0;
           const v: Record<string, string> = {
             n: p, s: String(st.size), F: type, a: mode, A: rwx, U: st.owner, G: st.owner, u: uid, g: uid, y: mtime,
-            Y: String(Math.floor(st.modified / 1000)), b: String(Math.ceil(st.size / 512)), i: String(h % 1_000_000), h: '1', '%': '%',
+            Y: String(Math.floor(st.modified / 1000)), b: String(st.blocks), B: '512', i: String(h % 1_000_000), h: String(st.links), '%': '%',
           };
           out += v[c] ?? '%' + c;
         }
         line(ctx, out);
         continue;
       }
-      ctx.stdout.write(`  File: ${p}\n  Size: ${String(st.size).padEnd(10)}\tBlocks: ${String(Math.ceil(st.size / 512) * 8).padEnd(10)} IO Block: 4096   ${type}\n` +
+      ctx.stdout.write(`  File: ${p}\n  Size: ${String(st.size).padEnd(10)}\tBlocks: ${String(st.blocks).padEnd(10)} IO Block: 4096   ${type}\n` +
         `Access: (${mode.padStart(4, '0')}/${rwx})  Uid: (${uid.padStart(5)}/${st.owner.padStart(8)})   Gid: (${uid.padStart(5)}/${st.owner.padStart(8)})\n` +
         `Modify: ${mtime}\nChange: ${mtime}\n`);
     }
@@ -694,10 +737,13 @@ export function registerFiles(shell: Shell) {
       else if (arg === '-v' || arg === '--verbose') verbose = true;
       else if (arg === '-c' || arg === '--changes') changes = true;
       else if (arg === '-f' || arg === '--silent' || arg === '--quiet') quiet = true;
+      else if (arg.startsWith('--') && arg.length > 2) throw new UsageException(`unrecognized option '${arg}'`);
+      else if (arg.length > 1 && arg[0] === '-' && [...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c)) !== undefined)
+        throw new UsageException(`invalid option -- '${[...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c))}'`);
       else if (spec === undefined) spec = arg; // may look like an option, e.g. -x or -w
       else files.push(arg);
     }
-    if (spec === undefined || files.length === 0) throw new ShellError(spec === undefined ? 'missing operand' : `missing operand after '${spec}'`);
+    if (spec === undefined || files.length === 0) throw new UsageException(spec === undefined ? 'missing operand' : `missing operand after ${quoteL(spec)}`);
     let code = 0;
     const apply = (display: string, path: string) => {
       const st = ctx.fs.stat(path);
@@ -723,7 +769,7 @@ export function registerFiles(shell: Shell) {
   const chown: CommandHandler = ctx => {
     const operands = ctx.args.filter(x => !x.startsWith('-'));
     const files = operands.slice(1); // first operand is the owner
-    if (files.length === 0) throw new ShellError('missing operand');
+    if (files.length === 0) throw new UsageException('missing operand');
     const owner = operands[0].split(':')[0];
     let code = 0;
     for (const f of files) {

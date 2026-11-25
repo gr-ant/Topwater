@@ -1,5 +1,5 @@
 // Shell built-ins (cd, read, declare, set, trap, ...) and the small system commands (date, uname, id, ...).
-import { Args, ShellError, StdinBuffer, DeadlineExceeded, type CommandContext, type CommandHandler, type Deadline } from '../command.js';
+import { Args, ShellError, UsageException, SHELL_BUILTINS, isShellBuiltin, quoteL, StdinBuffer, DeadlineExceeded, type CommandContext, type CommandHandler, type Deadline } from '../command.js';
 import { isName } from '../parser.js';
 import { evalArith } from '../arith.js';
 import { printfFormat, unescape, shellQuote, quoteValue, strftime } from '../format.js';
@@ -101,12 +101,6 @@ function testEvaluate(shell: Shell, a: string[]): boolean {
 // ---------- helpers ----------
 
 const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until', 'do', 'done', 'in', 'function', 'time', '{', '}', '!', '[[', ']]', 'coproc']);
-/** Commands that are part of bash itself rather than programs in /usr/bin (for `type` and `command -v`). */
-const SHELL_BUILTINS = new Set(['cd', 'echo', 'printf', 'read', 'export', 'unset', 'alias', 'unalias', 'set', 'shift', 'local', 'declare', 'typeset',
-  'eval', 'exit', 'return', 'break', 'continue', 'source', '.', 'test', '[', 'true', 'false', 'pwd', 'type', 'command',
-  'let', 'history', 'help', 'exec', 'wait', 'trap', 'umask', 'readonly', 'getopts', 'hash', 'jobs', 'kill', 'shopt', ':', 'mapfile', 'readarray',
-  'pushd', 'popd', 'dirs', 'builtin', 'ulimit', 'times', 'disown']);
-const isShellBuiltin = (sh: Shell, name: string) => SHELL_BUILTINS.has(name) && sh.isBuiltin(name);
 
 function parseCount(ctx: CommandContext, fallback: number): number {
   if (ctx.args.length === 0) return fallback;
@@ -216,7 +210,7 @@ const DATE_UNITS: Record<string, number> = { second: 1, sec: 1, minute: 60, min:
  * ("3 days ago", "next week", "+2 hours") applied last. Results are UTC (ms since the epoch).
  */
 export function parseDate(text: string, now: number): number {
-  const bad = new ShellError(`invalid date '${text}'`);
+  const bad = new ShellError(`invalid date ${quoteL(text)}`);
   let s = text.trim().toLowerCase();
   const epoch = /^@(-?\d+(?:\.\d+)?)$/.exec(s);
   if (epoch) return Number(epoch[1]) * 1000;
@@ -566,8 +560,9 @@ export function registerBuiltins(shell: Shell) {
     }
     let text: string;
     try { text = ctx.fs.readText(ctx.resolvePath(args[0])); } catch (e) {
-      if (e instanceof ShellError) throw new ShellError(`${args[0]}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}`, isBash ? 127 : 1);
-      throw e;
+      if (!(e instanceof ShellError)) throw e;
+      ctx.stderr.write(`bash: ${args[0]}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
+      return isBash ? 127 : 1;
     }
     if (isBash) return sh.runScriptText(text, io, true, args.slice(1), { arg0: args[0], file: args[0], setup });
     sh.sourceDepth++;
@@ -1033,7 +1028,7 @@ export function registerBuiltins(shell: Shell) {
   }, 'Print environment variables');
 
   reg('sleep', async ctx => {
-    if (ctx.args.length === 0) throw new ShellError('missing operand');
+    if (ctx.args.length === 0) throw new UsageException('missing operand');
     const total = ctx.args.reduce((t, a) => t + parseDuration(a), 0);
     if (ctx.shell.virtualNow !== undefined) { ctx.shell.sleepVirtual(total); return; }
     const end = Date.now() + total;
@@ -1099,7 +1094,7 @@ export function registerBuiltins(shell: Shell) {
     else if (r !== undefined) now = ctx.fs.stat(ctx.resolvePath(r)).modified;
     const fmt = a.positional.find(p => p.startsWith('+'));
     const extra = a.positional.find(p => !p.startsWith('+'));
-    if (extra !== undefined) throw new ShellError(`invalid date '${extra}'`);
+    if (extra !== undefined) throw new ShellError(`invalid date ${quoteL(extra)}`);
     line(ctx, strftime(now, a.has('I') ? '%Y-%m-%d' : a.has('R') ? '%a, %d %b %Y %H:%M:%S +0000' : fmt !== undefined ? fmt.slice(1) : '%a %b %e %H:%M:%S %Z %Y'));
   }, 'Print the date and time', DATE_USAGE);
 

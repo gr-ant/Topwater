@@ -1,5 +1,5 @@
 import type { Shell } from '../shell.js';
-import { Args, ShellError, inputBytes, inputs, reason, splitLines, type CommandContext, type CommandHandler } from '../command.js';
+import { Args, ShellError, UsageException, quoteL, inputBytes, inputs, reason, splitLines, type CommandContext, type CommandHandler } from '../command.js';
 import { decodeBytes, encodeText as encodeBytes } from '../bytes.js';
 import { escapeRegex, posixToJs } from '../regex.js';
 import { globRegex } from '../glob.js';
@@ -17,7 +17,7 @@ function buffered(ctx: CommandContext) {
 
 function intArg(s: string, what: string): number {
   const digits = s.replace(/^[+-]/, '');
-  if (!/^\d+$/.test(digits)) throw new ShellError(`invalid number of ${what}: '${s}'`);
+  if (!/^\d+$/.test(digits)) throw new ShellError(`invalid number of ${what}: ${quoteL(s)}`);
   return parseInt(digits, 10);
 }
 
@@ -54,7 +54,7 @@ function grep(ctx: CommandContext): number {
       kind = m[2];
       value = m[3];
       if (m[1]) rest.push('-' + m[1]);
-      if (value.length === 0) { if (i >= args.length) throw new ShellError(`option requires an argument -- '${kind}'`, 2); value = args[i++]; }
+      if (value.length === 0) { if (i >= args.length) throw new UsageException(`option requires an argument -- '${kind}'`); value = args[i++]; }
     } else if (lng) {
       kind = lng[1][0];
       value = lng[2] ?? (i < args.length ? args[i++] : '');
@@ -69,7 +69,7 @@ function grep(ctx: CommandContext): number {
     + 'dereference-recursive=R');
   const positional = [...a.positional];
   if (patterns.length === 0) {
-    if (positional.length === 0) throw new ShellError('usage: grep [OPTION]... PATTERNS [FILE]...', 2);
+    if (positional.length === 0) throw new UsageException('');
     patterns.push(positional.shift()!);
   }
   patterns = patterns.flatMap(p => (p.length > 0 ? p.split('\n') : [p])); // a pattern with newlines is several patterns
@@ -159,6 +159,10 @@ function grep(ctx: CommandContext): number {
 const headTail: CommandHandler = ctx => {
   const head = ctx.name === 'head';
   const a = Args.parse(Args.numericShorthand(ctx.args), head ? 'qv' : 'qvfF', 'nc', 'lines=n,bytes=c,quiet=q,silent=q,verbose=v' + (head ? '' : ',follow=f,retry=F'));
+  // a bad count is reported before any file is opened
+  const lines0 = a.value('n'), bytes0 = a.value('c');
+  if (lines0 !== undefined) intArg(lines0, 'lines');
+  if (bytes0 !== undefined) intArg(bytes0, 'bytes');
   let code = 0;
   const all = [...inputBytes(ctx, a.positional, () => { code = 1; })];
   all.forEach(([name, data], k) => {
@@ -299,7 +303,7 @@ function sort(ctx: CommandContext): number {
   const globalOpts = [...ORDERING].filter(c => a.has(c)).join('');
   const keys: SortKey[] = specs.map(spec => {
     const m = /^(\d+)(?:\.(\d+))?([a-zA-Z]*)(?:,(\d+)(?:\.(\d+))?([a-zA-Z]*))?$/.exec(spec);
-    if (!m || parseInt(m[1], 10) === 0) throw new ShellError(`invalid number at field start: invalid count at start of '${spec}'`, 2);
+    if (!m || parseInt(m[1], 10) === 0) throw new ShellError(`invalid number at field start: invalid count at start of ${quoteL(spec)}`, 2);
     const own = m[3] + (m[6] ?? '');
     return {
       sf: parseInt(m[1], 10), sc: m[2] ? parseInt(m[2], 10) : 1, ef: m[4] ? parseInt(m[4], 10) : null, ec: m[5] ? parseInt(m[5], 10) : 0,
@@ -339,7 +343,11 @@ function sort(ctx: CommandContext): number {
   };
 
   let code = 0;
-  const named = [...inputs(ctx, a.positional, () => { code = 2; })];
+  const named: [string, string][] = [];
+  for (const f of a.positional.length > 0 ? a.positional : ['-']) {
+    named.push(...inputs(ctx, [f], () => { code = 2; }));
+    if (code !== 0) return code; // sort stops at the first file it can't read
+  }
   const items = named.flatMap(([, t]) => records(t, eol)).map((line, i) => {
     checkEvery(ctx, i);
     return { line, vals: keys.map(k => keyValue(extract(line, k), k.opts)) };
@@ -447,7 +455,7 @@ function cut(ctx: CommandContext): number {
   const bytesMode = a.value('b') !== undefined && a.value('c') === undefined;
   const chars = a.value('c') ?? a.value('b');
   const spec = chars ?? a.value('f');
-  if (spec === undefined) throw new ShellError('you must specify a list of bytes, characters, or fields');
+  if (spec === undefined) throw new UsageException('you must specify a list of bytes, characters, or fields');
   const ranges = parseList(spec);
   const complement = a.has('z');
   const outDelim = a.value('O');
@@ -533,10 +541,10 @@ function expandRange(s: string): string[] {
 
 function tr(ctx: CommandContext): number {
   const a = Args.parse(ctx.args, 'dscCt', '', 'delete=d,squeeze-repeats=s,complement=c,truncate-set1=t');
-  if (a.positional.length === 0) throw new ShellError('missing operand');
+  if (a.positional.length === 0) throw new UsageException('missing operand');
   const del = a.has('d'), squeezeOpt = a.has('s'), complement = a.has('c') || a.has('C');
   if (!del && !squeezeOpt && a.positional.length < 2) throw new ShellError(`missing operand after '${a.positional[0]}'\nTwo strings must be given when translating.`);
-  if (a.positional.length > 2) throw new ShellError(`extra operand '${a.positional[2]}'`);
+  if (a.positional.length > 2) throw new UsageException(`extra operand ${quoteL(a.positional[2])}`);
   let set1 = expandSet(a.positional[0]);
   const set2 = a.positional.length > 1 ? expandSet(a.positional[1]) : [];
   if (a.has('t') && set2.length > 0) set1 = set1.slice(0, set2.length);
@@ -746,7 +754,7 @@ function seq(ctx: CommandContext): number {
     else if (x === '--') continue;
     else throw new ShellError(`invalid option -- '${x.replace(/^-+/, '')}'`);
   }
-  if (nums.length === 0 || nums.length > 3) throw new ShellError(nums.length === 0 ? 'missing operand' : `extra operand '${nums[3]}'`);
+  if (nums.length === 0 || nums.length > 3) throw new UsageException(nums.length === 0 ? 'missing operand' : `extra operand ${quoteL(nums[3])}`);
   const v = nums.map(Number);
   const first = v.length > 1 ? v[0] : 1, step = v.length === 3 ? v[1] : 1, last = v[v.length - 1];
   if (step === 0) throw new ShellError("invalid Zero increment value: '0'");
@@ -839,7 +847,7 @@ function diffUnified(ops: DOp[], x: string[], y: string[], an: string, bn: strin
 
 function diff(ctx: CommandContext): number {
   const a = Args.parse(ctx.args, 'uqsiwbBNr', 'U', 'unified=u,brief=q,report-identical-files=s,ignore-case=i,ignore-all-space=w,ignore-space-change=b,recursive=r');
-  if (a.positional.length !== 2) throw new ShellError(a.positional.length < 2 ? `missing operand after '${a.positional[a.positional.length - 1] ?? 'diff'}'` : `extra operand '${a.positional[2]}'`, 2);
+  if (a.positional.length !== 2) throw new UsageException(a.positional.length < 2 ? `missing operand after '${a.positional[a.positional.length - 1] ?? 'diff'}'` : `extra operand '${a.positional[2]}'`);
   const key = (l: string) => {
     if (a.has('w')) l = l.replace(/\s+/g, '');
     else if (a.has('b')) l = l.replace(/\s+$/, '').replace(/\s+/g, ' ');
@@ -891,7 +899,7 @@ export function registerText(shell: Shell): void {
     shell.register(alias, ctx => {
       const sub = Object.create(ctx, { name: { value: 'grep' }, args: { value: [flag, ...ctx.args] } }) as CommandContext;
       try { return grep(sub); } catch (e) {
-        if (!(e instanceof ShellError)) throw e;
+        if (!(e instanceof ShellError) || e instanceof UsageException) throw e; // usage errors are worded by the shell
         ctx.stderr.write(`grep: ${e.message}\n`);
         return e.exitCode;
       }

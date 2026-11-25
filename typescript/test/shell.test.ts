@@ -101,7 +101,7 @@ describe('shell', () => {
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toBe('cat: nope.txt: No such file or directory\n');
     expect(r.toToolOutput()).toBe('cat: nope.txt: No such file or directory\n[exit code 1]');
-    expect((await sh.run('ls -Z')).stderr).toBe("ls: invalid option -- 'Z'\n");
+    expect((await sh.run('ls -y')).stderr).toBe("ls: invalid option -- 'y'\nTry 'ls --help' for more information.\n");
   });
 
   it('fakes a system', async () => {

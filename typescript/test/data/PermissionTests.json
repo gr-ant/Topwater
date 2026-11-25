@@ -14,11 +14,11 @@
   ],
   [
    "source /root/notes.txt",
-   "source: /root/notes.txt: Permission denied\n"
+   "bash: /root/notes.txt: Permission denied\n"
   ],
   [
    "cat /root/*",
-   "cat: /root/*: Permission denied\n"
+   "cat: '/root/*': Permission denied\n"
   ],
   [
    "grep -r private /root",

@@ -1,5 +1,5 @@
 import type { Shell } from '../shell.js';
-import { ShellError, splitLines, reason, tooLarge, type CommandContext } from '../command.js';
+import { ShellError, cannotRead, splitLines, reason, tooLarge, type CommandContext } from '../command.js';
 import { posixToJs } from '../regex.js';
 
 type Addr =
@@ -493,7 +493,8 @@ function run(ctx: CommandContext): number {
       let original: string;
       try { original = ctx.fs.readText(path); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`sed: can't read ${f}: ${reason(e)}\n`);
+        if (ctx.fs.isDirectory(path)) { ctx.stderr.write(`sed: couldn't edit ${f}: not a regular file\n`); code = 4; continue; }
+        ctx.stderr.write(`sed: ${cannotRead('sed', f, reason(e))}\n`);
         code = 2;
         continue;
       }
@@ -512,7 +513,7 @@ function run(ctx: CommandContext): number {
     if (f === '-') { texts.push(ctx.stdinText); continue; }
     try { texts.push(ctx.fs.readPipeText(ctx.resolvePath(f))); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      ctx.stderr.write(`sed: can't read ${f}: ${reason(e)}\n`);
+      ctx.stderr.write(`sed: ${cannotRead('sed', f, reason(e))}\n`);
       error = true;
     }
   }
@@ -521,7 +522,7 @@ function run(ctx: CommandContext): number {
     for (const t of inputs) { const r = execute(ctx, cmds, t, out, quiet); if (r !== null) return r; }
     return null;
   });
-  return q ?? (error ? 2 : 0);
+  return q ?? (files.some(f => f !== '-' && ctx.fs.isDirectory(ctx.resolvePath(f))) ? 4 : error ? 2 : 0); // 4: a read error (a directory)
 }
 
 export function registerSed(shell: Shell): void {

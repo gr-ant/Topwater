@@ -92,7 +92,7 @@ describe('permissions', () => {
     await expectErrors(sh, [
       ['touch ro/new', "touch: cannot touch 'ro/new': Permission denied\n"],
       ['echo x > ~/ro/new', 'bash: /home/agent/ro/new: Permission denied\n'],
-      ['mkdir ro/d', "mkdir: cannot create directory 'ro/d': Permission denied\n"],
+      ['mkdir ro/d', 'mkdir: cannot create directory \u2018ro/d\u2019: Permission denied\n'],
       ['rm ro/b', "rm: cannot remove 'ro/b': Permission denied\n"],
       ['rm -r ro/sub', "rm: cannot remove 'ro/sub/c': Permission denied\n"],
       ['mv ro/b x', "mv: cannot move 'ro/b' to 'x': Permission denied\n"],

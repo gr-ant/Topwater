@@ -146,7 +146,7 @@ describe('agent features', () => {
     expect(await out(sh, "stat -c '%A %U' /tmp")).toBe('drwxrwxrwt root\n');
     expect(await out(sh, 'echo x > /tmp/f && cat /tmp/f')).toBe('x\n');
     r = await sh.run('find / -name shadow');
-    expect([r.exitCode, r.stderr]).toEqual([1, "find: '/root': Permission denied\n"]);
+    expect([r.exitCode, r.stderr]).toEqual([1, "find: \u2018/root\u2019: Permission denied\n"]);
     sh.fs.writeText('/etc/app.conf', 'mode=prod');
     sh.fs.writeText('/home/agent/notes.txt', 'hi');
     expect(await out(sh, 'stat -c %U /etc/app.conf ~/notes.txt')).toBe('root\nagent\n');
