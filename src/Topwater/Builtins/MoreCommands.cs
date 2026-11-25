@@ -1173,7 +1173,13 @@ internal static class Chmod
             if (mode != st.Mode && (verbose || changes)) ctx.Stdout.WriteLine($"mode of '{display}' changed from {Fmt(st.Mode)} to {Fmt(mode)}");
             else if (mode == st.Mode && verbose) ctx.Stdout.WriteLine($"mode of '{display}' retained as {Fmt(mode)}");
             if (recursive && st.IsDirectory && ctx.Fs.CanRead(path))
-                foreach (var n in ctx.Fs.List(path)) Apply(display.TrimEnd('/') + "/" + n, VirtualFileSystem.Normalize(path, n));
+                foreach (var n in ctx.Fs.List(path))
+                {
+                    var shown = display.TrimEnd('/') + "/" + n;
+                    // like chmod -R, links met on the way are left alone
+                    if (!ctx.Fs.IsSymlink(VirtualFileSystem.Normalize(path, n))) Apply(shown, VirtualFileSystem.Normalize(path, n));
+                    else if (verbose) ctx.Stdout.WriteLine($"neither symbolic link '{shown}' nor referent has been changed");
+                }
         }
         foreach (var f in files)
         {

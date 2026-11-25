@@ -38,6 +38,7 @@ internal sealed class Find
         var above = new List<(string Real, string Display)>(); // directories being walked, so -L stops at a link back up
         async Task Walk(string abs, string display, int depth, string start, bool follow)
         {
+            _ctx.CancellationToken.ThrowIfCancellationRequested(); // -L can make the walk far bigger than the tree: the call's time limit
             _prune = false;
             bool dir = fs.IsDirectory(abs, follow);
             var real = dir && follow ? fs.RealPath(abs, out _) ?? abs : abs;

@@ -506,7 +506,9 @@ public sealed class VirtualFileSystem
     /// <param name="followAll">Copy what every symbolic link in the tree leads to (cp -L); a link back into a directory being
     /// copied goes to <paramref name="broken"/> as "cyclic", one leading nowhere with its reason.</param>
     /// <param name="broken">(path, reason) for a link -L can't copy; null to throw.</param>
-    internal void Copy(string source, string dest, Action<string, bool> denied, bool followTop = true, bool followAll = false, Action<string, string>? broken = null)
+    /// <param name="tick">Called for each entry copied: the caller's time limit (links can make a copy far bigger than the tree).</param>
+    internal void Copy(string source, string dest, Action<string, bool> denied, bool followTop = true, bool followAll = false, Action<string, string>? broken = null,
+        Action? tick = null)
     {
         source = Normalize("/", source);
         var node = Find(source, out var why, followTop || followAll) ?? throw new ShellException($"{source}: {why}");
@@ -520,6 +522,7 @@ public sealed class VirtualFileSystem
         if (target != null) Require(target, 2, dest); else Require(parent, 2, dest);
         var user = User;
         var copying = new HashSet<Dir>(ReferenceEqualityComparer.Instance); // directories on the way down, so -L can't loop
+        long cloned = 0;
         broken ??= (p, reason) => throw new ShellException($"{p}: {reason}");
         Node? Clone(Node n, string path)
         {
@@ -527,15 +530,22 @@ public sealed class VirtualFileSystem
             {
                 if (!followAll) return new LinkNode { Target = l.Target, Owner = RunAs ?? parent.Owner, Mode = l.Mode, Modified = Clock() };
                 if (Find(path, out var reason) is not { } to) { broken(path, reason); return null; }
-                if (to is Dir td && copying.Contains(td)) { broken(path, "cyclic"); return null; }
                 n = to;
             }
+            // a directory already being copied further up, reached through a link (even one higher up), as cp -L reports it
+            if (n is Dir again && copying.Contains(again)) { broken(path, "cyclic"); return null; }
+            tick?.Invoke();
             if (!Permits(n, user, n is Dir ? 5 : 4))
             {
                 denied(path, n is Dir);
                 return null;
             }
-            if (n is FileNode f) return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode, Modified = Clock() };
+            if (n is FileNode f)
+            {
+                // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
+                if (RunAs != null && UsedBytes + (cloned += f.Size) > Capacity) throw new ShellException($"{dest}: {NoSpace}");
+                return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode, Modified = Clock() };
+            }
             var dir = (Dir)n;
             var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode, Modified = Clock() };
             copying.Add(dir);

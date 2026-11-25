@@ -476,6 +476,7 @@ internal static partial class Builtins
             void Add(string name, string path)
             {
                 if (path == archivePath || !fs.Exists(path)) return; // a dangling link has nothing to store
+                ctx.CancellationToken.ThrowIfCancellationRequested(); // following links, -r can walk far more than the tree: the call's time limit
                 var st = fs.Stat(path);
                 var entryName = string.Join('/', name.Split('/').Where(p => p is not ("" or "."))) + (st.IsDirectory ? "/" : "");
                 if (entryName != "/")

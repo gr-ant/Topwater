@@ -66,15 +66,17 @@ sealed class Machine
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.WriteLine($"topwater: could not save {state}: {e.Message}"); }
     }
 
-    /// <summary>Saves the state, then copies each <c>--export</c> path out to the host.</summary>
-    public void Close()
+    /// <summary>Saves the state, then copies each <c>--export</c> path out to the host; false if an export failed.</summary>
+    public bool Close()
     {
         Save();
+        bool ok = true;
         foreach (var (vfs, host) in _options.Exports)
         {
             try { Export(Shell, vfs, host, _log); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ShellException) { _log.WriteLine($"topwater: export {vfs} -> {host}: {e.Message}"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ShellException) { _log.WriteLine($"topwater: export {vfs} -> {host}: {e.Message}"); ok = false; }
         }
+        return ok;
     }
 
     /// <summary>Saves through a temporary file, so a crash mid-write never leaves a half-written state file.</summary>
@@ -149,9 +151,17 @@ sealed class Machine
         if (!fs.Exists(vfs)) throw new CliException($"--export: {vfs}: no such file or directory in the machine");
         var root = Path.GetFullPath(host);
         bool IsLink(string p) => (File.Exists(p) || Directory.Exists(p)) && new FileInfo(p).LinkTarget != null;
+        var top = fs.RealPath(vfs, out _) ?? vfs;
         void Copy(string v, string h)
         {
             if (h != root && (!Path.GetFullPath(h).StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) || IsLink(h))) { log.WriteLine($"topwater: export: skipped {v} (would write outside {root} or through a link)"); return; }
+            // a virtual link is never followed into a directory (it could loop, fan out or reach the whole machine), and
+            // goes out as a copy of its file only when that file is inside what is exported; no host link is made
+            if (v != vfs && fs.IsSymlink(v) && !(fs.IsFile(v) && fs.RealPath(v, out _) is { } real && real.StartsWith(top + "/", StringComparison.Ordinal)))
+            {
+                log.WriteLine($"topwater: export: skipped {v} (a symbolic link to {fs.ReadLink(v)}, not a file inside {vfs})");
+                return;
+            }
             if (fs.IsDirectory(v))
             {
                 Directory.CreateDirectory(h);

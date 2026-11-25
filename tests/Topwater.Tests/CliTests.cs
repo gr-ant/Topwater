@@ -145,6 +145,23 @@ public sealed class CliTests : IDisposable
         Assert.Equal("ok\n", File.ReadAllText(P("out/g")));
     }
 
+    /// <summary>The agent's links never lead the export anywhere: a loop, a link to / and a dangling one are skipped with a
+    /// note, a link to a file inside goes out as a copy, the rest of the tree still arrives, and nothing hangs.</summary>
+    [Fact]
+    public async Task ExportNeverFollowsTheMachinesLinks()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var run = Cli("run", "--export", "/tmp/x:" + P("out"),
+            "mkdir -p /tmp/x/d && echo hi > /tmp/x/d/f && ln -s . /tmp/x/self && ln -s / /tmp/x/root && ln -s nowhere /tmp/x/dang && ln -s d/f /tmp/x/inside && ln -s /etc/hostname /tmp/x/out && echo ok > /tmp/x/z");
+        var (code, _, stderr) = await run.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal(0, code);
+        foreach (var skipped in new[] { "self", "root", "dang", "out" }) Assert.Contains($"skipped /tmp/x/{skipped}", stderr);
+        var files = Directory.GetFileSystemEntries(P("out"), "*", SearchOption.AllDirectories).Select(p => Path.GetRelativePath(P("out"), p)).Order(StringComparer.Ordinal);
+        Assert.Equal(["d", "d/f", "inside", "z"], files);
+        Assert.Equal("hi\n", File.ReadAllText(P("out/inside")));
+        Assert.Null(new FileInfo(P("out/inside")).LinkTarget);
+    }
+
     [Fact]
     public async Task SnapshotSaveInfoAndPipedScripts()
     {

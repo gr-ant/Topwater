@@ -367,6 +367,7 @@ internal static partial class Builtins
                     catch (ShellException) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {display}: Permission denied"); error = true; return; }
                     foreach (var name in names)
                     {
+                        ctx.CancellationToken.ThrowIfCancellationRequested(); // -R can make the walk far bigger than the tree: the call's time limit
                         var child = VirtualFileSystem.Normalize(dirAbs, name);
                         var childDisplay = display == "." && implicitDot ? name : display.TrimEnd('/') + "/" + name;
                         if (!a.Has('R') && ctx.Fs.IsSymlink(child)) continue; // -r skips links it meets; -R follows them
@@ -974,6 +975,7 @@ internal static class Sed
                 var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes);
                 if (suffix.Length > 0)
                     ctx.Fs.WriteAllText(ctx.ResolvePath(suffix.Contains('*') ? suffix.Replace("*", f[(f.LastIndexOf('/') + 1)..]) : f + suffix), original);
+                if (ctx.Fs.IsSymlink(path)) ctx.Fs.Delete(path); // like GNU sed -i, the edited text replaces the link; its target stays as it was
                 ctx.Fs.WriteAllText(path, output.ToString());
                 if (quitCode is { } q) return q;
             }

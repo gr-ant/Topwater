@@ -278,6 +278,11 @@ internal static partial class Builtins
                     continue;
                 }
                 if (ctx.Fs.IsDirectory(abs, follow: p.EndsWith('/')) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Is a directory"); code = 1; continue; }
+                if (p.EndsWith('/') && ctx.Fs.IsSymlink(abs) && !ctx.Fs.IsDirectory(abs)) // "link/" names what it leads to, which is no directory
+                {
+                    if (!a.Has('f')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Not a directory"); code = 1; }
+                    continue;
+                }
                 if (recursive && p.EndsWith('/') && ctx.Fs.IsSymlink(abs) && ctx.Fs.IsDirectory(abs))
                 {
                     // like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
@@ -300,6 +305,7 @@ internal static partial class Builtins
             int code = 0;
             foreach (var arg in a.Positional)
             {
+                if (arg.EndsWith('/') && ctx.Fs.IsSymlink(ctx.ResolvePath(arg))) { ctx.Stderr.WriteLine($"rmdir: failed to remove {QuoteAlways(arg)}: Symbolic link not followed"); code = 1; continue; }
                 // -p: a/b/c, then a/b, then a
                 for (var p = arg.TrimEnd('/'); p.Length > 0; p = a.Has('p') && p.LastIndexOf('/') is var i and > 0 ? p[..i].TrimEnd('/') : "")
                 {
@@ -347,7 +353,9 @@ internal static partial class Builtins
                 if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data
                 var shown = destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg;
                 bool srcDir = ctx.Fs.IsDirectory(src, followTop);
-                string? clash = target == src ? $"{QuoteAlways(s)} and {QuoteAlways(shown)} are the same file"
+                // mv onto another name of the same file, or onto the file a link names, loses it; mv refuses as GNU mv does
+                bool sameFile = target == src || move && (ctx.Fs.SameFile(src, target, follow: false) || ctx.Fs.IsSymlink(src) && !ctx.Fs.IsSymlink(target) && ctx.Fs.SameFile(src, target));
+                string? clash = sameFile ? $"{QuoteAlways(s)} and {QuoteAlways(shown)} are the same file"
                     : srcDir && target.StartsWith(src + "/", StringComparison.Ordinal)
                         ? move ? $"cannot move {QuoteAlways(s)} to a subdirectory of itself, {QuoteAlways(shown)}"
                             : $"cannot copy a directory, {QuoteAlways(s)}, into itself, {QuoteAlways(shown)}"
@@ -378,7 +386,7 @@ internal static partial class Builtins
                         var p = Typed(new ShellException(abs + ": "), s, src).Path;
                         ctx.Stderr.WriteLine(why == "cyclic" ? $"cp: cannot copy cyclic symbolic link '{p}'" : $"cp: cannot stat '{p}': {why}");
                         code = 1;
-                    });
+                    }, ctx.CancellationToken.ThrowIfCancellationRequested);
                 }
                 catch (ShellException e) when (e.Message.Contains(" into itself, ") || e.Message.Contains(" to a subdirectory of itself, "))
                 {

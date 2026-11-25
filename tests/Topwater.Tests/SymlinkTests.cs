@@ -44,6 +44,38 @@ public class SymlinkTests
         Shell.Load(ms);
     }
 
+    /// <summary>Two links per level to the level below: no loop, but 2^30 paths. Commands that follow links stop at the
+    /// call's time limit (or a size limit) instead of running on; a regression fails at the test's own deadline.</summary>
+    [Theory]
+    [InlineData("find -L out | wc -l")]
+    [InlineData("cp -rL out o2")]
+    [InlineData("grep -R x out | wc -l")]
+    [InlineData("zip -qr z.zip out")]
+    [InlineData("chmod -R u+w out")]
+    [InlineData("ls -RL out | wc -l")]
+    public async Task LinkFanOutStopsAtTheTimeLimit(string cmd)
+    {
+        var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(2) });
+        await sh.RunAsync("mkdir -p /tmp/w/out/d0 && cd /tmp/w && echo x > out/d0/f && for i in $(seq 1 30); do mkdir out/d$i; ln -s ../d$((i-1)) out/d$i/a; ln -s ../d$((i-1)) out/d$i/b; done");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await Task.Run(() => sh.RunAsync("cd /tmp/w; " + cmd)).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"{cmd} took {watch.Elapsed}");
+    }
+
+    /// <summary>cp -rL meets a directory it is already copying (through a link higher up, then down a plain child): it
+    /// reports a cyclic link there, in either creation order, instead of copying without end.</summary>
+    [Theory]
+    [InlineData("mkdir -p w/a; cd w; ln -s /tmp/w/w a/abs; mkdir a/b")]
+    [InlineData("mkdir -p w/a/b; cd w; ln -s /tmp/w/w a/abs")]
+    public async Task CopyingThroughLinksToAParentEnds(string setup)
+    {
+        var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(5) });
+        var r = await Task.Run(() => sh.RunAsync($"mkdir -p /tmp/w && cd /tmp/w && {setup}; echo x > a/b/f; ln -s .. a/b/up; ln -s . a/self; ln -s a l; ln -s l l2; cp -rL a zz; echo rc=$?; find zz | wc -l"))
+            .WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal("rc=1\n4\n", r.Stdout); // zz, zz/abs, zz/b, zz/b/f
+        Assert.Equal(5, r.Stderr.Split('\n').Count(l => l.Contains("cannot copy cyclic symbolic link")));
+    }
+
     [Fact]
     public async Task ALinkGrantsNothingItsTargetDoesNot()
     {

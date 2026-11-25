@@ -171,7 +171,7 @@ static class Cli
             if (output != "(no output)") io.Out.Write(output.EndsWith('\n') ? output : output + "\n");
             machine.Save();
         }
-        machine.Close();
+        if (!machine.Close() && exitCode == 0) exitCode = 1; // an export that failed
         return exitCode;
     }
 
@@ -181,7 +181,7 @@ static class Cli
         io.Out.Write(result.Stdout);
         io.Err.Write(result.Stderr);
         if (result.Trailer != null) io.Err.WriteLine(result.Trailer);
-        machine.Close();
+        if (!machine.Close() && result.ExitCode == 0) return 1; // an export that failed
         return result.ExitCode;
     }
 
