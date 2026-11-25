@@ -488,7 +488,7 @@ internal static partial class Builtins
             var sh = ctx.Shell;
             sh.SyncHashed();
             int code = 0, i = 0;
-            bool show = false, delete = false;
+            bool show = false, delete = false, list = false;
             string? path = null;
             for (; i < ctx.Args.Count && ctx.Args[i].Length > 1 && ctx.Args[i][0] == '-'; i++)
             {
@@ -498,21 +498,30 @@ internal static partial class Builtins
                     else if (ch == 't') show = true;
                     else if (ch == 'd') delete = true;
                     else if (ch == 'p') { path = i + 1 < ctx.Args.Count ? ctx.Args[++i] : throw new UsageException("-p: option requires an argument"); break; }
-                    else if (ch != 'l') throw new UsageException($"-{ch}: invalid option");
+                    else if (ch == 'l') list = true;
+                    else throw new UsageException($"-{ch}: invalid option");
             }
             var names = ctx.Args.Skip(i).ToList();
-            if (i == 0 && names.Count == 0)
+            if ((show || delete) && names.Count == 0)
+            {
+                ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: -{(show ? 't' : 'd')}: option requires an argument");
+                return 1;
+            }
+            // -l: each entry as the command that would hash it again
+            static string Reusable(string name, string path) => $"builtin hash -p {path} {name}";
+            if (list && names.Count == 0) ctx.Stdout.Write(string.Concat(sh.Hashed.Select(h => Reusable(h.Key, h.Value.Path) + "\n")));
+            else if (i == 0 && names.Count == 0)
             {
                 if (sh.Hashed.Count == 0) ctx.Stdout.WriteLine("hash: hash table empty");
                 else ctx.Stdout.Write("hits\tcommand\n" + string.Concat(sh.Hashed.Values.Select(h => $"{h.Hits,4}\t{h.Path}\n")));
             }
             foreach (var n in names)
             {
-                if (show && sh.HashLookup(n) is { } hashed) ctx.Stdout.WriteLine(names.Count > 1 ? $"{n}\t{hashed}" : hashed);
+                if (show && sh.HashLookup(n) is { } hashed) ctx.Stdout.WriteLine(list ? Reusable(n, hashed) : names.Count > 1 ? $"{n}\t{hashed}" : hashed);
                 else if (delete && sh.Hashed.Remove(n)) { }
                 else if (path != null) sh.Hashed[n] = (path, 0);
-                else if (show || delete || n.Contains('/')) { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
-                else if (IsShellBuiltin(sh, n) || sh.Functions.ContainsKey(n) || sh.IsUnfiled(n)) { }
+                else if (show || delete) { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
+                else if (n.Contains('/') || IsShellBuiltin(sh, n) || sh.Functions.ContainsKey(n) || sh.IsUnfiled(n)) { }
                 else if (sh.SearchPathAll(n).FirstOrDefault() is { } found) sh.Hashed[n] = (found, 0);
                 else { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
             }

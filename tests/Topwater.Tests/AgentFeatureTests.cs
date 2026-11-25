@@ -25,6 +25,41 @@ public class AgentFeatureTests
         Assert.Equal("x\n", await Out(sh, "PATH=/nowhere; cd /tmp; echo x"));
     }
 
+    [Theory]
+    [InlineData("printf '#!/usr/bin/env foo\\n' > b/foo")]
+    [InlineData("printf '#!/usr/bin/timeout 5\\n' > b/foo")]
+    [InlineData("printf '#!/usr/bin/env -S bar\\n' > b/foo; printf '#!/usr/bin/env -S foo\\n' > b/bar; chmod +x b/bar")]
+    public async Task ShebangLoopsStopAtTheScriptNestingLimit(string setup)
+    {
+        var sh = new Shell();
+        await Out(sh, $"mkdir b; {setup}; chmod +x b/foo");
+        // under a deadline, so a regression fails the test instead of hanging it
+        var r = await Task.Run(() => sh.RunAsync("PATH=$PWD/b:$PATH foo")).WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal(1, r.ExitCode);
+        Assert.Contains("[stopped: maximum script nesting level exceeded (100).", r.ToToolOutput());
+        Assert.Equal("ok\n", await Out(sh, "echo ok"));
+    }
+
+    [Fact]
+    public async Task PathLookupDetails()
+    {
+        var sh = new Shell();
+        await Out(sh, "mkdir -p ~/bin b && printf 'echo hi\\n' > ~/bin/x && printf 'echo b\\n' > b/y && chmod +x ~/bin/x b/y");
+        // a ~ at the start of a PATH entry is expanded during the search
+        Assert.Equal("hi\nx is hashed (/home/agent/bin/x)\n", await Out(sh, "PATH=\"~/bin:$PATH\"; x; type x"));
+        Assert.Equal("builtin hash -p /home/agent/bin/x x\n", await Out(sh, "hash -l"));
+        Assert.Equal("builtin hash -p /home/agent/bin/x x\n", await Out(sh, "hash -lt x"));
+        Assert.Equal("", await Out(sh, "hash b/y; hash -r; hash -l"));
+        foreach (var o in new[] { "t", "d", "lt" })
+        {
+            var r = await sh.RunAsync("hash -" + o);
+            Assert.Equal((1, $"bash: line 1: hash: -{o[^1]}: option requires an argument\n"), (r.ExitCode, r.Stderr));
+        }
+        // a hashed program whose directory can no longer be searched
+        var d = await sh.RunAsync("PATH=$PWD/b:$PATH; y; chmod 000 b; y; echo $?; chmod 755 b");
+        Assert.Equal(("b\n126\n", "bash: line 1: /home/agent/b/y: Permission denied\n"), (d.Stdout, d.Stderr));
+    }
+
     [Fact]
     public async Task ScriptsRunWithArguments()
     {

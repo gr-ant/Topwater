@@ -1317,9 +1317,11 @@ public sealed partial class Shell
         return _commands.ContainsKey(name) ? name : null;
     }
 
-    /// <summary>Where PATH would have <paramref name="name"/>, directory by directory, as written; an empty entry is the cwd.</summary>
+    /// <summary>Where PATH would have <paramref name="name"/>, directory by directory, as written; an empty entry is the cwd, and a
+    /// leading ~ is expanded as bash does during the search.</summary>
     IEnumerable<string> PathCandidates(string name) =>
-        Environment.GetValueOrDefault("PATH", "").Split(':').Select(d => d.Length == 0 ? "./" + name : d.TrimEnd('/') + "/" + name);
+        Environment.GetValueOrDefault("PATH", "").Split(':').Select(d => TildePrefix(d) is { } t ? t.Home + d[t.Length..] : d)
+            .Select(d => d.Length == 0 ? "./" + name : d.TrimEnd('/') + "/" + name);
 
     /// <summary>PATH search as bash does it: the first executable regular file named <paramref name="name"/> in a directory the
     /// agent can search, else the first one that isn't executable (running it says "Permission denied"), else null.</summary>
@@ -1379,7 +1381,7 @@ public sealed partial class Shell
     async Task<int> RunScriptFileAsync(string name, string path, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
         if (Fs.IsDirectory(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: Is a directory"); return 126; }
-        if (!Fs.IsFile(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: No such file or directory"); return 127; }
+        if (!Fs.IsFile(path)) { var why = Fs.WhyMissing(path); io.Err.WriteLine($"{ErrPrefix}{name}: {why}"); return why == "Permission denied" ? 126 : 127; }
         if (!Fs.CanExecute(path) || !Fs.CanRead(path)) { io.Err.WriteLine($"{ErrPrefix}{name}: Permission denied"); return 126; }
         var text = Fs.ReadAllText(path);
         if (text.StartsWith(ExecutableStub[..4]))
@@ -1391,7 +1393,16 @@ public sealed partial class Shell
         if (text.StartsWith("#!"))
         {
             var line = text[2..(text.IndexOf('\n') is var nl and >= 0 ? nl : text.Length)].Trim();
-            if (!Regex.IsMatch(line, @"(^|/|\s)(ba)?sh(\s|$)")) return await RunInterpreterAsync(name, line, argv, io, ct);
+            if (!Regex.IsMatch(line, @"(^|/|\s)(ba)?sh(\s|$)"))
+            {
+                // the hand-off can lead back to this script (#!/usr/bin/env self), so it counts as a nesting level; no command
+                // runs between levels, so ExecCommandAsync's stack check would never see this recursion
+                if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+                    throw new LimitExceeded("maximum nesting level exceeded");
+                if (++_scriptDepth > 100) throw new LimitExceeded("maximum script nesting level exceeded (100)");
+                try { return await RunInterpreterAsync(name, line, argv, io, ct); }
+                finally { _scriptDepth--; }
+            }
         }
         return await RunScriptTextAsync(text, io, subshell: true, ct, argv.Skip(1).ToList(), new NewProcess(name, name));
     }
