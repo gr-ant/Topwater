@@ -73,6 +73,19 @@ public class ContainerTests
         Assert.DoesNotContain(lines, l => l.Contains("EVIL"));              // a multi-line value goes to the quoted session script, never to ENV
     }
 
+    /// <summary>A quote in an account or group name can't break out of the setup script's account list.</summary>
+    [Fact]
+    public void QuotesInGroupNamesCannotInjectIntoSetup()
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/etc/group", sh.Fs.ReadAllText("/etc/group") + "x';touch /pwned;'y:x:1500:\n");
+        var setup = sh.Snapshot().ToBuildContext().SetupScript;
+        var keep = setup.Split('\n').Single(l => l.StartsWith("keep="));
+        var inner = keep["keep='".Length..^1];
+        Assert.EndsWith("'", keep);
+        Assert.DoesNotContain("'", inner.Replace("'\\''", ""));            // every quote inside is the escaped '\'' form
+    }
+
     /// <summary>/proc, /dev and the /bin command stubs never go into the layer.</summary>
     [Fact]
     public async Task SimulatedPathsAndStubsAreNotExported()
