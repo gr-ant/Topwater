@@ -412,7 +412,7 @@ internal static partial class Builtins
             bool sym = a.Has('s');
             var ops = a.Positional;
             var into = a.Value('t');
-            if (into == null && !a.Has('T') && ops.Count > 1 && fs.IsDirectory(ctx.ResolvePath(ops[^1]), !a.Has('n')) || ops.Count > 2) into = ops[^1];
+            if (into == null && !a.Has('T') && (ops.Count > 2 || ops.Count == 2 && fs.IsDirectory(ctx.ResolvePath(ops[^1]), !a.Has('n')))) into = ops[^1];
             if (ops.Count == 0 || (ops.Count == 1 && a.Has('T') && into == null))
                 throw new UsageException(ops.Count == 0 ? "missing file operand" : $"missing destination file operand after {QuoteAlways(ops[0])}");
             if (into != null && a.Value('t') == null) ops = ops.Take(ops.Count - 1).ToList();

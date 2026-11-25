@@ -359,6 +359,7 @@ internal static partial class Builtins
                 if (!ctx.Fs.IsDirectory(abs)) { files.Add(f); continue; }
                 walked = true;
                 if (!recursive) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {f}: Is a directory"); error = true; continue; }
+                var above = new HashSet<string>(StringComparer.Ordinal) { ctx.Fs.RealPath(abs, out _) ?? abs }; // the directories being walked
                 void Walk(string dirAbs, string display)
                 {
                     IReadOnlyList<string> names;
@@ -368,7 +369,14 @@ internal static partial class Builtins
                     {
                         var child = VirtualFileSystem.Normalize(dirAbs, name);
                         var childDisplay = display == "." && implicitDot ? name : display.TrimEnd('/') + "/" + name;
-                        if (ctx.Fs.IsDirectory(child)) { if (!excludeDir.Any(r => r.IsMatch(name))) Walk(child, childDisplay); }
+                        if (!a.Has('R') && ctx.Fs.IsSymlink(child)) continue; // -r skips links it meets; -R follows them
+                        if (ctx.Fs.IsDirectory(child))
+                        {
+                            if (excludeDir.Any(r => r.IsMatch(name))) continue;
+                            if (ctx.Fs.RealPath(child, out _) is not { } real || !above.Add(real)) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {childDisplay}: warning: recursive directory loop"); continue; }
+                            Walk(child, childDisplay);
+                            above.Remove(real);
+                        }
                         else if ((include.Count == 0 || include.Any(r => r.IsMatch(name))) && !exclude.Any(r => r.IsMatch(name))) files.Add(childDisplay);
                     }
                 }

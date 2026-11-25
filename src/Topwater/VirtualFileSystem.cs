@@ -273,7 +273,7 @@ public sealed class VirtualFileSystem
     public bool CanExecute(string path) => Find(path) is { } n && Allowed(n, 1);
 
     /// <summary>Whether two paths lead to the same file or directory (`test -ef`): through hard or symbolic links.</summary>
-    public bool SameFile(string a, string b) => Find(a) is { } n && ReferenceEquals(n, Find(b));
+    public bool SameFile(string a, string b, bool follow = true) => Find(a, follow) is { } n && ReferenceEquals(n, Find(b, follow));
 
     /// <param name="follow">false: a symbolic link's own status (lstat), with <see cref="FileStat.LinkTarget"/> set.</param>
     public FileStat Stat(string path, bool follow = true) => Find(path, out var why, follow) switch

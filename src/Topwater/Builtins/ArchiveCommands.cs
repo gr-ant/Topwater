@@ -181,7 +181,6 @@ internal static partial class Builtins
             var linked = new List<(string Path, string Member)>(); // files with several names already stored
             using (var w = new TarWriter(ms, TarEntryFormat.Gnu, leaveOpen: true))
             {
-                var walking = new HashSet<string>(StringComparer.Ordinal); // real paths of the directories being added
             void Add(string name, string path)
                 {
                     if (path == archivePath) return; // the archive itself, as GNU tar skips it
@@ -191,7 +190,7 @@ internal static partial class Builtins
                         var st = fs.Stat(path, follow: false); // a symbolic link is stored as one, never followed
                         if (st.IsDirectory) member = member.TrimEnd('/') + "/";
                         // a file with several names: the first goes in whole, later ones as links to it
-                        var first = st.Links > 1 && !st.IsDirectory ? linked.FirstOrDefault(l => fs.SameFile(l.Path, path) && fs.IsSymlink(l.Path) == st.IsSymlink).Member : null;
+                        var first = st.Links > 1 && !st.IsDirectory ? linked.FirstOrDefault(l => fs.SameFile(l.Path, path, follow: false)).Member : null;
                         var type = st.IsDirectory ? TarEntryType.Directory : first != null ? TarEntryType.HardLink : st.IsSymlink ? TarEntryType.SymbolicLink : TarEntryType.RegularFile;
                         var entry = new GnuTarEntry(type, member)
                         {
