@@ -1,1 +1,0 @@
-printf 'apple 3\nbanana 1\ncherry 2\napple 5\n' > f.txt; printf 'b\na\nc\nb\n' > g.txt; printf 'x,y,z\n1,2,3\n4,5,6\n' > c.csv; seq 12 > n.txt; printf 'noeol' > ne.txt; mkdir -p d/sub e; echo 'hello world' > d/a.txt; printf 'foo\nbar\n' > d/sub/b.log

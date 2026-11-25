@@ -1,0 +1,4 @@
+{
+  "bc": "bc is not ported yet",
+  "archives-084": "zip prints zlib's compression ratio (55%), not Info-ZIP's (53%)"
+}
