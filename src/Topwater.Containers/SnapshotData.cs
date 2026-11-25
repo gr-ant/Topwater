@@ -87,7 +87,7 @@ internal sealed class SnapshotData
                     ["mtime"] = f.Mtime.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture),
                 };
                 if (f.LinkTarget != null) entry["target"] = f.LinkTarget;
-                if (f.HardLink != null && Files.TryGetValue(f.HardLink, out var first) && !first.IsDirectory && first.HardLink == null) entry["link"] = f.HardLink; // else its first name is gone: a file of its own
+                if (f.HardLink != null && Files.TryGetValue(f.HardLink, out var first) && !first.IsDirectory && first.HardLink == null && string.CompareOrdinal(first.Path, f.Path) < 0) entry["link"] = f.HardLink; // else its first name is gone or comes later: a file of its own
                 links |= entry["target"] != null || entry["link"] != null;
                 if (!f.IsDirectory && f.LinkTarget == null)
                 {
