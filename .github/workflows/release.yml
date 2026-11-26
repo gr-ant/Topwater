@@ -141,6 +141,10 @@ jobs:
           name: python-package
           path: dist
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          # first upload only: an API token while the PyPI project does not exist yet; empty (secret removed) means
+          # trusted publishing through this job's OIDC token, which is the steady state
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   # npm trusted publishing: npm accepts this job's OIDC token for the package topwater (repository gr-ant/Topwater,
   # workflow release.yml) and adds provenance. Off until the repository variable PUBLISH_NPM is 'true'.
