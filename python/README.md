@@ -123,21 +123,23 @@ Where Python differs from the reference:
   held as Python strings.
 - `shell.run()` wraps `asyncio.run`; inside an event loop use `await shell.run_async()`.
 
-## LangChain and LlamaIndex
+## Agent frameworks
 
 ```bash
-pip install "topwater[langchain]"     # or "topwater[llamaindex]"
+pip install "topwater[langchain]"   # or llamaindex, openai-agents, claude-agent-sdk, pydantic-ai, crewai, smolagents, google-adk
 ```
 
-Both adapters expose `bash_tool(shell=None, description=None)`: a tool named `bash` with the standard description.
-Calls on one tool are serialized, and the shell keeps its state between calls.
+Every adapter exposes `bash_tool(shell=None, description=None)`: a tool named `bash` with the standard description
+and one `command` argument, as the framework's own tool type. Calls on one tool are serialized, and the shell keeps
+its state between calls. Each module imports only its own framework; `import topwater` imports none.
 
 ```python
+from langchain.agents import create_agent                  # LangChain, and LangGraph underneath
 from topwater import Shell
 from topwater.integrations.langchain import bash_tool
 
 shell = Shell()
-llm_with_bash = llm.bind_tools([bash_tool(shell)])   # or pass it to a LangGraph agent's `tools=[...]`
+agent = create_agent(llm, tools=[bash_tool(shell)])         # or llm.bind_tools([bash_tool(shell)])
 ```
 
 ```python
@@ -146,5 +148,55 @@ from topwater.integrations.llamaindex import bash_tool
 
 agent = FunctionAgent(tools=[bash_tool(shell)], llm=llm)
 ```
+
+```python
+from agents import Agent                                   # OpenAI Agents SDK
+from topwater.integrations.openai_agents import bash_tool
+
+agent = Agent(name="assistant", tools=[bash_tool(shell)])
+```
+
+The Claude Agent SDK takes the tool through an in-process MCP server, so Claude sees it as `mcp__topwater__bash`.
+`tools=[]` leaves out Claude Code's own tools, its real `Bash` among them:
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server
+from topwater.integrations.claude_agent_sdk import bash_tool
+
+options = ClaudeAgentOptions(mcp_servers={"topwater": create_sdk_mcp_server("topwater", tools=[bash_tool(shell)])},
+                             tools=[], allowed_tools=["mcp__topwater__bash"])
+```
+
+```python
+from pydantic_ai import Agent
+from topwater.integrations.pydantic_ai import bash_tool
+
+agent = Agent(model, tools=[bash_tool(shell)])
+```
+
+```python
+from crewai import Agent
+from topwater.integrations.crewai import bash_tool
+
+agent = Agent(role="Analyst", goal="...", backstory="...", tools=[bash_tool(shell)])
+```
+
+```python
+from smolagents import ToolCallingAgent
+from topwater.integrations.smolagents import bash_tool
+
+agent = ToolCallingAgent(tools=[bash_tool(shell)], model=model)
+```
+
+```python
+from google.adk.agents import Agent
+from topwater.integrations.google_adk import bash_tool
+
+agent = Agent(name="assistant", model=model, tools=[bash_tool(shell)])
+```
+
+Pydantic AI and Google ADK need Python 3.11 or later. CrewAI pins an older `openai` than the OpenAI Agents SDK
+wants, so pip reports a conflict when both extras share an environment. AutoGen has no adapter: it is in maintenance
+mode, and Microsoft points new projects to Microsoft Agent Framework.
 
 See the [main README](../README.md) and the [reference](../docs/reference.md) for everything else.

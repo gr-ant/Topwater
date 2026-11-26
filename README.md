@@ -185,7 +185,8 @@ Adapters do the wiring for common frameworks:
   and so does Microsoft Agent Framework: `chatClient.AsAIAgent(tools: [shell.AsAIFunction()])`. The OpenAI and Anthropic
   SDKs plug in through their `AsIChatClient()`; MCP clients use `topwater mcp`. See
   [the reference](docs/reference.md#microsoft-agent-framework).
-- **Python:** LangChain and LlamaIndex, see [python/README.md](python/README.md#langchain-and-llamaindex).
+- **Python:** LangChain and LangGraph, LlamaIndex, OpenAI Agents SDK, Claude Agent SDK, Pydantic AI, CrewAI,
+  smolagents and Google ADK, see [python/README.md](python/README.md#agent-frameworks).
 - **TypeScript:** Vercel AI SDK, OpenAI Agents, LangChain.js/LangGraph.js, Mastra and the Claude Agent SDK, see
   [typescript/README.md](typescript/README.md#agent-frameworks).
 
