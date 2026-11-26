@@ -80,6 +80,18 @@ class CrossPortFiles(unittest.TestCase):
                 if name == "from-python.topwater":  # replays need not match across ports
                     self.assertTrue(rec.replay().matches, rec.replay().differences)
 
+    def test_a_branch_saved_by_the_recording_viewer_loads(self):
+        # typescript/test/viewer-timeline.test.ts writes it: two calls of from-typescript.topwater, then two typed in the viewer
+        path = RECORDINGS / "branch-from-viewer.topwater"
+        rec = Recording.load(path)
+        self.assertEqual(["greet branch > branch.txt; cat latest", "chmod 700 branch.txt; ls"], [c.command for c in rec.calls[2:]])
+        self.assertEqual("2", rec.metadata["forkedAfterCall"])
+        self.assertEqual("buy milk\nfix bug\n", rec.calls[2].stdout)
+        probe = "cat /home/agent/work/branch.txt; stat -c %a /home/agent/work/branch.txt"
+        self.assertEqual("hi branch\n700\n", rec.shell_at(3).run(probe).stdout)
+        self.assertEqual("hi branch\n700\n", Shell.load(path).run(probe).stdout)
+        self.assertEqual("hi branch\n", rec.shell_at(2).run("cat /home/agent/work/branch.txt").stdout)  # re-run from the fork's checkpoint
+
     def test_the_old_json_lines_recordings_load(self):
         basics = Recording.load(RECORDINGS / "basics.jsonl")
         self.assertEqual(6, len(basics.calls))

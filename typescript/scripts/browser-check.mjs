@@ -152,7 +152,7 @@ try {
   // fork from turn 6: the terminal opens on that machine and keeps going
   await viewer.locator('#timeline button[data-index="5"]').click();
   await settled();
-  const [forked] = await Promise.all([viewer.context().waitForEvent('page'), viewer.getByRole('button', { name: 'Open a terminal here' }).click()]);
+  const [forked] = await Promise.all([viewer.context().waitForEvent('page'), viewer.getByRole('button', { name: 'Open in a new tab' }).click()]);
   const fErrors = [];
   forked.on('pageerror', e => fErrors.push(String(e)));
   await forked.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false' && document.querySelector('#prompt')?.textContent?.includes('agent@topwater'), null, { timeout: 30_000 });
@@ -162,7 +162,64 @@ try {
   await forked.waitForTimeout(50);
   await forked.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false');
   const forkOut = await forked.locator('[role="log"]').innerText();
-  check(forkOut.includes('Forked from') && forkOut.includes('North 220') && forkOut.includes('archive') && forkOut.includes('more') && !forkOut.includes('notes.txt'), 'viewer: "Open a terminal here" opens the terminal on the machine after turn 6, and commands run on it');
+  check(forkOut.includes('Forked from') && forkOut.includes('North 220') && forkOut.includes('archive') && forkOut.includes('more') && !forkOut.includes('notes.txt'), 'viewer: "Open in a new tab" opens the terminal on the machine after turn 6, and commands run on it');
+  await forked.reload();
+  await forked.waitForFunction(() => document.querySelector('[data-busy]')?.getAttribute('data-busy') === 'false' && document.querySelector('#prompt')?.textContent?.includes('agent@topwater'), null, { timeout: 30_000 });
+  check((await forked.locator('[role="log"]').innerText()).includes('Forked from'), 'viewer: the forked terminal still has its machine after a reload');
+
+  // compare any two moments: turn 1 against turn 7
+  const changesSettled = text => viewer.waitForFunction(t => !document.querySelector('#changes[aria-busy]') && document.querySelector('#changes')?.textContent?.includes(t), text, { timeout: 30_000 });
+  await viewer.selectOption('#cmp-a', '0:0');
+  await viewer.selectOption('#cmp-z', '0:6');
+  await changesSettled('archive.tgz');
+  const cmp = await viewer.locator('#changes').innerText();
+  check(/added\s+\/home\/agent\/report\.txt/i.test(cmp) && /added\s+\/home\/agent\/archive\.tgz/i.test(cmp) && cmp.includes('+North 220') && /Binary or very large file \(none → binary/.test(cmp),
+    'viewer: comparing turn 1 with turn 7 lists every file added or removed between them, text diffs and binary files summarized');
+
+  // continue from turn 6: the commands typed become branch 1
+  await viewer.locator('#timeline button[data-index="5"]').click();
+  await settled();
+  await viewer.getByRole('button', { name: 'Continue from here' }).click();
+  const liveCmd = viewer.locator('#live-cmd');
+  check(await liveCmd.evaluate(e => e === document.activeElement), 'viewer: "Continue from here" opens a command line and focuses it');
+  const typeLive = async (cmd, pos) => { await liveCmd.fill(cmd); await liveCmd.press('Enter'); await viewer.waitForFunction(p => document.querySelector('#pos')?.textContent === p, pos, { timeout: 30_000 }); await settled(); };
+  await typeLive('echo branch > b.txt; cat report.txt', 'Turn 7 of 7 · Branch 1');
+  await typeLive('rm report.txt; ls', 'Turn 8 of 8 · Branch 1');
+  const liveText = await viewer.locator('#live-out').innerText();
+  check(liveText.includes('North 220') && liveText.includes('b.txt') && (await viewer.locator('#timeline li').count()) === 9 && (await viewer.locator('#timeline .typed').count()) === 2,
+    'viewer: commands run on the machine after turn 6 and become turns 7 and 8 of a new branch');
+  check(/removed\s+\/home\/agent\/report\.txt/i.test(await viewer.locator('#changes').innerText()) && (await viewer.locator('#branches li').count()) === 2, 'viewer: the branch turn shows what it changed, and the timelines list the original and branch 1');
+
+  // switch between them, from the keyboard too
+  await viewer.getByRole('button', { name: /^Original/ }).click();
+  await settled();
+  check((await pos()) === 'Turn 9 of 9' && (await viewer.locator('#timeline .typed').count()) === 0, 'viewer: switching to the original shows its 9 turns, unchanged');
+  await viewer.getByRole('button', { name: /^Branch 1 after/ }).focus();
+  await viewer.keyboard.press('Enter');
+  await settled();
+  check((await pos()) === 'Turn 8 of 8 · Branch 1', 'viewer: switching back to branch 1 with the keyboard');
+
+  // diff across branches: the original's last turn against the branch's
+  await viewer.selectOption('#cmp-a', '0:8');
+  await viewer.selectOption('#cmp-z', '1:7');
+  await changesSettled('b.txt');
+  const across = await viewer.locator('#changes').innerText();
+  check(/added\s+\/home\/agent\/b\.txt/i.test(across) && /removed\s+\/home\/agent\/report\.txt/i.test(across), 'viewer: comparing the original\'s last turn with the branch\'s shows b.txt added and report.txt removed');
+
+  // download the branch, then open the file it saved
+  const [branchDl] = await Promise.all([viewer.waitForEvent('download', { timeout: 30_000 }), viewer.getByRole('button', { name: 'Download branch 1 as a .topwater file' }).click()]);
+  const branchFile = join(root, 'browser/dist/sales-report-branch-1.topwater');
+  await branchDl.saveAs(branchFile);
+  check(branchDl.suggestedFilename() === 'sales-report-branch-1.topwater', 'viewer: a branch downloads as a .topwater file');
+  await viewer.locator('#file').setInputFiles(branchFile);
+  await viewer.waitForFunction(() => document.querySelector('#pos')?.textContent === 'Turn 1 of 8', null, { timeout: 30_000 });
+  await settled();
+  await viewer.locator('body').press('End');
+  await settled();
+  const reopened = await viewer.locator('#turn').innerText();
+  check(reopened.includes('rm report.txt; ls') && (await viewer.locator('#meta').innerText()).includes('6') && (await viewer.locator('#branches li').count()) === 1 &&
+    !(await viewer.locator('#tree button.file[data-path="/home/agent/report.txt"]').count()) && (await viewer.locator('#tree button.file[data-path="/home/agent/b.txt"]').count()) === 1,
+    'viewer: the downloaded branch opens as a recording of 8 turns, ending on the branch\'s machine');
   // a .topwater file (the cross-port fixture recorded by this port): opens from the file picker
   await viewer.locator('#file').setInputFiles(join(root, '../tests/Topwater.Tests/recordings/from-typescript.topwater'));
   await viewer.waitForFunction(() => document.querySelector('#pos')?.textContent === 'Turn 1 of 3', null, { timeout: 30_000 });

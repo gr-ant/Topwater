@@ -28,7 +28,7 @@
 <main>
   <section class="intro">
     <h1>Recording viewer</h1>
-    <p>Step through a recorded agent session turn by turn: each command and what it returned, the machine's files as they were after that turn, and what the turn changed. From any turn you can open a terminal on that machine and carry on yourself.</p>
+    <p>Step through a recorded agent session turn by turn: each command and what it returned, the machine's files as they were after that turn, and what the turn changed, or compare any two moments. From any turn you can continue in a terminal on that machine: what you type becomes a branch of the timeline, which you can compare with the original and download as its own <code>.topwater</code> file.</p>
     <p>Recordings are the <code>.topwater</code> files Topwater writes (<code>shell.StartRecording()</code> in .NET, <code>startRecording(shell)</code> in TypeScript, <code>shell.start_recording()</code> in Python); older JSON Lines recordings open too. Everything happens in this tab; nothing is uploaded.</p>
   </section>
 
@@ -48,6 +48,11 @@
       <dl id="meta"></dl>
     </div>
 
+    <nav class="branches" aria-labelledby="branches-title">
+      <h3 id="branches-title">Timelines</h3>
+      <ul id="branches"></ul>
+    </nav>
+
     <div class="player" role="group" aria-label="Move through the turns">
       <button id="first" type="button" class="secondary" aria-label="Start: before the first turn">« Start</button>
       <button id="prev" type="button" class="secondary" aria-label="Previous turn">‹ Prev</button>
@@ -55,9 +60,21 @@
       <button id="next" type="button" class="secondary" aria-label="Next turn">Next ›</button>
       <button id="last" type="button" class="secondary" aria-label="Last turn">End »</button>
       <output id="pos" for="slider" aria-live="polite"></output>
-      <button id="fork" type="button" title="Open the terminal demo on the machine as it was after this turn">Open a terminal here</button>
+      <button id="continue" type="button" title="Type commands on the machine as it was after this turn; they become a new branch">Continue from here</button>
+      <button id="fork" type="button" class="secondary" title="Open the terminal demo in a new tab on the machine as it was after this turn">Open in a new tab</button>
     </div>
     <p class="note keys">Keys: <kbd>←</kbd> <kbd>→</kbd> move one turn, <kbd>Home</kbd> <kbd>End</kbd> jump to the start or the end.</p>
+
+    <section id="live" class="live" hidden aria-labelledby="live-title">
+      <h3 id="live-title">Continue</h3>
+      <pre id="live-out" class="out" role="log" aria-live="polite" tabindex="0" aria-label="Terminal output"></pre>
+      <form id="live-form" class="live-row">
+        <label for="live-cmd" class="p">$</label>
+        <input id="live-cmd" type="text" autocomplete="off" spellcheck="false" aria-describedby="live-title">
+        <button type="submit">Run</button>
+        <button id="live-close" type="button" class="secondary">Close</button>
+      </form>
+    </section>
 
     <div class="split">
       <nav aria-label="Turns" class="timeline-wrap"><ol id="timeline"></ol></nav>
@@ -65,7 +82,12 @@
     </div>
 
     <section class="changes" aria-labelledby="changes-title">
-      <h3 id="changes-title">What this turn changed</h3>
+      <h3 id="changes-title">Changes</h3>
+      <div class="compare row">
+        <label>From <select id="cmp-a"></select></label>
+        <label>to <select id="cmp-z"></select></label>
+      </div>
+      <p class="note">Shows what this turn changed; pick any two moments, on any timeline, to compare them.</p>
       <div id="changes"></div>
     </section>
 

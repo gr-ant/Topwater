@@ -738,6 +738,22 @@ public class RecordingTests
         Assert.True(report.Matches, report.ToString());
     }
 
+    /// <summary>A branch the browser recording viewer saved (typescript/test/viewer-timeline.test.ts writes it).</summary>
+    [Fact]
+    public async Task Loads_a_branch_saved_by_the_recording_viewer()
+    {
+        var r = Recording.Load(Fixture("branch-from-viewer.topwater"));
+        Assert.Equal(["greet branch > branch.txt; cat latest", "chmod 700 branch.txt; ls"], r.Calls.Skip(2).Select(c => c.Command));
+        Assert.Equal("2", r.Metadata["forkedAfterCall"]);
+        Assert.Equal("buy milk\nfix bug\n", r.Calls[2].Stdout);
+        Assert.NotNull(r.Calls[1].SnapshotAfter);
+        var probe = "cat /home/agent/work/branch.txt; stat -c %a /home/agent/work/branch.txt";
+        Assert.Equal("hi branch\n700\n", (await (await r.ShellAtAsync(3)).RunAsync(probe)).Stdout);
+        using var stream = File.OpenRead(Fixture("branch-from-viewer.topwater"));
+        Assert.Equal("hi branch\n700\n", (await Shell.Load(stream).RunAsync(probe)).Stdout);
+        Assert.Equal("hi branch\n", (await (await r.ShellAtAsync(2)).RunAsync("cat /home/agent/work/branch.txt")).Stdout); // re-run from the fork's checkpoint
+    }
+
     [Fact]
     public async Task Reads_a_recording_made_by_the_typescript_port()
     {

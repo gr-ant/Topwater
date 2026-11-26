@@ -1,10 +1,13 @@
-// Recording viewer: steps through a Topwater recording turn by turn. The recording lives in a Web Worker
-// (replay-worker.ts), which rebuilds the machine as of any turn; this page only renders what it answers.
-import type { CallInfo, Change, DiffView, FileView, LoadedRecording, ReplayReply, ReplayRequest, TreeEntry, TurnView } from '../replay-protocol.js';
+// Recording viewer: steps through a Topwater recording turn by turn, compares any two moments, and continues from any
+// turn in a terminal whose commands become a branch of the timeline. The recording and its branches live in a Web
+// Worker (replay-worker.ts), which rebuilds the machine as of any turn; this page only renders what it answers.
+import type { CallInfo, Change, DiffView, FileView, LoadedRecording, Point, ReplayReply, ReplayRequest, TreeEntry, TurnView } from '../replay-protocol.js';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $('status'), viewer = $('viewer'), slider = $<HTMLInputElement>('slider'), pos = $('pos');
 const timeline = $('timeline'), turnEl = $('turn'), treeEl = $('tree'), fileEl = $('fileview'), changesEl = $('changes');
+const branchesEl = $('branches'), cmpA = $<HTMLSelectElement>('cmp-a'), cmpZ = $<HTMLSelectElement>('cmp-z');
+const liveEl = $('live'), liveOut = $('live-out'), liveCmd = $<HTMLInputElement>('live-cmd');
 const REQUEST_TIMEOUT_MS = 60_000;
 
 // ---------- the worker ----------
@@ -36,7 +39,10 @@ function request<T>(msg: Req, transfer: Transferable[] = []): Promise<T> {
       pending.clear();
       startWorker();
       reject(new Error(`rebuilding this turn took longer than ${REQUEST_TIMEOUT_MS / 1000} s, so it was stopped`));
-      if (loaded) await request({ t: 'load', data: loaded.data, sidecars: loaded.sidecars }).catch(() => undefined);
+      if (!loaded) return;
+      await request({ t: 'load', data: loaded.data, sidecars: loaded.sidecars }).catch(() => undefined);
+      // the branches typed so far: the new worker rebuilds their machines by re-running them
+      await request({ t: 'restore', branches: branches.slice(1) }).catch(() => undefined);
     }, REQUEST_TIMEOUT_MS);
     pending.set(id, {
       resolve: v => { clearTimeout(timer); resolve(v as T); },
@@ -62,9 +68,19 @@ const fmtSize = (n: number) => n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024)
 const modeText = (isDir: boolean, mode: number) => (isDir ? 'd' : '-') + [6, 3, 0].map(s => ['r', 'w', 'x'].map((c, k) => (mode >> s) & (4 >> k) ? c : '-').join('')).join('');
 const turnLabel = (index: number) => index < 0 ? 'Start' : `Turn ${index + 1}`;
 
+// ---------- timelines: 0 is the recording; a branch continues from call `at` of its parent ----------
+interface BranchInfo { parent: number; at: number; calls: CallInfo[] }
+let branches: BranchInfo[] = [];
+const len = (b: number) => b === 0 ? branches[0].calls.length : branches[b].at + 1 + branches[b].calls.length;
+const owner = (b: number, i: number) => { while (b > 0 && i <= branches[b].at) b = branches[b].parent; return b; };
+const callAt = (b: number, i: number) => { const o = owner(b, i); return branches[o].calls[o === 0 ? i : i - branches[o].at - 1]; };
+const branchName = (b: number) => b === 0 ? 'Original' : `Branch ${b}`;
+const pointValue = (p: Point) => `${p.i < 0 ? 0 : owner(p.b, p.i)}:${p.i}`;
+const parsePoint = (v: string): Point => { const [b, i] = v.split(':').map(Number); return { b, i }; };
+
 // ---------- loading ----------
 let rec: LoadedRecording | null = null;
-let current = -1;
+let cur: Point = { b: 0, i: -1 };
 let selected: string | null = null;
 const openDirs = new Set<string>();
 
@@ -74,9 +90,14 @@ async function openRecording(data: Uint8Array, sidecars: Record<string, Uint8Arr
     const value = await request<LoadedRecording>({ t: 'load', data, sidecars });
     loaded = { data, sidecars, name };
     rec = value;
+    branches = [{ parent: -1, at: -1, calls: rec.calls }];
+    cur = { b: 0, i: -1 };
+    live = null;
+    liveEl.hidden = true;
     selected = null;
     openDirs.clear();
     renderSummary(name);
+    renderBranches();
     renderTimeline();
     viewer.hidden = false;
     status(`${name}: ${plural(rec.calls.length, 'turn')}.`);
@@ -124,18 +145,21 @@ function renderSummary(name: string) {
   if (otherPort && r.calls.length)
     add('Re-run here', 'turns without a snapshot are re-run in this browser by Topwater\'s TypeScript port and compared with what it prints; it was recorded elsewhere, and the ports differ, so the output may too');
   if (r.appCommands.length) add('App commands', `${r.appCommands.join(', ')} (not available here: re-run turns that use them differ)`);
-  slider.max = String(r.calls.length);
 }
 
 function renderTimeline() {
   timeline.replaceChildren();
-  const items: [number, string, CallInfo | null][] = [[-1, 'Start: the machine before the first command', null], ...rec!.calls.map(c => [c.index, c.command, c] as [number, string, CallInfo])];
+  slider.max = String(len(cur.b));
+  const items: [number, string, CallInfo | null][] = [[-1, 'Start: the machine before the first command', null]];
+  for (let i = 0; i < len(cur.b); i++) items.push([i, callAt(cur.b, i).command, callAt(cur.b, i)]);
   for (const [index, command, call] of items) {
     const b = el('button', { type: 'button', cls: 'turn-btn' },
       el('span', { cls: 'n', textContent: index < 0 ? '0' : String(index + 1) }),
       el('span', { cls: 'cmd', textContent: command.split('\n')[0] + (command.includes('\n') ? ' …' : '') }));
     if (call && call.exitCode !== 0) b.append(el('span', { cls: 'exit', textContent: String(call.exitCode), title: `exit code ${call.exitCode}` }));
     if (call?.hasSnapshot) b.append(el('span', { cls: 'snap', textContent: '◆', title: 'the recording holds a snapshot after this turn' }));
+    const mine = index >= 0 ? owner(cur.b, index) : 0;
+    if (mine > 0) { b.classList.add('typed'); b.append(el('span', { cls: 'snap', textContent: `B${mine}`, title: `typed in ${branchName(mine).toLowerCase()}` })); }
     b.dataset.index = String(index);
     b.addEventListener('click', () => void go(index));
     timeline.append(el('li', {}, b));
@@ -144,10 +168,12 @@ function renderTimeline() {
 
 async function go(index: number) {
   if (!rec) return;
-  index = Math.max(-1, Math.min(rec.calls.length - 1, index));
-  current = index;
+  const n = len(cur.b), b = cur.b;
+  index = Math.max(-1, Math.min(n - 1, index));
+  cur = { b, i: index };
   slider.value = String(index + 1);
-  pos.textContent = index < 0 ? `Start (of ${rec.calls.length} turns)` : `Turn ${index + 1} of ${rec.calls.length}`;
+  pos.textContent = (index < 0 ? `Start (of ${n} turns)` : `Turn ${index + 1} of ${n}`) + (b ? ` · ${branchName(b)}` : '');
+  setCompare({ b, i: index - 1 }, cur);
   for (const b of timeline.querySelectorAll<HTMLButtonElement>('button')) {
     const on = Number(b.dataset.index) === index;
     if (on) { b.setAttribute('aria-current', 'step'); b.scrollIntoView({ block: 'nearest' }); } else b.removeAttribute('aria-current');
@@ -155,16 +181,16 @@ async function go(index: number) {
   renderTurn(index, null);
   treeEl.setAttribute('aria-busy', 'true');
   try {
-    const view = await request<TurnView>({ t: 'turn', index });
-    if (current !== index) return; // the user moved on
+    const view = await request<TurnView>({ t: 'turn', p: cur });
+    if (cur.i !== index || cur.b !== b) return; // the user moved on
     renderTurn(index, view);
-    renderChanges(view);
+    renderChanges(index < 0 ? null : view.changes, { b, i: index - 1 }, cur);
     renderTree(view);
     if (selected && !view.tree.some(e => e[0] === selected)) selected = null;
     selected ??= view.changes.find(c => !c.isDirectory && c.kind !== 'removed' && !/^\/(proc|usr|bin|etc|dev)\//.test(c.path))?.path ?? null;
     await showFile(selected);
   } catch (e) {
-    if (current === index) status(`${turnLabel(index)}: ${(e as Error).message}`, true);
+    if (cur.i === index && cur.b === b) status(`${turnLabel(index)}: ${(e as Error).message}`, true);
   } finally { treeEl.removeAttribute('aria-busy'); }
 }
 
@@ -177,8 +203,8 @@ function renderTurn(index: number, view: TurnView | null) {
     if (r.metadata.task) turnEl.append(el('blockquote', { textContent: r.metadata.task }));
     return;
   }
-  const c = r.calls[index];
-  const h = el('h3', { id: 'turn-title', textContent: `Turn ${index + 1}` });
+  const c = callAt(cur.b, index), mine = owner(cur.b, index);
+  const h = el('h3', { id: 'turn-title', textContent: `Turn ${index + 1}` + (mine ? ` (typed in ${branchName(mine).toLowerCase()})` : '') });
   h.append(' ', el('span', { cls: c.exitCode === 0 ? 'badge ok' : 'badge bad', textContent: c.exitCode === 0 ? 'exit 0' : `exit ${c.exitCode}` }));
   const out = el('pre', { cls: 'out', tabIndex: 0, ariaLabel: 'Output' });
   if (c.stdout) out.append(el('span', { textContent: c.stdout }));
@@ -187,7 +213,7 @@ function renderTurn(index: number, view: TurnView | null) {
   if (c.trailer) out.append(el('span', { cls: 'trailer', textContent: c.trailer + '\n' }));
   if (!c.stdout && !c.stderr && c.exitCode === 0 && !c.trailer) out.append(el('span', { cls: 'dim', textContent: '(no output)' }));
   const cmd = el('pre', { cls: 'cmd', tabIndex: 0, ariaLabel: 'Command' }, el('span', { cls: 'p', textContent: '$ ' }), c.command);
-  const meta = el('p', { cls: 'note' }, `Took ${c.elapsedMs < 1 ? '<1' : Math.round(c.elapsedMs)} ms when recorded.`);
+  const meta = el('p', { cls: 'note' }, `Took ${c.elapsedMs < 1 ? '<1' : Math.round(c.elapsedMs)} ms when ${mine ? 'typed' : 'recorded'}.`);
   if (view) meta.append(' ', sourceText(view));
   turnEl.append(h, cmd, out, meta);
   if (view?.source.kind === 'rerun' && !view.source.matches) {
@@ -206,6 +232,7 @@ function sourceText(view: TurnView): string {
   const s = view.source;
   if (s.kind === 'snapshot') return 'The files below are the recording\'s own snapshot after this turn.';
   if (s.kind === 'start') return '';
+  if (s.kind === 'typed') return 'The files below are the machine right after you ran it here.';
   const from = s.from < 0 ? 'the start' : `turn ${s.from + 1}`;
   return `The files below were rebuilt by re-running the turns after ${from} in this browser; ` +
     (s.matches ? 'this turn printed the same output as recorded.' : 'this turn printed something different from the recording (see below), so the files may differ too.');
@@ -213,13 +240,45 @@ function sourceText(view: TurnView): string {
 
 const KIND_LABEL: Record<Change['kind'], string> = { added: 'added', removed: 'removed', modified: 'changed', replaced: 'replaced', permissions: 'permissions' };
 
-function renderChanges(view: TurnView) {
+// the two moments compared: by default the turn before the current one and the current one
+function renderCompareOptions() {
+  const keep = [cmpA.value, cmpZ.value];
+  for (const sel of [cmpA, cmpZ]) {
+    sel.replaceChildren();
+    branches.forEach((br, b) => {
+      const g = el('optgroup', { label: b === 0 ? 'Original' : `${branchName(b)} (after turn ${br.at + 1} of ${branchName(br.parent).toLowerCase()})` });
+      for (let i = b === 0 ? -1 : br.at + 1; i < len(b); i++)
+        g.append(el('option', { value: `${b}:${i}`, textContent: i < 0 ? 'Start' : `${b ? `B${b} ` : ''}turn ${i + 1}: ${callAt(b, i).command.split('\n')[0].slice(0, 60)}` }));
+      sel.append(g);
+    });
+  }
+  [cmpA.value, cmpZ.value] = keep;
+}
+
+function setCompare(a: Point, z: Point) {
+  cmpA.value = pointValue(a.i < -1 ? z : a);
+  cmpZ.value = pointValue(z);
+}
+
+let compareToken = 0;
+async function compareChosen() {
+  const a = parsePoint(cmpA.value), z = parsePoint(cmpZ.value), token = ++compareToken;
+  changesEl.setAttribute('aria-busy', 'true');
+  try {
+    const changes = await request<Change[]>({ t: 'compare', a, z });
+    if (token === compareToken) renderChanges(changes, a, z);
+  } catch (e) {
+    if (token === compareToken) changesEl.replaceChildren(el('p', { cls: 'note error', textContent: (e as Error).message }));
+  } finally { if (token === compareToken) changesEl.removeAttribute('aria-busy'); }
+}
+
+function renderChanges(changes: Change[] | null, a: Point, z: Point) {
   changesEl.replaceChildren();
-  if (view.index < 0) { changesEl.append(el('p', { cls: 'note', textContent: 'Nothing yet: this is the starting machine.' })); return; }
-  if (view.changes.length === 0) { changesEl.append(el('p', { cls: 'note', textContent: 'No files changed in this turn.' })); return; }
+  if (!changes) { changesEl.append(el('p', { cls: 'note', textContent: 'Nothing yet: this is the starting machine.' })); return; }
+  if (changes.length === 0) { changesEl.append(el('p', { cls: 'note', textContent: 'No files differ.' })); return; }
   const list = el('ul', { cls: 'change-list' });
   let diffs = 0;
-  for (const c of view.changes) {
+  for (const c of changes) {
     const li = el('li', { cls: `change ${c.kind}` });
     const badge = el('span', { cls: `kind ${c.kind}`, textContent: KIND_LABEL[c.kind] });
     const name = c.kind === 'removed'
@@ -228,10 +287,10 @@ function renderChanges(view: TurnView) {
     if (name instanceof HTMLButtonElement) name.addEventListener('click', () => { selected = c.path; revealInTree(c.path); void showFile(c.path); });
     li.append(badge, ' ', name);
     if (c.detail) li.append(' ', el('span', { cls: 'note', textContent: c.detail }));
-    if (!c.isDirectory && (c.kind === 'modified' || c.kind === 'added' || c.kind === 'removed')) {
+    if (!c.isDirectory && !c.isLink && (c.kind === 'modified' || c.kind === 'added' || c.kind === 'removed')) {
       const d = el('details', { cls: 'diff' }, el('summary', { textContent: 'diff' }));
       let filled = false;
-      const fill = async () => { if (filled) return; filled = true; d.append(await diffBlock(view.index, c.path)); };
+      const fill = async () => { if (filled) return; filled = true; d.append(await diffBlock(a, z, c.path)); };
       d.addEventListener('toggle', () => { if (d.open) void fill(); });
       if (diffs++ < 6 && !/^\/(proc|usr|bin)\//.test(c.path)) { d.open = true; void fill(); }
       li.append(d);
@@ -241,10 +300,11 @@ function renderChanges(view: TurnView) {
   changesEl.append(list);
 }
 
-async function diffBlock(index: number, path: string): Promise<HTMLElement> {
+async function diffBlock(a: Point, z: Point, path: string): Promise<HTMLElement> {
   try {
-    const d = await request<DiffView>({ t: 'diff', index, path });
-    if (d.binary) return el('p', { cls: 'note', textContent: `Binary or very large file (${d.before} → ${d.after}); no text diff.` });
+    const d = await request<DiffView>({ t: 'diff', a, z, path });
+    const side = (kind: string, size: number) => kind === 'missing' ? 'none' : `${kind}, ${fmtSize(size)}`;
+    if (d.binary) return el('p', { cls: 'note', textContent: `Binary or very large file (${side(d.before, d.beforeSize)} → ${side(d.after, d.afterSize)}); no text diff.` });
     if (!d.hunks) return el('p', { cls: 'note', textContent: 'Too large to diff here.' });
     if (d.hunks.length === 0) return el('p', { cls: 'note', textContent: 'Same text (only its time or bytes elsewhere changed).' });
     const pre = el('pre', { cls: 'diff-body', tabIndex: 0, ariaLabel: `Changes to ${path}` });
@@ -326,12 +386,13 @@ async function showFile(path: string | null) {
   const entry = lastTree.find(e => e[0] === path);
   if (entry) fileEl.append(el('p', { cls: 'note', textContent: `${modeText(entry[1], entry[2])}  ${entry[3]}  ${fmtSize(entry[5])}  modified ${fmtTime(entry[4])}` }));
   try {
-    const v = await request<FileView>({ t: 'file', index: current, path });
+    const v = await request<FileView>({ t: 'file', p: cur, path });
     if (selected !== path) return;
     if (v.kind === 'text') {
       fileEl.append(el('pre', { cls: 'content', tabIndex: 0, ariaLabel: `Contents of ${path}`, textContent: v.text || '(empty file)' }));
       if (v.truncated) fileEl.append(el('p', { cls: 'note', textContent: 'Showing the first 256 KB.' }));
     } else if (v.kind === 'binary') fileEl.append(el('p', { cls: 'note', textContent: `Binary, ${fmtSize(v.size)}. First bytes:` }), el('pre', { cls: 'content', tabIndex: 0, textContent: hexdump(v.head) }));
+    else if (v.kind === 'link') fileEl.append(el('p', { cls: 'note', textContent: `A symbolic link to ${v.target}` }));
     else fileEl.append(el('p', { cls: 'note', textContent: v.kind === 'directory' ? 'A directory.' : 'Not on the machine at this turn.' }));
   } catch (e) { fileEl.append(el('p', { cls: 'note error', textContent: (e as Error).message })); }
 }
@@ -350,33 +411,127 @@ function hexdump(b: Uint8Array): string {
 async function forkHere() {
   if (!rec || !loaded) return;
   try {
-    const zip = await request<Uint8Array>({ t: 'fork', index: current });
+    const at = cur.i;
+    const zip = await request<Uint8Array>({ t: 'fork', p: cur });
     let s = '';
     for (let i = 0; i < zip.length; i += 0x8000) s += String.fromCharCode(...zip.subarray(i, i + 0x8000));
     const key = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
     try { localStorage.setItem('topwater-fork:' + key, btoa(s)); }
-    catch { status('This machine is too large to hand to the terminal page (browser storage is full).', true); return; }
-    const url = `index.html?fork=${key}&turn=${current < 0 ? -1 : current + 1}&from=${encodeURIComponent(loaded.name)}`;
+    catch { status('This machine is too large to hand to a new tab (browser storage is full); use "Continue from here" instead.', true); return; }
+    const from = loaded.name + (cur.b ? `, ${branchName(cur.b).toLowerCase()}` : '');
+    const url = `index.html?fork=${key}&turn=${at < 0 ? -1 : at + 1}&from=${encodeURIComponent(from)}`;
     const w = window.open(url, '_blank');
     if (!w) location.href = url; // a blocked pop-up: open it here
-    else status(`Opened a terminal on the machine after ${turnLabel(current).toLowerCase()} in a new tab.`);
+    else status(`Opened a terminal on the machine after ${turnLabel(at).toLowerCase()} in a new tab.`);
   } catch (e) { status(`Could not fork: ${(e as Error).message}`, true); }
 }
 
+// ---------- branches: the list, switching, downloading ----------
+function renderBranches() {
+  branchesEl.replaceChildren();
+  const add = (b: number, depth: number) => {
+    const br = branches[b];
+    const own = br.calls.length;
+    const pick = el('button', { type: 'button', cls: 'branch-btn' },
+      el('strong', { textContent: branchName(b) }), ' ',
+      el('span', { cls: 'note', textContent: b === 0 ? plural(own, 'turn') : `after turn ${br.at + 1} of ${branchName(br.parent).toLowerCase()}, ${plural(own, 'new turn')}` }));
+    if (b === cur.b) pick.setAttribute('aria-current', 'true');
+    pick.addEventListener('click', () => switchTo(b));
+    const li = el('li', { cls: 'branch' }, pick);
+    li.style.marginLeft = `${Math.min(depth, 6) * 16}px`;
+    if (b > 0) {
+      const dl = el('button', { type: 'button', cls: 'secondary small', textContent: 'Download .topwater', ariaLabel: `Download ${branchName(b).toLowerCase()} as a .topwater file` });
+      dl.addEventListener('click', () => void download(b));
+      li.append(' ', dl);
+    }
+    branchesEl.append(li);
+    branches.forEach((c, k) => { if (k > 0 && c.parent === b) add(k, depth + 1); });
+  };
+  add(0, 0);
+  renderCompareOptions();
+}
+
+function switchTo(b: number, index = len(b) - 1) {
+  cur = { b, i: cur.i };
+  renderBranches();
+  renderTimeline();
+  void go(index);
+}
+
+async function download(b: number) {
+  try {
+    const name = loaded!.name.replace(/ \(sample\)$/, '').replace(/\.(topwater|jsonl?)$/i, '');
+    const data = await request<Uint8Array>({ t: 'export', b, from: loaded!.name });
+    const url = URL.createObjectURL(new Blob([data as BlobPart], { type: 'application/zip' }));
+    const a = el('a', { href: url, download: `${name}-branch-${b}.topwater` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    status(`Saved ${branchName(b).toLowerCase()} as ${a.download}: the recording's turns up to the fork, then the branch's.`);
+  } catch (e) { status(`Could not save ${branchName(b).toLowerCase()}: ${(e as Error).message}`, true); }
+}
+
+// ---------- continue from here: a terminal whose commands become a branch ----------
+/** where the next command goes: after call `i` of branch `b` (a new branch, unless that is the end of a branch) */
+let live: Point | null = null;
+
+function continueHere() {
+  if (!rec) return;
+  live = { ...cur };
+  liveEl.hidden = false;
+  $('live-title').textContent = `Continue from ${turnLabel(cur.i).toLowerCase()}${cur.b ? ` of ${branchName(cur.b).toLowerCase()}` : ''}`;
+  liveOut.replaceChildren(el('span', { cls: 'dim', textContent: `This is the machine after ${turnLabel(cur.i).toLowerCase()}. ${cur.b && cur.i === len(cur.b) - 1 ? `Commands are added to ${branchName(cur.b).toLowerCase()}.` : 'Your commands start a new branch; the recording is left as it was.'}
+` }));
+  liveCmd.focus();
+}
+
+async function runLive(command: string) {
+  if (!live || !command.trim()) return;
+  liveCmd.value = '';
+  liveCmd.disabled = true;
+  const block = el('span', {}, el('span', { cls: 'p', textContent: '$ ' }), command + '\n');
+  liveOut.append(block);
+  try {
+    let b = live.b;
+    if (b === 0 || live.i !== len(b) - 1) {
+      b = await request<number>({ t: 'branch', parent: live.b, at: live.i });
+      if (b !== branches.length) throw new Error('the viewer lost track of its branches; reload the recording');
+      branches.push({ parent: live.b, at: live.i, calls: [] });
+    }
+    const c = await request<CallInfo>({ t: 'run', b, command });
+    branches[b].calls.push(c);
+    live = { b, i: c.index };
+    if (c.stdout) block.append(el('span', { textContent: c.stdout }));
+    if (c.stderr) block.append(el('span', { cls: 'err', textContent: c.stderr }));
+    if (c.exitCode !== 0) block.append(el('span', { cls: 'dim', textContent: `[exit code ${c.exitCode}]\n` }));
+    if (c.trailer) block.append(el('span', { cls: 'trailer', textContent: c.trailer + '\n' }));
+    switchTo(b, c.index);
+  } catch (e) {
+    block.append(el('span', { cls: 'err', textContent: `${(e as Error).message}\n` }));
+  } finally {
+    liveCmd.disabled = false;
+    liveOut.scrollTop = liveOut.scrollHeight;
+    liveCmd.focus();
+  }
+}
+
 // ---------- controls ----------
+$('continue').addEventListener('click', continueHere);
+$('live-form').addEventListener('submit', e => { e.preventDefault(); void runLive(liveCmd.value); });
+$('live-close').addEventListener('click', () => { liveEl.hidden = true; live = null; $('continue').focus(); });
+for (const sel of [cmpA, cmpZ]) sel.addEventListener('change', () => void compareChosen());
 $('open').addEventListener('click', () => $<HTMLInputElement>('file').click());
 $<HTMLInputElement>('file').addEventListener('change', e => { const input = e.target as HTMLInputElement; void openFiles([...input.files!]); input.value = ''; });
 $('sample').addEventListener('click', () => void openSample());
 $('first').addEventListener('click', () => void go(-1));
-$('prev').addEventListener('click', () => void go(current - 1));
-$('next').addEventListener('click', () => void go(current + 1));
-$('last').addEventListener('click', () => void go(rec ? rec.calls.length - 1 : -1));
+$('prev').addEventListener('click', () => void go(cur.i - 1));
+$('next').addEventListener('click', () => void go(cur.i + 1));
+$('last').addEventListener('click', () => void go(rec ? len(cur.b) - 1 : -1));
 slider.addEventListener('input', () => void go(Number(slider.value) - 1));
 $('fork').addEventListener('click', () => void forkHere());
 document.addEventListener('keydown', e => {
   const t = e.target as HTMLElement;
   if (!rec || e.altKey || e.ctrlKey || e.metaKey || t.closest('input, textarea, select, summary') || (t instanceof HTMLButtonElement && (e.key === 'Enter' || e.key === ' '))) return;
-  const move = { ArrowLeft: current - 1, ArrowRight: current + 1, Home: -1, End: rec.calls.length - 1 }[e.key];
+  const move = { ArrowLeft: cur.i - 1, ArrowRight: cur.i + 1, Home: -1, End: len(cur.b) - 1 }[e.key];
   if (move === undefined) return;
   e.preventDefault();
   void go(move);
@@ -403,5 +558,5 @@ themeBtn.addEventListener('click', () => {
   try { localStorage.setItem('theme', t); } catch { /* the choice just won't persist */ }
 });
 
-(window as unknown as { topwaterReplay: { go: typeof go; current: () => number } }).topwaterReplay = { go, current: () => current };
+(window as unknown as { topwaterReplay: { go: typeof go; current: () => Point } }).topwaterReplay = { go, current: () => cur };
 if (!new URLSearchParams(location.search).has('empty')) void openSample();

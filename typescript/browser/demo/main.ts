@@ -72,15 +72,12 @@ function forkedMachine(): Uint8Array | undefined {
   if (!key || !/^[a-z0-9]{1,40}$/.test(key)) return undefined;
   try {
     const name = 'topwater-fork:' + key;
-    let b64 = sessionStorage.getItem(name);
-    if (b64 === null) {
-      b64 = localStorage.getItem(name);
-      localStorage.removeItem(name);
-      if (b64 !== null) sessionStorage.setItem(name, b64);
-    }
+    const kept = sessionStorage.getItem(name), b64 = kept ?? localStorage.getItem(name);
     if (b64 === null) return undefined;
     const s = atob(b64), bytes = new Uint8Array(s.length);
     for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+    // the hand-off copy goes only once this tab holds its own; if that fails it stays, so a reload still finds the machine
+    if (kept === null) try { sessionStorage.setItem(name, b64); localStorage.removeItem(name); } catch { /* kept in localStorage */ }
     return bytes;
   } catch { return undefined; }
 }
