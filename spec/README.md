@@ -117,11 +117,11 @@ the ones found while building this spec) and fix the port that is wrong.
 ## Known gaps
 
 - `bc` is C# only.
-- Options only TypeScript accepts are marked `"ports": ["ts"]` (for example `uniq -f -s -w`, `sort -m -S -T`,
-  `wc -L`, `mkdir -m`, `tree -f -F -i`, `nl -n -v -i`, `cp -i -t -T`, `rm -i`, `du -b`, `uname -i -p`,
+- Some options only TypeScript accepts; they are marked `"ports": ["ts"]` (for example `uniq -f -s -w`,
+  `sort -m -S -T`, `wc -L`, `mkdir -m`, `tree -f -F -i`, `nl -n -v -i`, `cp -i -t -T`, `rm -i`, `du -b`, `uname -i -p`,
   `xargs -i --eof`).
-- The `custom`-parser commands other than `sed`, `env` and `hash` (`find`, `awk`, `echo`, `printf`, `set`, ...) have
-  no option list yet.
+- The `custom`-parser commands other than `sed`, `env`, `hash`, `umask`, `unalias` and `git` (`find`, `awk`, `echo`,
+  `printf`, `set`, ...) have no option list yet.
 - Still spelled inline in each port: `jq`, `awk` and `bc` (their own language errors), the regex translator's errors
   shared by grep and sed, the script-file and `#!` errors, the `[[ =~ ]]` bad-regex message, the filesystem's
   snapshot-loading messages, and the messages below.

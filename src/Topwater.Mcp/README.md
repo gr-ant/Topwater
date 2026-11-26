@@ -24,7 +24,7 @@ files read-file --path /data/a.txt    # calls the tool; the result goes to stdou
 ```
 
 Numbers, required options and unknown options are checked before the call. Calls are real, so expose only what you
-would let the agent do. See the [reference](https://github.com/gr-ant/Topwater/blob/main/docs/reference.md#mcp-servers).
+would let the agent do. See [MCP servers](https://github.com/gr-ant/Topwater/blob/main/docs/programs.md#mcp-servers).
 
 To go the other way, giving an MCP client (Claude Desktop, VS Code, Cursor, ...) a Topwater shell as its `bash` tool, run
 `topwater mcp` from the [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) package.

@@ -1,8 +1,8 @@
 ![Topwater](https://raw.githubusercontent.com/gr-ant/Topwater/main/assets/brand/topwater_lockup.png)
 
 Topwater gives an LLM agent one `bash` tool backed by a simulated Linux shell running inside your .NET process:
-a bash interpreter, an in-memory Ubuntu-like filesystem, about 100 standard commands (`grep`, `sed`, `awk`,
-`jq`, `find`, `tar`, ...), and your own C# methods as command-line programs.
+a bash interpreter, an in-memory Ubuntu-like filesystem, about 140 commands (`grep`, `sed`, `awk`, `jq`, `find`,
+`tar`, `git`, ...), and your own C# methods as command-line programs.
 
 ```bash
 dotnet add package Topwater --prerelease
@@ -41,7 +41,11 @@ agent types reaches your machine unless you register a real host program, an MCP
 
 ## More
 
-- [Reference](https://github.com/gr-ant/Topwater/blob/main/docs/reference.md): the shell language, every command, limits and safety
+- [Documentation](https://github.com/gr-ant/Topwater/blob/main/docs/README.md): [the machine](https://github.com/gr-ant/Topwater/blob/main/docs/machine.md), [your programs](https://github.com/gr-ant/Topwater/blob/main/docs/programs.md),
+  [snapshots and recordings](https://github.com/gr-ant/Topwater/blob/main/docs/snapshots-and-recordings.md), [limits and safety](https://github.com/gr-ant/Topwater/blob/main/docs/limits.md)
 - [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp): mount an MCP server as a command
 - [Topwater.AI](https://www.nuget.org/packages/Topwater.AI): use the shell as a Microsoft.Extensions.AI tool
+- [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers): a machine as a Docker image, and back
+- [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay): recordings as regression tests
+- [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli): the `topwater` command and MCP server
 - [Source and issues](https://github.com/gr-ant/Topwater) · MIT licensed

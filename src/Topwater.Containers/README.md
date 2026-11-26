@@ -42,4 +42,7 @@ Container content is untrusted: paths must be canonical, the import is bounded b
 `MaxStringBytes` and `MaxExtractEntries`, nothing is written to disk, and the result goes through the same checks as
 `ShellSnapshot.Load`.
 
-An exported image holds what the agent wrote: its files and scripts, its `~/.bashrc` and the session script that `~/.bashrc` sources, file modes and owners. Starting a shell in it runs that content. Treat the image as untrusted, and run it with the same care, limits and isolation you would give the agent itself. See the [reference](https://github.com/gr-ant/Topwater/blob/main/docs/reference.md#containers).
+An exported image holds what the agent wrote: its files and scripts, its `~/.bashrc` and the session script that
+`~/.bashrc` sources, file modes and owners. Starting a shell in it runs that content. Treat the image as untrusted,
+and run it with the same care, limits and isolation you would give the agent itself. See
+[Containers](https://github.com/gr-ant/Topwater/blob/main/docs/containers.md).

@@ -8,6 +8,9 @@ tool with no code.
 dotnet tool install -g Topwater.Cli --prerelease
 ```
 
+Releases from `0.1.0-preview.3` on also carry a standalone binary that needs no .NET; see
+[Command line and MCP server](https://github.com/gr-ant/Topwater/blob/main/docs/cli.md#install).
+
 ```console
 $ topwater                                  # an interactive shell on a fresh machine
 $ topwater run "seq 5 | paste -sd+ | bc"    # one command; its exit code is passed through

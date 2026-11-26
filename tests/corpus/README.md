@@ -1,6 +1,6 @@
 # Shared test corpus
 
-One copy of the recorded shell behaviour, run by all three implementations: C# (`tests/Topwater.Tests/CorpusTests.cs`),
+About 2,000 cases in 32 areas: one copy of the recorded shell behaviour, run by all three implementations: C# (`tests/Topwater.Tests/CorpusTests.cs`),
 Python (`python/tests/test_corpus.py`) and TypeScript (`typescript/test/corpus.test.ts`). Change behaviour here, never in
 a port's own copy, so the implementations cannot drift apart.
 
@@ -31,7 +31,8 @@ Every runner does the same thing per case: a fresh `Shell` with default options,
 Each value is what the real program printed, recorded by running the script in real bash in an empty directory:
 bash 5.2.21 and GNU coreutils 9.4 for the shell areas, GNU date 9.4 with `TZ=UTC` (`date`), GNU bc 1.07.1 (`bc`), GNU
 tar 1.35, gzip 1.12, Zip 3.0 and UnZip 6.00 (`archives`; compressed bytes differ from the real tools', so these cases
-compare listings, messages and round-tripped contents, never sizes). These are the versions on Ubuntu 24.04. Exceptions:
+compare listings, messages and round-tripped contents, never sizes), git 2.43.0 with a fixed identity and fixed
+dates, so commit ids are the same everywhere (`git`). These are the versions on Ubuntu 24.04. Exceptions:
 
 - `error-messages` and `ls-long` were recorded with `--agent` (as the user `agent`, so owners and "Permission denied"
   match Topwater's shell) and send stderr to stdout so the message wording is compared. Their first cases pass bash's
@@ -51,9 +52,11 @@ python3 tests/corpus/record.py bc --apt bc "echo 'scale=3; 1/7' | bc"   # instal
 python3 tests/corpus/record.py loops --local 'for i in 1 2; do echo $i; done'   # host bash in a temp dir, no docker
 python3 tests/corpus/record.py quoting --dry-run 'echo hi'          # print the case, don't append
 python3 tests/corpus/record.py ls-long --agent 'touch -d 2020-01-01 f; ls -l'   # as the ordinary user agent, like Topwater
+python3 tests/corpus/record.py git --git 'git init -q r && git -C r status'     # an image with git, fixed identity and dates
 ```
 
-The tool runs the script as `bash -c` in an empty `/tmp/w` (`TZ=UTC`, `LC_ALL=C.UTF-8`, no network), and appends
+The tool runs the script as `bash -c` in an empty `/tmp/w` (`TZ=UTC`, `LC_ALL=C.UTF-8`, no network, a time limit),
+and appends
 `{id, script, stdout, exitCode, quiet}` with the real output. Keep scripts independent of the machine: no `$USER`,
 `$HOME`, `$PWD` beyond `/tmp/w`, hostnames, clocks or PIDs, since the simulated machine differs there on purpose. Then run
 the three suites; a case a port cannot pass yet goes in its skip list.
