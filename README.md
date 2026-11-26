@@ -15,6 +15,12 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
+<p align="center">
+  <a href="https://gr-ant.github.io/Topwater/"><strong>Try it out in your browser →</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://gr-ant.github.io/Topwater/replay.html">Replay viewer</a>
+</p>
+
 Topwater is a library for **.NET**, **Python** and **TypeScript**. You register your functions, MCP servers and
 HTTP APIs; the model sees them as command-line programs on a small Linux machine and reaches all of them through a
 single tool:
