@@ -835,6 +835,12 @@ class _Find:
                 size = (st.size + unit - 1) // unit
                 return size > num if m.group(1) == "+" else size < num if m.group(1) == "-" else size == num
             return pred_e(size_ok)
+        if tok == "-links":
+            spec = arg()
+            if not re.fullmatch(r"[+-]?\d+", spec):
+                raise ShellError(spec_message("find", "invalidArgument", value=spec, predicate="-links"))
+            num = int(spec.lstrip("+-"))
+            return pred_e(lambda e: (lambda n: n > num if spec[0] == "+" else n < num if spec[0] == "-" else n == num)(stat(e).links))
         if tok == "-empty":
             return pred_e(lambda e: not fs.listdir(e[0]) if stat(e).is_dir else not stat(e).is_symlink and stat(e).size == 0)
         if tok in ("-true", "-false"):

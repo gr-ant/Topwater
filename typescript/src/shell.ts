@@ -61,7 +61,7 @@ export const DEFAULTS: ShellOptions = {
 const SYSTEM_DIRS = [
   '/boot', '/lib', '/lib64', '/media', '/mnt', '/proc/4242', '/proc/tty/driver', '/run/lock', '/sbin', '/srv', '/sys',
   '/etc/profile.d', '/etc/skel', '/usr/games', '/usr/include', '/usr/lib64', '/usr/libexec', '/usr/sbin', '/usr/src',
-  '/usr/local/etc', '/usr/local/games', '/usr/local/include', '/usr/local/lib', '/usr/local/man', '/usr/local/sbin', '/usr/local/share', '/usr/local/src',
+  '/usr/local/etc', '/usr/local/games', '/usr/local/include', '/usr/local/lib', '/usr/local/sbin', '/usr/local/share/man', '/usr/local/src',
   '/usr/share/base-files', '/usr/share/bash-completion', '/usr/share/common-licenses', '/usr/share/doc', '/usr/share/info', '/usr/share/locale',
   '/usr/share/man', '/usr/share/misc', '/usr/share/terminfo',
   '/var/backups', '/var/cache/apt/archives/partial', '/var/cache/debconf', '/var/cache/ldconfig', '/var/lib/apt', '/var/lib/dpkg', '/var/lib/misc', '/var/lib/pam', '/var/lib/systemd',
@@ -373,6 +373,7 @@ export class Shell implements ArithHost {
     const link = (path: string, target: string) => { if (!fs.exists(path) && !fs.isSymlink(path)) fs.createSymlink(path, target); };
     link('/var/run', '/run');
     link('/var/lock', '/run/lock');
+    link('/usr/local/man', 'share/man');
     fs.writeText('/etc/hostname', host + '\n');
     seed('/etc/issue', 'Ubuntu 24.04.1 LTS \\n \\l\n\n');
     seed('/etc/issue.net', 'Ubuntu 24.04.1 LTS\n');

@@ -4,6 +4,7 @@ import { ShellError, reason, specMessage, specOf, type CommandContext } from '..
 import { concatBytes, decodeBytes, encodeText, toBase64 } from '../bytes.js';
 import { strftime } from '../format.js';
 import { WebFailure, WebSession, WebUrl, decompress, header, type WebResponse } from '../web.js';
+import { sleepFor } from './builtins.js';
 
 const NO_NETWORK = new WebSession({ explainBlocked: false });
 const utf8 = new TextEncoder();
@@ -44,10 +45,52 @@ const CURL_LONG: Record<string, string> = {
   get: 'G', request: 'X', header: 'H', 'user-agent': 'A', user: 'u', location: 'L', 'max-redirs': '\u0005',
   include: 'i', head: 'I', output: 'o', 'remote-name': 'O', fail: 'f', 'fail-with-body': '\u0006', silent: 's',
   'show-error': 'S', 'write-out': 'w', 'max-time': 'm', 'connect-timeout': '\u0007', compressed: '\u0008', verbose: 'v',
-  insecure: 'k', help: 'h', version: 'V',
+  insecure: 'k', help: 'h', version: 'V', retry: '\u0010', 'retry-delay': '\u0011', 'retry-max-time': '\u0012',
+  'retry-all-errors': '\u0013', 'retry-connrefused': '\u0014', proto: '\u0015', 'proto-redir': '\u0016', 'fail-early': '\u0017',
+  'no-progress-meter': '\u0018', tlsv1: '\u0019', 'tlsv1.0': '\u0019', 'tlsv1.1': '\u0019', 'tlsv1.2': '\u0019', 'tlsv1.3': '\u0019',
+  'ssl-reqd': '\u0019', 'http1.1': '\u0019', http2: '\u0019', 'tls-max': '\u001a', 'progress-bar': '\u001b',
 };
-const CURL_FLAGS = 'GLiIOfsSvkhV\u0006\u0008';
-const CURL_VALUED = 'dXHAuowm\u0001\u0002\u0003\u0004\u0005\u0007';
+const CURL_FLAGS = 'GLiIOfsSvkhV\u0006\u0008\u0013\u0014\u0017\u0018\u0019\u001b';
+const CURL_VALUED = 'dXHAuowm\u0001\u0002\u0003\u0004\u0005\u0007\u0010\u0011\u0012\u0015\u0016\u001a';
+
+// what --proto names: the protocols curl 8.5 on Ubuntu knows (Topwater itself only speaks http and https)
+const CURL_PROTOCOLS = ['dict', 'file', 'ftp', 'ftps', 'gopher', 'gophers', 'http', 'https', 'imap', 'imaps', 'ldap', 'ldaps', 'mqtt',
+  'pop3', 'pop3s', 'rtmp', 'rtmpe', 'rtmps', 'rtmpt', 'rtmpte', 'rtmpts', 'rtsp', 'scp', 'sftp', 'smb', 'smbs', 'smtp', 'smtps', 'telnet', 'tftp', 'ws', 'wss'];
+const REDIR_PROTOCOLS = ['http', 'https', 'ftp', 'ftps'];
+
+/** --proto and --proto-redir: from `start`, each comma-separated name added (+ or none), removed (-) or made the only one (=);
+ * "all" is every protocol. An unknown name gets a warning and is skipped. */
+function protoSet(spec: string, start: string[], warn: (w: string) => void): Set<string> {
+  const set = new Set(start);
+  for (const token of spec.split(',')) {
+    let i = 0, action = '+';
+    for (; i < token.length && '+-='.includes(token[i]); i++) action = token[i];
+    const name = token.slice(i).toLowerCase();
+    if (name.length === 0) continue;
+    if (action === '=') set.clear();
+    const names = name === 'all' ? CURL_PROTOCOLS : CURL_PROTOCOLS.includes(name) ? [name] : [];
+    if (names.length === 0) { warn(specMessage('curl', 'unknownProtocol', { name: token.slice(i) })); continue; }
+    for (const n of names) if (action === '-') set.delete(n); else set.add(n);
+  }
+  return set;
+}
+
+/** curl's "Warning: " lines, wrapped at 79 columns (the width curl assumes when stderr is not a terminal). */
+function curlWarning(text: string): string {
+  const width = 79 - 9;
+  let out = '';
+  for (let rest = text; rest.length > 0;) {
+    if (rest.length <= width) { out += specMessage('curl', 'warning', { text: rest }) + '\n'; break; }
+    let cut = width - 1;
+    while (cut > 0 && rest[cut] !== ' ' && rest[cut] !== '\t') cut--;
+    if (cut === 0) cut = width - 1;
+    out += specMessage('curl', 'warning', { text: rest.slice(0, cut + 1) }) + '\n';
+    rest = rest.slice(cut + 1);
+  }
+  return out;
+}
+
+/** Waits like `sleep`: on the virtual clock, or really, up to the call's deadline. */
 const isLetter = (c: string) => /^[A-Za-z]$/.test(c);
 
 async function curl(ctx: CommandContext): Promise<number> {
@@ -70,6 +113,7 @@ async function curl(ctx: CommandContext): Promise<number> {
     } else if (arg.startsWith('-') && arg.length > 1) {
       for (let j = 1; j < arg.length; j++) {
         const c = arg[j];
+        if (c === '#') { opts.push({ key: '\u001b', value: null, name: '-#' }); continue; }
         if (CURL_VALUED.includes(c) && isLetter(c)) {
           const value = j + 1 < arg.length ? arg.slice(j + 1) : ++i < args.length ? args[i] : null;
           if (value === null) return usage(M('needsParameter', { option: '-' + c }));
@@ -102,6 +146,22 @@ async function curl(ctx: CommandContext): Promise<number> {
     else maxTime = maxTime === 0 ? Number(value) : Math.min(maxTime, Number(value));
   }
   const timeoutMs = maxTime > 0 && seconds(maxTime) < web.policy.timeoutMs ? seconds(maxTime) : web.policy.timeoutMs;
+
+  // --retry, --retry-delay, --retry-max-time: whole seconds, not negative
+  const retry = [0, 0, 0];
+  for (const { key, value, name } of opts.filter(o => o.key === '\u0010' || o.key === '\u0011' || o.key === '\u0012')) {
+    if (!/^[+-]?\d+$/.test(value!)) return usage(M('badNumber', { option: name }));
+    const n = Number(value);
+    if (n < 0) return usage(M('negativeNumber', { option: name }));
+    retry[key.charCodeAt(0) - 0x10] = n;
+  }
+  const [retries, retryDelay, retryMaxTime] = retry;
+  const retryAll = has('\u0013'), retryRefused = has('\u0014'), failEarly = has('\u0017');
+  let protocols = new Set(CURL_PROTOCOLS), redirProtocols = new Set(REDIR_PROTOCOLS);
+  for (const { key, value } of opts.filter(o => o.key === '\u0015' || o.key === '\u0016')) {
+    const set = protoSet(value!, key === '\u0015' ? CURL_PROTOCOLS : REDIR_PROTOCOLS, w => ctx.stderr.write(curlWarning(w)));
+    if (key === '\u0015') protocols = set; else redirProtocols = set;
+  }
 
   // the body: -d values joined with &, as curl does
   const parts: Uint8Array[] = [];
@@ -151,59 +211,114 @@ async function curl(ctx: CommandContext): Promise<number> {
 
   for (const raw of urls) {
     const output = outputs.shift() ?? { key: '', value: null };
-    let buffer: Uint8Array[] = [];
-    let code = 0, redirects = 0, message = '';
+    const started = ctx.shell.now();
+    let code = 0, redirects = 0;
     let lastResponse: WebResponse | null = null;
-    try {
-      const url = WebUrl.parse(query !== null ? raw + (raw.includes('?') ? '&' : '?') + query : raw);
-      const sent: [string, string][] = [...headers];
-      const userInfo = user ?? (url.userInfo !== null ? unescape(url.userInfo) : null);
-      if (userInfo !== null && !sent.some(h => h[0].toLowerCase() === 'authorization'))
-        sent.push(['Authorization', 'Basic ' + toBase64(utf8.encode(userInfo.includes(':') ? userInfo : userInfo + ':'))]);
-      const target = output.key === 'O' ? remoteName(url) : output.value;
-      if (target === '') throw new WebFailure('recv', '', 0, null, 'noRemoteName');
+    let vars: Record<string, string> = {};
+    for (let tries = 0; ; tries++) {
+      let buffer: Uint8Array[] = [];
+      let message = '', urlText = raw, retriable = true;
+      let target: string | null = null;
+      code = 0; redirects = 0; lastResponse = null;
+      const hops: { response: WebResponse; at: number; requestBytes: number }[] = [];
+      const clock = performance.now();
+      const elapsed = () => (performance.now() - clock) / 1000;
+      try {
+        if (query !== null) urlText += (raw.includes('?') ? '&' : '?') + query;
+        const url = WebUrl.parse(urlText);
+        if (!protocols.has(url.scheme)) throw new WebFailure('protocol', url.scheme);
+        const sent: [string, string][] = [...headers];
+        const userInfo = user ?? (url.userInfo !== null ? unescape(url.userInfo) : null);
+        if (userInfo !== null && !sent.some(h => h[0].toLowerCase() === 'authorization'))
+          sent.push(['Authorization', 'Basic ' + toBase64(utf8.encode(userInfo.includes(':') ? userInfo : userInfo + ':'))]);
+        target = output.key === 'O' ? remoteName(url) : output.value;
+        if (target === '') throw new WebFailure('recv', '', 0, null, 'noRemoteName');
 
-      const onHop = (r: WebResponse) => {
-        lastResponse = r;
-        if (verbose) {
-          let s = `> ${r.method} ${r.url.pathAndQuery} HTTP/1.1\r\n> Host: ${r.url.hostForUrl}${r.url.defaultPort ? '' : ':' + r.url.port}\r\n`;
-          for (const [k, v] of sent) s += `> ${k}: ${v}\r\n`;
-          s += `> \r\n< HTTP/1.1 ${r.status} ${r.reason}\r\n`;
-          for (const [k, v] of r.headers) s += `< ${k}: ${v}\r\n`;
-          ctx.stderr.write(s + '< \r\n');
+        const onHop = (r: WebResponse) => {
+          lastResponse = r;
+          // shortcut: the body counts toward the first request only; a 303 drops it, other redirects resend it
+          const first = body !== null && hops.length === 0;
+          const request = `${r.method} ${r.url.pathAndQuery} HTTP/1.1\r\nHost: ${r.url.hostForUrl}${r.url.defaultPort ? '' : ':' + r.url.port}\r\n`
+            + sent.map(([k, v]) => `${k}: ${v}\r\n`).join('') + (first ? `Content-Length: ${body!.length}\r\n` : '') + '\r\n';
+          hops.push({ response: r, at: elapsed(), requestBytes: utf8.encode(request).length + (first ? body!.length : 0) });
+          if (verbose) {
+            let s = `> ${r.method} ${r.url.pathAndQuery} HTTP/1.1\r\n> Host: ${r.url.hostForUrl}${r.url.defaultPort ? '' : ':' + r.url.port}\r\n`;
+            for (const [k, v] of sent) s += `> ${k}: ${v}\r\n`;
+            s += `> \r\n< HTTP/1.1 ${r.status} ${r.reason}\r\n`;
+            for (const [k, v] of r.headers) s += `< ${k}: ${v}\r\n`;
+            ctx.stderr.write(s + '< \r\n');
+          }
+          if (include) buffer.push(utf8.encode(statusBlock(r)));
+          // --proto-redir (and --proto) decide where a redirect may lead
+          const location = header(r, 'Location');
+          if (follow && [301, 302, 303, 307, 308].includes(r.status) && location) {
+            const next = r.url.resolve(location).scheme;
+            if (!(protocols.has(next) && redirProtocols.has(next))) throw new WebFailure('protocol', next);
+          }
+        };
+        const result = await web.fetch(url, method, forced, sent, body, follow, maxRedirs, timeoutMs, onHop, ctx);
+        const r = lastResponse = result.response;
+        redirects = result.redirects;
+        let data = r.body;
+        const encoding = header(r, 'Content-Encoding')?.trim().toLowerCase();
+        if (compressed && !r.truncated && (encoding === 'gzip' || encoding === 'x-gzip' || encoding === 'deflate') && data.length > 0)
+          data = decode(data, encoding !== 'deflate', web.policy.maxResponseBytes);
+        if ((fail || failWithBody) && r.status >= 400) {
+          if (failWithBody) buffer.push(data);
+          code = 22;
+          message = M('httpError', { status: String(r.status) });
+        } else {
+          if (!head) buffer.push(data);
+          if (r.truncated) { code = 63; message = M('tooLarge'); }
         }
-        if (include) buffer.push(utf8.encode(statusBlock(r)));
+        if (target !== null && target !== '-' && (code === 0 || code === 63 || failWithBody)) {
+          try { ctx.fs.writeBytes(ctx.resolvePath(target), concatBytes(buffer)); } catch (e) {
+            if (!(e instanceof ShellError)) throw e;
+            code = 23; message = M('writeFailed');
+          }
+          buffer = [];
+        }
+      } catch (e) {
+        if (!(e instanceof WebFailure)) throw e;
+        [code, message] = curlError(e, web.policy.explainBlocked);
+        retriable = e.blocked === null && e.kind !== 'replay'; // the web policy's answer would not change
+      }
+      const out = concatBytes(buffer);
+      if (out.length > 0) ctx.stdout.write(decodeBytes(out));
+      if (code !== 0) error(code, message);
+
+      const total = elapsed();
+      const lr = lastResponse as WebResponse | null;
+      const size = lr?.body.length ?? 0, upload = body?.length ?? 0;
+      const secs = (x: number) => x.toFixed(6);
+      vars = {
+        errormsg: code === 0 ? '' : message, filename_effective: target === null || target === '-' ? '' : target, url: urlText,
+        scheme: lr?.url.scheme.toUpperCase() ?? '', http_version: lr === null ? '0' : '1.1', remote_port: lr ? String(lr.url.port) : '',
+        num_connects: String(hops.filter((h, k) => k === 0 || h.response.url.host !== hops[k - 1].response.url.host || h.response.url.port !== hops[k - 1].response.url.port).length),
+        size_upload: String(upload), size_header: String(hops.reduce((n, h) => n + utf8.encode(statusBlock(h.response)).length, 0)),
+        size_request: String(hops.reduce((n, h) => n + h.requestBytes, 0)),
+        speed_download: String(total > 0 ? Math.floor(size / total) : 0), speed_upload: String(total > 0 && hops.length > 0 ? Math.floor(upload / total) : 0),
+        // the phases before the first response byte are not timed apart
+        time_total: secs(total), time_namelookup: secs(0), time_connect: secs(0), time_appconnect: secs(0), time_pretransfer: secs(0),
+        time_starttransfer: secs(hops.length > 0 ? hops[hops.length - 1].at : 0), time_redirect: secs(hops.length > 1 ? hops[hops.length - 2].at : 0),
       };
-      const result = await web.fetch(url, method, forced, sent, body, follow, maxRedirs, timeoutMs, onHop, ctx);
-      const r = lastResponse = result.response;
-      redirects = result.redirects;
-      let data = r.body;
-      const encoding = header(r, 'Content-Encoding')?.trim().toLowerCase();
-      if (compressed && !r.truncated && (encoding === 'gzip' || encoding === 'x-gzip' || encoding === 'deflate') && data.length > 0)
-        data = decode(data, encoding !== 'deflate', web.policy.maxResponseBytes);
-      if ((fail || failWithBody) && r.status >= 400) {
-        if (failWithBody) buffer.push(data);
-        code = 22;
-        message = M('httpError', { status: String(r.status) });
-      } else {
-        if (!head) buffer.push(data);
-        if (r.truncated) { code = 63; message = M('tooLarge'); }
-      }
-      if (target !== null && target !== '-' && (code === 0 || code === 63 || failWithBody)) {
-        try { ctx.fs.writeBytes(ctx.resolvePath(target), concatBytes(buffer)); } catch (e) {
-          if (!(e instanceof ShellError)) throw e;
-          code = 23; message = M('writeFailed');
-        }
-        buffer = [];
-      }
-    } catch (e) {
-      if (!(e instanceof WebFailure)) throw e;
-      [code, message] = curlError(e, web.policy.explainBlocked);
+
+      // --retry: a timeout or unresolved name, a refused connection (--retry-connrefused), a transient HTTP status, or anything (--retry-all-errors)
+      const status = lr?.status ?? 0;
+      const why = !retriable || tries >= retries ? null
+        : code === 6 || code === 28 ? 'retryTimeout'
+        : code === 7 && retryRefused ? 'retryRefused'
+        : (code === 0 || code === 22) && [408, 429, 500, 502, 503, 504, 522, 524].includes(status) ? 'retryHttp'
+        : retryAll && code !== 0 ? 'retryAll' : null;
+      if (why === null || retryMaxTime > 0 && (ctx.shell.now() - started) / 1000 >= retryMaxTime) break;
+      const wait = retryDelay > 0 ? retryDelay : Math.min(600, 2 ** Math.min(tries, 10));
+      if (!has('s')) // -S brings back errors, not warnings
+        ctx.stderr.write(curlWarning(M('retrying', { why: M(why), seconds: String(wait), left: String(retries - tries) })));
+      await sleepFor(ctx, wait * 1000);
     }
-    const out = concatBytes(buffer);
-    if (out.length > 0) ctx.stdout.write(decodeBytes(out));
-    if (code !== 0) { error(code, message); exit = code; }
-    if (format !== null) ctx.stdout.write(writeOut(ctx, format, lastResponse, redirects, code, method, forced));
+    exit = code; // without --fail-early, the last URL's status
+    if (format !== null) ctx.stdout.write(writeOut(ctx, format, lastResponse, redirects, code, method, forced, vars));
+    if (failEarly && code !== 0) break;
   }
   return exit;
 }
@@ -255,7 +370,7 @@ function decode(data: Uint8Array, gzip: boolean, max: number): Uint8Array {
   return out;
 }
 
-function writeOut(ctx: CommandContext, format: string, r: WebResponse | null, redirects: number, code: number, method: string, forced: string | null): string {
+function writeOut(ctx: CommandContext, format: string, r: WebResponse | null, redirects: number, code: number, method: string, forced: string | null, vars: Record<string, string>): string {
   let s = '';
   for (let i = 0; i < format.length; i++) {
     const c = format[i];
@@ -282,7 +397,9 @@ function writeOut(ctx: CommandContext, format: string, r: WebResponse | null, re
       case 'num_redirects': s += String(redirects); break;
       case 'method': s += forced ?? r?.method ?? method; break;
       case 'exitcode': s += String(code); break;
-      default: ctx.stderr.write(specMessage('curl', 'unknownWriteOut', { name }) + '\n');
+      default:
+        if (Object.hasOwn(vars, name)) s += vars[name];
+        else ctx.stderr.write(specMessage('curl', 'unknownWriteOut', { name }) + '\n');
     }
   }
   return s;
@@ -293,8 +410,9 @@ function writeOut(ctx: CommandContext, format: string, r: WebResponse | null, re
 const WGET_LONG: Record<string, string> = {
   'output-document': 'O', quiet: 'q', 'server-response': 'S', header: '\u0001', 'post-data': '\u0002', 'post-file': '\u0003',
   'user-agent': 'U', timeout: 'T', 'max-redirect': '\u0004', 'no-check-certificate': '\u0005', help: 'h', version: 'V',
+  'no-verbose': '\u0006', 'directory-prefix': 'P', 'no-clobber': '\u0007', spider: '\u0008', tries: 't', 'show-progress': '\u0009',
 };
-const WGET_VALUED = 'OUT\u0001\u0002\u0003\u0004';
+const WGET_VALUED = 'OUTPt\u0001\u0002\u0003\u0004';
 
 async function wget(ctx: CommandContext): Promise<number> {
   const web = sessionOf(ctx);
@@ -320,7 +438,9 @@ async function wget(ctx: CommandContext): Promise<number> {
     } else if (arg.startsWith('-') && arg.length > 1) {
       for (let j = 1; j < arg.length; j++) {
         const c = arg[j];
-        if (!'OqSUThV'.includes(c)) return usage(M('invalidOption', { option: c }));
+        // -nv and -nc: wget's two-letter short options
+        if (c === 'n' && j + 1 < arg.length && (arg[j + 1] === 'v' || arg[j + 1] === 'c')) { opts.push({ key: arg[++j] === 'v' ? '\u0006' : '\u0007', value: null }); continue; }
+        if (!'OqSUThVPt'.includes(c)) return usage(M('invalidOption', { option: c }));
         if (WGET_VALUED.includes(c)) {
           const value = j + 1 < arg.length ? arg.slice(j + 1) : ++i < args.length ? args[i] : null;
           if (value === null) return usage(M('requiresArgument', { option: c }));
@@ -337,7 +457,9 @@ async function wget(ctx: CommandContext): Promise<number> {
   if (has('V')) { ctx.stdout.write(spec.version + '\n'); return 0; }
   if (urls.length === 0) return usage(M('missingUrl'), 1);
 
-  const quiet = has('q'), server = has('S');
+  const quiet = has('q'), server = has('S'), brief = has('\u0006'), spider = has('\u0008'), noClobber = has('\u0007');
+  const dir = last('P');
+  const prefix = dir ? dir.replace(/\/+$/, '') + '/' : null;
   let timeoutMs = web.policy.timeoutMs;
   const t = last('T');
   if (t !== null) {
@@ -385,7 +507,8 @@ async function wget(ctx: CommandContext): Promise<number> {
   }
 
   const now = () => strftime(ctx.shell.now(), '%Y-%m-%d %H:%M:%S');
-  const say = (line: string) => { if (!quiet) ctx.stderr.write(line + '\n'); };
+  const say = (line: string) => { if (!quiet && !brief) ctx.stderr.write(line + '\n'); }; // the full report
+  const note = (line: string) => { if (!quiet) ctx.stderr.write(line + '\n'); }; // also under -nv
   let exit = 0;
   for (const raw of urls) {
     let code = 0;
@@ -396,10 +519,18 @@ async function wget(ctx: CommandContext): Promise<number> {
       exit = 1;
       continue;
     }
+    // the file a download is saved to: -O, or the URL's last segment (index.html), under -P
+    const fileFor = (u: WebUrl) => { const name = remoteName(u); return (prefix ?? '') + (name.length > 0 ? unescape(name) : 'index.html'); };
+    if (noClobber && document === null && !spider && ctx.fs.exists(ctx.resolvePath(fileFor(url)))) {
+      say(M('clobber', { file: fileFor(url) }));
+      say('');
+      continue;
+    }
+    if (spider) say(M('spiderMode'));
     say(M('start', { time: now(), url: url.toString() }));
     let hop = 0;
     const onHop = (r: WebResponse) => {
-      if (hop++ > 0) say(M('start', { time: now(), url: r.url.toString() }));
+      if (hop++ > 0) { if (spider) say(M('spiderMode')); say(M('start', { time: now(), url: r.url.toString() })); }
       say(M('sent', { status: server ? '' : `${r.status} ${r.reason}` }));
       if (server) {
         let s = `  HTTP/1.1 ${r.status} ${r.reason}\n`;
@@ -410,18 +541,32 @@ async function wget(ctx: CommandContext): Promise<number> {
       if ([301, 302, 303, 307, 308].includes(r.status) && loc) say(M('following', { location: loc }));
     };
     try {
-      const { response: r } = await web.fetch(url, body !== null ? 'POST' : 'GET', null, [...headers], body, true, maxRedirect, timeoutMs, onHop, ctx);
+      const { response: r } = await web.fetch(url, spider ? 'HEAD' : body !== null ? 'POST' : 'GET', null, [...headers], body, true, maxRedirect, timeoutMs, onHop, ctx);
       if (r.status >= 400) {
-        say(M('httpError', { time: now(), status: `${r.status}: ${r.reason}` }));
+        if (brief) note(M('nvErrorUrl', { url: r.url.toString() }));
+        note(spider ? M('spiderMissing') : M('httpError', { time: now(), status: `${r.status}: ${r.reason}` }));
         say('');
         code = 8;
+      } else if (spider) {
+        const type = header(r, 'Content-Type');
+        say(M('length', { length: (header(r, 'Content-Length') ?? M('lengthUnspecified')) + (type !== undefined ? ` [${type}]` : '') }));
+        say(M('spiderExists'));
+        say('');
+        if (brief) note(M('nvSpider', { time: now(), url: r.url.toString(), status: `${r.status} ${r.reason}` }));
       } else {
         const length = header(r, 'Content-Length'), type = header(r, 'Content-Type');
         say(M('length', { length: (length ?? M('lengthUnspecified')) + (type !== undefined ? ` [${type}]` : '') }));
         let file = document;
         if (file === null) {
-          const name = remoteName(url);
-          file = name.length === 0 ? 'index.html' : unescape(name);
+          file = fileFor(url);
+          if (prefix !== null) {
+            try { ctx.fs.mkdir(ctx.resolvePath(prefix), true); } catch (e) {
+              if (!(e instanceof ShellError)) throw e;
+              ctx.stderr.write(M('writeFailed', { file, errno: reason(e) }) + '\n');
+              exit = 3;
+              continue;
+            }
+          }
           if (ctx.fs.exists(ctx.resolvePath(file))) {
             let n = 1;
             while (ctx.fs.exists(ctx.resolvePath(`${file}.${n}`))) n++;
@@ -445,6 +590,7 @@ async function wget(ctx: CommandContext): Promise<number> {
         const size = String(r.body.length) + (length !== undefined ? '/' + length : '');
         say(file === '-' ? M('written', { time: now(), size }) : M('saved', { time: now(), file, size }));
         say('');
+        if (brief) note(M('nvSaved', { time: now(), url: r.url.toString(), size, file }));
         if (r.truncated) { ctx.stderr.write(M('tooLarge', { limit: String(web.policy.maxResponseBytes) }) + '\n'); code = 1; }
       }
     } catch (e) {

@@ -151,6 +151,19 @@ function parseDuration(s: string): number {
   return n * ({ m: 60_000, h: 3_600_000, d: 86_400_000 } as Record<string, number>)[m[2]] || n * 1000;
 }
 
+/** Waits `ms` on the shell's clock: virtual time moves on at once; real sleeps wait, up to the call's (or a `timeout`'s) deadline. */
+export async function sleepFor(ctx: CommandContext, ms: number) {
+  if (ctx.shell.virtualNow !== undefined) { ctx.shell.sleepVirtual(ms); return; }
+  const end = Date.now() + ms;
+  for (;;) {
+    ctx.checkTime();
+    const left = Math.min(end - Date.now(), ctx.remainingMs() + 1);
+    if (left <= 0) break;
+    await new Promise(r => setTimeout(r, Math.min(left, 1000)));
+  }
+  ctx.checkTime();
+}
+
 function loopJump(ctx: CommandContext, isBreak: boolean): number {
   if (ctx.shell.loopDepth > 0) ctx.shell.loopControl(isBreak, Math.max(1, parseCount(ctx, 1)));
   ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: ${specMessage(ctx.name, 'onlyInLoop')}\n`);
@@ -1200,17 +1213,7 @@ export function registerBuiltins(shell: Shell) {
 
   reg('sleep', async ctx => {
     if (ctx.args.length === 0) throw new UsageException(specMessage('sleep', 'missingOperand', {}));
-    const total = ctx.args.reduce((t, a) => t + parseDuration(a), 0);
-    if (ctx.shell.virtualNow !== undefined) { ctx.shell.sleepVirtual(total); return; }
-    const end = Date.now() + total;
-    // sleeps really wait, up to the call's (or a `timeout`'s) deadline
-    for (;;) {
-      ctx.checkTime();
-      const left = Math.min(end - Date.now(), ctx.remainingMs() + 1);
-      if (left <= 0) break;
-      await new Promise(r => setTimeout(r, Math.min(left, 1000)));
-    }
-    ctx.checkTime();
+    await sleepFor(ctx, ctx.args.reduce((t, a) => t + parseDuration(a), 0));
   });
 
   reg('timeout', async ctx => {

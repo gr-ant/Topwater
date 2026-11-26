@@ -385,6 +385,12 @@ class Find {
           return m[1] === '+' ? size > n : m[1] === '-' ? size < n : size === n;
         };
       }
+      case '-links': {
+        const spec = arg();
+        if (!/^[+-]?\d+$/.test(spec)) throw new ShellError(specMessage('find', 'invalidArgument', { value: spec, predicate: '-links' }));
+        const n = Number(spec.replace(/^[+-]/, ''));
+        return e => { const l = this.stat(e).links; return spec[0] === '+' ? l > n : spec[0] === '-' ? l < n : l === n; };
+      }
       case '-empty': return e => { const st = this.stat(e); return st.isDirectory ? fs.list(e.abs).length === 0 : !st.isSymlink && st.size === 0; };
       case '-readable': return e => fs.canRead(e.abs);
       case '-writable': return e => fs.canWrite(e.abs);

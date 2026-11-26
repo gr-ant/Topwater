@@ -53,16 +53,23 @@ Python spells the options in snake_case (`max_response_bytes`, `timeout` in seco
 
 ## curl and wget
 
-`curl` takes `-s -S -f --fail-with-body -L --max-redirs -i -I -o -O -X -H -d --data-raw --data-binary
---data-urlencode --json -G -u -A -w -m --compressed -v` (`@file` and `@-` work as in curl; `-w` knows `http_code`,
-`response_code`, `content_type`, `size_download`, `url_effective`, `redirect_url`, `num_redirects`, `method` and
-`exitcode`). `wget` takes `-O` (`-O -`), `-q`, `-S`, `--header`, `--post-data`, `--post-file`, `-U`, `-T` and
-`--max-redirect`. Output, error messages and exit codes match curl 8.5 and wget 1.21 on Ubuntu 24.04 for the cases in
+`curl` takes `-s -S -f --fail-with-body --fail-early -L --max-redirs -i -I -o -O -X -H -d --data-raw --data-binary
+--data-urlencode --json -G -u -A -w -m --compressed -v --retry --retry-delay --retry-max-time --retry-all-errors
+--retry-connrefused --proto --proto-redir` (`@file` and `@-` work as in curl; `-w` knows `http_code`, `response_code`,
+`content_type`, `size_download`, `size_upload`, `size_header`, `size_request`, `speed_download`, `speed_upload`,
+`url`, `url_effective`, `redirect_url`, `num_redirects`, `num_connects`, `method`, `scheme`, `http_version`,
+`remote_port`, `filename_effective`, `errormsg`, `exitcode` and the `time_*` values). `wget` takes `-O` (`-O -`), `-q`,
+`-nv`, `-S`, `-P`, `-nc`, `--spider`, `--header`, `--post-data`, `--post-file`, `-U`, `-T` and `--max-redirect`.
+Output, error messages and exit codes match curl 8.5 and wget 1.21 on Ubuntu 24.04 for the cases in
 [`tests/web`](../tests/web/README.md), recorded from the real programs; all three implementations run them.
 Differences:
 no progress meter, a shorter `wget` report (no Resolving/Connecting lines, dots or speeds, no retries), `-v` shows
-only the request and response headers, and `-k` / `--no-check-certificate` are accepted and ignored: certificates
-are always checked.
+only the request and response headers, `-k` / `--no-check-certificate` are accepted and ignored (certificates are
+always checked), and so are the TLS and HTTP version options (`--tlsv1.2`, `--http1.1`, ...), progress options
+(`--no-progress-meter`, `-#`, wget `--show-progress`) and wget `-t`. `curl --retry` waits as curl does (1 second,
+doubling) and every wait counts toward the call's time limit; each try is a request under the policy's limits, and a
+host the policy refuses is not tried again. `-w` times are measured around the whole request: `time_namelookup`,
+`time_connect`, `time_appconnect` and `time_pretransfer` read 0.
 
 ## Blocked requests
 

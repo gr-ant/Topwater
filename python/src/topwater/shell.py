@@ -404,7 +404,7 @@ def quote_value(s: str) -> str:
 
 # Ubuntu's base system, rewritten in our own words with the same effect: a login shell reads /etc/profile, which runs
 # /etc/profile.d/*.sh; an interactive one reads ~/.bashrc; a non-interactive one (every tool call) reads neither
-SYSTEM_DIRS = ("/boot", "/lib", "/lib64", "/media", "/mnt", "/proc/4242", "/proc/tty/driver", "/run/lock", "/sbin", "/srv", "/sys", "/etc/profile.d", "/etc/skel", "/usr/games", "/usr/include", "/usr/lib64", "/usr/libexec", "/usr/sbin", "/usr/src", "/usr/local/etc", "/usr/local/games", "/usr/local/include", "/usr/local/lib", "/usr/local/man", "/usr/local/sbin", "/usr/local/share", "/usr/local/src", "/usr/share/base-files", "/usr/share/bash-completion", "/usr/share/common-licenses", "/usr/share/doc", "/usr/share/info", "/usr/share/locale", "/usr/share/man", "/usr/share/misc", "/usr/share/terminfo", "/var/backups", "/var/cache/apt/archives/partial", "/var/cache/debconf", "/var/cache/ldconfig", "/var/lib/apt", "/var/lib/dpkg", "/var/lib/misc", "/var/lib/pam", "/var/lib/systemd", "/var/local", "/var/mail", "/var/opt", "/var/spool")
+SYSTEM_DIRS = ("/boot", "/lib", "/lib64", "/media", "/mnt", "/proc/4242", "/proc/tty/driver", "/run/lock", "/sbin", "/srv", "/sys", "/etc/profile.d", "/etc/skel", "/usr/games", "/usr/include", "/usr/lib64", "/usr/libexec", "/usr/sbin", "/usr/src", "/usr/local/etc", "/usr/local/games", "/usr/local/include", "/usr/local/lib", "/usr/local/sbin", "/usr/local/share/man", "/usr/local/src", "/usr/share/base-files", "/usr/share/bash-completion", "/usr/share/common-licenses", "/usr/share/doc", "/usr/share/info", "/usr/share/locale", "/usr/share/man", "/usr/share/misc", "/usr/share/terminfo", "/var/backups", "/var/cache/apt/archives/partial", "/var/cache/debconf", "/var/cache/ldconfig", "/var/lib/apt", "/var/lib/dpkg", "/var/lib/misc", "/var/lib/pam", "/var/lib/systemd", "/var/local", "/var/mail", "/var/opt", "/var/spool")
 OS_RELEASE = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.1 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n"
 ETC_PROFILE = "# Read by every login shell (bash -l, sh -l).\n\n# interactive bash: the shared settings in /etc/bash.bashrc\nif [ \"${PS1-}\" ] && [ \"${BASH-}\" ] && [ -f /etc/bash.bashrc ]; then\n  . /etc/bash.bashrc\nfi\n\n# then each script in /etc/profile.d\nif [ -d /etc/profile.d ]; then\n  for i in /etc/profile.d/*.sh; do\n    [ -r \"$i\" ] && . \"$i\"\n  done\n  unset i\nfi\n"
 ETC_BASHRC = "# Shared settings for interactive bash shells.\n\n# nothing to do for scripts and bash -c\n[ -z \"${PS1-}\" ] && return\n\nshopt -s checkwinsize\nPS1='\\u@\\h:\\w\\$ '\n"
@@ -551,6 +551,7 @@ class Shell:
 
         link("/var/run", "/run")
         link("/var/lock", "/run/lock")
+        link("/usr/local/man", "share/man")
 
         def seed(path: str, content: str) -> None:
             if not self.fs.exists(path):

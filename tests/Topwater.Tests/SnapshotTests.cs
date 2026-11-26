@@ -263,7 +263,7 @@ public class SnapshotTests(ITestOutputHelper output)
         var sh = new Shell();
         sh.Fs.WriteAllText("/home/agent/a", "same");
         sh.Fs.WriteAllText("/home/agent/b", "same");
-        foreach (var link in new[] { "/etc/os-release", "/var/run", "/var/lock", "/proc/self" }) sh.Fs.Delete(link); // the default machine's links
+        foreach (var link in new[] { "/etc/os-release", "/var/run", "/var/lock", "/proc/self", "/usr/local/man" }) sh.Fs.Delete(link); // the default machine's links
         using var zip = new ZipArchive(new MemoryStream(Save(sh)));
         var manifest = JsonNode.Parse(zip.GetEntry("manifest.json")!.Open())!;
         Assert.Equal("topwater-snapshot", (string?)manifest["format"]);

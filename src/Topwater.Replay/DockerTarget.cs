@@ -57,7 +57,7 @@ public sealed class DockerTarget : IReplayTarget
         // what the root setup step needs to write the files with their owners, and nothing can gain privileges (setuid)
         var run = new List<string>
         {
-            "run", "-d", "--rm", "--name", container, "--hostname", start.Hostname, "--memory", "1g", "--memory-swap", "1g", "--cpus", "1",
+            "run", "-d", "--rm", "--log-driver", "none", "--name", container, "--hostname", start.Hostname, "--memory", "1g", "--memory-swap", "1g", "--cpus", "1",
             "--pids-limit", "512", "--ulimit", "fsize=1073741824", "--cap-drop", "ALL",
             "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--security-opt", "no-new-privileges",
         };

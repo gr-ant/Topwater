@@ -40,10 +40,54 @@ internal static partial class Builtins
         ["get"] = 'G', ["request"] = 'X', ["header"] = 'H', ["user-agent"] = 'A', ["user"] = 'u', ["location"] = 'L', ["max-redirs"] = '\u0005',
         ["include"] = 'i', ["head"] = 'I', ["output"] = 'o', ["remote-name"] = 'O', ["fail"] = 'f', ["fail-with-body"] = '\u0006', ["silent"] = 's',
         ["show-error"] = 'S', ["write-out"] = 'w', ["max-time"] = 'm', ["connect-timeout"] = '\u0007', ["compressed"] = '\u0008', ["verbose"] = 'v',
-        ["insecure"] = 'k', ["help"] = 'h', ["version"] = 'V',
+        ["insecure"] = 'k', ["help"] = 'h', ["version"] = 'V', ["retry"] = '\u0010', ["retry-delay"] = '\u0011', ["retry-max-time"] = '\u0012',
+        ["retry-all-errors"] = '\u0013', ["retry-connrefused"] = '\u0014', ["proto"] = '\u0015', ["proto-redir"] = '\u0016', ["fail-early"] = '\u0017',
+        ["no-progress-meter"] = '\u0018', ["tlsv1"] = '\u0019', ["tlsv1.0"] = '\u0019', ["tlsv1.1"] = '\u0019', ["tlsv1.2"] = '\u0019', ["tlsv1.3"] = '\u0019',
+        ["ssl-reqd"] = '\u0019', ["http1.1"] = '\u0019', ["http2"] = '\u0019', ["tls-max"] = '\u001a', ["progress-bar"] = '\u001b',
     };
-    const string CurlFlags = "GLiIOfsSvkhV\u0006\u0008";
-    const string CurlValued = "dXHAuowm\u0001\u0002\u0003\u0004\u0005\u0007";
+    const string CurlFlags = "GLiIOfsSvkhV\u0006\u0008\u0013\u0014\u0017\u0018\u0019\u001b";
+    const string CurlValued = "dXHAuowm\u0001\u0002\u0003\u0004\u0005\u0007\u0010\u0011\u0012\u0015\u0016\u001a";
+
+    // what --proto names: the protocols curl 8.5 on Ubuntu knows (Topwater itself only speaks http and https)
+    static readonly string[] CurlProtocols = ["dict", "file", "ftp", "ftps", "gopher", "gophers", "http", "https", "imap", "imaps", "ldap", "ldaps", "mqtt",
+        "pop3", "pop3s", "rtmp", "rtmpe", "rtmps", "rtmpt", "rtmpte", "rtmpts", "rtsp", "scp", "sftp", "smb", "smbs", "smtp", "smtps", "telnet", "tftp", "ws", "wss"];
+
+    /// <summary>--proto and --proto-redir: from <paramref name="start"/>, each comma-separated name added (+ or none), removed (-) or
+    /// made the only one (=); "all" is every protocol. An unknown name gets a warning and is skipped.</summary>
+    static HashSet<string> ProtoSet(string spec, IEnumerable<string> start, Action<string> warn)
+    {
+        var set = new HashSet<string>(start, StringComparer.Ordinal);
+        foreach (var token in spec.Split(','))
+        {
+            int i = 0;
+            char action = '+';
+            for (; i < token.Length && token[i] is '+' or '-' or '='; i++) action = token[i];
+            var name = token[i..].ToLowerInvariant();
+            if (name.Length == 0) continue;
+            if (action == '=') set.Clear();
+            string[] names = name == "all" ? CurlProtocols : CurlProtocols.Contains(name) ? [name] : [];
+            if (names.Length == 0) { warn(CommandSpec.Message("curl", "unknownProtocol", ("name", token[i..]))); continue; }
+            if (action == '-') set.ExceptWith(names); else set.UnionWith(names);
+        }
+        return set;
+    }
+
+    /// <summary>curl's "Warning: " lines, wrapped at 79 columns (the width curl assumes when stderr is not a terminal).</summary>
+    static string CurlWarning(string text)
+    {
+        const int width = 79 - 9;
+        var sb = new StringBuilder();
+        for (var rest = text; rest.Length > 0;)
+        {
+            if (rest.Length <= width) { sb.Append(CommandSpec.Message("curl", "warning", ("text", rest))).Append('\n'); break; }
+            int cut = width - 1;
+            while (cut > 0 && rest[cut] is not (' ' or '\t')) cut--;
+            if (cut == 0) cut = width - 1;
+            sb.Append(CommandSpec.Message("curl", "warning", ("text", rest[..(cut + 1)]))).Append('\n');
+            rest = rest[(cut + 1)..];
+        }
+        return sb.ToString();
+    }
 
     static async Task<int> Curl(CommandContext ctx)
     {
@@ -75,6 +119,7 @@ internal static partial class Builtins
                 for (int j = 1; j < arg.Length; j++)
                 {
                     char c = arg[j];
+                    if (c == '#') { opts.Add(('\u001b', null, "-#")); continue; }
                     if (CurlValued.Contains(c) && char.IsAsciiLetter(c))
                     {
                         string? value = j + 1 < arg.Length ? arg[(j + 1)..] : ++i < args.Count ? args[i] : null;
@@ -111,6 +156,23 @@ internal static partial class Builtins
             else maxTime = maxTime == 0 ? s : Math.Min(maxTime, s);
         }
         var timeout = maxTime > 0 && Seconds(maxTime) < web.Policy.Timeout ? Seconds(maxTime) : web.Policy.Timeout;
+
+        // --retry, --retry-delay, --retry-max-time: whole seconds, not negative
+        var retry = new long[3];
+        foreach (var (key, value, name) in opts.Where(o => o.Key is '\u0010' or '\u0011' or '\u0012'))
+        {
+            if (!long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var n)) return Usage(CommandSpec.Message("curl", "badNumber", ("option", name)));
+            if (n < 0) return Usage(CommandSpec.Message("curl", "negativeNumber", ("option", name)));
+            retry[key - '\u0010'] = n;
+        }
+        var (retries, retryDelay, retryMaxTime) = (retry[0], retry[1], retry[2]);
+        bool retryAll = Has('\u0013'), retryRefused = Has('\u0014'), failEarly = Has('\u0017');
+        HashSet<string> protocols = [.. CurlProtocols], redirProtocols = ["http", "https", "ftp", "ftps"];
+        foreach (var (key, value, _) in opts.Where(o => o.Key is '\u0015' or '\u0016'))
+        {
+            var set = ProtoSet(value!, key == '\u0015' ? CurlProtocols : ["http", "https", "ftp", "ftps"], w => ctx.Stderr.Write(CurlWarning(w)));
+            if (key == '\u0015') protocols = set; else redirProtocols = set;
+        }
 
         // the body: -d values joined with &, as curl does
         var parts = new List<byte[]>();
@@ -168,67 +230,120 @@ internal static partial class Builtins
         foreach (var raw in urls)
         {
             var output = outputs.Count > 0 ? outputs.Dequeue() : ('\0', null);
-            var buffer = new MemoryStream();
+            var started = ctx.Shell.Now;
             int code = 0, redirects = 0;
             WebResponse? last = null;
-            string message = "";
-            try
+            Dictionary<string, string> vars = [];
+            for (long tries = 0; ; tries++)
             {
-                var urlText = raw;
-                if (query != null) urlText += (raw.Contains('?') ? "&" : "?") + query;
-                var url = WebUrl.Parse(urlText);
-                var sent = new List<KeyValuePair<string, string>>(headers);
-                var userInfo = user ?? (url.UserInfo is { } ui ? Uri.UnescapeDataString(ui) : null);
-                if (userInfo != null && !sent.Any(h => h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)))
-                    sent.Add(new("Authorization", "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(userInfo.Contains(':') ? userInfo : userInfo + ":"))));
-                string? target = output.Key == 'O' ? RemoteName(url) : output.Value;
-                if (target is "") throw new WebFailure(WebError.Recv) { Detail = "noRemoteName" };
+                var buffer = new MemoryStream();
+                code = redirects = 0;
+                last = null;
+                string message = "", urlText = raw;
+                string? target = null;
+                bool retriable = true;
+                var hops = new List<(WebResponse Response, double At, int RequestBytes)>();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    if (query != null) urlText += (raw.Contains('?') ? "&" : "?") + query;
+                    var url = WebUrl.Parse(urlText);
+                    if (!protocols.Contains(url.Scheme)) throw new WebFailure(WebError.Protocol, url.Scheme);
+                    var sent = new List<KeyValuePair<string, string>>(headers);
+                    var userInfo = user ?? (url.UserInfo is { } ui ? Uri.UnescapeDataString(ui) : null);
+                    if (userInfo != null && !sent.Any(h => h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)))
+                        sent.Add(new("Authorization", "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(userInfo.Contains(':') ? userInfo : userInfo + ":"))));
+                    target = output.Key == 'O' ? RemoteName(url) : output.Value;
+                    if (target is "") throw new WebFailure(WebError.Recv) { Detail = "noRemoteName" };
 
-                void OnHop(WebResponse r)
-                {
-                    last = r;
-                    if (verbose)
+                    void OnHop(WebResponse r)
                     {
-                        var sb = new StringBuilder($"> {r.Method} {r.Url.PathAndQuery} HTTP/1.1\r\n> Host: {r.Url.HostForUrl}{(r.Url.DefaultPort ? "" : ":" + r.Url.Port)}\r\n");
-                        foreach (var (k, v) in sent) sb.Append($"> {k}: {v}\r\n");
-                        sb.Append($"> \r\n< HTTP/1.1 {r.Status} {r.Reason}\r\n");
-                        foreach (var (k, v) in r.Headers) sb.Append($"< {k}: {v}\r\n");
-                        ctx.Stderr.Write(sb.Append("< \r\n").ToString());
+                        last = r;
+                        // shortcut: the body counts toward the first request only; a 303 drops it, other redirects resend it
+                        var request = $"{r.Method} {r.Url.PathAndQuery} HTTP/1.1\r\nHost: {r.Url.HostForUrl}{(r.Url.DefaultPort ? "" : ":" + r.Url.Port)}\r\n"
+                            + string.Concat(sent.Select(h => $"{h.Key}: {h.Value}\r\n")) + (body != null && hops.Count == 0 ? $"Content-Length: {body.Length}\r\n" : "") + "\r\n";
+                        hops.Add((r, clock.Elapsed.TotalSeconds, Encoding.UTF8.GetByteCount(request) + (body != null && hops.Count == 0 ? body.Length : 0)));
+                        if (verbose)
+                        {
+                            var sb = new StringBuilder($"> {r.Method} {r.Url.PathAndQuery} HTTP/1.1\r\n> Host: {r.Url.HostForUrl}{(r.Url.DefaultPort ? "" : ":" + r.Url.Port)}\r\n");
+                            foreach (var (k, v) in sent) sb.Append($"> {k}: {v}\r\n");
+                            sb.Append($"> \r\n< HTTP/1.1 {r.Status} {r.Reason}\r\n");
+                            foreach (var (k, v) in r.Headers) sb.Append($"< {k}: {v}\r\n");
+                            ctx.Stderr.Write(sb.Append("< \r\n").ToString());
+                        }
+                        if (include) buffer.Write(Encoding.UTF8.GetBytes(StatusBlock(r)));
+                        // --proto-redir (and --proto) decide where a redirect may lead
+                        if (follow && r.Status is 301 or 302 or 303 or 307 or 308 && r.Header("Location") is { Length: > 0 } location
+                            && r.Url.Resolve(location).Scheme is var next && !(protocols.Contains(next) && redirProtocols.Contains(next)))
+                            throw new WebFailure(WebError.Protocol, next);
                     }
-                    if (include) buffer.Write(Encoding.UTF8.GetBytes(StatusBlock(r)));
+                    (last, redirects) = await web.FetchAsync(url, method, forced, sent, body, follow, maxRedirs, timeout, OnHop, ctx.CancellationToken);
+                    var data = last.Body;
+                    if (compressed && !last.Truncated && last.Header("Content-Encoding")?.Trim().ToLowerInvariant() is "gzip" or "x-gzip" or "deflate" && data.Length > 0)
+                    {
+                        data = WebSession.Inflate(data, last.Header("Content-Encoding")!.Trim().ToLowerInvariant() != "deflate", web.Policy.MaxResponseBytes + 1) ?? throw new WebFailure(WebError.Recv);
+                        if (data.Length > web.Policy.MaxResponseBytes) throw new WebFailure(WebError.TooLarge);
+                    }
+                    if ((fail || failWithBody) && last.Status >= 400)
+                    {
+                        if (failWithBody) buffer.Write(data);
+                        code = 22;
+                        message = CommandSpec.Message("curl", "httpError", ("status", last.Status.ToString(CultureInfo.InvariantCulture)));
+                    }
+                    else
+                    {
+                        if (!head) buffer.Write(data);
+                        if (last.Truncated) { code = 63; message = CommandSpec.Message("curl", "tooLarge"); }
+                    }
+                    if (target is { } t && t != "-" && (code == 0 || code == 63 || failWithBody))
+                    {
+                        try { ctx.Fs.WriteAllBytes(ctx.ResolvePath(t), buffer.ToArray()); }
+                        catch (ShellException) { code = 23; message = CommandSpec.Message("curl", "writeFailed"); }
+                        buffer.SetLength(0);
+                    }
                 }
-                (last, redirects) = await web.FetchAsync(url, method, forced, sent, body, follow, maxRedirs, timeout, OnHop, ctx.CancellationToken);
-                var data = last.Body;
-                if (compressed && !last.Truncated && last.Header("Content-Encoding")?.Trim().ToLowerInvariant() is "gzip" or "x-gzip" or "deflate" && data.Length > 0)
+                catch (WebFailure f)
                 {
-                    data = WebSession.Inflate(data, last.Header("Content-Encoding")!.Trim().ToLowerInvariant() != "deflate", web.Policy.MaxResponseBytes + 1) ?? throw new WebFailure(WebError.Recv);
-                    if (data.Length > web.Policy.MaxResponseBytes) throw new WebFailure(WebError.TooLarge);
+                    (code, message) = CurlError(f, web.Policy.ExplainBlocked);
+                    retriable = f.Blocked == null && f.Kind != WebError.Replay; // the web policy's answer would not change
                 }
-                if ((fail || failWithBody) && last.Status >= 400)
+                if (buffer.Length > 0) ctx.Stdout.Write(ByteText.Decode(buffer.ToArray()));
+                if (code != 0) Error(code, message);
+
+                double total = clock.Elapsed.TotalSeconds;
+                long size = last?.Body.Length ?? 0, upload = body?.Length ?? 0;
+                string Secs(double x) => x.ToString("0.000000", CultureInfo.InvariantCulture);
+                vars = new()
                 {
-                    if (failWithBody) buffer.Write(data);
-                    code = 22;
-                    message = CommandSpec.Message("curl", "httpError", ("status", last.Status.ToString(CultureInfo.InvariantCulture)));
-                }
-                else
-                {
-                    if (!head) buffer.Write(data);
-                    if (last.Truncated) { code = 63; message = CommandSpec.Message("curl", "tooLarge"); }
-                }
-                if (target is { } t && t != "-" && (code == 0 || code == 63 || failWithBody))
-                {
-                    try { ctx.Fs.WriteAllBytes(ctx.ResolvePath(t), buffer.ToArray()); }
-                    catch (ShellException) { code = 23; message = CommandSpec.Message("curl", "writeFailed"); }
-                    buffer.SetLength(0);
-                }
+                    ["errormsg"] = code == 0 ? "" : message, ["filename_effective"] = target is null or "-" ? "" : target, ["url"] = urlText,
+                    ["scheme"] = last?.Url.Scheme.ToUpperInvariant() ?? "", ["http_version"] = last == null ? "0" : "1.1",
+                    ["remote_port"] = last?.Url.Port.ToString(CultureInfo.InvariantCulture) ?? "",
+                    ["num_connects"] = hops.Where((h, k) => k == 0 || (h.Response.Url.Host, h.Response.Url.Port) != (hops[k - 1].Response.Url.Host, hops[k - 1].Response.Url.Port)).Count().ToString(CultureInfo.InvariantCulture),
+                    ["size_upload"] = upload.ToString(CultureInfo.InvariantCulture), ["size_header"] = hops.Sum(h => Encoding.UTF8.GetByteCount(StatusBlock(h.Response))).ToString(CultureInfo.InvariantCulture),
+                    ["size_request"] = hops.Sum(h => h.RequestBytes).ToString(CultureInfo.InvariantCulture),
+                    ["speed_download"] = (total > 0 ? (long)(size / total) : 0).ToString(CultureInfo.InvariantCulture),
+                    ["speed_upload"] = (total > 0 && hops.Count > 0 ? (long)(upload / total) : 0).ToString(CultureInfo.InvariantCulture),
+                    // the phases before the first response byte are not timed apart
+                    ["time_total"] = Secs(total), ["time_namelookup"] = Secs(0), ["time_connect"] = Secs(0), ["time_appconnect"] = Secs(0), ["time_pretransfer"] = Secs(0),
+                    ["time_starttransfer"] = Secs(hops.Count > 0 ? hops[^1].At : 0), ["time_redirect"] = Secs(hops.Count > 1 ? hops[^2].At : 0),
+                };
+
+                // --retry: a timeout or unresolved name, a refused connection (--retry-connrefused), a transient HTTP status, or anything (--retry-all-errors)
+                string? why = !retriable || tries >= retries ? null
+                    : code is 6 or 28 ? "retryTimeout"
+                    : code == 7 && retryRefused ? "retryRefused"
+                    : code is 0 or 22 && last?.Status is 408 or 429 or 500 or 502 or 503 or 504 or 522 or 524 ? "retryHttp"
+                    : retryAll && code != 0 ? "retryAll" : null;
+                if (why == null || retryMaxTime > 0 && (ctx.Shell.Now - started).TotalSeconds >= retryMaxTime) break;
+                long wait = retryDelay > 0 ? retryDelay : Math.Min(600, 1L << (int)Math.Min(tries, 10));
+                if (!Has('s')) // -S brings back errors, not warnings
+                    ctx.Stderr.Write(CurlWarning(CommandSpec.Message("curl", "retrying", ("why", CommandSpec.Message("curl", why)), ("seconds", wait.ToString(CultureInfo.InvariantCulture)),
+                        ("left", (retries - tries).ToString(CultureInfo.InvariantCulture)))));
+                await ctx.Shell.SleepAsync(TimeSpan.FromSeconds(wait), ctx.CancellationToken);
             }
-            catch (WebFailure f)
-            {
-                (code, message) = CurlError(f, web.Policy.ExplainBlocked);
-            }
-            if (buffer.Length > 0) ctx.Stdout.Write(ByteText.Decode(buffer.ToArray()));
-            if (code != 0) { Error(code, message); exit = code; }
-            if (Last('w') is { } format) ctx.Stdout.Write(WriteOut(ctx, format, last, redirects, code, method, forced));
+            exit = code; // without --fail-early, the last URL's status
+            if (Last('w') is { } format) ctx.Stdout.Write(WriteOut(ctx, format, last, redirects, code, method, forced, vars));
+            if (failEarly && code != 0) break;
         }
         return exit;
     }
@@ -278,7 +393,7 @@ internal static partial class Builtins
         return eq < 0 ? Enc(s) : eq == 0 ? Enc(s[1..]) : s[..eq] + "=" + Enc(s[(eq + 1)..]);
     }
 
-    static string WriteOut(CommandContext ctx, string format, WebResponse? r, int redirects, int code, string method, string? forced)
+    static string WriteOut(CommandContext ctx, string format, WebResponse? r, int redirects, int code, string method, string? forced, Dictionary<string, string> vars)
     {
         var sb = new StringBuilder();
         for (int i = 0; i < format.Length; i++)
@@ -306,7 +421,7 @@ internal static partial class Builtins
                 "num_redirects" => redirects.ToString(CultureInfo.InvariantCulture),
                 "method" => forced ?? r?.Method ?? method,
                 "exitcode" => code.ToString(CultureInfo.InvariantCulture),
-                _ => Unknown(name),
+                _ => vars.TryGetValue(name, out var v) ? v : Unknown(name),
             });
         }
         return sb.ToString();
@@ -321,8 +436,9 @@ internal static partial class Builtins
     {
         ["output-document"] = 'O', ["quiet"] = 'q', ["server-response"] = 'S', ["header"] = '\u0001', ["post-data"] = '\u0002', ["post-file"] = '\u0003',
         ["user-agent"] = 'U', ["timeout"] = 'T', ["max-redirect"] = '\u0004', ["no-check-certificate"] = '\u0005', ["help"] = 'h', ["version"] = 'V',
+        ["no-verbose"] = '\u0006', ["directory-prefix"] = 'P', ["no-clobber"] = '\u0007', ["spider"] = '\u0008', ["tries"] = 't', ["show-progress"] = '\u0009',
     };
-    const string WgetValued = "OUT\u0001\u0002\u0003\u0004";
+    const string WgetValued = "OUTPt\u0001\u0002\u0003\u0004";
 
     static async Task<int> Wget(CommandContext ctx)
     {
@@ -359,7 +475,9 @@ internal static partial class Builtins
                 for (int j = 1; j < arg.Length; j++)
                 {
                     char c = arg[j];
-                    if (!"OqSUThV".Contains(c)) return Usage(M("invalidOption", ("option", c.ToString())));
+                    // -nv and -nc: wget's two-letter short options
+                    if (c == 'n' && j + 1 < arg.Length && arg[j + 1] is 'v' or 'c') { opts.Add((arg[++j] == 'v' ? '\u0006' : '\u0007', null)); continue; }
+                    if (!"OqSUThVPt".Contains(c)) return Usage(M("invalidOption", ("option", c.ToString())));
                     if (WgetValued.Contains(c))
                     {
                         string? value = j + 1 < arg.Length ? arg[(j + 1)..] : ++i < args.Count ? args[i] : null;
@@ -378,7 +496,8 @@ internal static partial class Builtins
         if (Has('V')) { ctx.Stdout.WriteLine(CommandSpec.Of("wget").Version); return 0; }
         if (urls.Count == 0) return Usage(M("missingUrl"), 1);
 
-        bool quiet = Has('q'), server = Has('S');
+        bool quiet = Has('q'), server = Has('S'), brief = Has('\u0006'), spider = Has('\u0008'), noClobber = Has('\u0007');
+        string? prefix = Last('P') is { Length: > 0 } dir ? dir.TrimEnd('/') + "/" : null;
         var timeout = web.Policy.Timeout;
         if (Last('T') is { } t)
         {
@@ -415,7 +534,8 @@ internal static partial class Builtins
         }
 
         string Now() => ctx.Shell.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-        void Say(string line) { if (!quiet) ctx.Stderr.WriteLine(line); }
+        void Say(string line) { if (!quiet && !brief) ctx.Stderr.WriteLine(line); } // the full report
+        void Note(string line) { if (!quiet) ctx.Stderr.WriteLine(line); } // also under -nv
         int exit = 0;
         foreach (var raw in urls)
         {
@@ -428,11 +548,20 @@ internal static partial class Builtins
                 exit = 1;
                 continue;
             }
+            // the file a download is saved to: -O, or the URL's last segment (index.html), under -P
+            string FileFor(WebUrl u) => RemoteName(u) is { Length: > 0 } name ? (prefix ?? "") + Uri.UnescapeDataString(name) : (prefix ?? "") + "index.html";
+            if (noClobber && document == null && !spider && ctx.Fs.Exists(ctx.ResolvePath(FileFor(url))))
+            {
+                Say(M("clobber", ("file", FileFor(url))));
+                Say("");
+                continue;
+            }
+            if (spider) Say(M("spiderMode"));
             Say(M("start", ("time", Now()), ("url", url.ToString())));
             int hop = 0;
             void OnHop(WebResponse r)
             {
-                if (hop++ > 0) Say(M("start", ("time", Now()), ("url", r.Url.ToString())));
+                if (hop++ > 0) { if (spider) Say(M("spiderMode")); Say(M("start", ("time", Now()), ("url", r.Url.ToString()))); }
                 Say(M("sent", ("status", server ? "" : $"{r.Status} {r.Reason}")));
                 if (server)
                 {
@@ -444,12 +573,21 @@ internal static partial class Builtins
             }
             try
             {
-                var (r, _) = await web.FetchAsync(url, body != null ? "POST" : "GET", null, [.. headers], body, true, maxRedirect, timeout, OnHop, ctx.CancellationToken);
+                var (r, _) = await web.FetchAsync(url, spider ? "HEAD" : body != null ? "POST" : "GET", null, [.. headers], body, true, maxRedirect, timeout, OnHop, ctx.CancellationToken);
                 if (r.Status >= 400)
                 {
-                    Say(M("httpError", ("time", Now()), ("status", $"{r.Status}: {r.Reason}")));
+                    if (brief) Note(M("nvErrorUrl", ("url", r.Url.ToString())));
+                    Note(spider ? M("spiderMissing") : M("httpError", ("time", Now()), ("status", $"{r.Status}: {r.Reason}")));
                     Say("");
                     code = 8;
+                }
+                else if (spider)
+                {
+                    var type = r.Header("Content-Type");
+                    Say(M("length", ("length", (r.Header("Content-Length") ?? M("lengthUnspecified")) + (type != null ? $" [{type}]" : ""))));
+                    Say(M("spiderExists"));
+                    Say("");
+                    if (brief) Note(M("nvSpider", ("time", Now()), ("url", r.Url.ToString()), ("status", $"{r.Status} {r.Reason}")));
                 }
                 else
                 {
@@ -459,8 +597,10 @@ internal static partial class Builtins
                     string? file = document;
                     if (file == null)
                     {
-                        var name = RemoteName(url);
-                        file = name.Length == 0 ? "index.html" : Uri.UnescapeDataString(name);
+                        file = FileFor(url);
+                        if (prefix != null)
+                            try { ctx.Fs.CreateDirectory(ctx.ResolvePath(prefix), parents: true); }
+                            catch (ShellException e) { ctx.Stderr.WriteLine(M("writeFailed", ("file", file), ("errno", Errno(e)))); exit = 3; continue; }
                         if (ctx.Fs.Exists(ctx.ResolvePath(file)))
                         {
                             int n = 1;
@@ -483,6 +623,7 @@ internal static partial class Builtins
                     var size = r.Body.Length.ToString(CultureInfo.InvariantCulture) + (length != null ? "/" + length : "");
                     Say(file == "-" ? M("written", ("time", Now()), ("size", size)) : M("saved", ("time", Now()), ("file", file), ("size", size)));
                     Say("");
+                    if (brief) Note(M("nvSaved", ("time", Now()), ("url", r.Url.ToString()), ("size", size), ("file", file)));
                     if (r.Truncated) { ctx.Stderr.WriteLine(M("tooLarge", ("limit", web.Policy.MaxResponseBytes.ToString(CultureInfo.InvariantCulture)))); code = 1; }
                 }
             }

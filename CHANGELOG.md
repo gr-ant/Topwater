@@ -9,6 +9,12 @@ Python and TypeScript packages are not published yet and are used from the repos
   package to npm with trusted publishing, once each is switched on. All three ports' tests pass before anything is
   published, and both take their version from the tag: `v0.1.0-preview.4` is `0.1.0a4` on PyPI (PEP 440 has no
   "preview"; alpha, not release candidate) and `0.1.0-preview.4` on npm, under the `next` tag.
+- **More `curl` and `wget` options.** `curl --retry` (with `--retry-delay`, `--retry-max-time`, `--retry-all-errors`,
+  `--retry-connrefused`), `--proto`, `--proto-redir`, `--fail-early`, more `-w` variables (`time_total` and the other
+  times, `size_upload`, `scheme`, `errormsg`, ...), and `--tlsv1.2`, `--http1.1`, `--no-progress-meter`, `-#`
+  accepted and ignored; `wget -nv`, `-P`, `-nc`, `--spider`, with `-t` and `--show-progress` accepted. With several
+  URLs and no `--fail-early`, `curl` now exits with the last URL's status, as curl does.
+- **`find -links N`** selects by link count, and `/usr/local/man` is a link to `share/man` as on Ubuntu.
 
 ## 0.1.0-preview.3 (2026-11-26)
 

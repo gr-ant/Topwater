@@ -252,6 +252,7 @@ public sealed partial class Shell
         Fs.Chmod("/run/lock", Oct("1777"));
         Link("/var/run", "/run");
         Link("/var/lock", "/run/lock");
+        Link("/usr/local/man", "share/man");
 
         void Seed(string path, string content) { if (!Fs.Exists(path)) Fs.WriteAllText(path, content); }
         void Link(string path, string target) { if (!Fs.Exists(path) && !Fs.IsSymlink(path)) Fs.CreateSymlink(path, target); }
@@ -295,7 +296,7 @@ public sealed partial class Shell
     [
         "/boot", "/lib", "/lib64", "/media", "/mnt", "/proc/4242", "/proc/tty/driver", "/run/lock", "/sbin", "/srv", "/sys",
         "/etc/profile.d", "/etc/skel", "/usr/games", "/usr/include", "/usr/lib64", "/usr/libexec", "/usr/sbin", "/usr/src",
-        "/usr/local/etc", "/usr/local/games", "/usr/local/include", "/usr/local/lib", "/usr/local/man", "/usr/local/sbin", "/usr/local/share", "/usr/local/src",
+        "/usr/local/etc", "/usr/local/games", "/usr/local/include", "/usr/local/lib", "/usr/local/sbin", "/usr/local/share/man", "/usr/local/src",
         "/usr/share/base-files", "/usr/share/bash-completion", "/usr/share/common-licenses", "/usr/share/doc", "/usr/share/info", "/usr/share/locale",
         "/usr/share/man", "/usr/share/misc", "/usr/share/terminfo",
         "/var/backups", "/var/cache/apt/archives/partial", "/var/cache/debconf", "/var/cache/ldconfig", "/var/lib/apt", "/var/lib/dpkg", "/var/lib/misc", "/var/lib/pam", "/var/lib/systemd",

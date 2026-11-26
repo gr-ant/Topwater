@@ -270,6 +270,13 @@ internal sealed class Find
                     return T(m.Groups[1].Value == "+" ? size > n : m.Groups[1].Value == "-" ? size < n : size == n);
                 };
             }
+            case "-links":
+            {
+                var spec = Arg();
+                if (!Regex.IsMatch(spec, @"^[+-]?\d+$")) throw new ShellException(CommandSpec.Message("find", "invalidArgument", ("value", spec), ("predicate", "-links")));
+                long n = long.Parse(spec.TrimStart('+', '-'), CultureInfo.InvariantCulture);
+                return e => T(Stat(e).Links is var l && (spec[0] == '+' ? l > n : spec[0] == '-' ? l < n : l == n));
+            }
             case "-empty": return e => T(Stat(e) is var st && st.IsDirectory ? fs.List(e.Abs).Count == 0 : !st.IsSymlink && st.Size == 0);
             case "-true": return _ => T(true);
             case "-false": return _ => T(false);

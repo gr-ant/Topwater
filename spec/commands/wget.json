@@ -10,6 +10,12 @@
     "",
     "  -O,  --output-document=FILE   write to FILE; '-' writes to standard output",
     "  -q,  --quiet                  print nothing but errors that end the run",
+    "  -nv, --no-verbose             one line per download instead of the full report",
+    "  -P,  --directory-prefix=DIR   save files under DIR",
+    "  -nc, --no-clobber             skip a download whose file already exists",
+    "       --spider                 only check that each URL exists; download nothing",
+    "  -t,  --tries=NUM              accepted and ignored: Topwater tries once",
+    "       --show-progress          accepted and ignored: no progress bar is printed",
     "  -S,  --server-response        print the response headers",
     "       --header=STRING          add a request header (\"Name: value\")",
     "       --post-data=STRING       send STRING in a POST body",
@@ -37,6 +43,12 @@
     {"short": "T", "long": ["timeout"], "arg": "SECONDS", "description": "time limit for each request (the policy's limit still applies)"},
     {"long": ["max-redirect"], "key": "\u0004", "arg": "NUM", "description": "the most redirects to follow (never more than the policy allows)"},
     {"long": ["no-check-certificate"], "key": "\u0005", "description": "accepted and ignored: certificates are always verified", "ignored": true},
+    {"long": ["no-verbose"], "key": "\u0006", "description": "report each download in one line, and errors (also written -nv)"},
+    {"short": "P", "long": ["directory-prefix"], "arg": "DIR", "description": "save files under DIR, created if missing (ignored with -O)"},
+    {"long": ["no-clobber"], "key": "\u0007", "description": "do not download a URL whose file already exists, and never save as NAME.1 (also written -nc)"},
+    {"long": ["spider"], "key": "\u0008", "description": "send HEAD for each URL and report whether it exists (exit status 8 if not); nothing is saved"},
+    {"short": "t", "long": ["tries"], "arg": "NUM", "description": "accepted and ignored: each URL is tried once", "ignored": true},
+    {"long": ["show-progress"], "key": "\u0009", "description": "accepted and ignored: no progress bar is printed", "ignored": true},
     {"short": "h", "long": ["help"], "description": "print the help"},
     {"short": "V", "long": ["version"], "description": "print the version"}
   ],
@@ -76,7 +88,14 @@
     "scheme": "{url}: Unsupported scheme {scheme:locale}.",
     "replay": "wget: Topwater replay: {request} is not in the recording",
     "invalidHeader": "wget: --header: Invalid header {header:locale}.",
-    "lengthUnspecified": "unspecified"
+    "lengthUnspecified": "unspecified",
+    "nvSaved": "{time} URL:{url} [{size}] -> \"{file}\" [1]",
+    "nvErrorUrl": "{url}:",
+    "spiderMode": "Spider mode enabled. Check if remote file exists.",
+    "spiderExists": "Remote file exists.",
+    "spiderMissing": "Remote file does not exist -- broken link!!!",
+    "nvSpider": "{time} URL: {url} {status}",
+    "clobber": "File {file:locale} already there; not retrieving."
   },
-  "notes": "Registered in every shell; without a web policy every host fails to resolve. The progress report is shortened: no Resolving/Connecting lines, no dots or speed. No retries."
+  "notes": "Registered in every shell; without a web policy every host fails to resolve. The progress report is shortened: no Resolving/Connecting lines, no dots or speed. No retries. -nv and -nc are wget's two-letter short forms of --no-verbose and --no-clobber."
 }
