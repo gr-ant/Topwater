@@ -61,7 +61,10 @@ public sealed class DockerTarget : IReplayTarget
         if (!o.Network) run.AddRange(["--network", "none"]);
         run.AddRange([image, "sleep", "infinity"]);
         await RunDockerAsync(o, run, null, ct, check: true);
-        var target = new DockerTarget(o, container, start.User, [], image);
+        // by number, not by name: the snapshot's files replace /etc/passwd, so a name could map to any uid. Only a root snapshot
+        // runs as root (with the three capabilities above)
+        var id = start.User == "root" ? "0:0" : "1000:1000";
+        var target = new DockerTarget(o, container, id, [], image);
         try
         {
             var (tar, owners) = FilesTar(shell, pristine);
@@ -81,7 +84,7 @@ public sealed class DockerTarget : IReplayTarget
             foreach (var (k, v) in shell.Environment)
                 if (k is not ("PWD" or "OLDPWD" or "SHLVL" or "_") && VariableName.IsMatch(k)) env.Append($"export {k}={Quote(v)}\n");
             var state = Encoding.UTF8.GetBytes(env.ToString());
-            await target.ExecAsync(["-i", "-u", start.User], ["bash", "-c", $"cat > {StateDir}/env && printf %s {Quote(shell.Cwd)} > {StateDir}/cwd"], state, ct, check: true);
+            await target.ExecAsync(["-i", "-u", id], ["bash", "-c", $"cat > {StateDir}/env && printf %s {Quote(shell.Cwd)} > {StateDir}/cwd"], state, ct, check: true);
             target._env.AddRange(new[] { "HOME", "USER", "LOGNAME", "SHELL", "PATH", "LANG", "TERM" }.Where(shell.Environment.ContainsKey).Select(k => $"{k}={shell.Environment[k]}"));
             return target;
         }
@@ -193,28 +196,36 @@ public sealed class DockerTarget : IReplayTarget
                 {
                     var path = dir == "/" ? "/" + name : dir + "/" + name;
                     if (path is "/proc" or "/sys" or "/dev") continue;
-                    var st = shell.Fs.Stat(path);
-                    bool known = pristine.Fs.Exists(path);
+                    // never followed: a link goes in as the link it is, so a loop or a fan-out of links costs one entry each
+                    var st = shell.Fs.Stat(path, follow: false);
+                    bool known = pristine.Fs.Exists(path, follow: false);
+                    if (st.IsSymlink)
+                    {
+                        if (!known || pristine.Fs.Stat(path, follow: false).LinkTarget != st.LinkTarget) Add(path, st, null);
+                        continue;
+                    }
                     if (st.IsDirectory)
                     {
-                        if (!known || pristine.Fs.Stat(path) is var p && (p.Mode != st.Mode || p.Owner != st.Owner)) Add(path, st, null);
+                        if (!known || pristine.Fs.Stat(path, follow: false) is var p && (p.Mode != st.Mode || p.Owner != st.Owner)) Add(path, st, null);
                         Walk(path);
                         continue;
                     }
                     var bytes = shell.Fs.ReadAllBytes(path);
                     if (bytes.AsSpan().SequenceEqual(stub)) continue;
-                    if (known && pristine.Fs.Stat(path) is var q && q.Mode == st.Mode && q.Owner == st.Owner && pristine.Fs.ReadAllBytes(path).AsSpan().SequenceEqual(bytes)) continue;
+                    if (known && pristine.Fs.Stat(path, follow: false) is var q && q.Mode == st.Mode && q.Owner == st.Owner && pristine.Fs.ReadAllBytes(path).AsSpan().SequenceEqual(bytes)) continue;
                     Add(path, st, bytes);
                 }
             }
             void Add(string path, FileStat st, byte[]? bytes)
             {
-                var entry = new PaxTarEntry(bytes == null ? TarEntryType.Directory : TarEntryType.RegularFile, path.TrimStart('/'))
+                var type = st.IsSymlink ? TarEntryType.SymbolicLink : bytes == null ? TarEntryType.Directory : TarEntryType.RegularFile;
+                var entry = new PaxTarEntry(type, path.TrimStart('/'))
                 {
                     Mode = (UnixFileMode)(st.Mode & 0xFFF), Uid = Uid(st.Owner), Gid = Uid(st.Owner), UserName = st.Owner, GroupName = st.Owner,
                     ModificationTime = new DateTimeOffset(DateTime.SpecifyKind(st.Modified.ToUniversalTime(), DateTimeKind.Utc)),
                 };
-                if (bytes != null) entry.DataStream = new MemoryStream(bytes);
+                if (st.IsSymlink) entry.LinkName = st.LinkTarget!;
+                else if (bytes != null) entry.DataStream = new MemoryStream(bytes);
                 tar.WriteEntry(entry);
             }
             Walk("/");
@@ -222,7 +233,7 @@ public sealed class DockerTarget : IReplayTarget
         return (ms.ToArray(), owners);
     }
 
-    static readonly System.Text.RegularExpressions.Regex AccountName = new("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$"), VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$");
+    static readonly System.Text.RegularExpressions.Regex AccountName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}\z"), VariableName = new(@"^[A-Za-z_][A-Za-z0-9_]*\z");
 
     static string Quote(string s) => "'" + s.Replace("'", "'\\''") + "'";
 }

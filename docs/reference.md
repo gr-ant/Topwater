@@ -623,7 +623,8 @@ Shell state that isn't files goes into `/etc/topwater/session.sh`, which `~/.bas
 - `set -o` options, `shopt` differences from Topwater's defaults, traps and positional parameters.
 
 History goes to `~/.bash_history`, timestamped so a multi-line command stays one entry. `/etc/topwater/paths` lists the
-paths the export wrote or deleted, in `docker diff`'s format, so an import can find them again.
+paths the export wrote or deleted, in `docker diff`'s format but each ended by a NUL rather than a line break (a path
+can hold a line break), so an import can find them again.
 
 ### What the import does
 
@@ -834,7 +835,10 @@ var report = await recording.ReplayAsync(linux, new ReplayOptions { Normalize = 
 
 The container has no network unless `Network = true`, 1 GB of memory and no swap, one CPU, 512 processes, files of at most
 1 GB, no capabilities but `CHOWN`, `DAC_OVERRIDE` and `FOWNER` (which the root setup step needs to write files with their
-owners), and `no-new-privileges`, so a setuid program gains nothing. It gets the snapshot's host name and user (uid 1000, in place of the
+owners), and `no-new-privileges`, so a setuid program gains nothing. The 1 GB limit is per file: nothing caps the
+container's total disk use, so a recording can still fill the docker host's disk. Commands run by number, uid and gid
+1000 (the snapshot's `/etc/passwd` cannot turn that into root); only a snapshot whose user is `root` runs as root,
+and then with those three capabilities. The snapshot's symbolic links go in as links, never followed. It gets the snapshot's host name and user (uid 1000, in place of the
 image's `ubuntu`), the files a fresh Topwater machine doesn't have or has differently (with modes, owners and times;
 not `/proc`, `/dev` or the program stubs, which the image provides for real), the variables and the working
 directory. Each call runs as `bash -c` under that user; the working directory, variables and functions are saved after

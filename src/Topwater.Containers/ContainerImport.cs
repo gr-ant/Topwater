@@ -88,7 +88,7 @@ public static class ContainerImport
             {
                 using var tar = new TarReader(s);
                 if (await tar.GetNextEntryAsync(cancellationToken: ct) is { EntryType: TarEntryType.RegularFile or TarEntryType.V7RegularFile, DataStream: { } data } entry && entry.Length <= max)
-                    lines.AddRange((await new StreamReader(data).ReadToEndAsync(ct)).Split('\n'));
+                    lines.AddRange(PathsLines(await new StreamReader(data).ReadToEndAsync(ct)));
                 await s.CopyToAsync(Stream.Null, ct);
             }, cancellationToken: ct);
         }
@@ -96,8 +96,11 @@ public static class ContainerImport
         return lines;
     }
 
-    static readonly Regex UserName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$");
-    static readonly Regex VarName = new(@"^[A-Za-z_][A-Za-z0-9_]*$");
+    /// <summary>/etc/topwater/paths: NUL-terminated entries; an image from before that has one per line.</summary>
+    static string[] PathsLines(string text) => text.Split(text.Contains('\0') ? '\0' : '\n');
+
+    static readonly Regex UserName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}\z");
+    static readonly Regex VarName = new(@"^[A-Za-z_][A-Za-z0-9_]*\z");
 
     sealed class Item(bool isDirectory, int mode, int uid, DateTime mtime, byte[]? data)
     {
@@ -299,6 +302,7 @@ public static class ContainerImport
                 else _report.Skip("environment " + JsonSerializer.Serialize(name), "not a variable a shell can hold");
             }
 
+            if (_config.WorkingDir?.Length > 4096) throw new InvalidDataException("the working directory is longer than 4096 characters");
             var cwd = string.IsNullOrEmpty(_config.WorkingDir) ? "/" : VirtualFileSystem.Normalize("/", _config.WorkingDir);
             Ensure(machine, cwd);
             machine.SetExported("PWD", cwd);

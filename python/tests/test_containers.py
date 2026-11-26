@@ -119,8 +119,9 @@ class ExportTests(unittest.TestCase):
         self.assertFalse(re.search(r"(?m)^.*(-ou|-og|-oo).*$", ctx.setup_script))
         self.assertTrue({"account -ou", "account -og", "owner -oo"} <= set(whats(ctx.report)))
         self.assertEqual(0, read_layer(ctx.layer)["srv/f"][0].uid)
-        with self.assertRaises(ValueError):
-            to_build_context(Shell("-x").snapshot())
+        for user in ("-x", "0"):
+            with self.subTest(user), self.assertRaises(ValueError):
+                to_build_context(Shell(user).snapshot())
 
     def test_passwd_fields_and_working_directory_stay_data(self):
         # home, shell and comment go to useradd as quoted words; the working directory to WORKDIR escaped
@@ -281,10 +282,11 @@ class ImportTests(unittest.TestCase):
     def test_exported_layer_read_back_gives_the_machine_back(self):
         sh = Shell()
         sh.run("echo hi > ~/a.txt; echo '# mine' >> ~/.bashrc; greet() { echo \"hi $1\"; }; alias ll='ls -l'; x=1; mkdir -p /tmp/w")
-        sh.run("cd /tmp/w")
+        # a line break in a name can't add an entry to /etc/topwater/paths, and the file comes back
+        sh.run("mkdir -p $'/tmp/x\\nD /home/agent'; touch $'/tmp/x\\nD /home/agent/.profile'; echo nl > $'/tmp/n\\nl'; cd /tmp/w")
         ctx = to_build_context(sh.snapshot())
         layer = read_layer(ctx.layer)
-        changes = layer["etc/topwater/paths"][1].decode().split("\n")  # docker diff's format, which an import also reads from the image
+        changes = layer["etc/topwater/paths"][1].decode().split("\0")  # docker diff's format, NUL-terminated, which an import also reads from the image
         rootfs = io.BytesIO()
         with tarfile.open(fileobj=rootfs, mode="w", format=tarfile.PAX_FORMAT) as t:
             pw = b"root:x:0:0::/root:/bin/bash\nagent:x:1000:1000::/home/agent:/bin/bash\n"
@@ -301,6 +303,9 @@ class ImportTests(unittest.TestCase):
         self.assertFalse(back.fs.exists("/home/agent/.bash_history"))
         self.assertEqual(sh.history, back.history)
         self.assertEqual("agent", back.fs.stat("/home/agent/a.txt").owner)
+        self.assertTrue(back.fs.exists("/home/agent/.profile"))
+        self.assertEqual("nl\n", back.fs.read_text("/tmp/n\nl"))
+        self.assertTrue(back.fs.exists("/tmp/x\nD /home/agent/.profile"))
         probe = "pwd; cat ~/a.txt; greet you; alias ll; declare -p x"
         self.assertEqual(sh.run(probe).stdout, back.run(probe).stdout)
 
@@ -347,6 +352,16 @@ class ImportTests(unittest.TestCase):
             buf.seek(0)
             with self.subTest(kw), self.assertRaises(InvalidContainerData):
                 imported(buf, changes=["A /srv/x"])
+        # 2,040 levels deep (under the 4,096-character name limit); a working directory past 4,096 characters
+        deep = "a/" * 2040 + "f"
+        self.assertIn("/" + deep, imported(make_tar(F(deep, "x")), changes=["A /" + deep]).report.carried)
+        with self.assertRaises(InvalidContainerData):
+            imported(make_tar(), ContainerConfig("agent", "/a" * 3000))
+        self.assertEqual("/a" * 1500, restored(imported(make_tar(), ContainerConfig("agent", "/a" * 1500))).run("pwd").stdout.strip())
+        # a uid of 5,000 digits: the passwd line is ignored, the config user becomes root
+        huge = "9" * 5000
+        r = imported(make_tar(F("etc/passwd", f"big:x:{huge}:1::/home/big:/bin/bash\n"), F("srv/f", "x", uid=0)), ContainerConfig(huge), ["A /srv/f"])
+        self.assertEqual("root", r.snapshot.user)
 
     def test_many_directory_links_import_in_linear_time(self):
         # each link to a directory once copied the directory's entries: 20,000 links took minutes

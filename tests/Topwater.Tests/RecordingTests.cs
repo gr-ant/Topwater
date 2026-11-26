@@ -337,6 +337,23 @@ public class RecordingTests
     }
 
     [Fact]
+    public async Task Docker_target_copies_links_as_links_and_runs_by_number()
+    {
+        // links that loop, or fan out two per level, are never followed on the host; /etc/passwd saying uid 0 changes nothing
+        if (!await DockerTarget.IsAvailableAsync()) return; // skipped without docker
+        var sh = new Shell();
+        var mk = new System.Text.StringBuilder("cd ~; ln -s . self; ln -s / r; mkdir d; ln -s ../d d/up; mkdir -p out/d0; echo x > out/d0/f\n");
+        for (int i = 1; i <= 16; i++) mk.Append($"mkdir out/d{i}; ln -s ../d{i - 1} out/d{i}/a; ln -s ../d{i - 1} out/d{i}/b\n");
+        Assert.Equal(0, (await sh.RunAsync(mk.ToString())).ExitCode);
+        sh.Fs.WriteAllText("/etc/passwd", sh.Fs.ReadAllText("/etc/passwd").Replace("agent:x:1000:1000:", "agent:x:0:0:"));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await using var docker = await DockerTarget.StartAsync(sh.Snapshot(), new DockerTargetOptions { Packages = [] });
+        Assert.InRange(watch.Elapsed.TotalSeconds, 0, 60);
+        var r = await docker.RunAsync("id -u; id -g; cd ~; readlink self r d/up out/d16/a; cat out/d2/a/b/f; find out -type l | wc -l");
+        Assert.Equal("1000\n1000\n.\n/\n../d\n../d15\nx\n32\n", r.Stdout);
+    }
+
+    [Fact]
     public async Task Docker_target_setup_never_runs_names_as_code()
     {
         // an owner or variable name the host put in by hand reaches the container's root setup script as data, or not at all

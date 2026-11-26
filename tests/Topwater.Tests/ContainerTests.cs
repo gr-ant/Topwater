@@ -99,7 +99,8 @@ public class ContainerTests
         Assert.DoesNotMatch("-ou|-og|-oo", ctx.SetupScript);
         Assert.Subset(ctx.Report.NotCarried.Select(i => i.What).ToHashSet(), new HashSet<string> { "account -ou", "account -og", "owner -oo" });
         Assert.Equal(0, Read(ctx.Layer)["srv/f"].Uid);
-        Assert.Throws<InvalidOperationException>(() => new Shell(new ShellOptions { User = "-x" }).Snapshot().ToBuildContext());
+        foreach (var user in new[] { "-x", "0" })
+            Assert.Throws<InvalidOperationException>(() => new Shell(new ShellOptions { User = user }).Snapshot().ToBuildContext());
     }
 
     /// <summary>Home, shell and comment go to useradd as quoted words; the working directory to WORKDIR escaped.</summary>
@@ -355,10 +356,11 @@ public class ContainerTests
     {
         var sh = new Shell();
         await sh.RunAsync("echo hi > ~/a.txt; echo '# mine' >> ~/.bashrc; greet() { echo \"hi $1\"; }; alias ll='ls -l'; x=1; mkdir -p /tmp/w");
-        await sh.RunAsync("cd /tmp/w");
+        // a line break in a name can't add an entry to /etc/topwater/paths, and the file comes back
+        await sh.RunAsync("mkdir -p $'/tmp/x\\nD /home/agent'; touch $'/tmp/x\\nD /home/agent/.profile'; echo nl > $'/tmp/n\\nl'; cd /tmp/w");
         var ctx = sh.Snapshot().ToBuildContext();
         var layer = Read(ctx.Layer);
-        var changes = Text(layer["etc/topwater/paths"]).Split('\n'); // docker diff's format, which an import also reads from the image
+        var changes = Text(layer["etc/topwater/paths"]).Split('\0'); // docker diff's format, NUL-terminated, which an import also reads from the image
         layer["etc/topwater/paths"].DataStream!.Position = 0;
         var rootfs = new MemoryStream();
         using (var w = new TarWriter(rootfs, TarEntryFormat.Pax, leaveOpen: true))
@@ -375,6 +377,9 @@ public class ContainerTests
         Assert.False(back.Fs.Exists("/home/agent/.bash_history"));
         Assert.Equal(sh.History, back.History);
         Assert.Equal("agent", back.Fs.Stat("/home/agent/a.txt").Owner);
+        Assert.True(back.Fs.Exists("/home/agent/.profile"));
+        Assert.Equal("nl\n", back.Fs.ReadAllText("/tmp/n\nl"));
+        Assert.True(back.Fs.Exists("/tmp/x\nD /home/agent/.profile"));
         const string probe = "pwd; cat ~/a.txt; greet you; alias ll; declare -p x";
         Assert.Equal((await sh.RunAsync(probe)).Stdout, (await back.RunAsync(probe)).Stdout);
     }
@@ -453,6 +458,20 @@ public class ContainerTests
             w.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "srv/x", new Dictionary<string, string> { [key[..^1] + "X"] = value }) { DataStream = new MemoryStream([1]) });
         var bytes = Encoding.Latin1.GetString(ms.ToArray()).Replace(" " + key[..^1] + "X=", " " + key + "=");
         await Assert.ThrowsAsync<InvalidDataException>(() => Import(new MemoryStream(Encoding.Latin1.GetBytes(bytes)), changes: ["A /srv/x"]));
+    }
+
+    /// <summary>A path 2,040 levels deep imports; a working directory past 4,096 characters is refused; a uid of 5,000
+    /// digits makes the passwd line ignored and the config user root.</summary>
+    [Fact]
+    public async Task DeepPathsLongDirectoriesAndHugeIds()
+    {
+        var deep = string.Concat(Enumerable.Repeat("a/", 2040)) + "f";
+        Assert.Contains("/" + deep, (await Import(Tar(F(deep, "x")), changes: ["A /" + deep])).Report.Carried);
+        await Assert.ThrowsAsync<InvalidDataException>(() => Import(Tar(), new ContainerConfig("agent", string.Concat(Enumerable.Repeat("/a", 3000)))));
+        var huge = new string('9', 5000);
+        var r = await Import(Tar(F("etc/passwd", $"big:x:{huge}:1::/home/big:/bin/bash\n"), F("srv/f", "x", uid: 0)), new ContainerConfig(huge), ["A /srv/f"]);
+        Assert.Equal("root", r.Snapshot.User);
+        Assert.Equal("root", (await Import(Tar(), new ContainerConfig("agent\n"))).Snapshot.User); // a final line break is no name
     }
 
     /// <summary>Each link to a directory once copied the directory's entries: 20,000 links took minutes.</summary>
