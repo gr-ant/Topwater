@@ -38,7 +38,9 @@ A command handler gets a `CommandContext`: `args`, `stdout`/`stderr` writers, `s
 Optional adapters (separate entry points; the core has no dependencies). Install the SDK you use: `npm i ai`,
 `npm i @openai/agents zod`, `npm i langchain @langchain/core`, `npm i @mastra/core zod` or
 `npm i @anthropic-ai/claude-agent-sdk @modelcontextprotocol/sdk zod`. Each returns the same `bash` tool wired to a
-`Shell`; calls through one adapter run one at a time.
+`Shell`; calls on one shell run one at a time, whichever adapter makes them. The adapters are tested with ai 7,
+@openai/agents 0.22, @langchain/core 1.5, @mastra/core 1.86, @modelcontextprotocol/sdk 1.32 and Claude Agent SDK 0.3;
+they are not declared as peer dependencies, so other versions install but are untested.
 
 ```ts
 import { Shell } from 'topwater';
@@ -77,15 +79,16 @@ const agent = new Agent({ id: 'assistant', name: 'Assistant', instructions: 'Use
 await agent.generate('...');
 ```
 
-The Claude Agent SDK takes tools from in-process MCP servers. `bashMcpServer` is one, and the model sees the tool as
-`mcp__topwater__bash`. `tools: []` turns off Claude Code's own tools, including its Bash, which runs on the host:
+The Claude Agent SDK takes tools from in-process MCP servers. `bashOptions` returns `query` options whose only tool is
+the shell (`mcp__topwater__bash`): it turns off Claude Code's own tools, whose Bash runs on the host, and keeps the
+developer's Claude Code settings, allow rules and MCP servers out of the session (`settingSources: []`,
+`strictMcpConfig: true`). `bashMcpServer` is the server alone.
 
 ```ts
-import { bashMcpServer } from 'topwater/claude-agent-sdk';
+import { bashOptions } from 'topwater/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-const options = { mcpServers: { topwater: bashMcpServer(new Shell()) }, tools: [], allowedTools: ['mcp__topwater__bash'] };
-for await (const message of query({ prompt: '...', options })) if (message.type === 'result') console.log(message);
+for await (const message of query({ prompt: '...', options: bashOptions(new Shell()) })) if (message.type === 'result') console.log(message);
 ```
 
 ## Deterministic runs, snapshots and recordings

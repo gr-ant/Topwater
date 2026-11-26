@@ -5,7 +5,8 @@ import { bashTool as aiTool } from '../src/integrations/ai-sdk.js';
 import { bashTool as agentsTool } from '../src/integrations/openai-agents.js';
 import { bashTool as langchainTool } from '../src/integrations/langchain.js';
 import { bashTool as mastraTool } from '../src/integrations/mastra.js';
-import { bashMcpServer } from '../src/integrations/claude-agent-sdk.js';
+import { bashMcpServer, bashOptions } from '../src/integrations/claude-agent-sdk.js';
+import { serialRunner } from '../src/integrations/run.js';
 import { createAgent, AIMessage } from 'langchain';
 import { fakeModel } from '@langchain/core/testing';
 import { Agent as MastraAgent } from '@mastra/core/agent';
@@ -13,7 +14,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +24,21 @@ const aiRun = (t: ReturnType<typeof aiTool>, command: string) =>
 const claudeSdk = await import('@anthropic-ai/claude-agent-sdk' as string).catch(() => null);
 const agentsRun = (t: ReturnType<typeof agentsTool>, command: string) =>
   t.invoke(new RunContext(), JSON.stringify({ command })) as Promise<string>;
+
+describe('every adapter', () => {
+  it('runs one call at a time per shell, across adapters', async () => {
+    const shell = new Shell();
+    const log: string[] = [];
+    shell.register('probe', async ctx => {
+      log.push(`start ${ctx.args[0]}`);
+      await new Promise(r => setTimeout(r, 10));
+      log.push(`end ${ctx.args[0]}`);
+    });
+    await Promise.all([langchainTool(shell).invoke({ command: 'probe 0' }), mastraTool(shell).execute!({ command: 'probe 1' }, {} as any), serialRunner(shell)('probe 2')]);
+    expect(log).toHaveLength(6);
+    for (let i = 0; i < 6; i += 2) expect(log[i + 1]).toBe(log[i].replace('start', 'end')); // each call ends before the next starts
+  });
+});
 
 describe('Vercel AI SDK adapter', () => {
   it('exposes the core description and schema', () => {
@@ -125,6 +141,14 @@ describe('Claude Agent SDK adapter', () => {
     expect(t.description).toBe(BashTool.description);
     expect(t.inputSchema.required).toEqual(['command']);
   });
+  it('bashOptions gives the model only the Topwater shell', () => {
+    const options = bashOptions();
+    expect(options.mcpServers.topwater.type).toBe('sdk');
+    expect(options.tools).toEqual([]);
+    expect(options.allowedTools).toEqual(['mcp__topwater__bash']);
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+  });
   it('keeps state and reports failures', async () => {
     const { run } = await connect(bashMcpServer(new Shell()));
     await run('cd /tmp && echo hi > a.txt');
@@ -137,11 +161,24 @@ describe('Claude Agent SDK adapter', () => {
     const shell = new Shell();
     const home = mkdtempSync(join(tmpdir(), 'topwater-claude-'));
     const results: unknown[] = [];
+    const offered = new Set<string>();
+    // the developer's own Claude Code config, which bashOptions must keep out: an MCP server and an allow rule
+    const stub = join(home, 'hostexec.mjs'); // a stdio MCP server with one harmless tool
+    const sdkDir = new URL('../node_modules/@modelcontextprotocol/sdk/dist/esm/server/', import.meta.url).href;
+    writeFileSync(stub, `import { McpServer } from '${sdkDir}mcp.js'; import { StdioServerTransport } from '${sdkDir}stdio.js';
+      const s = new McpServer({ name: 'hostexec', version: '1.0.0' }); s.registerTool('run', { description: 'stub' }, async () => ({ content: [{ type: 'text', text: 'host' }] }));
+      await s.connect(new StdioServerTransport());`);
+    const planted = { mcpServers: { hostexec: { type: 'stdio', command: process.execPath, args: [stub] } } };
+    writeFileSync(join(home, '.claude.json'), JSON.stringify(planted));
+    writeFileSync(join(home, '.mcp.json'), JSON.stringify(planted));
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash', 'mcp__hostexec'] } }));
     const api = createServer((req, res) => {
       let body = '';
       req.on('data', d => (body += d));
       req.on('end', () => {
         const b = body ? JSON.parse(body) : {};
+        for (const t of b.tools ?? []) offered.add(t.name);
         if (!req.url!.startsWith('/v1/messages') || req.url!.includes('count_tokens')) return res.end(JSON.stringify({ input_tokens: 1 }));
         const result = b.messages?.at(-1)?.content?.find?.((c: any) => c.type === 'tool_result');
         if (result) results.push(result.content);
@@ -165,7 +202,7 @@ describe('Claude Agent SDK adapter', () => {
     await new Promise<void>(r => api.listen(0, '127.0.0.1', r));
     try {
       const env = { ...process.env, HOME: home, ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.address() as any).port}`, ANTHROPIC_API_KEY: 'test', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
-      const options = { mcpServers: { topwater: bashMcpServer(shell) }, tools: [], allowedTools: ['mcp__topwater__bash'], settingSources: [], cwd: home, env };
+      const options = { ...bashOptions(shell), cwd: home, env };
       let last: any;
       for await (const m of claudeSdk!.query({ prompt: 'go', options })) last = m;
       expect(last.result).toBe('done');
@@ -173,6 +210,7 @@ describe('Claude Agent SDK adapter', () => {
       api.close();
       rmSync(home, { recursive: true, force: true });
     }
+    expect([...offered].filter(n => n !== 'DeferredToolPlaceholder')).toEqual(['mcp__topwater__bash']); // the placeholder is the CLI's own, not callable
     expect(JSON.stringify(results[0])).toContain('hi');
     expect((await shell.run('cat /tmp/a.txt')).stdout).toBe('hi\n');
   }, 60_000);
