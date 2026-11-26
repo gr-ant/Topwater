@@ -243,7 +243,7 @@ public sealed class ShellSnapshot
     /// directory itself holds more, counted by walking it and stopping once past <paramref name="cap"/>. -1 when there is
     /// no end record (the zip reader then fails).
     /// </summary>
-    static long ZipEntryCount(Stream s, long cap)
+    internal static long ZipEntryCount(Stream s, long cap)
     {
         long start = s.Position, length = s.Length - start;
         var tail = new byte[(int)Math.Min(length, 22 + 65535)];

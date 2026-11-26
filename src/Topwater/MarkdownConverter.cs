@@ -20,6 +20,8 @@ public static class MarkdownConverter
 {
     /// <summary>Zip-bomb guard: total bytes read out of one archive.</summary>
     public static long MaxUncompressedBytes { get; set; } = 100L * 1024 * 1024;
+    /// <summary>An OOXML package has a few hundred parts; <see cref="ZipArchive"/> builds an object for every entry.</summary>
+    const int MaxZipEntries = 10_000;
     const string Supported = ".docx, .xlsx, .pptx, .html, .htm, .csv, .tsv, .json, .md, .txt";
 
     static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -66,6 +68,14 @@ public static class MarkdownConverter
         return null;
     }
 
+    static ZipArchive OpenZip(byte[] data)
+    {
+        var s = new MemoryStream(data);
+        if (ShellSnapshot.ZipEntryCount(s, MaxZipEntries) > MaxZipEntries)
+            throw new InvalidDataException(CommandSpec.Message("to-markdown", "tooManyEntries", ("limit", MaxZipEntries.ToString())));
+        return new ZipArchive(s);
+    }
+
     static bool StartsWith(byte[] data, string latin1) => data.AsSpan().StartsWith(Encoding.Latin1.GetBytes(latin1));
 
     static string? Sniff(byte[] data)
@@ -74,7 +84,7 @@ public static class MarkdownConverter
         if (StartsWith(data, "PK"))
         {
             HashSet<string> names;
-            try { using var zip = new ZipArchive(new MemoryStream(data)); names = zip.Entries.Select(e => e.FullName).ToHashSet(); }
+            try { using var zip = OpenZip(data); names = zip.Entries.Select(e => e.FullName).ToHashSet(); }
             catch (Exception e) when (e is InvalidDataException or IOException or ArgumentException) { return null; }
             foreach (var (part, fmt) in new[] { ("word/document.xml", ".docx"), ("xl/workbook.xml", ".xlsx"), ("ppt/presentation.xml", ".pptx") })
                 if (names.Contains(part)) return fmt;
@@ -95,7 +105,7 @@ public static class MarkdownConverter
     /// <summary>A zip (OOXML package) read with a cap on total uncompressed bytes and no DTDs/entities in XML parts.</summary>
     sealed class Package(byte[] data)
     {
-        readonly ZipArchive _zip = new(new MemoryStream(data));
+        readonly ZipArchive _zip = OpenZip(data);
         long _budget = MaxUncompressedBytes;
 
         public byte[]? Read(string name)

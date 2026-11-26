@@ -21,6 +21,7 @@ export interface ZipEntry {
   data: Uint8Array;
 }
 export class ZipFormatError extends Error {}
+export class ZipTooManyEntriesError extends ZipFormatError {}
 
 export function dosTime(ms: number): [time: number, date: number] {
   const d = new Date(Math.max(ms, Date.UTC(1980, 0, 1)));
@@ -35,7 +36,7 @@ export function readZip(bytes: Uint8Array, maxEntries = Infinity): ZipEntry[] {
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
   if (eocd < 0) throw new ZipFormatError('no end of central directory');
   const count = v.getUint16(eocd + 10, true);
-  if (count > maxEntries) throw new ZipFormatError(`${count} entries, more than ${maxEntries}`);
+  if (count > maxEntries) throw new ZipTooManyEntriesError(`${count} entries, more than ${maxEntries}`);
   let pos = v.getUint32(eocd + 16, true);
   const entries: ZipEntry[] = [];
   for (let n = 0; n < count; n++) {

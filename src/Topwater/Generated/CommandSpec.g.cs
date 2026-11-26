@@ -912,6 +912,7 @@ internal static partial class CommandSpec
             ["unsupportedFormat"] = "unsupported format '{format}' (supported: {supported})",
             ["invalidFile"] = "not a valid {format} file ({detail})",
             ["partMissing"] = "not a valid {format} file ({part} is missing)",
+            ["tooManyEntries"] = "more than {limit} entries in the archive",
             ["archiveTooLarge"] = "archive expands to more than {megabytes} MB",
             ["dtdNotAllowed"] = "{name}: DTDs are not allowed",
             ["sheetTooLarge"] = "sheet '{name}' is too large",

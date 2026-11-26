@@ -199,6 +199,14 @@ def f():
     } finally { converterLimits.maxUncompressedBytes = saved; }
   });
 
+  it('refuses a zip with too many entries before it is read', async () => {
+    const many = buildZip([['word/document.xml', `<w:document ${W}/>`], ...Array.from({ length: 10_000 }, (_, i) => [`d${i}/`, ''] as [string, string])]);
+    expect(() => toMarkdown(many, 'x.docx')).toThrow(/^not a valid docx file \(more than 10000 entries in the archive\)$/);
+    const sh = new Shell();
+    sh.fs.writeBytes('/home/agent/x.docx', many);
+    expect((await sh.run('to-markdown x.docx')).stderr).toBe('to-markdown: x.docx: not a valid docx file (more than 10000 entries in the archive)\n');
+  });
+
   it('refuses PDF without starting anything', () => {
     expect(() => toMarkdown(enc('%PDF-1.4 hi'), 'x.pdf')).toThrow(/PDF/);
   });

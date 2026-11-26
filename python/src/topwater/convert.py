@@ -19,6 +19,17 @@ from .vfs import ShellError
 
 MAX_UNCOMPRESSED = 100 * 1024 * 1024  # zip-bomb guard: total bytes read out of one archive
 MAX_SHEET_CELLS = 5_000_000
+MAX_ZIP_ENTRIES = 10_000  # an OOXML package has a few hundred parts; zipfile builds an object for every entry
+
+
+def _open_zip(data: bytes) -> zipfile.ZipFile:
+    from .snapshot import _zip_entry_count  # here, not at the top: snapshot imports shell
+    src = io.BytesIO(data)
+    if _zip_entry_count(src, MAX_ZIP_ENTRIES) > MAX_ZIP_ENTRIES:
+        raise zipfile.BadZipFile(spec_message("to-markdown", "tooManyEntries", limit=str(MAX_ZIP_ENTRIES)))
+    return zipfile.ZipFile(src)
+
+
 SUPPORTED = ".docx, .xlsx, .pptx, .html, .htm, .csv, .tsv, .json, .md, .txt"
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -72,7 +83,7 @@ def _sniff(data: bytes) -> str | None:
         return ".pdf"
     if data.startswith(b"PK"):
         try:
-            names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+            names = set(_open_zip(data).namelist())
         except (zipfile.BadZipFile, ValueError, OSError):
             return None
         for part, fmt in (("word/document.xml", ".docx"), ("xl/workbook.xml", ".xlsx"), ("ppt/presentation.xml", ".pptx")):
@@ -97,7 +108,7 @@ class _Package:
     """A zip (OOXML package) read with a cap on total uncompressed bytes and no DTDs/entities in XML parts."""
 
     def __init__(self, data: bytes):
-        self.zip = zipfile.ZipFile(io.BytesIO(data))
+        self.zip = _open_zip(data)
         self.budget = MAX_UNCOMPRESSED
 
     def read(self, name: str) -> bytes | None:

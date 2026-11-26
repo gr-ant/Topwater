@@ -250,9 +250,18 @@ def _open(file, max_archive: int, what: str = "the snapshot"):
 
 
 def _check_entry_count(src, o: dict) -> None:
-    """Refuses a zip with more entries than any Topwater file holds, before zipfile builds an object for each. The count
-    in the end record comes first; the central directory is then walked too, as zipfile reads it by its size, not that count."""
+    """Refuses a zip with more entries than any Topwater file holds, before zipfile builds an object for each."""
     cap = 4 * o["max_extract_entries"] + 1002  # a manifest's and 1000 checkpoints' JSON, history.jsonl, and blobs
+    count = _zip_entry_count(src, cap)
+    if count < 0:
+        raise SnapshotError("not a zip file")
+    if count > cap:
+        raise SnapshotError(f"more than {cap} zip entries (4 x MaxExtractEntries + 1002)")
+
+
+def _zip_entry_count(src, cap: int) -> int:
+    """The number of entries in a zip, or cap + 1 once it is past cap; -1 without an end record. The count in the end
+    record comes first; the central directory is then walked too, as zipfile reads it by its size, not that count."""
     pos = src.tell()
     end = src.seek(0, io.SEEK_END)
     start = max(0, end - (22 + 0xFFFF + 76))  # the end record, its comment, and a zip64 record and locator before it
@@ -260,23 +269,26 @@ def _check_entry_count(src, o: dict) -> None:
     tail = src.read(end - start)
     i = tail.rfind(b"PK\x05\x06")
     if i < 0 or len(tail) - i < 22:
-        raise SnapshotError("not a zip file")
+        src.seek(pos)
+        return -1
     count, size, offset = struct.unpack_from("<HII", tail, i + 10)
     at = start + i
     if i >= 76 and tail[i - 20:i - 16] == b"PK\x06\x07" and tail[i - 76:i - 72] == b"PK\x06\x06":
         count, size, offset = struct.unpack_from("<QQQ", tail, i - 76 + 32)
         at -= 76
     if count > cap:
-        raise SnapshotError(f"more than {cap} zip entries (4 x MaxExtractEntries + 1002)")
+        src.seek(pos)
+        return cap + 1
     src.seek(at - size)  # where zipfile reads it, also with data prepended to the zip
     cd = src.read(size)
     p = n = 0
     while p + 46 <= len(cd):
         n += 1
         if n > cap:
-            raise SnapshotError(f"more than {cap} zip entries (4 x MaxExtractEntries + 1002)")
+            break
         p += 46 + sum(struct.unpack_from("<HHH", cd, p + 28))
     src.seek(pos)
+    return max(count, n)
 
 
 def _save_zip(file, write) -> None:

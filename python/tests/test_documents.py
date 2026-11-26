@@ -329,6 +329,22 @@ def f():
         finally:
             convert.MAX_UNCOMPRESSED = saved
 
+    def test_zip_with_too_many_entries_is_refused_before_it_is_read(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("word/document.xml", "<w:document " + W + "/>")
+            for i in range(convert.MAX_ZIP_ENTRIES):
+                zf.writestr(f"d{i}/", b"")
+        many = buf.getvalue()
+        lying = bytearray(many)  # the end record says 1 entry; the directory holds them all
+        lying[-14:-10] = (1).to_bytes(2, "little") * 2
+        for data in (many, bytes(lying)):
+            with self.assertRaisesRegex(ShellError, r"^not a valid docx file \(more than 10000 entries in the archive\)$"):
+                to_markdown(data, "x.docx")
+            sh = Shell()
+            sh.fs.write_bytes("/home/agent/x.docx", data)
+            self.assertEqual("x.docx: Zip archive data\n", sh.run("file x.docx").stdout)
+
     def test_pdf_is_not_converted(self):
         # PDF needs a native parser, so it is never run on agent-supplied bytes; the host can attach pdftotext itself
         with self.assertRaisesRegex(ShellError, "pdftotext -layout"):

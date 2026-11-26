@@ -6,11 +6,19 @@ import { OutputLimitError, inflateRaw } from '../inflate.js';
 import { Args, specOf, specMessage, ShellError, reason, type CommandContext } from '../command.js';
 import type { VirtualFileSystem } from '../vfs.js';
 import type { Shell } from '../shell.js';
-import { ZipFormatError, readZip, type ZipEntry } from './zipfile.js';
+import { ZipFormatError, ZipTooManyEntriesError, readZip, type ZipEntry } from './zipfile.js';
 import { DtdError, XmlError, attr, child, descendants, elements, parseXml, textOf, type XEl } from './xml.js';
 
 /** Zip-bomb guard: total bytes read out of one archive. */
 export const converterLimits = { maxUncompressedBytes: 100 * 1024 * 1024 };
+/** An OOXML package has a few hundred parts; each entry becomes an object. */
+const MAX_ZIP_ENTRIES = 10_000;
+
+function openZip(data: Uint8Array): ZipEntry[] {
+  try { return readZip(data, MAX_ZIP_ENTRIES); } catch (e) {
+    throw e instanceof ZipTooManyEntriesError ? new ZipFormatError(specMessage('to-markdown', 'tooManyEntries', { limit: String(MAX_ZIP_ENTRIES) })) : e;
+  }
+}
 
 const SUPPORTED = '.docx, .xlsx, .pptx, .pdf, .html, .htm, .csv, .tsv, .json, .md, .txt';
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -53,7 +61,7 @@ function sniff(data: Uint8Array): string | null {
   if (startsWith(data, '%PDF-')) return '.pdf';
   if (startsWith(data, 'PK')) {
     let names: Set<string>;
-    try { names = new Set(readZip(data).map(e => e.name)); } catch { return null; }
+    try { names = new Set(openZip(data).map(e => e.name)); } catch { return null; }
     for (const [part, fmt] of [['word/document.xml', '.docx'], ['xl/workbook.xml', '.xlsx'], ['ppt/presentation.xml', '.pptx']]) if (names.has(part)) return fmt;
     return null;
   }
@@ -71,7 +79,7 @@ function sniff(data: Uint8Array): string | null {
 class Pkg {
   private readonly entries = new Map<string, ZipEntry>();
   private budget = converterLimits.maxUncompressedBytes;
-  constructor(data: Uint8Array) { for (const e of readZip(data)) this.entries.set(e.name, e); }
+  constructor(data: Uint8Array) { for (const e of openZip(data)) this.entries.set(e.name, e); }
 
   read(name: string): Uint8Array | null {
     const e = name ? this.entries.get(name) : undefined;

@@ -344,6 +344,21 @@ public class DocumentTests
         finally { MarkdownConverter.MaxUncompressedBytes = saved; }
     }
 
+    [Fact]
+    public async Task ZipWithTooManyEntriesIsRefusedBeforeItIsRead()
+    {
+        var many = Zip([("word/document.xml", $"<w:document {W}/>"), .. Enumerable.Range(0, 10_000).Select(i => ($"d{i}/", ""))]);
+        var lying = (byte[])many.Clone(); // the end record says 1 entry; the directory holds them all
+        lying[^14] = 1; lying[^13] = 0; lying[^12] = 1; lying[^11] = 0;
+        foreach (var data in new[] { many, lying })
+        {
+            Assert.Equal("not a valid docx file (more than 10000 entries in the archive)", Assert.Throws<ShellException>(() => Md(data, "x.docx")).Message);
+            var sh = new Shell();
+            sh.Fs.WriteAllBytes("/home/agent/x.docx", data);
+            Assert.Equal("x.docx: Zip archive data\n", await Out(sh, "file x.docx"));
+        }
+    }
+
     [Fact] // PDF needs a native parser, so it is never run on agent-supplied bytes; the host can attach pdftotext itself
     public void PdfIsNotConverted() =>
         Assert.Contains("pdftotext -layout", Assert.Throws<ShellException>(() => Md(TinyPdf("hi"), "x.pdf")).Message);
