@@ -266,6 +266,8 @@ The `bc` calculator is in .NET only; the tables above show what Python and TypeS
 - [Python](python/README.md) and [TypeScript](typescript/README.md): how each port maps onto the reference, and
   where it differs.
 - [Shared test corpus](tests/corpus/README.md): the recorded cases all three implementations run.
+- [Command spec](spec/README.md): the one list of commands, options, help texts and messages the three implementations
+  are generated from, and how to add or change a command.
 
 ## Examples
 
@@ -294,8 +296,9 @@ dotnet test                                  # .NET
 (cd typescript && npm install && npm test)   # TypeScript
 ```
 
-All three run the shared cases in `tests/corpus/`.
+All three run the shared cases in `tests/corpus/`. Commands, options, help texts and messages live in `spec/`: edit
+the JSON there and run `python3 tools/spec-gen/gen.py` (see [spec/README.md](spec/README.md)).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE), and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the jq help text it reproduces.

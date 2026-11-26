@@ -56,7 +56,8 @@ State persists between tool calls: working directory, variables, functions, alia
 | System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `sudo` `su` |
 
 `help` lists everything, including your commands. Standard tools answer `--version` and `--help` the way the
-real ones do. `find` supports `-name -iname -path -regex -type -size -mmin -mtime -newer -empty -maxdepth
+real ones do. The full list, with each command's options and the ports that support them, is in
+[`spec/commands`](../spec/README.md). `find` supports `-name -iname -path -regex -type -size -mmin -mtime -newer -empty -maxdepth
 -mindepth -print -print0 -exec -delete` with `!`, `-o` and parentheses. `sed` is a full engine: addresses, `{}` blocks, hold space, labels and branches, `-i`, `-E`.
 `ls` also takes `-s`, `--time-style` (`full-iso`, `long-iso`, `iso`, `+FORMAT`) and `--full-time`.
 
