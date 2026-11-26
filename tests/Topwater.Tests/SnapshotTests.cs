@@ -331,6 +331,14 @@ public class SnapshotTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void NamesEndAtTheirLastCharacter()
+    {
+        // a pattern's $ also matches before a final newline
+        Assert.Contains("bad user", Rejected(Tamper(new Shell(), m => m["user"] = "agent\n")));
+        Assert.Contains("bad hostname", Rejected(Tamper(new Shell(), m => m["hostname"] = "topwater\n")));
+    }
+
+    [Fact]
     public void NotASnapshotIsRefused()
     {
         Assert.Contains("not a valid Topwater snapshot", Rejected(Encoding.UTF8.GetBytes("hello, not a zip")));

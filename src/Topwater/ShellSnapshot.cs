@@ -113,14 +113,27 @@ public sealed class ShellSnapshot
     /// MaxStringBytes and MaxExtractEntries bound it, and nothing is written outside memory. Throws <see cref="InvalidDataException"/>
     /// for anything malformed or over a limit, <see cref="NotSupportedException"/> for a newer format version.
     /// </summary>
-    public static ShellSnapshot Load(Stream stream, ShellOptions? limits = null)
+    public static ShellSnapshot Load(Stream stream, ShellOptions? limits = null) => Load(stream, limits, null);
+
+    internal static ShellSnapshot Load(Stream stream, ShellOptions? limits, Action<int>? countFiles)
     {
         var o = limits ?? new ShellOptions();
         return Checked(() =>
         {
             using var zip = OpenZip(stream, o, MaxArchiveBytes(o));
-            return ReadManifest(zip, "manifest.json", o);
+            return ReadManifest(zip, "manifest.json", o, countFiles);
         });
+    }
+
+    /// <summary>Whether the stream is a .topwater file with history (a recording), as opposed to a snapshot; false for
+    /// anything that isn't a zip. The zip is opened with the same checks as <see cref="Load(Stream, ShellOptions?)"/>.</summary>
+    public static bool HasHistory(Stream stream, ShellOptions? limits = null)
+    {
+        limits ??= new ShellOptions();
+        long at = stream.Position;
+        bool zip = stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
+        stream.Position = at;
+        return zip && Checked(() => { using var z = OpenZip(stream, limits, Recording.MaxSnapshotsFileSystems * MaxArchiveBytes(limits)); return z.GetEntry("history.jsonl") != null; });
     }
 
     /// <summary>Runs a read, turning whatever a malformed file makes it throw into <see cref="InvalidDataException"/>.</summary>
@@ -133,11 +146,12 @@ public sealed class ShellSnapshot
         }
     }
 
-    static readonly Regex UserName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$");
-    static readonly Regex HostName = new(@"^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$");
-    static readonly Regex VarName = new(@"^[A-Za-z_][A-Za-z0-9_]*$");
-    static readonly Regex Word = new(@"^[A-Za-z0-9_+-]{1,32}$");
-    static readonly Regex Blob = new(@"^[0-9a-f]{64}$");
+    // \z, not $: $ also matches before a final newline
+    internal static readonly Regex UserName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}\z");
+    internal static readonly Regex HostName = new(@"^[A-Za-z0-9][A-Za-z0-9.-]{0,63}\z");
+    static readonly Regex VarName = new(@"^[A-Za-z_][A-Za-z0-9_]*\z");
+    static readonly Regex Word = new(@"^[A-Za-z0-9_+-]{1,32}\z");
+    static readonly Regex Blob = new(@"^[0-9a-f]{64}\z");
 
     const string Invalid = "not a valid Topwater snapshot: ";
     static InvalidDataException Bad(string why) => new(Invalid + why);
@@ -175,40 +189,68 @@ public sealed class ShellSnapshot
         }
         else if (stream.Length - stream.Position > maxBytes) throw Bad($"the file is larger than {maxBytes} bytes");
         long maxEntries = (long)Recording.MaxSnapshotsFileSystems * o.MaxExtractEntries + Recording.MaxSnapshots + 2;
-        if (ZipEntryCount(input) is var count && count > maxEntries) throw Bad($"{count} zip entries, more than {maxEntries} (4 x MaxExtractEntries + 1002)");
-        return new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: input == stream);
+        if (ZipEntryCount(input, maxEntries) is var count && count > maxEntries) throw Bad($"{(count == maxEntries + 1 ? "more than " + maxEntries : count)} zip entries, more than {maxEntries} (4 x MaxExtractEntries + 1002)");
+        var zip = new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: input == stream);
+        // one name, one entry: readers that pick the first or the last of two must never see different files
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in zip.Entries) if (!names.Add(e.FullName)) { zip.Dispose(); throw Bad($"entry {JsonSerializer.Serialize(e.FullName)} appears twice"); }
+        return zip;
     }
 
-    /// <summary>The entry count the end-of-central-directory record states (zip64 included); -1 when there is none (the zip reader then fails).</summary>
-    static long ZipEntryCount(Stream s)
+    /// <summary>
+    /// The number of zip entries: what the end-of-central-directory record states (zip64 included), or more if the
+    /// directory itself holds more, counted by walking it and stopping once past <paramref name="cap"/>. -1 when there is
+    /// no end record (the zip reader then fails).
+    /// </summary>
+    static long ZipEntryCount(Stream s, long cap)
     {
         long start = s.Position, length = s.Length - start;
         var tail = new byte[(int)Math.Min(length, 22 + 65535)];
         s.Position = start + length - tail.Length;
         s.ReadExactly(tail);
-        s.Position = start;
-        for (int i = tail.Length - 22; i >= 0; i--)
+        try
         {
-            if (BitConverter.ToUInt32(tail, i) != 0x06054b50) continue;
-            long count = BitConverter.ToUInt16(tail, i + 10);
-            // zip64: the locator just before points at the zip64 record, which holds the real count
-            if (count == 0xFFFF && i >= 20 && BitConverter.ToUInt32(tail, i - 20) == 0x07064b50)
+            for (int i = tail.Length - 22; i >= 0; i--)
             {
-                var offset = BitConverter.ToInt64(tail, i - 12);
-                if (offset < 0 || offset > length - 56) return long.MaxValue;
-                var record = new byte[56];
-                s.Position = start + offset;
-                s.ReadExactly(record);
-                s.Position = start;
-                count = BitConverter.ToUInt32(record, 0) == 0x06064b50 ? (long)Math.Min(BitConverter.ToUInt64(record, 32), long.MaxValue) : long.MaxValue;
+                if (BitConverter.ToUInt32(tail, i) != 0x06054b50) continue;
+                long stated = BitConverter.ToUInt16(tail, i + 10), directory = BitConverter.ToUInt32(tail, i + 16);
+                // zip64: the locator just before points at the zip64 record, which holds the real count and offset
+                if ((stated == 0xFFFF || directory == 0xFFFFFFFF) && i >= 20 && BitConverter.ToUInt32(tail, i - 20) == 0x07064b50)
+                {
+                    var offset = BitConverter.ToInt64(tail, i - 12);
+                    if (offset < 0 || offset > length - 56) return long.MaxValue;
+                    var record = new byte[56];
+                    s.Position = start + offset;
+                    s.ReadExactly(record);
+                    if (BitConverter.ToUInt32(record, 0) != 0x06064b50) return long.MaxValue;
+                    stated = (long)Math.Min(BitConverter.ToUInt64(record, 32), long.MaxValue);
+                    directory = (long)Math.Min(BitConverter.ToUInt64(record, 48), long.MaxValue);
+                }
+                if (stated > cap) return stated;
+                // the stated count is the file's word: count the directory's own entries too
+                long walked = 0;
+                if (directory >= 0 && directory < length)
+                {
+                    s.Position = start + directory;
+                    var reader = new BufferedStream(s, 1 << 16);
+                    var head = new byte[46];
+                    var skip = new byte[3 * 65535];
+                    while (walked <= cap && reader.ReadAtLeast(head, 46, throwOnEndOfStream: false) == 46 && BitConverter.ToUInt32(head, 0) == 0x02014b50)
+                    {
+                        walked++;
+                        int rest = BitConverter.ToUInt16(head, 28) + BitConverter.ToUInt16(head, 30) + BitConverter.ToUInt16(head, 32);
+                        if (reader.ReadAtLeast(skip.AsSpan(0, rest), rest, throwOnEndOfStream: false) < rest) break;
+                    }
+                }
+                return Math.Max(stated, walked);
             }
-            return count;
+            return -1;
         }
-        return -1;
+        finally { s.Position = start; }
     }
 
     /// <summary>Reads the manifest <paramref name="name"/> (manifest.json or a checkpoint) and the blobs it names.</summary>
-    internal static ShellSnapshot ReadManifest(ZipArchive zip, string name, ShellOptions o)
+    internal static ShellSnapshot ReadManifest(ZipArchive zip, string name, ShellOptions o, Action<int>? countFiles = null)
     {
         long maxManifest = MaxManifestBytes(o);
         var manifestEntry = zip.GetEntry(name) ?? throw Bad($"{name} is missing");
@@ -226,6 +268,7 @@ public sealed class ShellSnapshot
 
         var user = Check(m.User, UserName, "user");
         var hostname = Check(m.Hostname, HostName, "hostname");
+        countFiles?.Invoke(m.Files?.Count ?? 0); // before any entry is built
         var fs = ReadFiles(zip, m.Files ?? [], o);
         var state = ReadState(m, o);
         return new ShellSnapshot(fs, state, user, hostname, ParseTime(m.Created, "created"));

@@ -341,6 +341,119 @@ public class RecordingTests
         }
     }
 
+    /// <summary>A fixture with history.jsonl replaced by <paramref name="write"/>'s output, deflated as small as it goes.</summary>
+    static byte[] WithHistory(Action<Stream> write) => Tamper(File.ReadAllBytes(Fixture("from-csharp.topwater")), z =>
+    {
+        z.GetEntry("history.jsonl")!.Delete();
+        using var s = z.CreateEntry("history.jsonl", CompressionLevel.SmallestSize).Open();
+        write(s);
+    });
+
+    static void Repeat(Stream s, byte[] chunk, long count)
+    {
+        var block = Enumerable.Repeat(chunk, 65536 / chunk.Length).SelectMany(b => b).ToArray();
+        long left = count * chunk.Length;
+        for (; left >= block.Length; left -= block.Length) s.Write(block);
+        s.Write(block, 0, (int)left);
+    }
+
+    static void RefusedFast(byte[] file, string message, ShellOptions? limits = null)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Contains(message, Assert.Throws<InvalidDataException>(() => LoadBytes(file, limits)).Message);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+    }
+
+    [Fact]
+    public void A_history_that_inflates_far_is_refused_early()
+    {
+        var header = Encoding.UTF8.GetBytes(Entry(File.ReadAllBytes(Fixture("from-csharp.topwater")), "history.jsonl").Split('\n')[0] + "\n");
+        // 236 MB of newlines (a ~240 KB file), and 15.7 million tiny calls
+        var newlines = WithHistory(s => { s.Write(header); Repeat(s, "\n"u8.ToArray(), 236L << 20); });
+        Assert.True(newlines.Length < 1 << 20);
+        RefusedFast(newlines, "more than 100000 calls (MaxExtractEntries)");
+        RefusedFast(WithHistory(s => { s.Write(header); Repeat(s, "{\"command\":\"\"}\n"u8.ToArray(), 15_728_625L); }), "more than 100000 calls");
+        // one huge line stops at the byte cap: 2 x MaxStringBytes
+        var limits = new ShellOptions { MaxStringBytes = 1 << 20 };
+        RefusedFast(WithHistory(s => { s.Write(header); Repeat(s, "x"u8.ToArray(), 8 << 20); }), "history.jsonl is larger than 2097152 bytes", limits);
+        // exactly the cap of calls still loads
+        var few = new ShellOptions { MaxExtractEntries = 1000 };
+        Assert.Equal(1000, LoadBytes(WithHistory(s => { s.Write(header); Repeat(s, "{\"command\":\"true\"}\n"u8.ToArray(), 1000); }), few).Calls.Count);
+        RefusedFast(WithHistory(s => { s.Write(header); Repeat(s, "{\"command\":\"true\"}\n"u8.ToArray(), 1001); }), "more than 1000 calls", few);
+        // and in an old .jsonl, the same count
+        var old = File.ReadAllLines(Fixture("basics.jsonl"));
+        var text = old[0] + "\n" + new string('\n', 2000);
+        Assert.Contains("more than 1000 calls", Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(text)), limits: few)).Message);
+    }
+
+    [Fact]
+    public async Task Checkpoints_share_a_budget_of_entries()
+    {
+        // directories cost no bytes: the entries are budgeted too, 4 x MaxExtractEntries over all checkpoints
+        var limits = new ShellOptions { MaxExtractEntries = 2000 };
+        var sh = new Shell();
+        Assert.Equal(0, (await sh.RunAsync("mkdir d && cd d && for i in $(seq 1500); do mkdir d$i; done")).ExitCode);
+        var rec = sh.StartRecording(new RecordingOptions { SnapshotEvery = 1 });
+        for (int i = 0; i < 4; i++) await sh.RunAsync("true");
+        rec.Stop();
+        var file = Bytes(rec.Recording);
+        RefusedFast(file, "files and directories together (4 x MaxExtractEntries)", limits);
+        Assert.Equal(4, LoadBytes(file, new ShellOptions { MaxExtractEntries = 3000 }).Calls.Count);
+
+        // one checkpoint's data under many names: refused at the budget, not after building them all
+        var start = Entry(file, "checkpoints/0.json");
+        var calls = Enumerable.Range(0, 999).Select(i => rec.Recording.Calls[0] with { Index = i, SnapshotAfter = null }).ToList();
+        var big = new Recording(rec.Recording.Start, new ShellOptions());
+        big.Calls.AddRange(calls);
+        RefusedFast(Tamper(Bytes(big), z => { for (int i = 1; i < 1000; i++) Put(z, $"checkpoints/{i}.json", start); }), "files and directories together", limits);
+    }
+
+    [Fact]
+    public async Task Refuses_duplicate_entries_bad_header_names_and_a_directory_that_holds_more_than_it_says()
+    {
+        var file = Bytes(await Record());
+        // two entries of one name: a reader taking the first and one taking the last would see different sessions
+        var twice = Tamper(file, z => { using var w = new StreamWriter(z.CreateEntry("history.jsonl").Open()); w.Write("{}"); });
+        Assert.Contains("entry \"history.jsonl\" appears twice", Assert.Throws<InvalidDataException>(() => LoadBytes(twice)).Message);
+        Assert.Contains("appears twice", Assert.Throws<InvalidDataException>(() => ShellSnapshot.Load(new MemoryStream(twice))).Message);
+
+        foreach (var (field, value) in new[] { ("user", "../../x"), ("user", "agent\n"), ("hostname", "a b") })
+            Assert.Contains($"bad {field}", Assert.Throws<InvalidDataException>(() => LoadBytes(TamperHeader(file, h => h["options"]![field] = value))).Message);
+
+        // the end record says 3 entries; the directory holds 1,100
+        var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+            for (int i = 0; i < 1100; i++) zip.CreateEntry($"x/{i}");
+        var lying = ms.ToArray();
+        BitConverter.GetBytes((ushort)3).CopyTo(lying, lying.Length - 22 + 8);
+        BitConverter.GetBytes((ushort)3).CopyTo(lying, lying.Length - 22 + 10);
+        Assert.Contains("more than 1006 zip entries", Assert.Throws<InvalidDataException>(() => LoadBytes(lying, new ShellOptions { MaxExtractEntries = 1 })).Message);
+    }
+
+    [Fact]
+    public async Task Saving_to_a_path_replaces_the_file_whole()
+    {
+        var dir = Directory.CreateTempSubdirectory("topwater-rec-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "run.topwater");
+            File.Copy(Fixture("from-csharp.topwater"), path);
+            var sh = new Shell();
+            using var rec = sh.StartRecording();
+            await sh.RunAsync("echo x > a; ln a b");
+            rec.Stop();
+            Recording.Load(path).Save(path); // load then save onto itself
+            rec.Recording.Save(path);
+            var back = Recording.Load(path);
+            back.Save(path);
+            var end = new Shell();
+            end.Restore(Recording.Load(path).Calls[0].SnapshotAfter!);
+            Assert.Equal("x\n2\n", (await end.RunAsync("cat b; stat -c %h a")).Stdout);
+            Assert.Equal(["run.topwater"], Directory.GetFiles(dir).Select(Path.GetFileName));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Fact]
     public async Task Counts_zip_entries_before_listing_them()
     {

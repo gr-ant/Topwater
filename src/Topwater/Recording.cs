@@ -206,8 +206,14 @@ public sealed class Recording
     /// <summary>Writes the recording to <paramref name="path"/> as a .topwater file (see <see cref="Save(Stream)"/>).</summary>
     public void Save(string path)
     {
-        using var file = File.Create(path);
-        Save(file);
+        // through a temporary file, so a failed save never leaves a half-written file where the old one was
+        var temp = path + ".tmp";
+        try
+        {
+            using (var file = File.Create(temp)) Save(file);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally { File.Delete(temp); }
     }
 
     /// <summary>Reads a .topwater file, or an older JSON Lines recording, whose side-car snapshots resolve next to it.</summary>
@@ -276,10 +282,8 @@ public sealed class Recording
                 MaxStringBytes = limits.MaxStringBytes,
             });
         }
-        var text = new MemoryStream();
-        using (var s = history.Open()) ShellSnapshot.ReadCapped(s, text, ShellSnapshot.MaxManifestBytes(limits), "history.jsonl");
-        text.Position = 0;
-        using var reader = new StreamReader(text, new UTF8Encoding(false, throwOnInvalidBytes: true));
+        // read as it inflates, never whole: deflate shrinks a run of newlines a thousandfold
+        using var reader = new StreamReader(new CappedStream(history.Open(), MaxHistoryBytes(limits)), new UTF8Encoding(false, throwOnInvalidBytes: true));
         var h = ReadHeader(reader, HistoryFormat, FormatVersion);
 
         // the checkpoints, checked by name before any is read
@@ -293,14 +297,39 @@ public sealed class Recording
         }
         if (!checkpoints.ContainsKey(0)) throw Bad("checkpoints/0.json (the start) is missing");
         var budget = new SnapshotBudget(limits);
-        var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits)), limits);
-        ReadCalls(reader, rec, (_, _) => null);
+        var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files)), limits);
+        ReadCalls(reader, rec, (_, _) => null, limits);
         foreach (var (n, name) in checkpoints.Skip(1))
         {
             if (n > rec.Calls.Count) throw Bad($"{name} is past the last call ({rec.Calls.Count})");
-            rec.Calls[n - 1] = rec.Calls[n - 1] with { SnapshotAfter = budget.Add(ShellSnapshot.ReadManifest(zip, name, limits)) };
+            rec.Calls[n - 1] = rec.Calls[n - 1] with { SnapshotAfter = budget.Add(ShellSnapshot.ReadManifest(zip, name, limits, budget.Files)) };
         }
         return rec;
+    }
+
+    /// <summary>The most bytes history.jsonl may inflate to: twice what the session's variables may hold.</summary>
+    internal static long MaxHistoryBytes(ShellOptions o) => 2 * o.MaxStringBytes;
+
+    /// <summary>Reads at most a set number of bytes from a stream, failing past it whatever the source claims.</summary>
+    sealed class CappedStream(Stream inner, long max) : Stream
+    {
+        long _read;
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int n = inner.Read(buffer, offset, (int)Math.Min(count, max + 1 - _read));
+            if ((_read += n) > max) throw Bad($"history.jsonl is larger than {max} bytes (2 x MaxStringBytes)");
+            return n;
+        }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _read; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
     }
 
     static readonly System.Text.RegularExpressions.Regex CheckpointName = new(@"^checkpoints/(0|[1-9][0-9]{0,8})\.json\z");
@@ -317,7 +346,7 @@ public sealed class Recording
                 byte[] bytes;
                 try { bytes = Convert.FromBase64String(b64); }
                 catch (FormatException) { throw Bad($"{what}: the embedded snapshot is not base64"); }
-                return budget.Add(ShellSnapshot.Load(new MemoryStream(bytes), limits));
+                return budget.Add(ShellSnapshot.Load(new MemoryStream(bytes), limits, budget.Files));
             }
             if (r?.File is { } rel)
             {
@@ -325,12 +354,12 @@ public sealed class Recording
                 if (openSnapshot == null) throw Bad($"{what} is in a side-car file ({rel}); load the recording from its path");
                 budget.Count();
                 using var s = openSnapshot(rel);
-                return budget.Add(ShellSnapshot.Load(s, limits), counted: true);
+                return budget.Add(ShellSnapshot.Load(s, limits, budget.Files), counted: true);
             }
             throw Bad($"{what} has no snapshot");
         }
         var rec = NewRecording(h, Snap(h.Start, "the start"), limits);
-        ReadCalls(reader, rec, Snap);
+        ReadCalls(reader, rec, Snap, limits);
         return rec;
     }
 
@@ -338,8 +367,16 @@ public sealed class Recording
     sealed class SnapshotBudget(ShellOptions limits)
     {
         int _count;
-        long _bytes;
+        long _bytes, _files;
         readonly long _maxBytes = MaxSnapshotsFileSystems * limits.MaxFileSystemBytes;
+        readonly long _maxFiles = (long)MaxSnapshotsFileSystems * limits.MaxExtractEntries;
+
+        /// <summary>Charges a snapshot's entries, from its manifest's list, before any is built: directories and empty files cost no bytes.</summary>
+        public void Files(int n)
+        {
+            if ((_files += n) > _maxFiles)
+                throw Bad($"the snapshots hold more than {_maxFiles} files and directories together ({MaxSnapshotsFileSystems} x MaxExtractEntries)");
+        }
 
         public void Count() { if (++_count > MaxSnapshots) throw Bad($"more than {MaxSnapshots} snapshots"); }
 
@@ -370,6 +407,8 @@ public sealed class Recording
     static Recording NewRecording(Header h, ShellSnapshot start, ShellOptions limits)
     {
         var o = h.Options ?? throw Bad("options are missing");
+        if (o.User != null && !ShellSnapshot.UserName.IsMatch(o.User)) throw Bad($"bad user {JsonSerializer.Serialize(o.User)}");
+        if (o.Hostname != null && !ShellSnapshot.HostName.IsMatch(o.Hostname)) throw Bad($"bad hostname {JsonSerializer.Serialize(o.Hostname)}");
         var d = new ShellOptions();
         // the file's limits can lower the caller's (or the default) limits, never raise them
         static long Cap(long? file, long max) => Math.Clamp(file ?? max, 0, max);
@@ -399,12 +438,13 @@ public sealed class Recording
         return TimeSpan.FromMilliseconds(limit == Timeout.InfiniteTimeSpan ? Math.Min(file, int.MaxValue) : Math.Min(file, (long)limit.TotalMilliseconds));
     }
 
-    static void ReadCalls(TextReader reader, Recording rec, Func<SnapshotRef?, string, ShellSnapshot?> snap)
+    static void ReadCalls(TextReader reader, Recording rec, Func<SnapshotRef?, string, ShellSnapshot?> snap, ShellOptions limits)
     {
         int lineNo = 1;
         while (reader.ReadLine() is { } line)
         {
-            lineNo++;
+            // every line counts, blank ones too, so a file of newlines stops here as early as one of calls
+            if (++lineNo > limits.MaxExtractEntries + 1) throw Bad($"more than {limits.MaxExtractEntries} calls (MaxExtractEntries)");
             if (line.Length == 0) continue;
             CallEntry e;
             try { e = JsonSerializer.Deserialize<CallEntry>(line, Json) ?? throw Bad($"line {lineNo} is null"); }
