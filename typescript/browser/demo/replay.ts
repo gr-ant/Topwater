@@ -28,7 +28,9 @@ function startWorker() {
 startWorker();
 
 type Req = ReplayRequest extends infer R ? R extends { id: number } ? Omit<R, 'id'> : never : never;
-function request<T>(msg: Req, transfer: Transferable[] = []): Promise<T> {
+/** set while a replaced worker loads the recording and its branches again: a typed command waits for it */
+let restoring: Promise<unknown> = Promise.resolve();
+function request<T>(msg: Req, transfer: Transferable[] = [], what = 'rebuilding this turn', timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
     // re-running a recorded command can't be interrupted from inside; a stuck worker is replaced
@@ -38,12 +40,15 @@ function request<T>(msg: Req, transfer: Transferable[] = []): Promise<T> {
       for (const p of pending.values()) p.reject(new Error('cancelled'));
       pending.clear();
       startWorker();
-      reject(new Error(`rebuilding this turn took longer than ${REQUEST_TIMEOUT_MS / 1000} s, so it was stopped`));
+      reject(new Error(`${what} took longer than ${timeoutMs / 1000} s, so it was stopped`));
       if (!loaded) return;
-      await request({ t: 'load', data: loaded.data, sidecars: loaded.sidecars }).catch(() => undefined);
-      // the branches typed so far: the new worker rebuilds their machines by re-running them
-      await request({ t: 'restore', branches: branches.slice(1) }).catch(() => undefined);
-    }, REQUEST_TIMEOUT_MS);
+      const again = loaded;
+      restoring = (async () => {
+        await request({ t: 'load', data: again.data, sidecars: again.sidecars }).catch(() => undefined);
+        // the branches typed so far: the new worker rebuilds their machines by re-running them
+        await request({ t: 'restore', branches: branches.slice(1) }).catch(() => undefined);
+      })();
+    }, timeoutMs);
     pending.set(id, {
       resolve: v => { clearTimeout(timer); resolve(v as T); },
       reject: e => { clearTimeout(timer); reject(e); },
@@ -75,6 +80,8 @@ const len = (b: number) => b === 0 ? branches[0].calls.length : branches[b].at +
 const owner = (b: number, i: number) => { while (b > 0 && i <= branches[b].at) b = branches[b].parent; return b; };
 const callAt = (b: number, i: number) => { const o = owner(b, i); return branches[o].calls[o === 0 ? i : i - branches[o].at - 1]; };
 const branchName = (b: number) => b === 0 ? 'Original' : `Branch ${b}`;
+const forkLabel = (b: number) => branches[b].at < 0 ? 'from the start' : `after turn ${branches[b].at + 1} of ${branchName(branches[b].parent).toLowerCase()}`;
+const MAX_CHANGE_ROWS = 500;
 const pointValue = (p: Point) => `${p.i < 0 ? 0 : owner(p.b, p.i)}:${p.i}`;
 const parsePoint = (v: string): Point => { const [b, i] = v.split(':').map(Number); return { b, i }; };
 
@@ -98,6 +105,7 @@ async function openRecording(data: Uint8Array, sidecars: Record<string, Uint8Arr
     openDirs.clear();
     renderSummary(name);
     renderBranches();
+    renderCompareOptions();
     renderTimeline();
     viewer.hidden = false;
     status(`${name}: ${plural(rec.calls.length, 'turn')}.`);
@@ -246,13 +254,19 @@ function renderCompareOptions() {
   for (const sel of [cmpA, cmpZ]) {
     sel.replaceChildren();
     branches.forEach((br, b) => {
-      const g = el('optgroup', { label: b === 0 ? 'Original' : `${branchName(b)} (after turn ${br.at + 1} of ${branchName(br.parent).toLowerCase()})` });
-      for (let i = b === 0 ? -1 : br.at + 1; i < len(b); i++)
-        g.append(el('option', { value: `${b}:${i}`, textContent: i < 0 ? 'Start' : `${b ? `B${b} ` : ''}turn ${i + 1}: ${callAt(b, i).command.split('\n')[0].slice(0, 60)}` }));
+      const g = el('optgroup', { label: b === 0 ? 'Original' : `${branchName(b)} (${forkLabel(b)})` });
+      g.dataset.b = String(b);
+      for (let i = b === 0 ? -1 : br.at + 1; i < len(b); i++) g.append(compareOption(b, i));
       sel.append(g);
     });
   }
   [cmpA.value, cmpZ.value] = keep;
+}
+const compareOption = (b: number, i: number) =>
+  el('option', { value: `${b}:${i}`, textContent: i < 0 ? 'Start' : `${b ? `B${b} ` : ''}turn ${i + 1}: ${callAt(b, i).command.split('\n')[0].slice(0, 60)}` });
+/** a turn typed on branch `b`: one more option, not the whole list again */
+function addCompareOption(b: number, i: number) {
+  for (const sel of [cmpA, cmpZ]) sel.querySelector(`optgroup[data-b="${b}"]`)?.append(compareOption(b, i));
 }
 
 function setCompare(a: Point, z: Point) {
@@ -278,7 +292,8 @@ function renderChanges(changes: Change[] | null, a: Point, z: Point) {
   if (changes.length === 0) { changesEl.append(el('p', { cls: 'note', textContent: 'No files differ.' })); return; }
   const list = el('ul', { cls: 'change-list' });
   let diffs = 0;
-  for (const c of changes) {
+  // thousands of rows would block the page for seconds
+  for (const c of changes.slice(0, MAX_CHANGE_ROWS)) {
     const li = el('li', { cls: `change ${c.kind}` });
     const badge = el('span', { cls: `kind ${c.kind}`, textContent: KIND_LABEL[c.kind] });
     const name = c.kind === 'removed'
@@ -298,6 +313,7 @@ function renderChanges(changes: Change[] | null, a: Point, z: Point) {
     list.append(li);
   }
   changesEl.append(list);
+  if (changes.length > MAX_CHANGE_ROWS) changesEl.append(el('p', { cls: 'note', textContent: `…and ${changes.length - MAX_CHANGE_ROWS} more (showing the first ${MAX_CHANGE_ROWS}; the agent's files come first).` }));
 }
 
 async function diffBlock(a: Point, z: Point, path: string): Promise<HTMLElement> {
@@ -428,13 +444,14 @@ async function forkHere() {
 
 // ---------- branches: the list, switching, downloading ----------
 function renderBranches() {
+  const hadFocus = branchesEl.contains(document.activeElement);
   branchesEl.replaceChildren();
   const add = (b: number, depth: number) => {
     const br = branches[b];
     const own = br.calls.length;
     const pick = el('button', { type: 'button', cls: 'branch-btn' },
       el('strong', { textContent: branchName(b) }), ' ',
-      el('span', { cls: 'note', textContent: b === 0 ? plural(own, 'turn') : `after turn ${br.at + 1} of ${branchName(br.parent).toLowerCase()}, ${plural(own, 'new turn')}` }));
+      el('span', { cls: 'note', textContent: b === 0 ? plural(own, 'turn') : `${forkLabel(b)}, ${plural(own, 'new turn')}` }));
     if (b === cur.b) pick.setAttribute('aria-current', 'true');
     pick.addEventListener('click', () => switchTo(b));
     const li = el('li', { cls: 'branch' }, pick);
@@ -448,7 +465,8 @@ function renderBranches() {
     branches.forEach((c, k) => { if (k > 0 && c.parent === b) add(k, depth + 1); });
   };
   add(0, 0);
-  renderCompareOptions();
+  // the list was rebuilt: keep the keyboard on the chosen timeline
+  if (hadFocus) branchesEl.querySelector<HTMLButtonElement>('.branch-btn[aria-current]')?.focus();
 }
 
 function switchTo(b: number, index = len(b) - 1) {
@@ -461,7 +479,8 @@ function switchTo(b: number, index = len(b) - 1) {
 async function download(b: number) {
   try {
     const name = loaded!.name.replace(/ \(sample\)$/, '').replace(/\.(topwater|jsonl?)$/i, '');
-    const data = await request<Uint8Array>({ t: 'export', b, from: loaded!.name });
+    status(`Saving ${branchName(b).toLowerCase()}…`);
+    const data = await request<Uint8Array>({ t: 'export', b, from: loaded!.name }, [], 'saving this branch', 5 * REQUEST_TIMEOUT_MS);
     const url = URL.createObjectURL(new Blob([data as BlobPart], { type: 'application/zip' }));
     const a = el('a', { href: url, download: `${name}-branch-${b}.topwater` });
     document.body.append(a); a.click(); a.remove();
@@ -491,14 +510,18 @@ async function runLive(command: string) {
   const block = el('span', {}, el('span', { cls: 'p', textContent: '$ ' }), command + '\n');
   liveOut.append(block);
   try {
+    await restoring;
     let b = live.b;
     if (b === 0 || live.i !== len(b) - 1) {
       b = await request<number>({ t: 'branch', parent: live.b, at: live.i });
       if (b !== branches.length) throw new Error('the viewer lost track of its branches; reload the recording');
-      branches.push({ parent: live.b, at: live.i, calls: [] });
+      // filed under the timeline that holds the turn (the worker does the same)
+      branches.push({ parent: live.i < 0 ? 0 : owner(live.b, live.i), at: live.i, calls: [] });
+      renderCompareOptions();
     }
-    const c = await request<CallInfo>({ t: 'run', b, command });
+    const c = await request<CallInfo>({ t: 'run', b, command }, [], 'running this command');
     branches[b].calls.push(c);
+    addCompareOption(b, c.index);
     live = { b, i: c.index };
     if (c.stdout) block.append(el('span', { textContent: c.stdout }));
     if (c.stderr) block.append(el('span', { cls: 'err', textContent: c.stderr }));

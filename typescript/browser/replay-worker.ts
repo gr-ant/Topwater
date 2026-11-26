@@ -5,7 +5,7 @@ import { Recording } from '../src/index.js';
 import type { VfsEntry } from '../src/vfs.js';
 import { diffLines } from './diff.js';
 import type { CallInfo, DiffView, FileView, Point, ReplayReply, ReplayRequest, TreeEntry, TurnView } from './replay-protocol.js';
-import { Timelines } from './timeline.js';
+import { Timelines, contentOf } from './timeline.js';
 
 let t: Timelines | null = null;
 const MAX_TEXT = 256 << 10;
@@ -51,7 +51,7 @@ const sizeOf = (e: VfsEntry) => e.isDirectory || e.linkTarget !== null ? 0 : e.r
 
 async function turn(p: Point): Promise<TurnView> {
   const tl = t!, snap = await tl.stateAt(p.b, p.i);
-  const tree: TreeEntry[] = snap.entries.map(e => [e.path, e.isDirectory, e.mode, e.owner, e.modified, sizeOf(e)]);
+  const tree: TreeEntry[] = snap.entries.map(e => [e.path, e.isDirectory, e.mode, e.owner, e.modified, sizeOf(contentOf(e, snap.entries))]);
   const changes = p.i >= 0 ? await tl.compare({ b: p.b, i: p.i - 1 }, p) : [];
   return { p, tree, changes, source: sourceOf(p), cwd: snap.state.cwd };
 }
@@ -68,7 +68,10 @@ function view(e: VfsEntry | undefined): FileView {
   return { kind: 'binary', size: bytes.length, head: bytes.slice(0, 512) };
 }
 
-const entry = async (p: Point, path: string) => (await t!.stateAt(p.b, p.i)).entries.find(e => e.path === path);
+const entry = async (p: Point, path: string) => {
+  const entries = (await t!.stateAt(p.b, p.i)).entries, e = entries.find(x => x.path === path);
+  return e && contentOf(e, entries);
+};
 
 async function diff(a: Point, z: Point, path: string): Promise<DiffView> {
   const before = view(await entry(a, path)), after = view(await entry(z, path));

@@ -197,7 +197,8 @@ try {
   await viewer.getByRole('button', { name: /^Branch 1 after/ }).focus();
   await viewer.keyboard.press('Enter');
   await settled();
-  check((await pos()) === 'Turn 8 of 8 · Branch 1', 'viewer: switching back to branch 1 with the keyboard');
+  check((await pos()) === 'Turn 8 of 8 · Branch 1' && await viewer.evaluate(() => document.activeElement?.matches('.branch-btn[aria-current]') && document.activeElement.textContent.startsWith('Branch 1')),
+    'viewer: switching back to branch 1 with the keyboard, which stays on the chosen timeline');
 
   // diff across branches: the original's last turn against the branch's
   await viewer.selectOption('#cmp-a', '0:8');

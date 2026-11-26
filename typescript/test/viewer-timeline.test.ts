@@ -16,7 +16,7 @@ async function recorded(...commands: string[]) {
 }
 
 describe('viewer timelines', () => {
-  it('rebuilds any call, compares two moments with symlinks and modes, and narrows by the files lists', async () => {
+  it('rebuilds any call and compares two moments with symlinks and modes', async () => {
     const t = new Timelines(await recorded('echo one > a.txt; mkdir d', 'ln -s a.txt link; echo two >> a.txt', 'chmod 755 a.txt; rm -r d; ln -sfn d link'));
     expect((await t.stateAt(0, 0)).entries.some(e => e.path === '/home/agent/a.txt')).toBe(true);
     const step2 = await t.compare({ b: 0, i: 0 }, { b: 0, i: 1 });
@@ -31,10 +31,6 @@ describe('viewer timelines', () => {
       expect.objectContaining({ path: '/home/agent/d', kind: 'removed', isDirectory: true }),
       expect.objectContaining({ path: '/home/agent/link', kind: 'modified', detail: '→ a.txt became → d' }),
     ]));
-    // what the files lists allow to differ is what a full comparison finds
-    const [x, y] = [await t.stateAt(0, -1), await t.stateAt(0, 2)];
-    expect(await t.compare({ b: 0, i: -1 }, { b: 0, i: 2 })).toEqual(diffMachines(x.entries, y.entries));
-    expect(t.candidates({ b: 0, i: -1 }, { b: 0, i: 2 })).not.toBeNull();
     // calls re-run here matched the recording
     expect([...t.reran.values()].every(r => r.matches)).toBe(true);
   });
@@ -57,7 +53,9 @@ describe('viewer timelines', () => {
     expect(t.call(b2, 0)).toBe(rec.calls[0]);
     const across = await t.compare({ b: 0, i: 2 }, { b: b1, i: 2 });
     expect(across.map(c => `${c.kind} ${c.path}`)).toEqual(expect.arrayContaining(['added /home/agent/a.txt', 'removed /home/agent/b.txt', 'added /home/agent/c.txt']));
-    expect(t.candidates({ b: 0, i: 2 }, { b: b1, i: 2 })).not.toBeNull();
+    // a branch from a turn the parent inherited is filed under the branch that holds that turn
+    expect(t.branches[t.fork(b2, 0)].parent).toBe(0);
+    expect(t.branches[t.fork(b2, -1)].parent).toBe(0);
 
     const saved = await Recording.load(await t.export(b2, 'test.topwater'));
     expect(saved.calls.map(c => c.command)).toEqual(['echo one > a.txt', 'X=7; echo three > c.txt; cat a.txt', 'rm c.txt']);
@@ -68,6 +66,35 @@ describe('viewer timelines', () => {
     expect((await saved.replay()).matches).toBe(true);
     // the original recording is untouched
     expect(rec.calls).toHaveLength(3);
+  });
+
+  it('lists what the machines differ by, not what the files lists name: a host write, a short list, no list', async () => {
+    const sh = new Shell(deterministic);
+    const { recording, stop } = startRecording(sh);
+    await sh.run('echo 1 > a');
+    sh.fs.as(sh.options.user).writeText('/home/agent/upload.csv', 'x,y\n'); // the host hands the agent a file between calls
+    await sh.run('wc -l upload.csv; echo 2 > b');
+    await sh.run('echo 3 > c');
+    stop();
+    const t = new Timelines(await Recording.load(await recording.save()));
+    const paths = async (i: number) => (await t.compare({ b: 0, i: i - 1 }, { b: 0, i })).map(c => c.path);
+    expect(await paths(2)).toEqual(expect.arrayContaining(['/home/agent/c', '/home/agent/upload.csv'])); // turn 2 was re-run here without it; turn 3 is the checkpoint
+    // the same recording with call 2 listing only b and call 3 listing nothing
+    const short = await Recording.load(await recording.save());
+    short.calls[1].files = ['/home/agent/b'];
+    short.calls[2].files = undefined;
+    const u = new Timelines(short);
+    expect((await u.compare({ b: 0, i: 1 }, { b: 0, i: 2 })).map(c => c.path)).toEqual(expect.arrayContaining(['/home/agent/c', '/home/agent/upload.csv']));
+    const [x, y] = [await u.stateAt(0, -1), await u.stateAt(0, 2)];
+    expect(await u.compare({ b: 0, i: -1 }, { b: 0, i: 2 })).toEqual(diffMachines(x.entries, y.entries));
+  });
+
+  it('reads a hard link\'s content through its first name on a checkpoint', async () => {
+    const t = new Timelines(await recorded('echo x > a; ln a b', 'chmod 600 b'));
+    const end = await t.stateAt(0, 1);
+    expect(end.entries.find(e => e.path === '/home/agent/b')).toMatchObject({ hardLink: '/home/agent/a', text: null, data: null });
+    const changes = await t.compare({ b: 0, i: 0 }, { b: 0, i: 1 });
+    expect(changes.find(c => c.path === '/home/agent/b')).toMatchObject({ kind: 'permissions' });
   });
 
   it('rebuilds branches given back after a restart by re-running them', async () => {

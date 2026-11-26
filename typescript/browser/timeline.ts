@@ -18,13 +18,10 @@ export class Timelines {
   private readonly states = new Map<string, ShellSnapshot>();
   /** a shell at each branch's last call, so typing on a branch doesn't restore the machine every time */
   private readonly live = new Map<number, Shell>();
-  /** whether the recording lists each call's changed files (a .topwater file does; older recordings may not) */
-  private readonly tracksFiles: boolean;
 
   constructor(readonly recording: Recording) {
     this.branches = [{ parent: -1, at: -1, calls: recording.calls }];
     this.states.set('start', recording.start);
-    this.tracksFiles = recording.calls.some(c => c.files !== undefined);
   }
 
   length(b: number): number { const br = this.branches[b]; return b === 0 ? br.calls.length : br.at + 1 + br.calls.length; }
@@ -54,10 +51,10 @@ export class Timelines {
     return this.states.get(k)!;
   }
 
-  /** A new, empty branch that continues from call `at` of branch `parent`; its id. */
+  /** A new, empty branch that continues from call `at` of branch `parent` (filed under the branch that holds that call); its id. */
   fork(parent: number, at: number): number {
     this.check(parent, at);
-    return this.branches.push({ parent, at, calls: [] }) - 1;
+    return this.branches.push({ parent: at < 0 ? 0 : this.owner(parent, at), at, calls: [] }) - 1;
   }
 
   /** Runs `command` after the last call of branch `b` (not the recording itself) and adds it to the branch. */
@@ -79,27 +76,11 @@ export class Timelines {
     return { call, result };
   }
 
-  /**
-   * The paths that can differ between two points, from the calls' lists of changed files: the calls after the points'
-   * last shared call, on each side. Null when some of those calls don't list their files (then every path is compared).
-   */
-  candidates(a: Point, z: Point): Set<string> | null {
-    let shared = -1;
-    while (shared < Math.min(a.i, z.i) && this.key(a.b, shared + 1) === this.key(z.b, shared + 1)) shared++;
-    const paths = new Set<string>();
-    for (const p of [a, z])
-      for (let j = shared + 1; j <= p.i; j++) {
-        const c = this.call(p.b, j);
-        if (c.files === undefined && (this.owner(p.b, j) > 0 || !this.tracksFiles)) return null;
-        for (const f of c.files ?? []) paths.add(f);
-      }
-    return paths;
-  }
-
   /** What changed between the machines at two points. */
   async compare(a: Point, z: Point): Promise<Change[]> {
     const [x, y] = [await this.stateAt(a.b, a.i), await this.stateAt(z.b, z.i)];
-    return diffMachines(x.entries, y.entries, this.candidates(a, z));
+    // every path: a call's `files` list is informational (a host's writes between calls, another writer's short list)
+    return diffMachines(x.entries, y.entries);
   }
 
   /**
@@ -133,6 +114,11 @@ const stubChurn = (o: VfsEntry | undefined, e: VfsEntry | undefined) => (isStub(
 const perm = (e: VfsEntry) => `${e.mode.toString(8).padStart(4, '0')} ${e.owner}`;
 export const isSystem = (p: string) => /^\/(proc|sys|dev|usr|bin|etc)(\/|$)/.test(p);
 
+/** the entry that carries a hard link's content: a checkpoint read from a file keeps it only under the first name */
+export function contentOf(e: VfsEntry, entries: readonly VfsEntry[]): VfsEntry {
+  return e.hardLink !== null && e.text === null && e.data === null ? index(entries).get(e.hardLink) ?? e : e;
+}
+
 export function sameContent(a: VfsEntry, b: VfsEntry): boolean {
   if (a.linkTarget !== null || b.linkTarget !== null) return a.linkTarget === b.linkTarget;
   if (a.text !== null || b.text !== null) return a.text === b.text;
@@ -147,18 +133,18 @@ const byPath = new WeakMap<readonly VfsEntry[], Map<string, VfsEntry>>();
 const index = (entries: readonly VfsEntry[]) => byPath.get(entries) ?? byPath.set(entries, new Map(entries.map(e => [e.path, e]))).get(entries)!;
 const kindOf = (e: VfsEntry) => e.isDirectory ? 'dir' : e.linkTarget !== null ? 'link' : 'file';
 
-/** The changes from machine `a` to machine `b`, looking only at `paths` when given; the agent's files first. */
-export function diffMachines(a: readonly VfsEntry[], b: readonly VfsEntry[], paths: Iterable<string> | null = null): Change[] {
+/** The changes from machine `a` to machine `b`; the agent's files first. */
+export function diffMachines(a: readonly VfsEntry[], b: readonly VfsEntry[]): Change[] {
   const old = index(a), now = index(b);
   const changes: Change[] = [];
-  for (const path of paths ?? new Set([...now.keys(), ...old.keys()])) {
+  for (const path of new Set([...now.keys(), ...old.keys()])) {
     const o = old.get(path), e = now.get(path);
     if (stubChurn(o, e) || (!o && !e)) continue;
     const link = (x: VfsEntry) => x.linkTarget !== null ? { isLink: true } : {};
     if (!o) changes.push({ path, kind: 'added', isDirectory: e!.isDirectory, ...link(e!), detail: e!.linkTarget !== null ? `→ ${e!.linkTarget}` : modeNote(null, e!) });
     else if (!e) changes.push({ path, kind: 'removed', isDirectory: o.isDirectory, ...link(o) });
     else if (kindOf(o) !== kindOf(e)) changes.push({ path, kind: 'replaced', isDirectory: e.isDirectory, ...link(e), detail: `${kindOf(o)} → ${kindOf(e)}` });
-    else if (!e.isDirectory && !sameContent(o, e))
+    else if (!e.isDirectory && !sameContent(contentOf(o, a), contentOf(e, b)))
       changes.push({ path, kind: 'modified', isDirectory: false, ...link(e), detail: e.linkTarget !== null ? `→ ${o.linkTarget} became → ${e.linkTarget}` : modeNote(o, e) });
     else if (o.mode !== e.mode || o.owner !== e.owner) changes.push({ path, kind: 'permissions', isDirectory: e.isDirectory, ...link(e), detail: `${perm(o)} → ${perm(e)}` });
   }

@@ -920,8 +920,11 @@ All three ports read and write the same `.topwater` files. The TypeScript port (
 `startRecording`; see `typescript/README.md`) has the same virtual clock and random generator, so a deterministic recording made here
 re-runs there with the same times and random numbers. Python (`shell.start_recording()`, `Recording.load()`; see
 `python/README.md`) has no virtual clock, so a replay of its recordings needs a normalizer for anything that prints the time. The TypeScript demo site has a recording viewer (`replay.html`) that steps
-through a recording turn by turn, shows the files after each turn and what the turn changed, and opens a terminal on
-the machine as of any turn.
+through a recording turn by turn, shows the files after each turn and what the turn changed, compares any two moments,
+and continues from any turn in a terminal on that machine. Commands typed there form a branch of the timeline, which
+can be compared with the original and downloaded as its own `.topwater` file: the recording's calls up to the fork,
+then the branch's, with metadata `forkedFrom` and `forkedAfterCall`, and checkpoints only at the fork and the end (a
+reader re-runs the branch's calls in between).
 
 ### The file format
 
