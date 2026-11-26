@@ -999,7 +999,7 @@ export class Shell implements ArithHost {
           if (target === '-') dup = r.op === '<&' ? new StdinBuffer('') : nullWriter;
           else {
             const d = /^\d+$/.test(target) ? this.descriptor(Number(target), io) : undefined;
-            if (!d) throw new ShellError(diagnostic('redirectFailed', { target: target, reason: /^\\d+$/.test(target) ? ERRNO.EBADF : DIAGNOSTICS.ambiguousRedirect }));
+            if (!d) throw new ShellError(diagnostic('redirectFailed', { target: target, reason: /^\d+$/.test(target) ? ERRNO.EBADF : DIAGNOSTICS.ambiguousRedirect }));
             dup = d;
           }
           io = withFd(io, r.fd, dup);
