@@ -10,7 +10,7 @@ from .. import bytetext
 from .._spec import COMMANDS
 from ..vfs import ShellError, normalize, utc_now
 from . import spec_format, spec_message, spec_sub_message
-from .gitpack import MAX_PACKS, Corrupt, Pack
+from .gitpack import MAX_NAMES, MAX_PACKS, Corrupt, ObjectCache, Pack
 from .gitcore import (EMPTY_TREE, timed, HEX, MAX_DEPTH, MAX_WALK, Commit, Config, Entry, GitError, IgnoreRules, c_quote, canonical_key,
                       check_path, config_bool, count_changes, fatal, format_date, glob_regex, is_binary, local_time, merge_lines,
                       msg, myers, object_id, parse_date, parse_ident, parse_tree, read_index, split_lines, tree_bytes, unified,
@@ -115,14 +115,20 @@ def parse(sub: str, args: list[str]) -> Opts:
 
 # ---------- the repository ----------
 
+def packed_name_ok(name: str) -> bool:
+    """A packed-refs name git could have written: under refs/, the characters loose refs allow, no empty, '.'-led or
+    '..' component and no .lock name, so nothing read from the file can name a path outside refs/."""
+    return (name.startswith("refs/") and re.fullmatch(r"[A-Za-z0-9_./-]+", name) is not None
+            and all(c and not c.startswith(".") and not c.endswith(".lock") for c in name.split("/")))
+
+
 class Repo:
     def __init__(self, g: "Git", top: str, gitdir: str):
         self.g, self.ctx, self.fs = g, g.ctx, g.ctx.fs
         self.top, self.git = top, gitdir
         self.limit = g.ctx.shell.max_string_bytes
-        self._objects: dict[str, tuple[str, bytes]] = {}
+        self._cache = ObjectCache()  # objects, commits and pack delta bases, under one byte budget
         self._packs: list[Pack] | None = None
-        self._commits: dict[str, Commit] = {}
         self._config = None
         self._ignores: dict[str, IgnoreRules | None] = {}
         self.prefix = ""  # the cwd below the top ("sub/dir/"), for relative paths
@@ -167,8 +173,9 @@ class Repo:
 
     # --- objects ---
     def obj(self, sha: str) -> tuple[str, bytes]:
-        if sha in self._objects:
-            return self._objects[sha]
+        hit = self._cache.get(sha)
+        if hit:
+            return hit
         if any(sha in p.offsets for p in self.packs()):  # packs first, as git does: a dictionary lookup, no file walk
             return self._packed(sha)
         raw = self.gread(f"objects/{sha[:2]}/{sha[2:]}") if re.fullmatch(r"[0-9a-f]{40}", sha) else None
@@ -188,8 +195,7 @@ class Repo:
         result = (head[0], data[nul + 1:])
         if object_id(*result) != sha:
             raise fatal("corruptObject", object=sha)
-        if len(self._objects) < 4096:
-            self._objects[sha] = result
+        self._cache.put(sha, result, len(result[1]))
         return result
 
     def packs(self) -> list[Pack]:
@@ -203,7 +209,10 @@ class Repo:
             for name in names:
                 pack = self.gread(f"{d}/{name[:-4]}.pack")
                 if pack is not None:  # like git, an index without its pack is skipped
-                    self._packs.append(Pack(self._gpath(f"{d}/{name[:-4]}.pack"), self.gread(f"{d}/{name}") or b"", pack, self.limit, self.ctx.check_time))
+                    self._packs.append(Pack(self._gpath(f"{d}/{name[:-4]}.pack"), self.gread(f"{d}/{name}") or b"", pack, self.limit,
+                                            self.ctx.check_time, self._cache))
+                    if sum(len(p.names) for p in self._packs) > MAX_NAMES:
+                        raise fatal("tooLarge", what=self._gpath(d))
         return self._packs
 
     def _packed(self, sha: str) -> tuple[str, bytes]:
@@ -215,8 +224,7 @@ class Repo:
                     raise fatal("corruptObject", object=sha) from None
                 if object_id(*result) != sha:
                     raise fatal("corruptObject", object=sha)
-                if len(self._objects) < 4096:
-                    self._objects[sha] = result
+                self._cache.put(sha, result, len(result[1]))
                 return result
         raise fatal("missingObject", object=sha)
 
@@ -236,7 +244,7 @@ class Repo:
         return data
 
     def commit(self, sha: str) -> Commit:
-        c = self._commits.get(sha)
+        c = self._cache.get(("commit", sha))
         if c:
             return c
         data = self.typed(sha, "commit").decode("utf-8", "surrogateescape")
@@ -255,7 +263,7 @@ class Repo:
         if not tree or not re.fullmatch(r"[0-9a-f]{40}", tree) or any(not re.fullmatch(r"[0-9a-f]{40}", p) for p in parents):
             raise fatal("corruptObject", object=sha)
         c = Commit(sha, tree, parents, author, committer, message)
-        self._commits[sha] = c
+        self._cache.put(("commit", sha), c, len(data) + 200)
         return c
 
     def tree(self, sha: str):
@@ -319,7 +327,7 @@ class Repo:
         out = {}
         for line in text.split("\n"):
             parts = line.split(" ")
-            if len(parts) == 2 and re.fullmatch(r"[0-9a-f]{40}", parts[0]):
+            if len(parts) == 2 and re.fullmatch(r"[0-9a-f]{40}", parts[0]) and packed_name_ok(parts[1]):
                 out[parts[1]] = parts[0]
         return out
 
@@ -690,7 +698,7 @@ def resolve_base(repo: Repo, name: str) -> str | None:
         return repo.read_ref("refs/heads/" + b) if b else None
     m = re.fullmatch(r"(.*)@\{(?:u|upstream)\}", name)
     if m:
-        up = upstream(repo, m.group(1) or repo.branch() or "")
+        up = upstream(repo, upstream_branch(repo, m.group(1)))
         return repo.read_ref(up[1]) if up else None
     for r in (name, "refs/" + name, "refs/tags/" + name, "refs/heads/" + name, "refs/remotes/" + name, "refs/remotes/" + name + "/HEAD"):
         if r == name and not (name.isupper() or name.startswith("refs/")):
@@ -880,6 +888,21 @@ def remote_branches(repo: Repo) -> list[tuple[str, str | None, str | None]]:
                 if text.startswith("ref: refs/remotes/"):
                     rows.append((f"{remote}/HEAD", repo.read_ref(rel), text[18:]))
     return sorted(rows, key=lambda r: r[0].encode())
+
+
+def upstream_branch(repo: Repo, name: str) -> str:
+    """The branch <name>@{u} asks about (HEAD and '' mean the current one); refuses as git does when there is none."""
+    if name in ("", "HEAD", "@"):
+        b = repo.branch()
+        if b is None:
+            raise fatal("headNotBranch")
+    else:
+        b = name
+        if repo.read_ref("refs/heads/" + b) is None:
+            raise fatal("noSuchBranch", name=b)
+    if upstream(repo, b) is None:
+        raise fatal("noUpstream", branch=b)
+    return b
 
 
 def walk_order(repo: Repo, starts: list[str], check, limit_set=None) -> list[str]:
@@ -2502,8 +2525,20 @@ def guess_remote(repo: Repo, name: str) -> str | None:
     """refs/remotes/<remote>/<name> when exactly one remote has a branch called name (git checkout <name> then creates it)."""
     if not valid_branch_name(name):
         return None
-    hits = [n for n, sha, sym in remote_branches(repo) if sym is None and n.partition("/")[2] == name]
-    return "refs/remotes/" + hits[0] if len(hits) == 1 else None
+    configured = {k[7:].rpartition(".")[0] for k, _, _ in repo.config().items() if k.startswith("remote.") and k.endswith((".url", ".fetch"))}
+    hits = [n for n, sha, sym in remote_branches(repo) if sym is None and n.partition("/")[2] == name and n.partition("/")[0] in configured]
+    if len(hits) > 1:
+        raise sub_fatal("checkout", "matchedMultiple", name=name, count=str(len(hits)))
+    return "refs/remotes/" + hits[0] if hits else None
+
+
+def is_work_path(repo: Repo, name: str) -> bool:
+    """name is a file in the work tree or the index, so 'git checkout name' could mean it."""
+    try:
+        rel = repo.from_user(name)
+    except GitError:
+        return False
+    return rel in repo.stage0() or repo.fs.exists(repo.wt(rel), follow=False)
 
 
 def checkout_paths(g: Git, repo: Repo, source: str | None, items: list[str], sub: str, staged: bool = False, worktree: bool = True,
@@ -2599,6 +2634,8 @@ def git_checkout(g: Git, args) -> int:
     if o.has("\x01"):
         raise fatal("badRevision", rev=target)
     guess = guess_remote(repo, target) if len(o.args) == 1 and not o.dashdash else None
+    if guess and is_work_path(repo, target):
+        raise sub_fatal("checkout", "fileOrBranch", name=target, upstream=guess[13:])
     if guess:
         return move_head(g, repo, "refs/heads/" + target, repo.read_ref(guess), guess[13:], force, quiet, new_branch=target, track=guess)
     return checkout_paths(g, repo, None, o.args, "checkout", quiet=quiet)
@@ -3389,7 +3426,7 @@ def git_rev_parse(g: Git, args) -> int:
                 continue
             up_of = re.fullmatch(r"(.*)@\{(?:u|upstream)\}", a)
             if up_of:
-                up = upstream(r, up_of.group(1) or r.branch() or "")
+                up = upstream(r, upstream_branch(r, up_of.group(1)))
                 name = (up[0] if abbrev_ref else up[1]) if up else None
             elif a in ("HEAD", "@"):
                 ref = r.head_ref()

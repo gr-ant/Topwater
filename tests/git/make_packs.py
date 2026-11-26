@@ -225,6 +225,64 @@ for label, d in [("delta copies past its base", delta(len(HELLO), [("copy", 20, 
                  ("delta truncated", delta(len(HELLO), [("insert", b"abcdef")])[:-3])]:
     case(label, *build([blob(HELLO), {"kind": "ofs", "data": d, "base": 0, "name": W}]), f"git cat-file -p {W}", 128, stderr="is corrupt")
 
+# an index naming far more objects than its pack can hold (all at one offset)
+one = blob(HELLO)
+pk = bytearray(b"PACK" + struct.pack(">II", 2, 1000)) + header(3, len(HELLO)) + zlib.compress(HELLO)
+pk += hashlib.sha1(pk).digest()
+names = sorted(["%040x" % (i + 1) for i in range(999)] + [H])
+fan = [sum(1 for n in names if int(n[:2], 16) <= b) for b in range(256)]
+ix = bytearray(b"\xfftOc" + struct.pack(">I", 2) + struct.pack(">256I", *fan)) + b"".join(bytes.fromhex(n) for n in names)
+ix += b"\0" * 4000 + struct.pack(">I", 12) * 1000 + pk[-20:]
+ix += hashlib.sha1(ix).digest()
+case("index names more objects than the pack holds", bytes(pk), bytes(ix), f"git cat-file -p {H}", 128, stderr="more objects than")
+
+# memory: forty 32 MB blobs, each a few bytes of delta, read by one command; every port caches object contents under one
+# byte budget per repository, so this stays near that budget ("cacheBound": the test also checks the cache's peak)
+BIG = 32 << 20
+zero = {"kind": "blob", "data": b"\0" * 65536, "name": oid("blob", b"\0" * 65536)}
+h = hashlib.sha1(f"blob {BIG}\0".encode())
+h.update(b"\0" * (BIG - 2))
+full_zero = h.copy()
+full_zero.update(b"\0\0")
+ents = [zero, {"kind": "ofs", "base": 0, "data": delta(65536, [("copy", 0, 65536)] * (BIG // 65536)), "name": full_zero.hexdigest()}]
+files = []
+for i in range(1, 41):
+    hi = h.copy()
+    hi.update(struct.pack(">H", i))
+    ents.append({"kind": "ofs", "base": 1, "data": delta(BIG, [("copy", 0, 0xFFFFFF), ("copy", 0xFFFFFF, BIG - 2 - 0xFFFFFF), ("insert", struct.pack(">H", i))]),
+                 "name": hi.hexdigest()})
+    files.append((b"f%02d" % i, hi.hexdigest()))
+
+
+def tree_of(items):
+    data = b"".join(b"100644 " + n + b"\0" + bytes.fromhex(sha) for n, sha in sorted(items))
+    return {"kind": "tree", "data": data, "name": oid("tree", data)}
+
+
+def commit_of(tree, parent=None):
+    data = f"tree {tree}\n{'parent ' + parent + chr(10) if parent else ''}author A <a@b> 1700000000 +0000\ncommitter A <a@b> 1700000000 +0000\n\nm\n".encode()
+    return {"kind": "commit", "data": data, "name": oid("commit", data)}
+
+
+t1, t2 = tree_of(files[:20]), tree_of(files)
+c1 = commit_of(t1["name"])
+c2 = commit_of(t2["name"], c1["name"])
+p, i = build(ents + [t1, t2, c1, c2])
+CASES.append({"name": "forty 32 MB objects stay within the cache budget", "files": {"pack-t.pack": enc(p), "pack-t.idx": enc(i)},
+              "script": f"git diff --stat {c1['name']} {c2['name']} | tail -1", "exitCode": 0,
+              "stdout": " 20 files changed, 0 insertions(+), 0 deletions(-)\n", "cacheBound": True})
+
+# time: a 1500-deep chain of 16 MB objects; each step is cheap to store and costly to apply, so the call's time limit
+# (1 s here) must stop the walk between steps
+SIZE = 16 << 20
+chain = [zero, {"kind": "ofs", "base": 0, "data": delta(65536, [("copy", 0, 65536)] * (SIZE // 65536)), "name": "%040x" % 1}]
+for n in range(1, 1500):
+    chain.append({"kind": "ofs", "base": n, "data": delta(SIZE, [("copy", 0, SIZE - 2), ("insert", struct.pack(">H", n))]), "name": "%040x" % (n + 1)})
+chain[0] = dict(zero, name="0" * 40)
+p, i = build(chain)
+CASES.append({"name": "a deep chain of large objects stops at the time limit", "files": {"pack-t.pack": enc(p), "pack-t.idx": enc(i)},
+              "script": f"git cat-file -s {'%040x' % 1500}", "exitCode": 124, "timeLimit": 1})
+
 with open(OUT, "w") as f:
     f.write("[\n" + ",\n".join(json.dumps(c, sort_keys=True) for c in CASES) + "\n]\n")
 print(f"wrote {len(CASES)} cases to {OUT} ({os.path.getsize(OUT)} bytes)")

@@ -6,6 +6,7 @@ import hashlib
 import json
 import sys
 import time
+import tracemalloc
 import zlib
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from bashcompat import Shell
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "git"))
 import make_packs  # noqa: E402
+from topwater.commands.gitpack import CACHE_BYTES, ObjectCache  # noqa: E402
 
 IDENT = ("export GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@example.com GIT_COMMITTER_NAME=A GIT_COMMITTER_EMAIL=a@example.com "
          "GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' GIT_COMMITTER_DATE='2026-01-02T03:04:05Z'")
@@ -139,18 +141,50 @@ PACKS = json.loads((Path(__file__).resolve().parents[2] / "tests" / "git" / "pac
 @pytest.mark.parametrize("case", PACKS, ids=[c["name"] for c in PACKS])
 def test_packfiles_good_and_hostile(case):
     """tests/git/packs.json (made by tests/git/make_packs.py), shared with the other ports."""
-    sh = repo(max_call_duration=10)
+    sh = repo(max_call_duration=case.get("timeLimit", 10))
     sh.fs.mkdir("/tmp/w/.git/objects/pack", parents=True)
     for name, data in case["files"].items():
         sh.fs.write_bytes(f"/tmp/w/.git/objects/pack/{name}", gzip.decompress(base64.b64decode(data)))
+    ObjectCache.peak = 0
+    tracemalloc.start()
     start = time.monotonic()
-    r = sh.run(case["script"])
-    assert time.monotonic() - start < 5
+    try:
+        r = sh.run(case["script"])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert time.monotonic() - start < case.get("timeLimit", 2) + 3
+    if case.get("cacheBound"):
+        assert 0 < ObjectCache.peak <= CACHE_BYTES and peak < 400 << 20, (ObjectCache.peak, peak)
     assert r.exit_code == case["exitCode"], r.stderr
     if "stdout" in case:
         assert r.stdout == case["stdout"]
     if "stderr" in case:
         assert case["stderr"] in r.stderr and r.stderr.startswith("fatal: ")
+
+
+def test_packed_refs_names_that_leave_refs_are_ignored():
+    sh = repo()
+    sh.run("git remote 2>/dev/null; s=$(git rev-parse HEAD); printf '%s refs/heads/../../outside\\n%s refs/remotes/../x\\n%s refs/remotes/o/cr\\r\\n"
+           "%s refs/tags/.hidden\\n%s refs/heads/ok\\n' $s $s $s $s $s > .git/packed-refs")
+    r = sh.run("git branch -a; git log --oneline --decorate -1; git tag")
+    assert r.exit_code == 0 and ".." not in r.stdout and "hidden" not in r.stdout and "\r" not in r.stdout and "ok" in r.stdout, r.stdout
+    r = sh.run("git checkout x; echo $?; cat .git/config")
+    assert r.stdout.startswith("1\n") and "remote = .." not in r.stdout
+
+
+def test_upstream_errors_and_ambiguous_checkout():
+    sh = repo()
+    r = sh.run("git rev-parse @{u}; git rev-parse nosuch@{u}; git checkout -q --detach; git rev-parse HEAD@{upstream}")
+    assert r.stderr == ("fatal: no upstream configured for branch 'master'\nfatal: no such branch: 'nosuch'\n"
+                        "fatal: HEAD does not point to a branch\n")
+    sh.run("git checkout -q master; for r in origin up; do git config remote.$r.url /x; mkdir -p .git/refs/remotes/$r;"
+           " git rev-parse HEAD > .git/refs/remotes/$r/b; done")
+    r = sh.run("git checkout b")
+    assert r.exit_code == 128 and r.stderr == "fatal: 'b' matched multiple (2) remote tracking branches\n"
+    sh.run("rm -r .git/refs/remotes/up; echo f > b")
+    r = sh.run("git checkout b")
+    assert r.exit_code == 128 and "could be both a local file and a tracking branch" in r.stderr
 
 
 def test_packed_repositories_take_new_loose_objects():

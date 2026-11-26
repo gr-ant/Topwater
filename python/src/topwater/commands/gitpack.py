@@ -13,8 +13,33 @@ from .gitcore import GitError, fatal, msg
 
 MAX_CHAIN = 4096  # deltas on top of one base (real git refuses to write deeper than 4095)
 MAX_PACKS = 256
-CACHE_BYTES = 32 << 20  # inflated objects kept for reuse as delta bases
+MAX_NAMES = 1_000_000  # objects named by all the packs of one repository
+CACHE_BYTES = 64 << 20  # object contents one repository keeps for reuse, all caches together
 KINDS = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
+
+
+class ObjectCache:
+    """Objects, commits and delta bases one command keeps for reuse, under a single byte budget per repository: an
+    entry over a quarter of it is not kept, and the whole cache is dropped when the next entry would not fit."""
+
+    def __init__(self, budget: int = CACHE_BYTES):
+        self.items: dict = {}
+        self.used, self.budget = 0, budget
+
+    def get(self, key):
+        return self.items.get(key)
+
+    peak = 0  # the most any cache has held, for tests
+
+    def put(self, key, value, size: int) -> None:
+        if size > self.budget // 4:
+            return
+        if self.used + size > self.budget:
+            self.items.clear()
+            self.used = 0
+        self.items[key] = value
+        self.used += size
+        ObjectCache.peak = max(ObjectCache.peak, self.used)
 
 
 class Corrupt(Exception):
@@ -26,10 +51,8 @@ def bad_pack(path: str, why: str, **values) -> GitError:
 
 
 class Pack:
-    def __init__(self, path: str, idx: bytes, pack: bytes, limit: int, check):
-        self.path, self.pack, self.limit, self.check = path, pack, limit, check
-        self.cache: dict[int, tuple[str, bytes]] = {}
-        self.cached = 0
+    def __init__(self, path: str, idx: bytes, pack: bytes, limit: int, check, cache: ObjectCache):
+        self.path, self.pack, self.limit, self.check, self.cache = path, pack, limit, check, cache
         ipath = path[:-5] + ".idx"
         if len(idx) < 1072 or idx[:4] != b"\xfftOc":
             raise bad_pack(ipath, "packBadSignature")
@@ -51,6 +74,8 @@ class Pack:
             raise bad_pack(path, "packBadChecksum")
         if count != n or idx[-40:-20] != pack[-20:]:
             raise bad_pack(path, "packNoMatch")
+        if n * 2 > len(pack) - 32:  # every entry takes at least two bytes
+            raise bad_pack(ipath, "packTooMany")
         names = idx[1032:1032 + 20 * n].hex()
         self.names = [names[40 * i:40 * i + 40] for i in range(n)]
         small = struct.unpack(f">{n}I", idx[1032 + 24 * n:1032 + 28 * n])
@@ -92,8 +117,9 @@ class Pack:
         seen: set[int] = set()
         while True:
             self.check()
-            if off in self.cache:
-                kind, data = self.cache[off]
+            hit = self.cache.get((self.path, off))
+            if hit:
+                kind, data = hit
                 break
             if off in seen or len(chain) >= MAX_CHAIN:
                 raise Corrupt()
@@ -160,12 +186,7 @@ class Pack:
         return bytes(out)
 
     def _remember(self, off: int, kind: str, data: bytes) -> None:
-        if self.cached + len(data) > CACHE_BYTES:
-            self.cache.clear()
-            self.cached = 0
-        if len(data) <= CACHE_BYTES:
-            self.cache[off] = (kind, data)
-            self.cached += len(data)
+        self.cache.put((self.path, off), (kind, data), len(data))
 
 
 def _varint(d: bytes, i: int) -> tuple[int, int]:
