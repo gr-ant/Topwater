@@ -3,13 +3,15 @@
 
 import { DIAGNOSTICS, diagnostic } from './spec.generated.js';
 
-export class ParseError extends Error {}
+/** `line`: where in the parsed text the error is (eval reports it). */
+export class ParseError extends Error { line?: number; constructor(message: string, line?: number) { super(message); this.line = line; } }
 
 /** One piece of a word. `q` is true for quoted text (no splitting or globbing). */
 export type WordPart =
   | { k: 'lit'; text: string; q: boolean }
   /** $name or ${expr}: expr is the raw text between the braces, interpreted at expansion time. */
-  | { k: 'var'; expr: string; q: boolean }
+  /** src: the text a bad substitution names (the enclosing double-quoted string, or the whole word). */
+  | { k: 'var'; expr: string; q: boolean; src?: string }
   | { k: 'cmd'; src: string; q: boolean }
   | { k: 'arith'; expr: string; q: boolean }
   /** <(cmd): replaced by the path of a file holding cmd's output. */
@@ -79,7 +81,13 @@ const parseCache = new Map<string, Script>();
 export function parse(text: string): Script {
   const hit = parseCache.get(text);
   if (hit) return hit;
-  const script = new Parser(text).parseScript();
+  const p = new Parser(text);
+  let script: Script;
+  try { script = p.parseScript(); } catch (e) {
+    // an end-of-input error is on the line after the last (bash reads a final newline)
+    if (e instanceof ParseError && e.line === undefined) e.line = e.message === DIAGNOSTICS.unexpectedEof ? (text.endsWith('\n') ? text : text + '\n').split('\n').length : p.lineAt(p.pos);
+    throw e;
+  }
   if (parseCache.size > 2000) parseCache.clear();
   if (text.length < 10_000) parseCache.set(text, script);
   return script;
@@ -109,7 +117,12 @@ export function parseParamWord(text: string, inDq: boolean, pattern = false): Wo
   const p = new Parser(text);
   const parts: WordPart[] = [];
   while (!p.atEnd()) p.readWordPart(parts, { inDq, paramWord: true, pattern });
+  tagSource(parts, text);
   return { parts: merge(parts) };
+}
+
+function tagSource(parts: WordPart[], src: string) {
+  for (const p of parts) if (p.k === 'var' && p.src === undefined) p.src = src;
 }
 
 function merge(parts: WordPart[]): WordPart[] {
@@ -136,6 +149,8 @@ class Parser {
   atEnd() { return this.pos >= this.src.length; }
   private ch(off = 0) { return this.src[this.pos + off] ?? ''; }
   private startsWith(s: string) { return this.src.startsWith(s, this.pos); }
+
+  lineAt(pos: number) { return this.line(pos); }
 
   private line(pos = this.pos): number {
     if (!this.lineStarts) {
@@ -202,8 +217,7 @@ class Parser {
   private expectKeyword(word: string) {
     this.skipSeparators();
     if (this.peekKeyword() !== word) {
-      if (this.atEnd()) throw new ParseError(diagnostic('unexpectedEofExpecting', { word: word }));
-      this.fail();
+      this.fail(); // at the end: bash 5.2 says only "unexpected end of file"
     }
     this.pos += word.length;
   }
@@ -548,12 +562,12 @@ class Parser {
       }
       const w = this.readWord();
       if (!w) this.fail();
-      end = this.pos;
+      if (words.length < 2) end = this.pos;
       if (words.length === 0 && w.assign) { assigns.push(w.assign); continue; }
       words.push(w);
     }
     if (words.length === 0 && assigns.length === 0 && redirects.length === 0) this.fail();
-    // bash reports a command that spans lines (a quoted newline) at its last line
+    // bash reports a command that spans lines (a quoted newline) at the line where its second word ends
     return { k: 'simple', assigns, words, redirects, line: Math.max(line, this.line(Math.max(end - 1, 0))) };
   }
 
@@ -646,7 +660,9 @@ class Parser {
               elements = this.src.slice(this.pos + 1, end);
               this.pos = end + 1;
             } else {
+              const valueStart = this.pos;
               while (!this.atEnd() && !META.includes(this.ch())) this.readWordPart(valueParts, opts);
+              tagSource(valueParts, this.src.slice(valueStart, this.pos));
             }
             const value = { parts: merge(valueParts) };
             assign = { name: m[1], value, index, elements, append };
@@ -703,6 +719,7 @@ class Parser {
       return null;
     }
     if (parts.length === 0) parts.push({ k: 'lit', text: '', q: true }); // "" or a removed continuation
+    tagSource(parts, this.src.slice(start, this.pos));
     return { parts: merge(parts), assign };
   }
 
@@ -725,7 +742,7 @@ class Parser {
     }
     if (c === "'" && !opts.inDq) {
       const end = this.src.indexOf("'", this.pos + 1);
-      if (end < 0) throw new ParseError(DIAGNOSTICS.eofSingleQuote);
+      if (end < 0) throw new ParseError(DIAGNOSTICS.eofSingleQuote, this.line());
       parts.push({ k: 'lit', text: this.src.slice(this.pos + 1, end), q: true });
       this.pos = end + 1;
       return;
@@ -771,14 +788,15 @@ class Parser {
   readDoubleQuoted(toEnd: boolean, heredoc: boolean): WordPart[] {
     const parts: WordPart[] = [];
     let text = '';
+    const start = this.pos;
     const flush = () => { if (text) { parts.push({ k: 'lit', text, q: true }); text = ''; } };
     for (;;) {
       if (this.atEnd()) {
         if (toEnd) break;
-        throw new ParseError(diagnostic('eofMatching', { terminator: '"' }));
+        throw new ParseError(diagnostic('eofMatching', { terminator: '"' }), this.line(Math.max(start - 1, 0)));
       }
       const c = this.ch();
-      if (c === '"' && !heredoc) { this.pos++; break; }
+      if (c === '"' && !heredoc) { tagSource(parts, this.src.slice(start, this.pos)); this.pos++; break; }
       if (c === '\\') {
         const n = this.ch(1);
         if (n === '\n') { this.pos += 2; continue; }

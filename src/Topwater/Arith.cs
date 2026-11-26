@@ -28,19 +28,21 @@ internal sealed class Arith
     {
         if (depth > 20) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.RecursionExceeded, ("expression", expr)));
         if (expr.Contains('$')) expr = Dollar.Replace(expr, m => sh.GetVariable(m.Groups[1].Value));
-        var tokens = Tokenize(expr);
+        var starts = new List<int>();
+        var tokens = Tokenize(expr, starts);
         if (tokens.Count == 0) return 0;
-        var a = new Arith(sh, expr, tokens) { _depth = depth };
+        var a = new Arith(sh, expr, tokens) { _depth = depth, _starts = starts };
         var v = a.Comma(true);
         if (a._p < tokens.Count) throw a.Syntax(tokens[a._p]);
         return v;
     }
 
     int _depth;
+    List<int> _starts = [];
 
     static readonly Regex Dollar = new(@"\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?");
 
-    static List<string> Tokenize(string s)
+    static List<string> Tokenize(string s, List<int> starts)
     {
         var tokens = new List<string>();
         for (int i = 0; i < s.Length;)
@@ -59,6 +61,7 @@ internal sealed class Arith
                         else if (s[j] == ']' && --depth == 0) { j++; break; }
                     if (depth > 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ArithmeticBadSubscript, ("expression", s)));
                 }
+                starts.Add(i);
                 tokens.Add(s[i..j]);
                 i = j;
                 continue;
@@ -68,6 +71,7 @@ internal sealed class Arith
             // `5--3` (after $a-$b is substituted) is two minus signs; `--` is one operator only next to a name
             bool nextIsName = i + 2 < s.Length && (char.IsLetter(s[i + 2]) || s[i + 2] == '_');
             if (op is "++" or "--" && !nextIsName && !(tokens.Count > 0 && IsIdent(tokens[^1]))) op = op[..1];
+            starts.Add(i);
             tokens.Add(op);
             i += op.Length;
         }
@@ -105,9 +109,10 @@ internal sealed class Arith
             var name = _t[_p];
             var op = _t[_p + 1];
             _p += 2;
+            int right = _p;
             var r = Assign(ev);
             if (!ev) return r;
-            var v = op == "=" ? r : Apply(op[..^1], Var(name), r, true);
+            var v = op == "=" ? r : Apply(op[..^1], Var(name), r, true, right);
             Set(name, v);
             return v;
         }
@@ -133,14 +138,17 @@ internal sealed class Arith
             _p++;
             if (op == "&&") { var r = Binary(level + 1, ev && l != 0); l = l != 0 && r != 0 ? 1 : 0; }
             else if (op == "||") { var r = Binary(level + 1, ev && l == 0); l = l != 0 || r != 0 ? 1 : 0; }
-            else l = Apply(op, l, Binary(level + 1, ev), ev);
+            else { int right = _p; l = Apply(op, l, Binary(level + 1, ev), ev, right); }
         }
         return l;
     }
 
-    long Apply(string op, long l, long r, bool ev)
+    /// <param name="right">The token where the right operand starts: bash names the text from there on.</param>
+    long Apply(string op, long l, long r, bool ev, int right)
     {
-        if (op is "/" or "%" && r == 0) return ev ? throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.DivisionByZero, ("expression", _src.Trim()))) : 0;
+        if (op is "/" or "%" && r == 0)
+            return ev ? throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.DivisionByZero, ("expression", _src.TrimStart()),
+                ("token", right < _starts.Count ? _src[_starts[right]..] : ""))) : 0;
         return op switch
         {
             "+" => l + r, "-" => l - r, "*" => l * r, "/" => r == -1 ? -l : l / r, "%" => r == -1 ? 0 : l % r, "**" => Pow(l, r),

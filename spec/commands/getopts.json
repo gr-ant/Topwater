@@ -4,6 +4,7 @@
   "category": "scripting",
   "summary": "Parse command-line options",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom",
   "messages": {
     "usage": "usage: getopts optstring name [arg ...]",

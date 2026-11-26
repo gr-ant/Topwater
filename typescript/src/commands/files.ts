@@ -1,6 +1,7 @@
 // File commands: ls cat mkdir touch rm rmdir cp mv find tree stat du df chmod chown file mktemp realpath ...
 import { Args, specOf, specMessage, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, type CommandContext, type CommandHandler } from '../command.js';
 import { VirtualFileSystem, NO_SPACE, type FileStat } from '../vfs.js';
+import { ERRNO } from '../spec.generated.js';
 import { globRegex } from '../glob.js';
 import { strftime } from '../format.js';
 import { parseDate } from './builtins.js';
@@ -40,6 +41,13 @@ function copyIntoItself(fs: CommandContext['fs'], from: string, to: string, crea
     else if (!copyIntoItself(fs, child, norm(to, name), created)) return false;
   }
   return true;
+}
+/** cp -p: the copy at `to` takes the mode and modification time of what it was copied from, entry by entry. */
+function keepModeAndTimes(fs: CommandContext['fs'], from: string, to: string) {
+  if (!fs.exists(from) || !fs.exists(to) || fs.isSymlink(to)) return;
+  const st = fs.stat(from);
+  if (fs.isDirectory(to)) for (const n of fs.list(to)) keepModeAndTimes(fs, norm(from, n), norm(to, n));
+  try { fs.chmod(to, st.mode); fs.setModifiedTime(to, st.modified); } catch (e) { if (!(e instanceof ShellError)) throw e; }
 }
 const fail = (message: string): never => { throw new ShellError(message); };
 const fmt1 = (v: number) => String(Math.round(v * 10) / 10);
@@ -555,6 +563,8 @@ export function registerFiles(shell: Shell) {
         if (!(e instanceof ShellError)) throw e;
         throw new ShellError(specMessage('touch', 'invalidDateFormat', { value: d }));
       }
+      // shortcut: times outside years 0-9999 are refused (GNU takes larger years), since ls and date can't show them
+      if (!(when >= -62167219200000 && when <= 253402300799999)) throw new ShellError(specMessage('touch', 'invalidDateFormat', { value: d }));
     }
     if (t !== undefined) when = touchStamp(t, ctx.fs.clock()) ?? fail(specMessage('touch', 'invalidDateFormat', { value: t }));
     let code = 0;
@@ -565,7 +575,12 @@ export function registerFiles(shell: Shell) {
         // an explicit time needs ownership, not write permission
         if (a.has('h') && ctx.fs.isSymlink(path)) ctx.fs.setModifiedTime(path, when ?? ctx.fs.clock(), false);
         else if (when === undefined) ctx.fs.touch(path);
-        else { if (!ctx.fs.exists(path)) ctx.fs.touch(path); ctx.fs.setModifiedTime(path, when); }
+        else {
+          if (!ctx.fs.exists(path)) ctx.fs.touch(path);
+          // touch opens the file for writing first, so an unwritable file is "Permission denied" even with a time given
+          else if (ctx.fs.isFile(path) && !ctx.fs.canWrite(path) && ctx.fs.stat(path).owner !== ctx.fs.runAs) throw new ShellError(`${path}: ${ERRNO.EACCES}`);
+          ctx.fs.setModifiedTime(path, when);
+        }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
         ctx.stderr.write('touch: ' + specMessage('touch', 'cannotTouch', { file: p, reason: typed(e, p, path)[1] }) + '\n');
@@ -734,6 +749,7 @@ export function registerFiles(shell: Shell) {
         code = 1;
         continue;
       }
+      if (!move && (a.has('p') || a.has('a'))) keepModeAndTimes(fs, src, target);
       if (a.has('v')) line(ctx, `${move ? 'renamed ' : ''}'${s}' -> '${shown}'`);
     }
     return code;

@@ -7,6 +7,10 @@ import re
 from ._spec import diagnostic
 from .vfs import ShellError
 
+
+class ArithError(ShellError):
+    """An error in an arithmetic expression: in $((...)) or an array subscript it ends the script, as in bash."""
+
 _OPS = [
     "**=", "<<=", ">>=", "&&", "||", "==", "!=", "<=", ">=", "<<", ">>", "**", "++", "--", "+=", "-=", "*=", "/=", "%=",
     "&=", "|=", "^=", "+", "-", "*", "/", "%", "<", ">", "=", "!", "~", "&", "|", "^", "?", ":", "(", ")", ",",
@@ -17,8 +21,9 @@ _VAR_REF = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?")
 
 
 @functools.lru_cache(maxsize=512)  # loops re-evaluate the same expressions; tokens are never mutated
-def _tokenize(s: str) -> tuple[str, ...]:
-    tokens, i = [], 0
+def _tokenize(s: str) -> tuple[tuple[str, ...], tuple[int, ...]]:
+    """The tokens and where each starts in s."""
+    tokens, starts, i = [], [], 0
     while i < len(s):
         if s[i].isspace():
             i += 1
@@ -40,31 +45,34 @@ def _tokenize(s: str) -> tuple[str, ...]:
                             break
                     j += 1
                 if depth > 0:
-                    raise ShellError(diagnostic("arithmeticBadSubscript", expression=s))
+                    raise ArithError(diagnostic("arithmeticBadSubscript", expression=s))
             tokens.append(s[i:j])
+            starts.append(i)
             i = j
             continue
         op = next((o for o in _OPS if s.startswith(o, i)), None)
         if op is None:
-            raise ShellError(diagnostic("invalidArithmeticOperator", expression=s, token=s[i:]))
+            raise ArithError(diagnostic("invalidArithmeticOperator", expression=s, token=s[i:]))
         # `5--3` (after $a-$b is substituted) is two minus signs; `--` is one operator only next to a name
         next_is_name = i + 2 < len(s) and (s[i + 2].isalpha() or s[i + 2] == "_")
         if op in ("++", "--") and not next_is_name and not (tokens and _is_ident(tokens[-1])):
             op = op[0]
         tokens.append(op)
+        starts.append(i)
         i += len(op)
-    return tuple(tokens)
+    return tuple(tokens), tuple(starts)
 
 
 def evaluate(shell, expr: str, depth: int = 0) -> int:
     if depth > 20:
-        raise ShellError(diagnostic("recursionExceeded", expression=expr))
+        raise ArithError(diagnostic("recursionExceeded", expression=expr))
     if "$" in expr:
         expr = _VAR_REF.sub(lambda m: shell.get_variable(m.group(1)), expr)
-    tokens = _tokenize(expr)
+    tokens, starts = _tokenize(expr)
     if not tokens:
         return 0
     a = _Arith(shell, expr, tokens, depth)
+    a.starts = starts
     v = a.comma(True)
     if a.p < len(tokens):
         raise a.syntax(tokens[a.p])
@@ -84,13 +92,13 @@ def _wrap(x: int) -> int:
 def _literal(digits: str, radix: int, tok: str) -> int:
     """A literal in the given base (2-64: 0-9 a-z A-Z @ _); values past 64 bits wrap around like bash."""
     if not digits or not 2 <= radix <= 64:
-        raise ShellError(diagnostic("invalidBase", token=tok))
+        raise ArithError(diagnostic("invalidBase", token=tok))
     v = 0
     for c in digits:
         d = (ord(c) - 48 if c.isdigit() and c.isascii() else ord(c) - 87 if "a" <= c <= "z"
              else (ord(c) - 55 if radix <= 36 else ord(c) - 29) if "A" <= c <= "Z" else 62 if c == "@" else 63 if c == "_" else 99)
         if d >= radix:
-            raise ShellError(diagnostic("valueTooGreat", token=tok))
+            raise ArithError(diagnostic("valueTooGreat", token=tok))
         v = v * radix + d
     return _wrap(v)
 
@@ -108,8 +116,8 @@ class _Arith:
     def __init__(self, shell, src: str, tokens: list[str], depth: int):
         self.sh, self.src, self.t, self.p, self.depth = shell, src, tokens, 0, depth
 
-    def syntax(self, token: str) -> ShellError:
-        return ShellError(diagnostic("arithmeticSyntax", expression=self.src.strip(), token=token))
+    def syntax(self, token: str) -> ArithError:
+        return ArithError(diagnostic("arithmeticSyntax", expression=self.src.strip(), token=token))
 
     @property
     def peek(self):
@@ -149,10 +157,11 @@ class _Arith:
         if self.p + 1 < len(self.t) and self.is_ident(self.t[self.p]) and self.t[self.p + 1] in _ASSIGN:
             name, op = self.t[self.p], self.t[self.p + 1]
             self.p += 2
+            at = self.at()
             r = self.assign(ev)
             if not ev:
                 return r
-            v = r if op == "=" else self.apply(op[:-1], self.var(name), r, True)
+            v = r if op == "=" else self.apply(op[:-1], self.var(name), r, True, at)
             self.set(name, v)
             return v
         return self.ternary(ev)
@@ -181,13 +190,19 @@ class _Arith:
                 right = self.binary(level + 1, ev and left == 0)
                 left = int(left != 0 or right != 0)
             else:
-                left = self.apply(op, left, self.binary(level + 1, ev), ev)
+                at = self.at()
+                left = self.apply(op, left, self.binary(level + 1, ev), ev, at)
         return left
 
-    def apply(self, op: str, l: int, r: int, ev: bool) -> int:
+    def at(self) -> int:
+        """Where the next token starts in the source (its end when there is none)."""
+        return self.starts[self.p] if self.p < len(self.starts) else len(self.src)
+
+    def apply(self, op: str, l: int, r: int, ev: bool, at: int = 0) -> int:
         if op in ("/", "%") and r == 0:
             if ev:
-                raise ShellError(diagnostic("divisionByZero", expression=self.src.strip()))
+                # bash's error token: the divisor's text through the end of the expression
+                raise ArithError(diagnostic("divisionByZero", expression=self.src.lstrip(), token=self.src[at:]))
             return 0
         ops = {
             "+": lambda: l + r, "-": lambda: l - r, "*": lambda: l * r, "/": lambda: _cdiv(l, r), "%": lambda: _cmod(l, r),
@@ -201,7 +216,7 @@ class _Arith:
 
     def power(self, b: int, e: int) -> int:
         if e < 0:
-            raise ShellError(diagnostic("negativeExponent", expression=self.src.strip(), token=str(e)))
+            raise ArithError(diagnostic("negativeExponent", expression=self.src.strip(), token=str(e)))
         return _wrap(pow(b, e, 1 << 64))
 
     def unary(self, ev: bool) -> int:

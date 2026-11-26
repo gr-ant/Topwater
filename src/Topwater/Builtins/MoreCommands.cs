@@ -54,6 +54,41 @@ internal static partial class Builtins
         return fields;
     }
 
+    /// <summary>`umask 027`: octal digits up to 07777, of which the permission bits count; null when out of range.</summary>
+    static int? OctalMask(string mode)
+    {
+        int v = 0;
+        foreach (var c in mode)
+            if (c is < '0' or > '7' || (v = v * 8 + (c - '0')) > 0xFFF) return null;
+        return v & 0x1FF;
+    }
+
+    /// <summary>`umask u=rwx,g+w,o-r`: clauses change the permissions the mask leaves; null (and the offending character) when malformed.</summary>
+    static int? SymbolicMask(string mode, int mask, out char bad, out bool badOperator)
+    {
+        int allowed = ~mask & 0x1FF, i = 0;
+        bad = ' ';
+        badOperator = false;
+        while (true)
+        {
+            int who = 0;
+            for (; i < mode.Length && "ugoa".Contains(mode[i]); i++) who |= mode[i] switch { 'u' => 0x1C0, 'g' => 0x38, 'o' => 7, _ => 0x1FF };
+            if (who == 0) who = 0x1FF;
+            if (i >= mode.Length || !"+-=".Contains(mode[i])) { bad = i < mode.Length ? mode[i] : ' '; badOperator = true; return null; }
+            while (i < mode.Length && "+-=".Contains(mode[i]))
+            {
+                char op = mode[i++];
+                int bits = 0;
+                for (; i < mode.Length && "rwx".Contains(mode[i]); i++) bits |= (mode[i] switch { 'r' => 4, 'w' => 2, _ => 1 }) * 0x49;
+                bits &= who;
+                allowed = op == '+' ? allowed | bits : op == '-' ? allowed & ~bits : allowed & ~who | bits;
+            }
+            if (i >= mode.Length) return ~allowed & 0x1FF;
+            if (mode[i] != ',') { bad = mode[i]; return null; }
+            i++;
+        }
+    }
+
     static readonly HashSet<string> ShellKeywords = ["if", "then", "else", "elif", "fi", "case", "esac", "for", "select", "while", "until", "do", "done", "in", "function", "time", "{", "}", "!", "[[", "]]", "coproc"];
 
     /// <summary>`type NAME` / `command -V NAME`: what the name runs, or false (with a message) when nothing.</summary>
@@ -590,9 +625,47 @@ internal static partial class Builtins
             return 0;
         });
         shell.Register("times", ctx => { ctx.Stdout.Write("0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n"); return 0; });
-        shell.Register("umask", ctx => { if (ctx.Args.Count == 0) ctx.Stdout.WriteLine("0022"); return 0; });
+        shell.Register("umask", ctx =>
+        {
+            bool symbolic = false, reusable = false;
+            int i = 0;
+            for (; i < ctx.Args.Count && ctx.Args[i].Length > 1 && ctx.Args[i][0] == '-'; i++)
+            {
+                if (ctx.Args[i] == "--") { i++; break; }
+                foreach (var c in ctx.Args[i][1..])
+                    if (c == 'S') symbolic = true;
+                    else if (c == 'p') reusable = true;
+                    else
+                    {
+                        ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}umask: " + CommandSpec.Message("umask", "builtinInvalidOption", ("option", "-" + c)));
+                        ctx.Stderr.WriteLine("umask: " + CommandSpec.Message("umask", "usage"));
+                        return 2;
+                    }
+            }
+            if (i < ctx.Args.Count)
+            {
+                var mode = ctx.Args[i];
+                char bad = ' ';
+                bool badOperator = false;
+                int? mask = char.IsAsciiDigit(mode[0]) ? OctalMask(mode) : SymbolicMask(mode, ctx.Fs.Umask, out bad, out badOperator);
+                if (mask == null)
+                {
+                    ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}umask: " + (char.IsAsciiDigit(mode[0])
+                        ? CommandSpec.Message("umask", "octalOutOfRange", ("value", mode))
+                        : CommandSpec.Message("umask", badOperator ? "invalidOperator" : "invalidSymbolic", ("char", bad.ToString()))));
+                    return 1;
+                }
+                ctx.Fs.Umask = mask.Value;
+                if (!symbolic) return 0;
+            }
+            int allowed = ~ctx.Fs.Umask & 0x1FF;
+            string Perms(int shift) => string.Concat("rwx".Where((_, k) => (allowed >> (shift + 2 - k) & 1) != 0));
+            var shown = symbolic ? $"u={Perms(6)},g={Perms(3)},o={Perms(0)}" : Convert.ToString(ctx.Fs.Umask, 8).PadLeft(4, '0');
+            ctx.Stdout.WriteLine(reusable ? $"umask {(symbolic ? "-S " : "")}{shown}" : shown);
+            return 0;
+        });
 
-        shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken));
+        shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken, eval: true));
 
         shell.Register("let", ctx =>
         {
@@ -606,7 +679,18 @@ internal static partial class Builtins
         {
             var args = ctx.Args.SkipWhile(a => a == "-p").ToList();
             bool describe = args.Count > 0 && args[0] is "-v" or "-V";
-            if (!describe) return args.Count == 0 ? 0 : await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true);
+            if (!describe && args.Count == 0) return 0;
+            if (!describe && args.Count < ctx.Args.Count)
+            {
+                // -p: search the system's standard PATH instead of the user's
+                // shortcut: the hash table is emptied by the PATH switch, as if PATH had been assigned
+                var env = ctx.Shell.Environment;
+                var saved = env.GetValueOrDefault("PATH");
+                env["PATH"] = "/bin:/usr/bin";
+                try { return await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true); }
+                finally { if (saved == null) env.Remove("PATH"); else env["PATH"] = saved; }
+            }
+            if (!describe) return await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true);
             int code = 0;
             foreach (var n in args.Skip(1))
             {
@@ -623,12 +707,12 @@ internal static partial class Builtins
         {
             if (ctx.Args.Count == 0)
             {
-                foreach (var (k, v) in ctx.Shell.Environment.OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}");
+                foreach (var (k, v) in ctx.Shell.Environment.Where(e => ctx.Shell.IsExported(e.Key)).OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}");
                 return 0;
             }
             int code = 0;
             foreach (var n in ctx.Args)
-                if (ctx.Shell.Environment.TryGetValue(n, out var v)) ctx.Stdout.WriteLine(v); else code = 1;
+                if (ctx.Shell.IsExported(n) && ctx.Shell.Environment.TryGetValue(n, out var v)) ctx.Stdout.WriteLine(v); else code = 1;
             return code;
         });
 
@@ -644,6 +728,11 @@ internal static partial class Builtins
         {
             var args = ctx.Args.SkipWhile(a => a.StartsWith('-')).ToList();
             if (args.Count < 2) throw new ShellException(CommandSpec.Message("timeout", "missingOperand"), 125);
+            if (ExecFailure(ctx, args[1], out _) is { } error)
+            {
+                ctx.Stderr.WriteLine("timeout: " + CommandSpec.Message("timeout", "failedToRun", ("command", args[1]), ("errno", error)));
+                return error == CommandSpec.Errno.EACCES ? 126 : 127;
+            }
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
             cts.CancelAfter(ParseDuration(args[0]));
             try { return await ctx.Shell.WithVirtualTimeoutAsync(ParseDuration(args[0]), () => ctx.Shell.InvokeAsync(args.Skip(1).ToList(), ctx.Io, cts.Token)) ?? 124; }

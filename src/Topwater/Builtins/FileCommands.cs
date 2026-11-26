@@ -253,8 +253,15 @@ internal static partial class Builtins
             {
                 var path = ctx.ResolvePath(p);
                 if (a.Has('c') && !ctx.Fs.Exists(path)) continue;
-                // an explicit time needs ownership, not write permission
-                try { if (a.Has('h') && ctx.Fs.IsSymlink(path)) ctx.Fs.SetModifiedTime(path, when ?? ctx.Fs.Clock(), follow: false); else if (when is { } w) { if (!ctx.Fs.Exists(path)) ctx.Fs.Touch(path); ctx.Fs.SetModifiedTime(path, w); } else ctx.Fs.Touch(path); }
+                // the owner may set any time; others need write access, which only lets them set the current time
+                try
+                {
+                    if (a.Has('h') && ctx.Fs.IsSymlink(path)) ctx.Fs.SetModifiedTime(path, when ?? ctx.Fs.Clock(), follow: false);
+                    else if (!ctx.Fs.Exists(path)) { ctx.Fs.Touch(path); if (when is { } w) ctx.Fs.SetModifiedTime(path, w); }
+                    else
+                        try { ctx.Fs.SetModifiedTime(path, when ?? ctx.Fs.Clock()); }
+                        catch (ShellException) when (when == null || !ctx.Fs.CanWrite(path)) { ctx.Fs.Touch(path); }
+                }
                 catch (ShellException e) { ctx.Stderr.WriteLine("touch: " + CommandSpec.Message("touch", "cannotTouch", ("file", p), ("reason", Typed(e, p, path).Reason))); code = 1; }
             }
             return code;
@@ -382,7 +389,7 @@ internal static partial class Builtins
                         var p = Typed(new ShellException(abs + ": "), s, src).Path;
                         ctx.Stderr.WriteLine("cp: " + (why == "cyclic" ? CommandSpec.Message("cp", "cyclicLink", ("file", p)) : CommandSpec.Message("cp", "cannotStat", ("file", p), ("errno", why))));
                         code = 1;
-                    }, ctx.CancellationToken.ThrowIfCancellationRequested);
+                    }, ctx.CancellationToken.ThrowIfCancellationRequested, preserve: a.Has('p') || a.Has('a'));
                 }
                 catch (ShellException e) when (e.Message.Contains(" into itself, ") || e.Message.Contains(" to a subdirectory of itself, "))
                 {

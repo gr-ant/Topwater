@@ -2,7 +2,18 @@
   "$schema": "../command.schema.json",
   "name": "umask",
   "category": "scripting",
-  "summary": "Show the file mode creation mask",
+  "summary": "Show or set the permission bits taken away from new files and directories",
   "shellBuiltin": true,
-  "parser": "custom"
+  "programFile": false,
+  "parser": "custom",
+  "options": [
+    {"short": "p", "description": "print the mask as a umask command that would set it"},
+    {"short": "S", "description": "print the mask as the permissions it leaves, u=...,g=...,o=..."}
+  ],
+  "messages": {
+    "usage": "usage: umask [-p] [-S] [mode]",
+    "octalOutOfRange": "{value}: octal number out of range",
+    "invalidSymbolic": "`{char}': invalid symbolic mode character",
+    "invalidOperator": "`{char}': invalid symbolic mode operator"
+  }
 }

@@ -4,5 +4,6 @@
   "category": "scripting",
   "summary": "Forget background jobs",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom"
 }

@@ -7,6 +7,8 @@ import inspect
 import io
 import random
 import re
+import signal
+import threading
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -106,6 +108,13 @@ class _Io:
     out: Any
     err: Any
     fds: dict | None = None  # fds 3 and up redirected for one command (3>&1); None when none are
+
+
+class _BadSubstitution(ShellError):
+    """${...} with an operator bash does not know; the word expanding it turns this into the fatal error."""
+
+    def __init__(self, expr: str):
+        super().__init__(diagnostic("badSubstitution", text="${" + expr + "}"))
 
 
 class _ControlFlow(Exception):
@@ -434,6 +443,9 @@ class Shell:
         self._cond_depth = 0
         self._ifs_unset = False
         self._subshell = self._lineno = self._last_bg = 0
+        self._line_base = 0  # added to the line numbers of the text running now (eval and $(...) text start at 1)
+        self._cur_word: Word | None = None  # the word being expanded, for what a bad substitution names
+        self.umask = 0o022  # `umask`: taken from the modes of the files and directories the agent creates
         self._next_pid = 4300
         self._last_arg = ""
         self._pipe_status: list[int] = []
@@ -723,6 +735,22 @@ class Shell:
         if self._variable_chars > mx:
             raise self.too_large("variables in total", "keep big data in files and unset variables you no longer need")
 
+    def _arm_alarm(self):
+        """Ticks SIGALRM while the call runs, so a regex that backtracks past the time limit is stopped (see TimedPattern).
+        Returns the handler to put back, or None where that is not possible: off the main thread, without setitimer
+        (Windows), or when the host has a timer of its own running."""
+        if (threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer")
+                or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0)):
+            return None
+
+        def tick(signum, frame):
+            if _matching and time.monotonic() >= self._deadline:
+                raise CallTimeout()
+
+        previous = signal.signal(signal.SIGALRM, tick)
+        signal.setitimer(signal.ITIMER_REAL, 0.1, 0.1)
+        return previous if previous is not None else signal.SIG_DFL
+
     def check_deadline(self) -> None:
         if time.monotonic() >= self._deadline:
             raise CallTimeout()
@@ -745,8 +773,9 @@ class Shell:
         out, err = CappedWriter(self), CappedWriter(self)
         trailer = None
         previous_user, self.fs.run_as = self.fs.run_as, self.user  # the agent's commands run as a regular user
+        self.fs.umask = self.umask
         self._total_iterations = self._script_depth = self._arith_depth = 0
-        self._lineno = 0  # each call is a new bash -c: its lines count from 1
+        self._lineno = self._line_base = 0  # each call is a new bash -c: its lines count from 1
         self._deadline = time.monotonic() + self.max_call_duration
         io_ = _Io(StdinBuffer(), SwitchWriter(out), SwitchWriter(err))
 
@@ -754,6 +783,7 @@ class Shell:
             err.seek(0, io.SEEK_END)
             io.StringIO.write(err, msg)  # past the cap on purpose: the note must get through
 
+        alarm = self._arm_alarm()
         try:
             try:
                 code = await self._exec_script(Parser.parse(command_line), io_)
@@ -783,6 +813,9 @@ class Shell:
             stop_err(f"bash: internal error: {type(e).__name__}: {e}\n")
             code = 1
         finally:
+            if alarm is not None:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, alarm)
             # shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
             self.errexit = self.pipefail = self.nounset = self.noglob = self.xtrace = self.noclobber = False
             self.fds.clear()
@@ -803,19 +836,28 @@ class Shell:
         return f"{self._err_where[-1][0] if self._err_where else 'bash'}: line {max(self._lineno, 1)}: "
 
     async def _run_script_text(self, text: str, io_: _Io, subshell: bool, positional: list[str] | None = None,
-                               process: _NewProcess | None = None, sourced: str | None = None) -> int:
+                               process: _NewProcess | None = None, sourced: str | None = None, eval_: bool = False) -> int:
         """process is set for a new bash process (it sees only exported variables and functions); sourced is the file
-        `source` is running, for BASH_SOURCE."""
+        `source` is running, for BASH_SOURCE. eval_: report syntax errors as eval's, at their line in the text."""
         try:
             script = Parser.parse(text)
         except ParseError as e:
-            io_.err.write(f"bash: {e}\n")
+            if not eval_:
+                io_.err.write(f"bash: {e}\n")
+                return 2
+            # shortcut: lexer errors (unmatched quotes) are reported on the text's first line
+            prefix = f"{self._err_where[-1][0] if self._err_where else 'bash'}: eval: line {max(self._lineno, 1) + (e.line or 1) - 1}: "
+            io_.err.write(f"{prefix}{e}\n")
+            if e.echo is not None:
+                io_.err.write(prefix + diagnostic("sourceLine", line=e.echo) + "\n")
             return 2
         self._script_depth += 1
         if self._script_depth > 100:
             raise LimitExceeded("maximum script nesting level exceeded (100)")
         saved_arg0 = self._arg0
-        sources, where, line = len(self._sources), len(self._err_where), self._lineno
+        sources, where, line, base = len(self._sources), len(self._err_where), self._lineno, self._line_base
+        # eval and $(...) text counts on from the line it is on; a new bash or a sourced file counts from 1
+        self._line_base = 0 if process is not None or sourced is not None else max(line, 1) - 1
         file = (process.file if process else None) or sourced
         if file is not None:
             self._sources.append(file)
@@ -854,7 +896,7 @@ class Shell:
             self._arg0 = saved_arg0
             del self._sources[sources:]
             del self._err_where[where:]
-            self._lineno = line
+            self._lineno, self._line_base = line, base
 
     def _become_new_process(self, process: _NewProcess) -> None:
         """What a child bash inherits: exported variables (not their other attributes) and exported functions."""
@@ -865,6 +907,7 @@ class Shell:
         self.functions = {k: v for k, v in self.functions.items() if k in self.exported_functions}
         self.errexit = self.pipefail = self.nounset = self.xtrace = self.noglob = self.noclobber = False
         self.hashed = {}
+        self._subshell = 0  # a new bash is no subshell: a fatal error ends it with its own status (127 for set -u)
         self._arg0 = process.arg0
         if process.setup:
             process.setup()
@@ -884,18 +927,18 @@ class Shell:
         # pipeline stage doesn't copy every element just to start
         self._epoch += 1
         self._subshell += 1
-        return (self._cwd, dict(self.env), dict(self.aliases), dict(self.functions), self.positional, self.errexit, self.pipefail,
+        return (self._subshell - 1, self.umask, self._cwd, dict(self.env), dict(self.aliases), dict(self.functions), self.positional, self.errexit, self.pipefail,
                 self.nounset, set(self.shopts), dict(self.traps), dict(self.arrays),
                 (self.noglob, self.xtrace, self.noclobber, self._ifs_unset), dict(self.var_attrs), self._variable_chars,
                 {k: list(v) for k, v in self.hashed.items()})
 
     def _restore_state(self, saved) -> None:
         self._epoch += 1
-        self._subshell -= 1
-        (cwd, self.env, self.aliases, self.functions, self.positional, self.errexit, self.pipefail, self.nounset, self.shopts,
+        (self._subshell, self.umask, cwd, self.env, self.aliases, self.functions, self.positional, self.errexit, self.pipefail, self.nounset, self.shopts,
          self.traps, self.arrays, flags, self.var_attrs, self._variable_chars, self.hashed) = saved
         self.noglob, self.xtrace, self.noclobber, self._ifs_unset = flags
         self._cwd = cwd if self.fs.is_dir(cwd) else "/"
+        self.fs.umask = self.umask
 
     async def _exec_script(self, script: Script, io_: _Io) -> int:
         code = 0
@@ -1021,7 +1064,7 @@ class Shell:
         if isinstance(cmd, SimpleCommand) and not cmd.assignments and len(cmd.words) == 1 and cmd.words[0].is_("exec"):
             return await self._exec_redirects(cmd.redirects, io_)
         if getattr(cmd, "line", 0) > 0:
-            self._lineno = cmd.line  # a failed redirection reports this line too
+            self._lineno = self._line_base + cmd.line  # a failed redirection reports this line too
         sinks: list[FileSink] = []
         rio = await self._apply_redirects(cmd.redirects, io_, sinks)
         if rio is None:
@@ -1305,7 +1348,7 @@ class Shell:
         return 0
 
     async def _exec_simple(self, c: SimpleCommand, io_: _Io) -> int:
-        self._lineno = c.line
+        self._lineno = self._line_base + c.line
         debug = self.traps.get("DEBUG") if self.traps and not self._in_debug_trap else None
         if debug:
             # shortcut: the DEBUG trap runs before simple commands only, not before (( )), [[ ]], for and case
@@ -1423,7 +1466,8 @@ class Shell:
                         io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n" if not self.env.get("PATH")
                                       else diagnostic("commandNotFound", command=argv[0]) + "\n")
                         return 127
-                    self.hashed[name] = [found, 1]
+                    if "/" in found:  # bash does not remember what an empty PATH found
+                        self.hashed[name] = [found, 1]
                 registered = self.stub_command(found)
                 if registered is None:
                     return await self._run_script_file(found, self.resolve(found), [found, *argv[1:]], io_)
@@ -1499,6 +1543,11 @@ class Shell:
         parts = re.split(r"[ \t]", line, maxsplit=1)
         program = self.stub_command(parts[0])
         if program is None:
+            interpreter = self.resolve(parts[0])
+            if self.fs.is_file(interpreter) and self.fs.can_execute(interpreter):
+                # another script as the interpreter, as Linux allows; each hand-off counts toward the nesting limit
+                words = [parts[1].strip()] if len(parts) > 1 and parts[1].strip() else []
+                return await self._run_script_file(parts[0], interpreter, [parts[0], *words, name, *argv[1:]], io_)
             io_.err.write(self.err_prefix + diagnostic("requiredFileNotFound", name=name) + "\n")
             return 127
         opt = parts[1].strip() if len(parts) > 1 else ""
@@ -1530,6 +1579,8 @@ class Shell:
         """Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd, and a leading ~ is
         expanded as bash does during the search."""
         dirs = [tp[0] + d[tp[1]:] if (tp := self._tilde_prefix(d)) else d for d in self.env.get("PATH", "").split(":")]
+        if dirs == [""]:
+            return [name]  # PATH= : bash runs the cwd's `name` as it is, and neither hashes it nor calls it ./name
         return [d.rstrip("/") + "/" + name if d else "./" + name for d in dirs]
 
     def search_path(self, name: str) -> str | None:
@@ -1574,7 +1625,7 @@ class Shell:
             return h, True
         p = self.search_path(name)
         if p is not None:
-            return p, False
+            return (p if "/" in p else self.resolve(p)), False
         return ("/usr/bin/" + name, False) if self._is_app_only(name) else None
 
     def locate_all(self, name: str) -> list[str]:
@@ -1587,7 +1638,9 @@ class Shell:
 
     def _is_app_only(self, name: str) -> bool:
         from .commands import is_shell_builtin
-        return self.is_unfiled(name) and not is_shell_builtin(self, name)
+        spec = COMMANDS.get(name)
+        shell_only = spec is not None and not spec.program_file and self._builtin_names is not None and name in self._builtin_names
+        return self.is_unfiled(name) and not is_shell_builtin(self, name) and not shell_only
 
     async def _call_function(self, body, argv: list[str], io_: _Io) -> int:
         if len(self._locals) >= 200:
@@ -1600,7 +1653,7 @@ class Shell:
         self._func_names.append(argv[0])
         where = self._func_where.get(argv[0], "environment")
         self._err_where.append((where, where != "environment"))
-        line = self._lineno
+        line, base, self._line_base = self._lineno, self._line_base, 0  # shortcut: a function defined inside eval counts from its text's line 1
         try:
             code = await self._exec_command(body, io_)
         except ReturnSignal as r:
@@ -1626,7 +1679,7 @@ class Shell:
             self.positional = saved_pos
             self._func_names.pop()
             self._err_where.pop()
-            self._lineno = line
+            self._lineno, self._line_base = line, base
         # a RETURN trap set inside the function runs as it returns
         trap = self.traps.get("RETURN")
         if trap and trap != on_return:
@@ -1974,7 +2027,10 @@ class Shell:
             value = await self._expand_assignment(a.value, io_)
             if self.xtrace:
                 io_.err.write(f"+ {name}[{key}]{'+=' if a.append else '='}{trace_quote(value)}\n")
-            self.set_var(f"{name}[{key}]", value, a.append)
+            try:
+                self.set_var(f"{name}[{key}]", value, a.append)
+            except arith.ArithError as e:
+                raise self._fatal(io_, str(e), 1) from None
             return
         if a.append:
             target = self.writable(name)
@@ -2085,7 +2141,10 @@ class Shell:
         if isinstance(part, (Literal, ExpandedText)):
             return part.text
         if isinstance(part, Variable):
-            return await self._expand_parameter(part.name, io_, part.quoted)
+            try:
+                return await self._expand_parameter(part.name, io_, part.quoted)
+            except _BadSubstitution:
+                raise self._fatal(io_, diagnostic("badSubstitution", text=self._bad_substitution_text(part)), 127) from None
         if isinstance(part, CommandSub):
             return await self._capture(part.source, io_)
         if isinstance(part, ArithSub):
@@ -2121,6 +2180,22 @@ class Shell:
             return await self._arith(expr, io_)
         except ShellError as e:
             raise self._fatal(io_, str(e), 1) from None
+
+    def _bad_substitution_text(self, part: Variable) -> str:
+        """What bash names in a bad substitution: the double-quoted string around it, or else the whole word."""
+        parts = self._cur_word.parts if self._cur_word is not None else []
+        at = next((i for i, p in enumerate(parts) if p is part), None)
+        if at is None:
+            return "${" + part.name + "}"
+        if not part.quoted:
+            return str(self._cur_word)
+        # shortcut: a run of quoted parts stands for the "..." string ('a'"b" joins), and $x prints as ${x}
+        lo, hi = at, at + 1
+        while lo > 0 and parts[lo - 1].quoted:
+            lo -= 1
+        while hi < len(parts) and parts[hi].quoted:
+            hi += 1
+        return str(Word(parts[lo:hi]))
 
     def _fatal(self, io_: _Io, message: str, code: int) -> ExitSignal:
         """An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1)."""
@@ -2209,6 +2284,8 @@ class Shell:
         if one is not None and not one[0]:
             try:
                 element = self.get_element(one[1], await self._subscript(one[2], io_))
+            except arith.ArithError as e:
+                raise self._fatal(io_, str(e), 1) from None
             except ShellError as e:
                 io_.err.write(f"{self.err_prefix}{e}\n")  # like bash: reported, and the expansion is empty
                 element = None
@@ -2220,7 +2297,7 @@ class Shell:
             return str(len(self.get_variable(expr[1:])))
         m = _PARAM.match(expr)
         if not m:
-            raise ShellError(diagnostic("badSubstitution", expr=expr))
+            raise _BadSubstitution(expr)
         name, rest = m.group(1), m.group(2)
         value = self.get_variable(name)
         d = default_op(rest)
@@ -2344,7 +2421,7 @@ class Shell:
                 return f"declare -{flags} {name}={quote_value(value)}" if flags else f"{name}={quote_value(value)}"
             if c == "P":
                 return value
-            raise ShellError(diagnostic("badSubstitution", expr=expr))
+            raise _BadSubstitution(expr)
         if rest[0] == ":":
             spec = rest[1:].split(":", 1)
             offset = await self._arith(spec[0], io_)
@@ -2361,7 +2438,7 @@ class Shell:
                 if length < 0:
                     raise ShellError(diagnostic("substringNegative", expression=spec[1].strip()))
             return tail[:length]
-        raise ShellError(diagnostic("badSubstitution", expr=expr))
+        raise _BadSubstitution(expr)
 
     def _check_set(self, name: str, io_: _Io) -> None:
         """set -u: expanding an unset variable is an error that ends the (sub)shell, like bash."""
@@ -2408,8 +2485,10 @@ class Shell:
         """Expands a word without field splitting or globbing (redirect targets, heredocs, case subjects)."""
         out = []
         total = 0
+        saved, self._cur_word = self._cur_word, word
         for i, part in enumerate(word.parts):
             text = await self._expand_part(part, io_)
+            self._cur_word = word
             if i == 0 and isinstance(part, Literal) and not part.quoted:
                 tp = self._tilde_prefix(text)
                 if tp:
@@ -2418,12 +2497,14 @@ class Shell:
             if total > self.max_string_bytes:
                 raise self.too_large("expansion", "write the data to a file instead")
             out.append(text)
+        self._cur_word = saved
         return "".join(out)
 
     async def _expand_assignment(self, word: Word, io_: _Io) -> str:
         """An assignment's value: one string, with ~ expanded at the start and after each ':' (PATH=~/bin:~/x)."""
         out: list[str] = []
         for i, part in enumerate(word.parts):
+            self._cur_word = word
             text = await self._expand_part(part, io_)
             if isinstance(part, Literal) and not part.quoted and "~" in text:
                 at_start = i == 0 or "".join(out).endswith(":")
@@ -2585,6 +2666,7 @@ class Shell:
                             continue
                     if name != part.name:
                         part = Variable(name, part.quoted)
+                self._cur_word = word
                 text = await self._expand_part(part, io_)
                 if isinstance(part, Literal):
                     if i == 0 and not part.quoted:
@@ -2769,7 +2851,7 @@ class _CondEvaluator:
                 rv = "".join(re.escape(t) if p.quoted else t for p, t in zip(right.parts, parts))
                 from .commands.text import posix_to_python
                 try:
-                    m = _cached(posix_to_python(rv, True), re.IGNORECASE if nocase else 0).search(lv)
+                    m = TimedPattern(_cached(posix_to_python(rv, True), re.IGNORECASE if nocase else 0)).search(lv)
                 except (re.error, ShellError):
                     raise ShellError(f"invalid regular expression `{rv}'", 2) from None
                 # BASH_REMATCH: the whole match, then each group; emptied when nothing matches
@@ -2918,6 +3000,55 @@ def _has_unescaped_wildcard(seg: str) -> bool:
             return True
         i += 1
     return False
+
+
+_matching = 0  # > 0 while a user's regex runs: only there may the call's time limit interrupt Python code
+
+
+class TimedPattern:
+    """A compiled regex whose matching the call's time limit can stop: Python's re has no timeout, but it checks for
+    signals while it backtracks, so the alarm _run_call sets raises CallTimeout from inside it (main thread only)."""
+    __slots__ = ("_rx",)
+
+    def __init__(self, rx: re.Pattern):
+        self._rx = rx
+
+    def __getattr__(self, name: str):
+        return getattr(self._rx, name)
+
+    def _run(self, fn, *args, **kwargs):
+        global _matching
+        _matching += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _matching -= 1
+
+    def search(self, *a, **k):
+        return self._run(self._rx.search, *a, **k)
+
+    def match(self, *a, **k):
+        return self._run(self._rx.match, *a, **k)
+
+    def fullmatch(self, *a, **k):
+        return self._run(self._rx.fullmatch, *a, **k)
+
+    def sub(self, *a, **k):
+        return self._run(self._rx.sub, *a, **k)
+
+    def subn(self, *a, **k):
+        return self._run(self._rx.subn, *a, **k)
+
+    def split(self, *a, **k):
+        return self._run(self._rx.split, *a, **k)
+
+    def findall(self, *a, **k):
+        return self._run(self._rx.findall, *a, **k)
+
+    def finditer(self, *a, **k):
+        it = self._rx.finditer(*a, **k)
+        while (m := self._run(next, it, None)) is not None:
+            yield m
 
 
 @functools.lru_cache(maxsize=1024)

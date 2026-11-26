@@ -150,6 +150,8 @@ export class VirtualFileSystem {
   private readonly store: Store;
   /** The user this view acts as, or null for unrestricted access (your app). */
   readonly runAs: string | null = null;
+  /** Permission bits taken away from new files and directories (the shell's `umask`). */
+  umask = 0o022;
 
   constructor() { this.store = { root: Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE }), capacity: Number.MAX_SAFE_INTEGER, usedBytes: 0, clock: Date.now }; }
 
@@ -158,7 +160,7 @@ export class VirtualFileSystem {
    * view of the agent, so whose call it is travels with the object instead of an ambient async context.
    */
   as(user: string | null): VirtualFileSystem {
-    return Object.assign(Object.create(VirtualFileSystem.prototype) as VirtualFileSystem, { store: this.store, runAs: user });
+    return Object.assign(Object.create(VirtualFileSystem.prototype) as VirtualFileSystem, { store: this.store, runAs: user, umask: 0o022 });
   }
 
   /** Where new modification times come from: the owning shell's clock (virtual when ShellOptions.startTime is set). */
@@ -395,7 +397,7 @@ export class VirtualFileSystem {
       existing.modified = this.store.clock();
     } else {
       this.require(dir, 2, path);
-      const file = Object.assign(new FileNode(), { modified: this.store.clock(), owner: this.runAs ?? dir.owner, mode: DEFAULT_FILE_MODE });
+      const file = Object.assign(new FileNode(), { modified: this.store.clock(), owner: this.runAs ?? dir.owner, mode: 0o666 & ~this.umask });
       file.store(content, data, false, d => this.reserve(d, path));
       dir.children.set(spot.name, file);
     }
@@ -554,7 +556,7 @@ export class VirtualFileSystem {
     if (parents && !this.exists(parent)) this.mkdir(parent, true);
     const spot = this.place(path);
     this.require(spot.parent, 2, path);
-    spot.parent.children.set(spot.name, Object.assign(new Dir(), { modified: this.store.clock(), owner: this.runAs ?? spot.parent.owner, mode: DEFAULT_DIR_MODE }));
+    spot.parent.children.set(spot.name, Object.assign(new Dir(), { modified: this.store.clock(), owner: this.runAs ?? spot.parent.owner, mode: 0o777 & ~this.umask }));
     spot.parent.modified = this.store.clock();
   }
 
@@ -632,12 +634,12 @@ export class VirtualFileSystem {
       if (n instanceof FileNode) {
         // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
         if (this.runAs !== null && this.usedBytes + (cloned += n.size) > this.capacity) throw new ShellError(`${dest}: ${NO_SPACE}`);
-        const f = Object.assign(new FileNode(), { owner, mode: n.mode, size: n.size, data: n.data, modified: this.store.clock() });
+        const f = Object.assign(new FileNode(), { owner, mode: n.mode & ~this.umask, size: n.size, data: n.data, modified: this.store.clock() });
         f.content = n.content;
         return f;
       }
       const dir = n as Dir;
-      const copy = Object.assign(new Dir(), { owner, mode: n.mode, modified: this.store.clock() });
+      const copy = Object.assign(new Dir(), { owner, mode: n.mode & ~this.umask, modified: this.store.clock() });
       copying.add(dir);
       for (const [k, v] of dir.children) { const c = clone(v, path + '/' + k); if (c) copy.children.set(k, c); }
       copying.delete(dir);

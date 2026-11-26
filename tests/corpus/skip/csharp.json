@@ -1,10 +1,2 @@
 {
-  "command-spec-017": "a syntax error inside eval lacks bash's 'eval: line N:' prefix and says what it expected",
-  "command-spec-018": "a syntax error inside eval lacks bash's 'eval: line N:' prefix",
-  "command-spec-019": "a syntax error inside eval lacks bash's 'eval: line N:' prefix and the echoed source line",
-  "command-spec-020": "set -u stopping bash -c exits 1; bash exits 127",
-  "command-spec-022": "a bad substitution names only the bad part and does not end the script",
-  "command-spec-023": "division by 0 leaves out bash's (error token is ...)",
-  "command-spec-028": "a bad substitution does not end the script",
-  "command-spec-030": "an arithmetic error in an array subscript does not end the script"
 }

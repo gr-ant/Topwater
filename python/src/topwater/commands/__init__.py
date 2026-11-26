@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from .. import bytetext
 from ..parser import is_name
-from .._spec import COMMANDS, DEFAULT_MESSAGES, DIAGNOSTICS, GETOPT, CommandSpec
+from .._spec import COMMANDS, DEFAULT_MESSAGES, DIAGNOSTICS, ERRNO, GETOPT, CommandSpec
 from ..vfs import ShellError, UsageException, normalize
 
 
@@ -358,24 +358,79 @@ def _export(ctx):
     return code
 
 
+def exec_failure(sh, name: str) -> tuple[str, int] | None:
+    """Why a program-running command (env, timeout) could not start `name`: (errno text, exit status), or None."""
+    if "/" not in name:
+        if is_shell_builtin(sh, name) or sh.is_unfiled(name) or sh.search_path(name) is not None:
+            return None
+        return ERRNO["ENOENT"], 127
+    path = sh.resolve(name)
+    if not sh.fs.exists(path):
+        return ERRNO["ENOENT"], 127
+    if sh.fs.is_dir(path) or not sh.fs.can_execute(path):
+        return ERRNO["EACCES"], 126
+    return None
+
+
 async def _env(ctx):
-    """env [-i] [-u NAME] [NAME=VALUE]... [COMMAND [ARG]...]: the exported variables, or COMMAND run with changed ones."""
+    """env [-i] [-u NAME] [-C DIR] [-0] [NAME=VALUE]... [COMMAND [ARG]...]: the exported variables, or COMMAND run with
+    changed ones."""
     sh = ctx.shell
     args = list(ctx.args)
     sets: list[tuple[str, str]] = []
     unsets: list[str] = []
-    clear = False
+    clear = null = False
+    chdir: str | None = None
+    longs = {"ignore-environment": "i", "unset": "u", "chdir": "C", "null": "0"}
     while args:
-        if args[0] in ("-i", "-"):
-            clear = True
-            args.pop(0)
-        elif args[0] == "-u" and len(args) > 1:
-            unsets.append(args[1])
-            del args[:2]
-        elif args[0] == "--":
+        a = args[0]
+        if a == "--":
             args.pop(0)
             break
-        elif args[0].find("=") > 0:
+        if a == "-":
+            clear = True
+            args.pop(0)
+        elif a.startswith("--"):
+            name, eq, inline = a[2:].partition("=")
+            c = longs.get(name)
+            if c is None:
+                raise UsageException(spec_format(GETOPT["unrecognizedOption"], option=a))
+            args.pop(0)
+            if c in "uC":
+                if not eq:
+                    if not args:
+                        raise UsageException(spec_format(GETOPT["missingLongArgument"], option=name))
+                    inline = args.pop(0)
+                if c == "u":
+                    unsets.append(inline)
+                else:
+                    chdir = inline
+            elif c == "i":
+                clear = True
+            else:
+                null = True
+        elif a.startswith("-") and len(a) > 1:
+            args.pop(0)
+            k = 1
+            while k < len(a):
+                c = a[k]
+                if c in "uC":
+                    value = a[k + 1:] or (args.pop(0) if args else None)
+                    if value is None:
+                        raise UsageException(spec_format(GETOPT["missingShortArgument"], option=c))
+                    if c == "u":
+                        unsets.append(value)
+                    else:
+                        chdir = value
+                    break
+                if c == "i":
+                    clear = True
+                elif c == "0":
+                    null = True
+                else:
+                    raise UsageException(spec_format(GETOPT["invalidOption"], option=c))
+                k += 1
+        elif a.find("=") > 0:
             k, _, v = args.pop(0).partition("=")
             sets.append((k, v))
         else:
@@ -384,34 +439,58 @@ async def _env(ctx):
     def show():
         for k in sorted(sh.env):
             if sh.is_exported(k):
-                ctx.print(f"{k}={sh.env[k]}")
+                ctx.stdout.write(f"{k}={sh.env[k]}" + ("\0" if null else "\n"))
 
-    if not args and not sets and not clear and not unsets:
+    if not args and not sets and not clear and not unsets and chdir is None:
         show()
         return 0
-    saved = (sh.env, sh.var_attrs)
+    saved = (sh.env, sh.var_attrs, sh.cwd)
     sh.env = {} if clear else {k: v for k, v in saved[0].items() if sh.is_exported(k) and k not in unsets}
     sh.var_attrs = {k: "x" for k in sh.env}
     for k, v in sets:
         sh.env[k] = v
         sh.var_attrs[k] = "x"
     try:
+        if chdir is not None:
+            target = ctx.resolve(chdir)
+            if not ctx.fs.is_dir(target):
+                why = ctx.fs.why_missing(target) if not ctx.fs.exists(target) else ERRNO["ENOTDIR"]
+                raise ShellError(spec_message("env", "cannotChdir", dir=chdir, errno=why), 125)
+            sh._cwd = target  # the command's working directory only; PWD stays as it was, as with a real chdir
         if not args:
             show()
             return 0
         if "PATH" not in sh.env and "/" not in args[0]:  # with no PATH, env searches /bin and /usr/bin, as execvp does
             args[0] = next((d + args[0] for d in ("/bin/", "/usr/bin/") if ctx.fs.is_file(d + args[0])), args[0])
+        failure = exec_failure(sh, args[0])
+        if failure is not None:
+            raise ShellError(spec_message("env", "runFailed", command=args[0], errno=failure[0]), failure[1])
         return await sh._invoke(args, ctx.io, skip_functions=True)
     finally:
-        sh.env, sh.var_attrs = saved
+        sh.env, sh.var_attrs, sh._cwd = saved
 
 
 def _unalias(ctx):
-    if "-a" in ctx.args:
+    args = list(ctx.args)
+    all_ = False
+    while args and args[0].startswith("-") and len(args[0]) > 1:
+        a = args.pop(0)
+        if a == "--":
+            break
+        bad = next((c for c in a[1:] if c != "a"), None)
+        if bad is not None:
+            ctx.error(f"{ctx.shell.err_prefix}unalias: " + spec_message("unalias", "builtinInvalidOption", option="-" + bad))
+            ctx.error("unalias: " + spec_message("unalias", "usage"))
+            return 2
+        all_ = True
+    if all_:
         ctx.shell.aliases.clear()
         return 0
+    if not args:
+        ctx.error("unalias: " + spec_message("unalias", "usage"))
+        return 2
     code = 0
-    for a in ctx.args:
+    for a in args:
         if ctx.shell.aliases.pop(a, None) is None:
             ctx.error(f"{ctx.shell.err_prefix}unalias: " + spec_message("unalias", "notFound", name=a))
             code = 1
@@ -967,6 +1046,14 @@ _MONTHS_RE = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
 
 
 def parse_date(text: str, now: datetime) -> datetime:
+    """See _parse_date; a time past what a datetime holds (GNU takes years past 9999) is an invalid date here."""
+    try:
+        return _parse_date(text, now)
+    except (ValueError, OverflowError, OSError):
+        raise ShellError(spec_message("date", "invalidDate", value=text)) from None
+
+
+def _parse_date(text: str, now: datetime) -> datetime:
     """date -d, from GNU date's documented input formats: items in any order, each optional. Calendar dates
     (2026-11-20, 11/20/2026, 20 Nov 2026, Nov 20, 2026, 20261120), times (13:30[:00[.5]], 1pm), zones
     (UTC, Z, EST..., +0100, +01:00), a day of the week, today/now/yesterday/tomorrow, @EPOCH, and relative items
@@ -1125,4 +1212,4 @@ def _register_system_commands(shell) -> None:
     r("hostname", lambda ctx: ctx.print(ctx.shell.hostname))
     r("uname", _uname)
     r("date", _date)
-    r("ps", lambda ctx: ctx.stdout.write("    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n"))
+    r("ps", lambda ctx: ctx.stdout.write("    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n") and 0)

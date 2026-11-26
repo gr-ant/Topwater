@@ -4,6 +4,7 @@
   "category": "scripting",
   "summary": "Remember command locations",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom",
   "options": [
     {"short": "d", "description": "forget the named commands"},

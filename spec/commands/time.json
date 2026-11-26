@@ -3,5 +3,6 @@
   "name": "time",
   "category": "scripting",
   "summary": "Time a command",
+  "programFile": false,
   "parser": "custom"
 }

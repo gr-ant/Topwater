@@ -8,7 +8,9 @@ from ._spec import DIAGNOSTICS, diagnostic
 
 
 class ParseError(Exception):
-    pass
+    """line: where in the source bash reports it (None: the first line); echo: the source line bash repeats after it."""
+    line: int | None = None
+    echo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -878,6 +880,10 @@ class Parser:
             script = p.parse_script()
         except RecursionError:  # deeply nested input must not crash the host
             raise ParseError(DIAGNOSTICS["nestedTooDeeply"]) from None
+        except ParseError as e:
+            if e.line is None and str(e) == DIAGNOSTICS["unexpectedEof"]:
+                e.line = source.count("\n") + (1 if source.endswith("\n") else 2)  # bash counts the end as one more line
+            raise
         if p.p < len(p.t):
             raise p.unexpected()
         return script
@@ -909,12 +915,16 @@ class Parser:
             self.p += 1
 
     def unexpected(self) -> ParseError:
-        return ParseError(diagnostic("unexpectedToken", token=str(self.cur) if self.cur else "newline"))
+        e = ParseError(diagnostic("unexpectedToken", token=str(self.cur) if self.cur else "newline"))
+        if self.cur is not None:
+            e.line = self.cur.line
+            e.echo = self.src.split("\n")[self.cur.line - 1] if self.cur.line > 0 else None
+        return e
 
     def expect(self, word: str) -> None:
         if not self.is_word(word):
             if self.cur is None:
-                raise ParseError(diagnostic("unexpectedEofExpecting", word=word))
+                raise ParseError(DIAGNOSTICS["unexpectedEof"])  # bash 5.2 does not say what it expected
             raise self.unexpected()
         self.p += 1
 
@@ -1020,6 +1030,7 @@ class Parser:
                 return self.parse_function(False)
 
         line = self.cur.line if self.cur is not None else 0
+        first = self.p
         assignments, words, redirects = [], [], []
         while self.cur is not None:
             if self.cur.kind == "redirect":
@@ -1037,8 +1048,8 @@ class Parser:
             words.append(w)
         if not words and not assignments and not redirects:
             raise self.unexpected()
-        # bash reports a command that spans lines (a quoted newline) at its last line
-        return SimpleCommand(assignments, words, redirects, max(line, self.t[self.p - 1].end_line) if self.p > 0 else line)
+        # bash reports a command that spans lines (a quoted newline, a backslash-newline) where its second word ends
+        return SimpleCommand(assignments, words, redirects, max(line, self.t[min(first + 1, self.p - 1)].end_line) if self.p > 0 else line)
 
     def parse_list(self, *terms: str) -> Script:
         """A compound command's list, which bash requires to hold at least one command (`if; then` is an error)."""

@@ -3,5 +3,8 @@
   "name": "timeout",
   "category": "scripting",
   "summary": "Stop a command that runs longer than a given time",
-  "parser": "custom"
+  "parser": "custom",
+  "messages": {
+    "failedToRun": "failed to run command {command:locale}: {errno}"
+  }
 }

@@ -259,6 +259,19 @@ class VirtualFileSystem:
         self.used_bytes = 0  # bytes all files hold now (what `df` reports as used)
         # context-local, so your app's own calls stay unrestricted while an agent command is awaiting
         self._run_as: ContextVar[str | None] = ContextVar("run_as", default=None)
+        self._umask: ContextVar[int] = ContextVar("umask", default=0o022)
+
+    @property
+    def umask(self) -> int:
+        """The agent's file mode creation mask (the shell's `umask`); your app's own files get the default modes."""
+        return self._umask.get()
+
+    @umask.setter
+    def umask(self, mask: int) -> None:
+        self._umask.set(mask & 0o777)
+
+    def _new_mode(self, full: int, default: int) -> int:
+        return full & ~self.umask if self.run_as is not None else default
 
     @property
     def run_as(self) -> str | None:
@@ -540,7 +553,7 @@ class VirtualFileSystem:
             existing.modified = utc_now()
         else:
             self._require(d, 2, path)
-            f = _File(owner=self.run_as or d.owner)
+            f = _File(owner=self.run_as or d.owner, mode=self._new_mode(0o666, DEFAULT_FILE_MODE))
             f.store(content, False, lambda delta: self._reserve(delta, path))
             d.children[name] = f
         d.modified = utc_now()
@@ -593,7 +606,7 @@ class VirtualFileSystem:
         spot = self._place(path)
         d = spot.parent
         self._require(d, 2, path)
-        d.children[spot.name] = _Dir(owner=self.run_as or d.owner)
+        d.children[spot.name] = _Dir(owner=self.run_as or d.owner, mode=self._new_mode(0o777, DEFAULT_DIR_MODE))
         d.modified = utc_now()
 
     def listdir(self, path: str) -> list[str]:
@@ -635,12 +648,14 @@ class VirtualFileSystem:
             if isinstance(child, _Dir):
                 self._require_tree_removable(child, f"{path}/{name}")
 
-    def copy(self, source: str, dest: str, denied=None, follow_top: bool = True, follow_all: bool = False, broken=None, tick=None) -> None:
+    def copy(self, source: str, dest: str, denied=None, follow_top: bool = True, follow_all: bool = False, broken=None, tick=None,
+             preserve: bool = False) -> None:
         """Copies a file or tree. Entries the user can't read are passed to `denied(path, is_dir)` and skipped, like
         `cp -r`; without a callback the whole copy fails. follow_top: copy what `source` leads to when it is a symbolic link
         (cp without -r, or -H), rather than the link. follow_all: copy what every link in the tree leads to (cp -L); a link
         back into a directory being copied goes to `broken(path, "cyclic")`, one leading nowhere to `broken(path, reason)`
-        (None to raise). tick: called for each entry copied (the caller's time limit: links can make a copy far bigger than the tree)."""
+        (None to raise). tick: called for each entry copied (the caller's time limit: links can make a copy far bigger than the tree).
+        preserve: keep modes and times (cp -p); otherwise the copies are new, their modes less the agent's umask."""
         source, dest = normalize("/", source), normalize("/", dest)
         n, why = self._find_why(source, follow_top or follow_all)
         if n is None:
@@ -657,6 +672,9 @@ class VirtualFileSystem:
         owner = self.run_as or parent.owner
         copying: set[int] = set()  # directories on the way down, so -L can't loop
         cloned = 0
+
+        def mode(node) -> int:
+            return node.mode if preserve or self.run_as is None else node.mode & ~self.umask
 
         def clone(node, p: str):
             if isinstance(node, _Link):
@@ -688,8 +706,13 @@ class VirtualFileSystem:
                 cloned += node.size
                 if self.run_as is not None and self.used_bytes + cloned > self.capacity:
                     raise ShellError(f"{dest}: {NO_SPACE}")
-                return _File(node.text(), owner=owner, mode=node.mode, data=node.data, size=node.size)
-            c = _Dir(owner=owner, mode=node.mode)
+                f = _File(node.text(), owner=owner, mode=mode(node), data=node.data, size=node.size)
+                if preserve:
+                    f.modified = node.modified
+                return f
+            c = _Dir(owner=owner, mode=mode(node))
+            if preserve:
+                c.modified = node.modified
             copying.add(id(node))
             for k, v in node.children.items():
                 if (cc := clone(v, f"{p}/{k}")) is not None:
@@ -702,7 +725,9 @@ class VirtualFileSystem:
             return
         if isinstance(target, _File) and isinstance(copied, _File):  # onto an existing file: write into it, keeping owner and mode
             target.store(copied.raw(), False, lambda delta: self._reserve(delta, dest))
-            target.modified = utc_now()
+            target.modified = copied.modified if preserve else utc_now()
+            if preserve:
+                target.mode = copied.mode
         else:
             old = place.node
             old_size = 0 if old is None else _tree_size(old)

@@ -17,22 +17,26 @@ const OPS = ['**=', '<<=', '>>=', '&&', '||', '==', '!=', '<=', '>=', '<<', '>>'
 const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '|=', '^=', '**=']);
 const LEVELS = [['||'], ['&&'], ['|'], ['^'], ['&'], ['==', '!='], ['<', '<=', '>', '>='], ['<<', '>>'], ['+', '-'], ['*', '/', '%']];
 const wrap = (v: bigint) => BigInt.asIntN(64, v);
+/** An error in an arithmetic expression (a $(( )) or array subscript with one ends the script). */
+export class ArithError extends ShellError {}
+
 const isIdent = (s: string) => /^[A-Za-z_]/.test(s);
 const DOLLAR = /\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$])\}?/g;
 const MAX_NESTING = 1000;
 
 export function evalArith(host: ArithHost, expr: string, depth = 0): bigint {
-  if (depth > 20) throw new ShellError(diagnostic('recursionExceeded', { expression: expr }));
+  if (depth > 20) throw new ArithError(diagnostic('recursionExceeded', { expression: expr }));
   if (expr.includes('$')) expr = expr.replace(DOLLAR, (_, name: string) => host.getVariable(name));
-  const tokens = tokenize(expr);
+  const starts: number[] = [];
+  const tokens = tokenize(expr, starts);
   if (tokens.length === 0) return 0n;
-  const a = new Arith(host, expr, tokens, depth);
+  const a = new Arith(host, expr, tokens, depth, starts);
   const v = a.comma(true);
   if (a.p < tokens.length) throw a.syntax(tokens[a.p]);
   return v;
 }
 
-function tokenize(s: string): string[] {
+function tokenize(s: string, starts: number[] = []): string[] {
   const tokens: string[] = [];
   for (let i = 0; i < s.length;) {
     if (/\s/.test(s[i])) { i++; continue; }
@@ -49,17 +53,19 @@ function tokenize(s: string): string[] {
           if (s[j] === '[') d++;
           else if (s[j] === ']' && --d === 0) { j++; break; }
         }
-        if (d > 0) throw new ShellError(diagnostic('arithmeticBadSubscript', { expression: s }));
+        if (d > 0) throw new ArithError(diagnostic('arithmeticBadSubscript', { expression: s }));
       }
+      starts.push(i);
       tokens.push(s.slice(i, j));
       i = j;
       continue;
     }
     let op = OPS.find(o => s.startsWith(o, i));
-    if (!op) throw new ShellError(diagnostic('invalidArithmeticOperator', { expression: s, token: s.slice(i) }));
+    if (!op) throw new ArithError(diagnostic('invalidArithmeticOperator', { expression: s, token: s.slice(i) }));
     // `5--3` (after $a-$b is substituted) is two minus signs; `--` is one operator only next to a name
     const nextIsName = i + 2 < s.length && /[A-Za-z_]/.test(s[i + 2]);
     if ((op === '++' || op === '--') && !nextIsName && !(tokens.length > 0 && isIdent(tokens[tokens.length - 1]))) op = op[0];
+    starts.push(i);
     tokens.push(op);
     i += op.length;
   }
@@ -69,9 +75,9 @@ function tokenize(s: string): string[] {
 class Arith {
   p = 0;
   private nesting = 0;
-  constructor(private host: ArithHost, private src: string, private t: string[], private depth: number) {}
+  constructor(private host: ArithHost, private src: string, private t: string[], private depth: number, private starts: number[]) {}
 
-  syntax(token: string) { return new ShellError(diagnostic('arithmeticSyntax', { expression: this.src.trim(), token: token })); }
+  syntax(token: string) { return new ArithError(diagnostic('arithmeticSyntax', { expression: this.src.trim(), token: token })); }
   private peek(): string | undefined { return this.t[this.p]; }
   private accept(s: string) { if (this.t[this.p] !== s) return false; this.p++; return true; }
 
@@ -96,9 +102,10 @@ class Arith {
     if (this.p + 1 < this.t.length && isIdent(this.t[this.p]) && ASSIGN_OPS.has(this.t[this.p + 1])) {
       const name = this.t[this.p], op = this.t[this.p + 1];
       this.p += 2;
+      const rp = this.p;
       const r = this.assign(ev);
       if (!ev) return r;
-      const v = op === '=' ? r : this.apply(op.slice(0, -1), this.variable(name), r, true);
+      const v = op === '=' ? r : this.apply(op.slice(0, -1), this.variable(name), r, true, rp);
       this.set(name, v);
       return v;
     }
@@ -121,14 +128,15 @@ class Arith {
       this.p++;
       if (op === '&&') { const r = this.binary(level + 1, ev && l !== 0n); l = l !== 0n && r !== 0n ? 1n : 0n; }
       else if (op === '||') { const r = this.binary(level + 1, ev && l === 0n); l = l !== 0n || r !== 0n ? 1n : 0n; }
-      else l = this.apply(op, l, this.binary(level + 1, ev), ev);
+      else { const rp = this.p; l = this.apply(op, l, this.binary(level + 1, ev), ev, rp); }
     }
     return l;
   }
 
-  private apply(op: string, l: bigint, r: bigint, ev: boolean): bigint {
+  /** rp: the token where the right operand starts (a division by 0 names the text from there on). */
+  private apply(op: string, l: bigint, r: bigint, ev: boolean, rp = this.p): bigint {
     if ((op === '/' || op === '%') && r === 0n) {
-      if (ev) throw new ShellError(diagnostic('divisionByZero', { expression: this.src.trim() }));
+      if (ev) throw new ArithError(diagnostic('divisionByZero', { expression: this.src.trimStart(), token: this.src.slice(this.starts[rp] ?? this.src.length) }));
       return 0n;
     }
     const b = (x: boolean) => (x ? 1n : 0n);
@@ -155,14 +163,14 @@ class Arith {
   }
 
   private pow(base: bigint, e: bigint): bigint {
-    if (e < 0n) throw new ShellError(diagnostic('negativeExponent', { expression: this.src.trim(), token: String(e) }));
+    if (e < 0n) throw new ArithError(diagnostic('negativeExponent', { expression: this.src.trim(), token: String(e) }));
     let r = 1n;
     for (; e > 0n; e >>= 1n, base = wrap(base * base)) if (e & 1n) r = wrap(r * base);
     return r;
   }
 
   private unary(ev: boolean): bigint {
-    if (++this.nesting > MAX_NESTING) throw new ShellError(DIAGNOSTICS.expressionNested);
+    if (++this.nesting > MAX_NESTING) throw new ArithError(DIAGNOSTICS.expressionNested);
     try {
       if (this.accept('+')) return this.unary(ev);
       if (this.accept('-')) return wrap(-this.unary(ev));
@@ -221,7 +229,7 @@ class Arith {
 
 /** A literal in the given base; values past 64 bits wrap around like bash. */
 function parseLiteral(digits: string, radix: number, tok: string): bigint {
-  if (digits.length === 0 || radix < 2 || radix > 64) throw new ShellError(diagnostic('invalidBase', { token: tok }));
+  if (digits.length === 0 || radix < 2 || radix > 64) throw new ArithError(diagnostic('invalidBase', { token: tok }));
   let v = 0n;
   const R = BigInt(radix);
   for (const c of digits) {
@@ -232,7 +240,7 @@ function parseLiteral(digits: string, radix: number, tok: string): bigint {
     else if (c === '@') d = 62;
     else if (c === '_') d = 63;
     else d = 99;
-    if (d >= radix) throw new ShellError(diagnostic('valueTooGreat', { token: tok }));
+    if (d >= radix) throw new ArithError(diagnostic('valueTooGreat', { token: tok }));
     v = BigInt.asUintN(64, v * R + BigInt(d));
   }
   return wrap(v);

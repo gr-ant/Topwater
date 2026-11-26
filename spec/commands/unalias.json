@@ -5,5 +5,11 @@
   "summary": "Remove aliases",
   "shellBuiltin": true,
   "programFile": false,
-  "parser": "custom"
+  "parser": "custom",
+  "options": [
+    {"short": "a", "description": "remove every alias"}
+  ],
+  "messages": {
+    "usage": "usage: unalias [-a] name [name ...]"
+  }
 }

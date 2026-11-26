@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from ..shell import glob_to_regex
-from .._spec import COMMANDS
+from .._spec import COMMANDS, ERRNO
 from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, get_parent, normalize, utc_now
 from . import Args, inputs, parse_date, quote_always, quote_l, spec_message, split_lines, strftime
 
@@ -311,6 +311,8 @@ def _touch(ctx):
             else:  # an explicit time needs ownership, not write permission
                 if not ctx.fs.exists(path):
                     ctx.fs.touch(path)
+                elif not ctx.fs.can_write(path) and ctx.fs.stat(path).owner != ctx.fs.run_as:
+                    raise ShellError(f"{path}: {ERRNO['EACCES']}")  # touch opens someone else's file for writing first
                 ctx.fs.set_modified_time(path, when)
         except ShellError as e:
             ctx.error("touch: " + spec_message("touch", "cannotTouch", file=p, reason=typed(str(e), p, path)[1]))
@@ -489,7 +491,8 @@ def _copy_or_move(ctx):
             nonlocal_code[0] = 1
 
         try:
-            ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied, follow_top, a.has("L"), broken, ctx.check_time)
+            ctx.fs.move(src, target) if move else ctx.fs.copy(src, target, denied, follow_top, a.has("L"), broken, ctx.check_time,
+                                                                   preserve=a.has("p") or a.has("a"))
         except ShellError as e:
             shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
             if " into itself, " in str(e) or " to a subdirectory of itself, " in str(e):

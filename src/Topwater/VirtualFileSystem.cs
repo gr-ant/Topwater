@@ -113,6 +113,10 @@ public sealed class VirtualFileSystem
     public const int DefaultFileMode = 0b110_100_100; // 0644
     public const int DefaultDirMode = 0b111_101_101;  // 0755
 
+    /// <summary>The shell's umask: bits taken away from what the agent's commands create (your own calls create 0644 and 0755).</summary>
+    internal int Umask { get; set; } = 0b000_010_010; // 0022
+    int Masked(int mode) => mode & ~(RunAs == null ? 0b000_010_010 : Umask);
+
     Dir _root = new() { Mode = DefaultDirMode };
 
     /// <summary>Where new modification times come from: the owning shell's clock (virtual when ShellOptions.StartTime is set).</summary>
@@ -422,7 +426,7 @@ public sealed class VirtualFileSystem
         else
         {
             Require(dir, 2, path);
-            var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = DefaultFileMode, Modified = Clock() };
+            var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = Masked(0b110_110_110), Modified = Clock() };
             file.Store(content, data, false, d => Reserve(d, path));
             dir.Children[spot.Name] = file;
         }
@@ -476,7 +480,7 @@ public sealed class VirtualFileSystem
         if (parents && !Exists(GetParent(path))) CreateDirectory(GetParent(path), true);
         var spot = Place(path);
         Require(spot.Parent!, 2, path);
-        spot.Parent!.Children[spot.Name] = new Dir { Owner = RunAs ?? spot.Parent.Owner, Mode = DefaultDirMode, Modified = Clock() };
+        spot.Parent!.Children[spot.Name] = new Dir { Owner = RunAs ?? spot.Parent.Owner, Mode = Masked(0b111_111_111), Modified = Clock() };
         spot.Parent.Modified = Clock();
     }
 
@@ -532,8 +536,9 @@ public sealed class VirtualFileSystem
     /// copied goes to <paramref name="broken"/> as "cyclic", one leading nowhere with its reason.</param>
     /// <param name="broken">(path, reason) for a link -L can't copy; null to throw.</param>
     /// <param name="tick">Called for each entry copied: the caller's time limit (links can make a copy far bigger than the tree).</param>
+    /// <param name="preserve">cp -p: the copies keep their sources' modes and times; otherwise the umask applies and the time is now.</param>
     internal void Copy(string source, string dest, Action<string, bool> denied, bool followTop = true, bool followAll = false, Action<string, string>? broken = null,
-        Action? tick = null)
+        Action? tick = null, bool preserve = false)
     {
         source = Normalize("/", source);
         var node = Find(source, out var why, followTop || followAll) ?? throw new ShellException($"{source}: {why}");
@@ -569,10 +574,10 @@ public sealed class VirtualFileSystem
             {
                 // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
                 if (RunAs != null && UsedBytes + (cloned += f.Size) > Capacity) throw new ShellException($"{dest}: {NoSpace}");
-                return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = f.Mode, Modified = Clock() };
+                return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = preserve ? f.Mode : Masked(f.Mode), Modified = preserve ? f.Modified : Clock() };
             }
             var dir = (Dir)n;
-            var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = n.Mode, Modified = Clock() };
+            var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = preserve ? n.Mode : Masked(n.Mode), Modified = preserve ? n.Modified : Clock() };
             copying.Add(dir);
             foreach (var (k, v) in dir.Children)
                 if (Clone(v, path + "/" + k) is { } c) copy.Children[k] = c;
@@ -581,7 +586,12 @@ public sealed class VirtualFileSystem
         }
         if (Clone(node, source) is not { } clone) return;
         // copying onto an existing file writes into it, keeping its owner and mode, as cp does
-        if (target is FileNode tf && clone is FileNode cf) { tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest)); tf.Modified = Clock(); }
+        if (target is FileNode tf && clone is FileNode cf)
+        {
+            tf.Store(cf.Content, cf.Data, false, d => Reserve(d, dest));
+            tf.Modified = cf.Modified;
+            if (preserve) tf.Mode = cf.Mode;
+        }
         else
         {
             var old = place.Node;

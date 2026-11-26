@@ -39,7 +39,7 @@ internal static partial class CommandSpec
         }),
         ["bc"] = new("bc", "Arbitrary-precision calculator", "Usage: bc [options] [file ...]\nArbitrary-precision calculator.\n\n  -l            load the math library and set the default scale to 20\n  -q, -s, -w    accepted and ignored (quiet / POSIX / warnings)\n      --version  print the version and exit\n      --help     print this message\n\nReads a bc program from the files, or from standard input when none are given.\nLimits: one invocation is stopped after 5 s, and any single number is capped at 100000 digits.\n", "bc 1.07.1", true, false, true, "bc", 1, "Try 'bc --help' for more information.\n", null, Empty),
         ["break"] = new("break", "Exit a loop", null, "break (GNU coreutils) 9.4", false, true, false, "break", 1, "Try 'break --help' for more information.\n", null, Empty),
-        ["builtin"] = new("builtin", "Run a shell builtin, bypassing a function of the same name", null, "builtin (GNU coreutils) 9.4", true, true, true, "builtin", 1, "Try 'builtin --help' for more information.\n", null, new Dictionary<string, string>
+        ["builtin"] = new("builtin", "Run a shell builtin, bypassing a function of the same name", null, "builtin (GNU coreutils) 9.4", true, true, false, "builtin", 1, "Try 'builtin --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["notBuiltin"] = "{name}: not a shell builtin",
         }),
@@ -109,8 +109,8 @@ internal static partial class CommandSpec
             ["tooLarge"] = "files too large to compare",
         }),
         ["dirname"] = new("dirname", "Strip the last component from a path", null, "dirname (GNU coreutils) 9.4", true, false, true, "dirname", 1, "Try 'dirname --help' for more information.\n", ("z", "", "zero=z"), Empty),
-        ["dirs"] = new("dirs", "Show the directory stack", null, "dirs (GNU coreutils) 9.4", true, true, true, "dirs", 1, "Try 'dirs --help' for more information.\n", null, Empty),
-        ["disown"] = new("disown", "Forget background jobs", null, "disown (GNU coreutils) 9.4", true, true, true, "disown", 1, "Try 'disown --help' for more information.\n", null, Empty),
+        ["dirs"] = new("dirs", "Show the directory stack", null, "dirs (GNU coreutils) 9.4", true, true, false, "dirs", 1, "Try 'dirs --help' for more information.\n", null, Empty),
+        ["disown"] = new("disown", "Forget background jobs", null, "disown (GNU coreutils) 9.4", true, true, false, "disown", 1, "Try 'disown --help' for more information.\n", null, Empty),
         ["du"] = new("du", "Estimate disk usage", null, "du (GNU coreutils) 9.4", true, false, true, "du", 1, "Try 'du --help' for more information.\n", ("achkSs", "d", "all=a,total=c,max-depth=d,human-readable=h,summarize=s"), new Dictionary<string, string>
         {
             ["cannotAccess"] = "cannot access '{file}': {errno}",
@@ -118,9 +118,13 @@ internal static partial class CommandSpec
         }),
         ["echo"] = new("echo", "Print arguments", null, "echo (GNU coreutils) 9.4", false, true, true, "echo", 1, "Try 'echo --help' for more information.\n", null, Empty),
         ["egrep"] = new("egrep", "Search text, like grep -E", null, "grep (GNU grep) 3.11", true, false, true, "grep", 2, "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n", ("acEFHhIiLlnoPqRrsUvwxZ", "ABCm", "after-context=A,text=a,before-context=B,context=C,count=c,extended-regexp=E,fixed-strings=F,with-filename=H,no-filename=h,binary-files=I,ignore-case=i,files-without-match=L,files-with-matches=l,max-count=m,line-number=n,only-matching=o,perl-regexp=P,quiet=q,silent=q,dereference-recursive=R,recursive=r,no-messages=s,color=U,colour=U,line-buffered=U,invert-match=v,word-regexp=w,line-regexp=x"), Empty),
-        ["env"] = new("env", "Print the environment, or run a command in a modified one", null, "env (GNU coreutils) 9.4", true, false, true, "env", 1, "Try 'env --help' for more information.\n", null, Empty),
+        ["env"] = new("env", "Print the environment, or run a command in a modified one", null, "env (GNU coreutils) 9.4", true, false, true, "env", 125, "Try 'env --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["cannotChdir"] = "cannot change directory to {dir:shell-always}: {errno}",
+            ["runFailed"] = "{command:locale}: {errno}",
+        }),
         ["eval"] = new("eval", "Run its arguments as shell code", null, "eval (GNU coreutils) 9.4", false, true, false, "eval", 1, "Try 'eval --help' for more information.\n", null, Empty),
-        ["exec"] = new("exec", "Run a command in place of the shell, or redirect the shell's own input and output", null, "exec (GNU coreutils) 9.4", true, true, true, "exec", 1, "Try 'exec --help' for more information.\n", null, Empty),
+        ["exec"] = new("exec", "Run a command in place of the shell, or redirect the shell's own input and output", null, "exec (GNU coreutils) 9.4", true, true, false, "exec", 1, "Try 'exec --help' for more information.\n", null, Empty),
         ["exit"] = new("exit", "Exit the shell", null, "exit (GNU coreutils) 9.4", false, true, false, "exit", 1, "Try 'exit --help' for more information.\n", null, Empty),
         ["export"] = new("export", "Set environment variables", null, "export (GNU coreutils) 9.4", false, true, false, "export", 1, "Try 'export --help' for more information.\n", null, Empty),
         ["false"] = new("false", "Exit with status 1 and nothing else", null, "false (GNU coreutils) 9.4", false, true, true, "false", 1, "Try 'false --help' for more information.\n", null, Empty),
@@ -143,7 +147,7 @@ internal static partial class CommandSpec
             ["loop"] = "File system loop detected; {dir:locale} is part of the same file system loop as {loop:locale}.",
         }),
         ["free"] = new("free", "Display memory usage", null, "free from procps-ng 4.0.4", true, false, true, "free", 1, "Try 'free --help' for more information.\n", null, Empty),
-        ["getopts"] = new("getopts", "Parse command-line options", null, "getopts (GNU coreutils) 9.4", true, true, true, "getopts", 1, "Try 'getopts --help' for more information.\n", null, new Dictionary<string, string>
+        ["getopts"] = new("getopts", "Parse command-line options", null, "getopts (GNU coreutils) 9.4", true, true, false, "getopts", 1, "Try 'getopts --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["usage"] = "usage: getopts optstring name [arg ...]",
             ["illegalOption"] = "{script}: illegal option -- {option}",
@@ -168,7 +172,7 @@ internal static partial class CommandSpec
             ["corrupt"] = "\ngzip: {file}: {error}",
             ["ratio"] = "{file}:\t{ratio}% -- {action} {target}",
         }),
-        ["hash"] = new("hash", "Remember command locations", null, "hash (GNU coreutils) 9.4", true, true, true, "hash", 1, "Try 'hash --help' for more information.\n", null, Empty),
+        ["hash"] = new("hash", "Remember command locations", null, "hash (GNU coreutils) 9.4", true, true, false, "hash", 1, "Try 'hash --help' for more information.\n", null, Empty),
         ["head"] = new("head", "Print the first lines of files", null, "head (GNU coreutils) 9.4", true, false, true, "head", 1, "Try 'head --help' for more information.\n", ("qv", "cn", "bytes=c,lines=n,quiet=q,silent=q,verbose=v"), new Dictionary<string, string>
         {
             ["openFailed"] = "cannot open {file:shell-always} for reading: {errno}",
@@ -182,7 +186,7 @@ internal static partial class CommandSpec
         ["history"] = new("history", "Show command history", null, "history (GNU coreutils) 9.4", true, true, false, "history", 1, "Try 'history --help' for more information.\n", null, Empty),
         ["hostname"] = new("hostname", "Print the host name", null, "hostname (GNU coreutils) 9.4", true, false, true, "hostname", 1, "Try 'hostname --help' for more information.\n", null, Empty),
         ["id"] = new("id", "Show the user's and groups' ids", null, "id (GNU coreutils) 9.4", true, false, true, "id", 1, "Try 'id --help' for more information.\n", ("Ggnru", "", ""), Empty),
-        ["jobs"] = new("jobs", "List background jobs (none are ever still running)", null, "jobs (GNU coreutils) 9.4", true, true, true, "jobs", 1, "Try 'jobs --help' for more information.\n", null, Empty),
+        ["jobs"] = new("jobs", "List background jobs (none are ever still running)", null, "jobs (GNU coreutils) 9.4", true, true, false, "jobs", 1, "Try 'jobs --help' for more information.\n", null, Empty),
         ["jq"] = new("jq", "Command-line JSON processor", "jq - commandline JSON processor [version 1.7]\n\nUsage:\tjq [options] <jq filter> [file...]\n\tjq [options] --args <jq filter> [strings...]\n\tjq [options] --jsonargs <jq filter> [JSON_TEXTS...]\n\njq is a tool for processing JSON inputs, applying the given filter to\nits JSON text inputs and producing the filter's results as JSON on\nstandard output.\n\nThe simplest filter is ., which copies jq's input to its output\nunmodified except for formatting.\n\nExample:\n\n\t$ echo '{\"foo\": 0}' | jq .\n\t{\n\t  \"foo\": 0\n\t}\n", "jq-1.7.1", true, false, true, "jq", 1, "Try 'jq --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["missingFilter"] = "Usage: jq [OPTIONS] FILTER [FILES...]",
@@ -213,8 +217,8 @@ internal static partial class CommandSpec
         ["ls"] = new("ls", "Show what a directory holds", null, "ls (GNU coreutils) 9.4", true, false, true, "ls", 2, "Try 'ls --help' for more information.\n", ("1AadFhHLlRrStksZ", "\u0001", "almost-all=A,all=a,directory=d,human-readable=h,dereference-command-line=H,dereference=L,recursive=R,reverse=r,kibibytes=k,size=s,time-style=\u0001,full-time=\u0002"), new Dictionary<string, string>
         {
             ["badTimeStyle"] = "{problem} argument {value:locale} for ‘time style’\nValid arguments are:\n  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.",
-            ["cannotAccess"] = "cannot access '{file}': {errno}",
-            ["cannotOpenDirectory"] = "cannot open directory '{file}': {errno}",
+            ["cannotAccess"] = "cannot access {file:shell-always}: {errno}",
+            ["cannotOpenDirectory"] = "cannot open directory {file:shell-always}: {errno}",
             ["alreadyListed"] = "{file}: not listing already-listed directory",
         }),
         ["mapfile"] = new("mapfile", "Read lines from stdin into an array (-t drops the newlines)", null, "mapfile (GNU coreutils) 9.4", true, true, false, "mapfile", 1, "Try 'mapfile --help' for more information.\n", ("t", "CcdnOsu", ""), Empty),
@@ -250,7 +254,7 @@ internal static partial class CommandSpec
             ["invalidRadix"] = "invalid output address radix '{radix}'; it must be one character from [doxn]",
         }),
         ["paste"] = new("paste", "Join the lines of several files side by side", null, "paste (GNU coreutils) 9.4", true, false, true, "paste", 1, "Try 'paste --help' for more information.\n", ("s", "d", "delimiters=d,serial=s"), Empty),
-        ["popd"] = new("popd", "Return to the directory pushd left", null, "popd (GNU coreutils) 9.4", true, true, true, "popd", 1, "Try 'popd --help' for more information.\n", null, new Dictionary<string, string>
+        ["popd"] = new("popd", "Return to the directory pushd left", null, "popd (GNU coreutils) 9.4", true, true, false, "popd", 1, "Try 'popd --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["stackEmpty"] = "directory stack empty",
         }),
@@ -260,7 +264,7 @@ internal static partial class CommandSpec
             ["usage"] = "usage: printf [-v var] format [arguments]",
         }),
         ["ps"] = new("ps", "List processes", null, "ps from procps-ng 4.0.4", true, false, true, "ps", 1, "Try 'ps --help' for more information.\n", null, Empty),
-        ["pushd"] = new("pushd", "Change directory, remembering the old one", null, "pushd (GNU coreutils) 9.4", true, true, true, "pushd", 1, "Try 'pushd --help' for more information.\n", null, new Dictionary<string, string>
+        ["pushd"] = new("pushd", "Change directory, remembering the old one", null, "pushd (GNU coreutils) 9.4", true, true, false, "pushd", 1, "Try 'pushd --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["noOtherDirectory"] = "no other directory",
             ["noDirectory"] = "{dir}: No such file or directory",
@@ -419,9 +423,12 @@ internal static partial class CommandSpec
             ["parenExpected"] = "`)' expected",
             ["tooManyArguments"] = "too many arguments",
         }),
-        ["time"] = new("time", "Time a command", null, "time (GNU coreutils) 9.4", true, false, true, "time", 1, "Try 'time --help' for more information.\n", null, Empty),
-        ["timeout"] = new("timeout", "Stop a command that runs longer than a given time", null, "timeout (GNU coreutils) 9.4", true, false, true, "timeout", 1, "Try 'timeout --help' for more information.\n", null, Empty),
-        ["times"] = new("times", "Show the shell's CPU times", null, "times (GNU coreutils) 9.4", true, true, true, "times", 1, "Try 'times --help' for more information.\n", null, Empty),
+        ["time"] = new("time", "Time a command", null, "time (GNU coreutils) 9.4", true, false, false, "time", 1, "Try 'time --help' for more information.\n", null, Empty),
+        ["timeout"] = new("timeout", "Stop a command that runs longer than a given time", null, "timeout (GNU coreutils) 9.4", true, false, true, "timeout", 1, "Try 'timeout --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["failedToRun"] = "failed to run command {command:locale}: {errno}",
+        }),
+        ["times"] = new("times", "Show the shell's CPU times", null, "times (GNU coreutils) 9.4", true, true, false, "times", 1, "Try 'times --help' for more information.\n", null, Empty),
         ["to-markdown"] = new("to-markdown", "Convert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save)", "Usage: to-markdown [-o OUT.md] FILE...\nConvert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save).\n", "to-markdown (GNU coreutils) 9.4", true, false, true, "to-markdown", 1, "Try 'to-markdown --help' for more information.\n", ("", "o", "output=o"), new Dictionary<string, string>
         {
             ["missingOperand"] = "missing file operand\nUsage: to-markdown [-o OUT.md] FILE...",
@@ -453,9 +460,18 @@ internal static partial class CommandSpec
         ["true"] = new("true", "Exit with status 0 and nothing else", null, "true (GNU coreutils) 9.4", false, true, true, "true", 1, "Try 'true --help' for more information.\n", null, Empty),
         ["type"] = new("type", "Describe a command", null, "type (GNU coreutils) 9.4", false, true, false, "type", 1, "Try 'type --help' for more information.\n", ("afPpt", "", ""), Empty),
         ["typeset"] = new("typeset", "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)", null, "typeset (GNU coreutils) 9.4", true, true, false, "typeset", 1, "Try 'typeset --help' for more information.\n", null, Empty),
-        ["ulimit"] = new("ulimit", "Show resource limits", null, "ulimit (GNU coreutils) 9.4", true, true, true, "ulimit", 1, "Try 'ulimit --help' for more information.\n", null, Empty),
-        ["umask"] = new("umask", "Show the file mode creation mask", null, "umask (GNU coreutils) 9.4", true, true, true, "umask", 1, "Try 'umask --help' for more information.\n", null, Empty),
-        ["unalias"] = new("unalias", "Remove aliases", null, "unalias (GNU coreutils) 9.4", true, true, false, "unalias", 1, "Try 'unalias --help' for more information.\n", null, Empty),
+        ["ulimit"] = new("ulimit", "Show resource limits", null, "ulimit (GNU coreutils) 9.4", true, true, false, "ulimit", 1, "Try 'ulimit --help' for more information.\n", null, Empty),
+        ["umask"] = new("umask", "Show or set the permission bits taken away from new files and directories", null, "umask (GNU coreutils) 9.4", true, true, false, "umask", 1, "Try 'umask --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["usage"] = "usage: umask [-p] [-S] [mode]",
+            ["octalOutOfRange"] = "{value}: octal number out of range",
+            ["invalidSymbolic"] = "`{char}': invalid symbolic mode character",
+            ["invalidOperator"] = "`{char}': invalid symbolic mode operator",
+        }),
+        ["unalias"] = new("unalias", "Remove aliases", null, "unalias (GNU coreutils) 9.4", true, true, false, "unalias", 1, "Try 'unalias --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["usage"] = "usage: unalias [-a] name [name ...]",
+        }),
         ["uname"] = new("uname", "Show the kernel name and other machine facts", null, "uname (GNU coreutils) 9.4", true, false, true, "uname", 1, "Try 'uname --help' for more information.\n", ("amnorsv", "", "all=a,machine=m,nodename=n,operating-system=o,kernel-release=r,kernel-name=s"), Empty),
         ["uniq"] = new("uniq", "Collapse adjacent duplicate lines", null, "uniq (GNU coreutils) 9.4", true, false, true, "uniq", 1, "Try 'uniq --help' for more information.\n", ("cdiu", "", "count=c,repeated=d,ignore-case=i,unique=u"), new Dictionary<string, string>
         {
@@ -474,7 +490,7 @@ internal static partial class CommandSpec
             ["filenameNotMatched"] = "caution: filename not matched:  {pattern}",
         }),
         ["uptime"] = new("uptime", "Show the time, how long the machine has been up and its load", null, "uptime from procps-ng 4.0.4", true, false, true, "uptime", 1, "Try 'uptime --help' for more information.\n", null, Empty),
-        ["wait"] = new("wait", "Wait for background jobs (they run to completion when started)", null, "wait (GNU coreutils) 9.4", true, true, true, "wait", 1, "Try 'wait --help' for more information.\n", null, new Dictionary<string, string>
+        ["wait"] = new("wait", "Wait for background jobs (they run to completion when started)", null, "wait (GNU coreutils) 9.4", true, true, false, "wait", 1, "Try 'wait --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["notPid"] = "`{id}': not a pid or valid job spec",
             ["notChild"] = "pid {pid} is not a child of this shell",
@@ -566,14 +582,14 @@ internal static partial class CommandSpec
         internal const string CommandNotFound = "{command}: command not found (run 'help' to list available commands)";
         internal const string EofMatching = "unexpected EOF while looking for matching `{terminator}'";
         internal const string UnexpectedToken = "syntax error near unexpected token `{token}'";
-        internal const string UnexpectedEofExpecting = "syntax error: unexpected end of file (expected `{word}')";
+        internal const string SourceLine = "`{line}'";
         internal const string ConditionalSyntaxNear = "syntax error in conditional expression near `{token}'";
         internal const string ConditionalBinaryArgument = "unexpected argument to conditional binary operator `{op}'";
         internal const string NotValidIdentifier = "`{name}': not a valid identifier";
         internal const string ReadonlyVariable = "{name}: readonly variable";
         internal const string CannotUnsetReadonly = "{name}: cannot unset: readonly variable";
         internal const string BadArraySubscript = "{name}: bad array subscript";
-        internal const string BadSubstitution = "${{expr}}: bad substitution";
+        internal const string BadSubstitution = "{text}: bad substitution";
         internal const string SubstringNegative = "{expression}: substring expression < 0";
         internal const string InvalidIndirect = "{name}: invalid indirect expansion";
         internal const string CannotAssign = "${name}: cannot assign in this way";
@@ -582,7 +598,7 @@ internal static partial class CommandSpec
         internal const string CannotExecuteBinary = "{name}: cannot execute binary file";
         internal const string RequiredFileNotFound = "{name}: cannot execute: required file not found";
         internal const string UnboundVariable = "{name}: unbound variable";
-        internal const string DivisionByZero = "{expression}: division by 0";
+        internal const string DivisionByZero = "{expression}: division by 0 (error token is \"{token}\")";
         internal const string ArithmeticSyntax = "{expression}: syntax error in expression (error token is \"{token}\")";
         internal const string InvalidArithmeticOperator = "{expression}: syntax error: invalid arithmetic operator (error token is \"{token}\")";
         internal const string ArithmeticBadSubscript = "{expression}: syntax error: bad array subscript";

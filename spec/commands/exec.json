@@ -4,5 +4,6 @@
   "category": "scripting",
   "summary": "Run a command in place of the shell, or redirect the shell's own input and output",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom"
 }

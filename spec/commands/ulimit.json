@@ -4,5 +4,6 @@
   "category": "scripting",
   "summary": "Show resource limits",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom"
 }

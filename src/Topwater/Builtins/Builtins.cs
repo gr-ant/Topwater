@@ -338,23 +338,57 @@ internal static partial class Builtins
 
         shell.Register("env", async ctx =>
         {
-            // env [-i] [-u NAME] [NAME=VALUE]... [COMMAND [ARG]...]: the exported variables, or COMMAND run with changed ones
+            // env [-i] [-u NAME] [-C DIR] [-0] [NAME=VALUE]... [COMMAND [ARG]...]: the exported variables, or COMMAND run with changed ones
             var sh = ctx.Shell;
             var args = ctx.Args.ToList();
             var sets = new List<(string Name, string Value)>();
             var unsets = new List<string>();
-            bool clear = false;
-            while (args.Count > 0)
+            bool clear = false, nul = false;
+            string? dir = null;
+            string Value(char opt, string rest)
             {
-                if (args[0] is "-i" or "-") { clear = true; args.RemoveAt(0); continue; }
-                if (args[0] == "-u" && args.Count > 1) { unsets.Add(args[1]); args.RemoveRange(0, 2); continue; }
-                if (args[0] == "--") { args.RemoveAt(0); break; }
-                if (args[0].IndexOf('=') is var eq and > 0) { sets.Add((args[0][..eq], args[0][(eq + 1)..])); args.RemoveAt(0); continue; }
-                break;
+                if (rest.Length > 0) return rest;
+                if (args.Count > 1) { args.RemoveAt(0); return args[0]; }
+                throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingShortArgument, ("option", opt.ToString())));
             }
-            void Print() { foreach (var (k, v) in sh.Environment.Where(e => sh.IsExported(e.Key)).OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}"); }
+            // options stop at the first assignment or command, as getopt does with a leading +
+            while (args.Count > 0 && args[0].Length > 1 && args[0][0] == '-')
+            {
+                var a = args[0];
+                if (a == "--") { args.RemoveAt(0); break; }
+                if (a.StartsWith("--"))
+                {
+                    var (name, inline) = a.IndexOf('=') is var eq and > 0 ? (a[2..eq], a[(eq + 1)..]) : (a[2..], null);
+                    string LongValue() => inline ?? (args.Count > 1 ? args[1] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingLongArgument, ("option", name))));
+                    bool takesValue = false;
+                    switch (name)
+                    {
+                        case "ignore-environment": clear = true; break;
+                        case "null": nul = true; break;
+                        case "unset": unsets.Add(LongValue()); takesValue = true; break;
+                        case "chdir": dir = LongValue(); takesValue = true; break;
+                        default: throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.UnrecognizedOption, ("option", a)));
+                    }
+                    args.RemoveAt(0);
+                    if (takesValue && inline == null) args.RemoveAt(0);
+                    continue;
+                }
+                for (int k = 1; k < a.Length; k++)
+                {
+                    char c = a[k];
+                    if (c == 'i') clear = true;
+                    else if (c == '0') nul = true;
+                    else if (c == 'u') { unsets.Add(Value(c, a[(k + 1)..])); break; }
+                    else if (c == 'C') { dir = Value(c, a[(k + 1)..]); break; }
+                    else throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.InvalidOption, ("option", c.ToString())));
+                }
+                args.RemoveAt(0);
+            }
+            if (args.Count > 0 && args[0] == "-") { clear = true; args.RemoveAt(0); }
+            while (args.Count > 0 && args[0].IndexOf('=') is var eq and > 0) { sets.Add((args[0][..eq], args[0][(eq + 1)..])); args.RemoveAt(0); }
+            void Print() { foreach (var (k, v) in sh.Environment.Where(e => sh.IsExported(e.Key)).OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.Write($"{k}={v}{(nul ? '\0' : '\n')}"); }
             if (args.Count == 0 && sets.Count == 0 && !clear && unsets.Count == 0) { Print(); return 0; }
-            var (savedEnv, savedAttrs) = (sh.Environment, sh.VarAttrs);
+            var (savedEnv, savedAttrs, savedCwd) = (sh.Environment, sh.VarAttrs, sh.Cwd);
             sh.Environment = clear ? new(StringComparer.Ordinal)
                 : savedEnv.Where(e => sh.IsExported(e.Key) && !unsets.Contains(e.Key)).ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal);
             sh.VarAttrs = sh.Environment.Keys.ToDictionary(k => k, _ => "x", StringComparer.Ordinal);
@@ -362,12 +396,31 @@ internal static partial class Builtins
             try
             {
                 if (args.Count == 0) { Print(); return 0; }
-                // with no PATH, env searches /bin and /usr/bin, as execvp does
-                if (!sh.Environment.ContainsKey("PATH") && !args[0].Contains('/') && new[] { "/bin/", "/usr/bin/" }.FirstOrDefault(d => ctx.Fs.IsFile(d + args[0])) is { } dir)
-                    args[0] = dir + args[0];
+                if (dir != null)
+                {
+                    var abs = ctx.ResolvePath(dir);
+                    var why = !ctx.Fs.Exists(abs) ? ctx.Fs.WhyMissing(abs) : !ctx.Fs.IsDirectory(abs) ? CommandSpec.Errno.ENOTDIR : !ctx.Fs.CanExecute(abs) ? CommandSpec.Errno.EACCES : null;
+                    if (why != null)
+                    {
+                        ctx.Stderr.WriteLine("env: " + CommandSpec.Message("env", "cannotChdir", ("dir", dir), ("errno", why)));
+                        return 125;
+                    }
+                    sh.Cwd = abs;
+                }
+                var cmd = args[0];
+                if (ExecFailure(ctx, cmd, out var path) is { } error)
+                {
+                    ctx.Stderr.WriteLine("env: " + CommandSpec.Message("env", "runFailed", ("command", cmd), ("errno", error)));
+                    return error == CommandSpec.Errno.EACCES ? 126 : 127;
+                }
+                if (path != null && !cmd.Contains('/') && !sh.Environment.ContainsKey("PATH")) args[0] = path;
                 return await sh.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true);
             }
-            finally { (sh.Environment, sh.VarAttrs) = (savedEnv, savedAttrs); }
+            finally
+            {
+                (sh.Environment, sh.VarAttrs) = (savedEnv, savedAttrs);
+                if (sh.Cwd != savedCwd && ctx.Fs.IsDirectory(savedCwd)) sh.Cwd = savedCwd;
+            }
         });
 
         shell.Register("alias", ctx =>
@@ -387,9 +440,23 @@ internal static partial class Builtins
 
         shell.Register("unalias", ctx =>
         {
-            if (ctx.Args.Contains("-a")) { ctx.Shell.Aliases.Clear(); return 0; }
+            var args = ctx.Args.ToList();
+            bool all = false;
+            for (; args.Count > 0 && args[0].Length > 1 && args[0][0] == '-'; args.RemoveAt(0))
+            {
+                if (args[0] == "--") { args.RemoveAt(0); break; }
+                if (args[0] != "-a")
+                {
+                    ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}unalias: " + CommandSpec.Message("unalias", "builtinInvalidOption", ("option", args[0][..2])));
+                    ctx.Stderr.WriteLine("unalias: " + CommandSpec.Message("unalias", "usage"));
+                    return 2;
+                }
+                all = true;
+            }
+            if (all) { ctx.Shell.Aliases.Clear(); return 0; }
+            if (args.Count == 0) { ctx.Stderr.WriteLine("unalias: " + CommandSpec.Message("unalias", "usage")); return 2; }
             int code = 0;
-            foreach (var a in ctx.Args)
+            foreach (var a in args)
                 if (!ctx.Shell.Aliases.Remove(a)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}unalias: " + CommandSpec.Message("unalias", "notFound", ("name", a))); code = 1; }
             return code;
         });
@@ -612,7 +679,30 @@ internal static partial class Builtins
     /// (UTC, Z, EST..., +0100, +01:00), a day of the week, today/now/yesterday/tomorrow, @EPOCH, and relative items
     /// ("3 days ago", "next week", "+2 hours") applied last. Results are UTC, the simulated machine's zone.
     /// </summary>
+    /// <summary>Why a program-running command (env, timeout) can't exec <paramref name="cmd"/>, or null: it runs programs only, so
+    /// a name must be a file on PATH (with no PATH, /bin and /usr/bin, as execvp does). <paramref name="path"/> is where it was found.</summary>
+    internal static string? ExecFailure(CommandContext ctx, string cmd, out string? path)
+    {
+        var sh = ctx.Shell;
+        path = cmd.Contains('/') ? cmd
+            : sh.Environment.ContainsKey("PATH") ? sh.SearchPath(cmd)
+            : new[] { "/bin/", "/usr/bin/" }.Select(d => d + cmd).FirstOrDefault(p => ctx.Fs.IsFile(p));
+        if (path == null) return sh.IsAppOnly(cmd) ? null : CommandSpec.Errno.ENOENT;
+        var abs = ctx.ResolvePath(path);
+        return !ctx.Fs.Exists(abs) ? ctx.Fs.WhyMissing(abs) : !ctx.Fs.IsFile(abs) || !ctx.Fs.CanExecute(abs) ? CommandSpec.Errno.EACCES : null;
+    }
+
     internal static DateTime ParseDate(string text, DateTime now)
+    {
+        // a date past what DateTime holds (year 9999; GNU goes much further) is refused like any other bad date
+        try { return ParseDateOrThrow(text, now); }
+        catch (Exception e) when (e is ArgumentOutOfRangeException or OverflowException)
+        {
+            throw new ShellException(CommandSpec.Message("date", "invalidDate", ("value", text)));
+        }
+    }
+
+    static DateTime ParseDateOrThrow(string text, DateTime now)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         var bad = new ShellException(CommandSpec.Message("date", "invalidDate", ("value", text)));

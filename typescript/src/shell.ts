@@ -7,7 +7,7 @@ import {
   parse, parseWords, parseQuoted, parseParamWord, isName, literal, ParseError,
   type Script, type AndOr, type Pipeline, type Command, type Word, type WordPart, type Redirect, type Assignment,
 } from './parser.js';
-import { evalArith, type ArithHost } from './arith.js';
+import { evalArith, ArithError, type ArithHost } from './arith.js';
 import { escapeGlob, hasWildcard, globRegex, globBody, cachedRegex, expandGlob } from './glob.js';
 import { printable } from './bytes.js';
 import { quoteValue, shellQuote, unescape } from './format.js';
@@ -120,6 +120,9 @@ export class ShellArray {
   }
 }
 
+/** ${...} that is not a valid expansion: ends the script, naming the text it came from. */
+class BadSubstitution extends ShellError {}
+
 class ControlFlow extends Error {}
 class LoopControl extends ControlFlow { constructor(readonly isBreak: boolean, readonly levels: number) { super(); } }
 export class ReturnSignal extends ControlFlow { constructor(readonly code: number) { super(); } }
@@ -178,7 +181,7 @@ interface SavedState {
   cwd: string; env: Map<string, string>; aliases: Map<string, string>; functions: Map<string, FunctionDef>; positional: string[];
   errexit: boolean; pipefail: boolean; nounset: boolean; noglob: boolean; xtrace: boolean; noclobber: boolean; ifsUnset: boolean;
   shopts: Set<string>; traps: Map<string, string>; arrays: Map<string, ShellArray>; attrs: Map<string, string>; variableChars: number;
-  hashed: Map<string, [string, number]>;
+  hashed: Map<string, [string, number]>; umask: number;
 }
 
 interface NewProcess { arg0: string; file?: string; setup?: () => void }
@@ -264,6 +267,8 @@ export class Shell implements ArithHost {
   private cwdPath = '/';
   private ifsUnset = false;
   private lineno = 0;
+  /** Added to the line numbers of text parsed on its own (eval, $(...)), which count from the line it is on. */
+  private lineBase = 0;
   private lastBg = 0;
   private nextPid = 4300;
   private lastArg = '';
@@ -607,15 +612,24 @@ export class Shell implements ArithHost {
   }
 
   /** @internal Runs shell text: `eval`, `source`, traps, `bash -c`, scripts. */
-  async runScriptText(text: string, io: Io, subshell: boolean, positional?: string[], process?: NewProcess, sourced?: string): Promise<number> {
+  async runScriptText(text: string, io: Io, subshell: boolean, positional?: string[], process?: NewProcess, sourced?: string, inline?: 'eval' | 'sub'): Promise<number> {
     let script: Script;
+    const base = inline ? Math.max(this.lineno, 1) - 1 : 0;
     try { script = parse(text); } catch (e) {
+      if (e instanceof ParseError && inline === 'eval') {
+        const at = `${this.errWhere.at(-1)?.name ?? 'bash'}: eval: line ${base + (e.line ?? 1)}: `;
+        io.err.write(at + e.message + '\n');
+        if (e.message.startsWith(DIAGNOSTICS.unexpectedToken.slice(0, DIAGNOSTICS.unexpectedToken.indexOf('`'))))
+          io.err.write(at + diagnostic('sourceLine', { line: text.split('\n')[(e.line ?? 1) - 1] ?? '' }) + '\n');
+        return 2;
+      }
       if (e instanceof ParseError) { io.err.write(`bash: ${e.message}\n`); return 2; }
       throw e;
     }
     if (++this.scriptDepth > 100) throw new LimitExceeded('maximum script nesting level exceeded (100)');
     const savedArg0 = this.arg0;
-    const sources = this.sources.length, where = this.errWhere.length, line = this.lineno;
+    const sources = this.sources.length, where = this.errWhere.length, line = this.lineno, savedBase = this.lineBase;
+    this.lineBase = base;
     const file = process?.file ?? sourced;
     if (file !== undefined) this.sources.push(file);
     if (process) this.errWhere.push({ name: process.file ?? process.arg0, file: process.file !== undefined });
@@ -626,23 +640,25 @@ export class Shell implements ArithHost {
         if (positional) this.positional = positional;
         try { return await this.execScript(script, io); } finally { if (positional) this.positional = savedPos; }
       }
-      const saved = this.saveState();
+      const saved = this.saveState(), depth = this.subshell;
       this.traps = new Map();
       io = { ...io, out: new SwitchWriter(io.out), err: new SwitchWriter(io.err) }; // `exec >file` in a script ends with it
-      if (process) this.becomeNewProcess(process);
+      // a new process ends with its own status on a fatal error, not a subshell's 1
+      if (process) { this.becomeNewProcess(process); this.subshell = 0; }
       if (positional) this.positional = positional;
       try {
         try { return await this.execScript(script, io); } finally { await this.runExitTrap(io); }
       } catch (e) {
         if (e instanceof ExitSignal) return e.code;
         throw e;
-      } finally { this.restoreState(saved); }
+      } finally { this.subshell = depth; this.restoreState(saved); }
     } finally {
       this.scriptDepth--;
       this.arg0 = savedArg0;
       this.sources.length = sources;
       this.errWhere.length = where;
       this.lineno = line;
+      this.lineBase = savedBase;
     }
   }
 
@@ -677,7 +693,7 @@ export class Shell implements ArithHost {
       positional: this.positional, errexit: this.errexit, pipefail: this.pipefail, nounset: this.nounset, noglob: this.noglob,
       xtrace: this.xtrace, noclobber: this.noclobber, ifsUnset: this.ifsUnset, shopts: new Set(this.shopts), traps: new Map(this.traps),
       arrays: new Map(this.arrays), attrs: new Map(this.varAttrs), variableChars: this.variableChars,
-      hashed: new Map([...this.hashed].map(([k, [p, n]]) => [k, [p, n]])),
+      hashed: new Map([...this.hashed].map(([k, [p, n]]) => [k, [p, n]])), umask: this.agentFs.umask,
     };
   }
 
@@ -694,6 +710,7 @@ export class Shell implements ArithHost {
     this.shopts = s.shopts;
     this.traps = s.traps;
     this.hashed = s.hashed;
+    this.agentFs.umask = s.umask;
     this.cwdPath = this.agentFs.isDirectory(s.cwd) ? s.cwd : '/';
   }
 
@@ -812,7 +829,7 @@ export class Shell implements ArithHost {
     try {
       if (cmd.k === 'simple' && cmd.assigns.length === 0 && cmd.words.length === 1 && literal(cmd.words[0]) === 'exec')
         return await this.execRedirects(cmd.redirects, io);
-      if (cmd.line) this.lineno = cmd.line; // a failed redirection reports this line too
+      if (cmd.line) this.lineno = this.lineBase + cmd.line; // a failed redirection reports this line too
       const sinks: FileSink[] = [];
       const rio = cmd.redirects.length ? await this.applyRedirects(cmd.redirects, io, sinks) : io;
       if (!rio) return 1;
@@ -1103,7 +1120,7 @@ export class Shell implements ArithHost {
   // ---------- simple commands ----------
 
   private async execSimple(c: Extract<Command, { k: 'simple' }>, io: Io): Promise<number> {
-    this.lineno = c.line;
+    this.lineno = this.lineBase + c.line;
     this.checkTime();
     const debug = this.traps.size > 0 && !this.inDebugTrap ? this.traps.get('DEBUG') : undefined;
     if (debug) {
@@ -1133,6 +1150,7 @@ export class Shell implements ArithHost {
         // with no command, assignments apply left to right: IFS=, parts=($csv) splits on the comma
         this.setVar(a.name, v, a.append);
       } catch (e) {
+        if (e instanceof ArithError && a.index !== undefined) throw this.fatal(io, e.message, 1); // a[1/0]=x ends the script
         if (e instanceof ShellError && words.length === 0 && e.message.endsWith('readonly variable')) {
           io.err.write(`${this.errPrefix}${e.message}\n`);
           throw new ExitSignal(1); // like bash, assigning a read-only variable ends the script
@@ -1207,7 +1225,7 @@ export class Shell implements ArithHost {
             : diagnostic('commandNotFound', { command: argv[0] }) + '\n');
           return 127;
         }
-        this.hashed.set(name, [found, 1]);
+        if (found.includes('/')) this.hashed.set(name, [found, 1]); // with PATH= bash remembers nothing
       }
       const registered = this.stubCommand(found);
       if (registered === null) return this.runScriptFile(found, this.resolvePath(found), [found, ...argv.slice(1)], io);
@@ -1282,6 +1300,12 @@ export class Shell implements ArithHost {
   private async runInterpreter(name: string, line: string, argv: string[], io: Io): Promise<number> {
     const m = /^(\S+)(?:[ \t]+(.*))?$/.exec(line)!;
     const program = this.stubCommand(m[1]);
+    const interp = this.resolvePath(m[1]);
+    if (program === null && this.agentFs.isFile(interp) && this.agentFs.canExecute(interp)) {
+      // another script as the interpreter: it runs with this script's path as its argument (the nesting is counted)
+      const opt = (m[2] ?? '').trim();
+      return this.invoke([m[1], ...(opt ? [opt] : []), name, ...argv.slice(1)], io, true);
+    }
     if (program === null) {
       io.err.write(this.errPrefix + diagnostic('requiredFileNotFound', { name: name }) + '\n');
       return 127;
@@ -1315,6 +1339,7 @@ export class Shell implements ArithHost {
   /** Where PATH would have `name`, directory by directory, as written; an empty entry is the cwd, and a leading ~ is
    * expanded as bash does during the search. */
   private pathCandidates(name: string): string[] {
+    if (this.environment.get('PATH') === '') return [name]; // PATH= runs `name` from the current directory, as typed
     return (this.environment.get('PATH') ?? '').split(':').map(d => { const tp = this.tildePrefix(d); return tp ? tp[0] + d.slice(tp[1]) : d; })
       .map(d => d ? d.replace(/\/+$/, '') + '/' + name : './' + name);
   }
@@ -1373,7 +1398,7 @@ export class Shell implements ArithHost {
     return all.length || !this.isAppOnly(name) ? all : ['/usr/bin/' + name];
   }
 
-  private isAppOnly(name: string) { return this.isUnfiled(name) && !isShellBuiltin(this, name); }
+  private isAppOnly(name: string) { return this.isUnfiled(name) && !isShellBuiltin(this, name) && !(this.builtinNames?.has(name) && COMMANDS.get(name)?.programFile === false); }
 
   private async callFunction(body: Command, argv: string[], io: Io): Promise<number> {
     if (this.locals.length >= 200) throw new LimitExceeded(`${argv[0]}: maximum function nesting level exceeded (200)`);
@@ -1383,7 +1408,8 @@ export class Shell implements ArithHost {
     this.locals.push(new Map());
     this.localArrays.push(new Map());
     this.funcNames.push(argv[0]);
-    const where = this.funcWhere.get(argv[0]) ?? 'environment', line = this.lineno;
+    const where = this.funcWhere.get(argv[0]) ?? 'environment', line = this.lineno, base = this.lineBase;
+    this.lineBase = 0; // a function's lines are those of the text that defined it
     this.errWhere.push({ name: where, file: where !== 'environment' });
     let code: number;
     try { code = await this.execCommand(body, io); } catch (e) {
@@ -1403,6 +1429,7 @@ export class Shell implements ArithHost {
       this.funcNames.pop();
       this.errWhere.pop();
       this.lineno = line;
+      this.lineBase = base;
     }
     // a RETURN trap set inside the function runs as it returns
     const trap = this.traps.get('RETURN');
@@ -1820,7 +1847,11 @@ export class Shell implements ArithHost {
   private async expandPart(part: WordPart, io: Io): Promise<string> {
     switch (part.k) {
       case 'lit': case 'exp': return part.text;
-      case 'var': return this.expandParameter(part.expr, io, part.q);
+      case 'var':
+        try { return await this.expandParameter(part.expr, io, part.q); } catch (e) {
+          if (e instanceof BadSubstitution) throw this.fatal(io, diagnostic('badSubstitution', { text: part.src ?? '${' + part.expr + '}' }), 127);
+          throw e;
+        }
       case 'cmd': return this.capture(part.src, io);
       case 'arith': return (await this.arithExpansion(part.expr, io)).toString();
       case 'proc': return this.processSubstitution(part.src, io);
@@ -1916,6 +1947,7 @@ export class Shell implements ArithHost {
     if (one && !one.keys) {
       let element: string | null;
       try { element = this.getElement(one.name, await this.subscript(one.sub, io)); } catch (e) {
+        if (e instanceof ArithError) throw this.fatal(io, e.message, 1);
         if (!(e instanceof ShellError)) throw e;
         io.err.write(`${this.errPrefix}${e.message}\n`); // like bash: reported, and the expansion is empty
         element = null;
@@ -1932,7 +1964,7 @@ export class Shell implements ArithHost {
       }
     }
     const m = PARAM_RE.exec(expr);
-    if (!m) throw new ShellError(diagnostic('badSubstitution', { expr: expr }));
+    if (!m) throw new BadSubstitution(diagnostic("badSubstitution", { text: "${" + expr + "}" }));
     const name = m[1], rest = m[2];
     const value = this.getVariable(name);
     const dop = defaultOp(rest);
@@ -2021,7 +2053,7 @@ export class Shell implements ArithHost {
         }
         case 'P': return value;
       }
-      throw new ShellError(diagnostic('badSubstitution', { expr: expr }));
+      throw new BadSubstitution(diagnostic("badSubstitution", { text: "${" + expr + "}" }));
     }
     if (rest[0] === ':') {
       const spec = splitOnce(rest.slice(1), ':');
@@ -2035,7 +2067,7 @@ export class Shell implements ArithHost {
       if (len < 0 && (len += tail.length) < 0) throw new ShellError(diagnostic('substringNegative', { expression: spec[1].trim() }));
       return tail.slice(0, len).join('');
     }
-    throw new ShellError(diagnostic('badSubstitution', { expr: expr }));
+    throw new BadSubstitution(diagnostic("badSubstitution", { text: "${" + expr + "}" }));
   }
 
   /** set -u: expanding an unset variable is an error that ends the (sub)shell, like bash. */
@@ -2048,7 +2080,7 @@ export class Shell implements ArithHost {
   private async runSubstitution(source: string, io: Io): Promise<number> {
     const errexit = this.errexit;
     if (!this.shopts.has('inherit_errexit')) this.errexit = false;
-    try { return await this.runScriptText(source, io, true); } finally { this.errexit = errexit; }
+    try { return await this.runScriptText(source, io, true, undefined, undefined, undefined, 'sub'); } finally { this.errexit = errexit; }
   }
 
   /** <(cmd): writes cmd's output to /dev/fd/N (removed after the tool call) and returns that path. */

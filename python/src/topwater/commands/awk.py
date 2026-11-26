@@ -975,10 +975,11 @@ class _Runner:
     def regex(self, pattern: str) -> re.Pattern:
         rx = self.regexes.get(pattern)
         if rx is None:
+            from ..shell import TimedPattern
             from .text import posix_to_python
 
             try:
-                rx = self.regexes[pattern] = re.compile(posix_to_python(pattern, True, bracket_escapes=True))
+                rx = self.regexes[pattern] = TimedPattern(re.compile(posix_to_python(pattern, True, bracket_escapes=True)))
             except re.error as e:
                 raise AwkError(f"invalid regular expression /{pattern}/: {e}") from None
         return rx

@@ -5,7 +5,7 @@ import io
 import re
 
 from .. import bytetext
-from ..shell import CommandContext, glob_to_regex
+from ..shell import CommandContext, TimedPattern, glob_to_regex
 from .._spec import COMMANDS, GETOPT
 from ..vfs import ShellError, UsageException, normalize
 from . import Args, inputs, quote_l, spec_format, spec_message, split_lines, unescape
@@ -179,10 +179,18 @@ def posix_regex_error(p: str, extended: bool, grep: bool) -> str | None:
                     j = close + 2
                     continue
                 if p[j] == "-" and low is not None and j + 1 < n and p[j + 1] != "]":
-                    if p[j + 1] < low:
+                    high, after = p[j + 1], j + 2
+                    if p.startswith("[.", j + 1) or p.startswith("[=", j + 1):  # a range may end in a collating element
+                        close = p.find(p[j + 2] + "]", j + 3)
+                        if close < 0:
+                            return unmatched
+                        if len(p[j + 3:close]) != 1:
+                            return "Invalid collation character"
+                        high, after = p[j + 3], close + 2
+                    if high < low:
                         return "Invalid range end"
                     low = None
-                    j += 2
+                    j = after
                     continue
                 low = p[j]
                 j += 1
@@ -283,7 +291,7 @@ def _regex(patterns: list[str], extended: bool, fixed: bool, ignore_case: bool, 
     if line:
         rx = rf"^(?:{rx})$"
     try:
-        return re.compile(rx, re.IGNORECASE if ignore_case else 0)
+        return TimedPattern(re.compile(rx, re.IGNORECASE if ignore_case else 0))
     except re.error as e:
         raise ShellError(spec_message("grep", "invalidRegex", detail=str(e)), 2) from None
 
@@ -998,7 +1006,7 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
         if (error := posix_regex_error(text, extended, grep=False)) is not None:
             raise ShellError(error, 4) if error == CLASS_SYNTAX else fail(error, error_at)
         try:
-            rx = re.compile(posix_to_python(text, extended), flags)
+            rx = TimedPattern(re.compile(posix_to_python(text, extended), flags))
         except re.error as e:
             raise fail(spec_message("sed", "invalidRegex", detail=str(e)), error_at) from None
         last_rx[0] = rx
@@ -1040,11 +1048,11 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
             return ("re", compile_rx(text, flags, i))
         return None
 
-    def read_label() -> str:
+    def read_label(stop: str = ";\n}") -> str:
         nonlocal i
         skip_blanks()
         start = i
-        while i < n and script[i] not in ";\n}":
+        while i < n and script[i] not in stop:
             i += 1
         return script[start:i].strip()
 
@@ -1170,12 +1178,12 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
         elif op == ":":
             if c.a1 is not None:
                 raise fail(spec_message("sed", "colonAddresses"), i)
-            label = read_label()
+            label = read_label(";\n \t")  # a label ends at a blank too: `:x p` is the label x, then p
             if not label:
                 raise fail(spec_message("sed", "colonLabel"), i)
             labels[label] = len(cmds)
         elif op in "btT":
-            c.label = read_label()
+            c.label = read_label(";\n} \t")
         elif op == "v":
             read_label()  # "requires GNU sed VERSION": always met
         elif op in "qQ":
@@ -1188,7 +1196,7 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
                 raise fail(spec_message("sed", "unknownCommand", op=op), at)
         cmds.append(c)
         skip_blanks()
-        if op != "{" and i < n and script[i] not in ";\n}#":
+        if op not in "{:" and i < n and script[i] not in ";\n}#":
             raise fail(spec_message("sed", "extraCharacters"), i + 1)
     if blocks:
         raise fail(spec_message("sed", "unmatchedBrace"), blocks[-1][1], char_zero=True)
@@ -1480,7 +1488,8 @@ def _sed(ctx):
             scripts.append((value, f"-e expression #{expressions}"))
             return
         try:
-            text = ctx.stdin if value == "-" else ctx.fs.read_text(ctx.resolve(value))
+            # a directory reads as an empty script, as GNU sed takes it
+            text = ctx.stdin if value == "-" else "" if ctx.fs.is_dir(ctx.resolve(value)) else ctx.fs.read_text(ctx.resolve(value))
         except ShellError as e:
             raise ShellError(spec_message("sed", "cannotOpenScript", file=value, errno=str(e).rsplit(": ", 1)[-1]), 4) from None
         scripts.append((text, f"file {value}"))
@@ -1554,6 +1563,8 @@ def _sed(ctx):
         if not files:
             return bad("")
         add_script("e", files.pop(0))
+    if scripts[0][0].startswith("#n"):  # "#n" opening the script means -n
+        quiet = True
     cmds = _sed_parse(scripts, extended)
     if in_place:
         if not files:

@@ -138,8 +138,8 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
   function readLabel(): string {
     skipBlanks();
     const start = i;
-    while (i < n && script[i] !== ';' && script[i] !== '\n' && script[i] !== '}') i++;
-    return script.slice(start, i).trim();
+    while (i < n && !';\n} \t'.includes(script[i])) i++; // `:x p` is the label x, then p
+    return script.slice(start, i);
   }
 
   function readToEol(): string {
@@ -266,7 +266,7 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
     }
     cmds.push(c);
     skipBlanks();
-    if (op !== '{' && i < n && !';\n}#'.includes(script[i])) throw err(specMessage('sed', 'extraCharacters'), i + 1);
+    if (op !== '{' && !':btT'.includes(op) && i < n && !';\n}#'.includes(script[i])) throw err(specMessage('sed', 'extraCharacters'), i + 1);
   }
   if (blocks.length > 0) throw err(specMessage('sed', 'unmatchedBrace'), blocks[blocks.length - 1].at, true);
   for (const c of cmds) {
@@ -498,7 +498,7 @@ function run(ctx: CommandContext): number {
   const addScript = (kind: string, value: string) => {
     if (kind === 'e') { scripts.push({ text: value, where: `-e expression #${++expressions}` }); return; }
     let text: string;
-    try { text = value === '-' ? ctx.stdinText : ctx.fs.readText(ctx.resolvePath(value)); } catch (e) {
+    try { text = value === '-' ? ctx.stdinText : ctx.fs.isDirectory(ctx.resolvePath(value)) ? '' : ctx.fs.readText(ctx.resolvePath(value)); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
       throw new ShellError(specMessage('sed', 'cannotOpenScript', { file: value, errno: reason(e) }), 4);
     }
@@ -551,6 +551,7 @@ function run(ctx: CommandContext): number {
     if (files.length === 0) return bad('');
     addScript('e', files.shift()!);
   }
+  if (scripts[0].text.startsWith('#n')) quiet = true; // like GNU sed, a script starting with #n is sed -n
   const cmds = parse(scripts, extended);
   for (const c of cmds) {
     const w = c.op === 'w' ? c.text : c.wfile; // GNU creates w files up front

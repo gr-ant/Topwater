@@ -179,3 +179,24 @@ describe('shell', () => {
     expect((await sh.run('p=$(printf \'\\\\{1\\\\}%.0s\' {1..40}); echo aaa | grep -c "a$p"')).stderr).toBe('grep: Regular expression too big\n');
   });
 });
+
+describe('bug pass', () => {
+  it('touch -d refuses a time it cannot show, and the directory stays listable', async () => {
+    const sh = new Shell();
+    const r = await sh.run('cd /tmp && touch -d @99999999999999 f; echo "rc=$?"; touch g; ls -l g >/dev/null && echo listed');
+    expect(r.stdout).toBe('rc=1\nlisted\n');
+    expect(r.stderr).toBe('touch: invalid date format ‘@99999999999999’\n');
+  });
+
+  it('umask applies to new files, lasts across calls and stays inside a subshell', async () => {
+    const sh = new Shell();
+    await sh.run('umask 027');
+    const r = await sh.run('cd /tmp && (umask 077; touch in); touch out; mkdir d; ls -ld in out d | cut -c1-10; umask');
+    expect(r.stdout).toBe('drwxr-x---\n-rw-------\n-rw-r-----\n0027\n');
+  });
+
+  it('counts lines inside eval and $(...) from the line they are on', async () => {
+    const r = await new Shell().run('true\n\neval "true\ncd /nope"\necho $(cd /nope)');
+    expect(r.stderr).toBe('bash: line 5: cd: /nope: No such file or directory\nbash: line 5: cd: /nope: No such file or directory\n'); // real bash
+  });
+});

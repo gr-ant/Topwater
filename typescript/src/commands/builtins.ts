@@ -1,5 +1,5 @@
 // Shell built-ins (cd, read, declare, set, trap, ...) and the small system commands (date, uname, id, ...).
-import { COMMANDS, DIAGNOSTICS } from '../spec.generated.js';
+import { COMMANDS, DIAGNOSTICS, ERRNO, GETOPT, diagnostic } from '../spec.generated.js';
 import { Args, specFormat, specOf, specMessage, ShellError, UsageException, isShellBuiltin, quoteL, StdinBuffer, DeadlineExceeded, type CommandContext, type CommandHandler, type Deadline } from '../command.js';
 import { isName } from '../parser.js';
 import { evalArith } from '../arith.js';
@@ -9,6 +9,37 @@ import { splitFields, ExitSignal, ReturnSignal, type Shell, type Io } from '../s
 
 const ioOf = (ctx: CommandContext): Io => ({ stdin: ctx.stdin, out: ctx.stdout, err: ctx.stderr, fds: ctx.fds });
 const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
+
+/** Why `name` can't be run as a program by env or timeout ([errno, exit status]), or null if it can. */
+function cannotRun(ctx: CommandContext, name: string): [string, number] | null {
+  if (!name.includes('/')) return isShellBuiltin(ctx.shell, name) || ctx.shell.locate(name) !== null ? null : [ERRNO.ENOENT, 127];
+  const abs = ctx.resolvePath(name);
+  if (!ctx.fs.exists(abs)) { const why = ctx.fs.whyMissing(abs); return [why, why === ERRNO.EACCES ? 126 : 127]; }
+  return ctx.fs.isDirectory(abs) || !ctx.fs.canExecute(abs) ? [ERRNO.EACCES, 126] : null;
+}
+
+/** umask's u=rwx,g+w,o-x applied to the permissions `perm` (what the mask leaves). */
+function symbolicMode(mode: string, perm: number): number {
+  for (const clause of mode.split(',')) {
+    let k = 0, who = 0;
+    for (; k < clause.length && 'ugoa'.includes(clause[k]); k++) who |= { u: 0o700, g: 0o070, o: 0o007, a: 0o777 }[clause[k] as 'u']!;
+    if (who === 0) who = 0o777;
+    if (k >= clause.length) throw new ShellError(specMessage('umask', 'invalidOperator', { char: ' ' }));
+    while (k < clause.length) {
+      const op = clause[k++];
+      if (!'+-='.includes(op)) throw new ShellError(specMessage('umask', 'invalidOperator', { char: op }));
+      let bits = 0;
+      for (; k < clause.length && !'+-='.includes(clause[k]); k++) {
+        const b = { r: 0o444, w: 0o222, x: 0o111 }[clause[k] as 'r'];
+        if (b === undefined) throw new ShellError(specMessage('umask', 'invalidSymbolic', { char: clause[k] }));
+        bits |= b;
+      }
+      bits &= who;
+      perm = op === '+' ? perm | bits : op === '-' ? perm & ~bits : (perm & ~who) | bits;
+    }
+  }
+  return perm;
+}
 
 // ---------- test / [ ----------
 
@@ -161,7 +192,7 @@ function describe(ctx: CommandContext, a: string, all = false): boolean {
   if (all) lines.push(...sh.locateAll(a).map(p => `${a} is ${p}`));
   else if (!lines.length) {
     const l = sh.locate(a);
-    if (l) lines.push(l[1] ? `${a} is hashed (${l[0].startsWith('/') || l[0].startsWith('./') ? '' : './'}${l[0]})` : `${a} is ${l[0]}`);
+    if (l) lines.push(l[1] ? `${a} is hashed (${l[0].startsWith('/') || l[0].startsWith('./') ? '' : './'}${l[0]})` : `${a} is ${l[0].includes('/') ? l[0] : sh.resolvePath(l[0])}`);
   }
   if (!lines.length) { ctx.stderr.write(`${ctx.shell.errPrefix}type: ${specMessage('type', 'notFound', { name: a })}\n`); return false; }
   for (const l of all ? lines : lines.slice(0, 1)) line(ctx, l);
@@ -438,34 +469,79 @@ export function registerBuiltins(shell: Shell) {
   };
 
   reg('env', async ctx => {
-    // env [-i] [-u NAME] [NAME=VALUE]... [COMMAND [ARG]...]
+    // env [-i] [-u NAME] [-C DIR] [-0] [NAME=VALUE]... [COMMAND [ARG]...]; options end at the first other word
     const args = [...ctx.args];
     const sets: [string, string][] = [];
     const unsets: string[] = [];
-    let clear = false;
+    let clear = false, nul = false, dir: string | undefined;
+    const option = (c: string, value: () => string) => {
+      if (c === 'i') clear = true;
+      else if (c === '0') nul = true;
+      else if (c === 'u') unsets.push(value());
+      else dir = value();
+    };
+    const LONG: Record<string, string> = { 'ignore-environment': 'i', unset: 'u', chdir: 'C', null: '0' };
     while (args.length) {
-      if (args[0] === '-i' || args[0] === '-') { clear = true; args.shift(); continue; }
-      if (args[0] === '-u' && args.length > 1) { unsets.push(args[1]); args.splice(0, 2); continue; }
-      if (args[0] === '--') { args.shift(); break; }
-      const eq = args[0].indexOf('=');
-      if (eq > 0) { sets.push([args[0].slice(0, eq), args[0].slice(eq + 1)]); args.shift(); continue; }
+      const a = args[0];
+      if (a === '-') { clear = true; args.shift(); continue; }
+      if (a === '--') { args.shift(); break; }
+      if (a.startsWith('--')) {
+        args.shift();
+        const eq = a.indexOf('='), name = eq < 0 ? a.slice(2) : a.slice(2, eq);
+        const c = LONG[name];
+        if (c === undefined) throw new UsageException(specFormat(GETOPT.unrecognizedOption, { option: a }));
+        option(c, () => eq >= 0 ? a.slice(eq + 1) : args.length ? args.shift()! : (() => { throw new UsageException(specFormat(GETOPT.missingLongArgument, { option: name })); })());
+        continue;
+      }
+      if (a.length > 1 && a[0] === '-') {
+        args.shift();
+        for (let k = 1; k < a.length; k++) {
+          const c = a[k];
+          if (!'i0uC'.includes(c)) throw new UsageException(specFormat(GETOPT.invalidOption, { option: c }));
+          if (c === 'u' || c === 'C') {
+            const rest = a.slice(k + 1);
+            option(c, () => rest || (args.length ? args.shift()! : (() => { throw new UsageException(specFormat(GETOPT.missingShortArgument, { option: c })); })()));
+            break;
+          }
+          option(c, () => '');
+        }
+        continue;
+      }
+      const eq = a.indexOf('=');
+      if (eq > 0) { sets.push([a.slice(0, eq), a.slice(eq + 1)]); args.shift(); continue; }
       break;
     }
-    if (args.length === 0 && sets.length === 0 && !clear && unsets.length === 0) { printEnv(ctx); return 0; }
+    const print = () => {
+      for (const k of [...ctx.shell.environment.keys()].sort(ordinal)) if (ctx.shell.isExported(k)) ctx.stdout.write(`${k}=${ctx.shell.environment.get(k)}${nul ? '\0' : '\n'}`);
+    };
+    if (args.length === 0 && sets.length === 0 && !clear && unsets.length === 0) { print(); return 0; }
     const sh = ctx.shell;
-    const savedEnv = sh.environment, savedAttrs = sh.varAttrs;
+    const savedEnv = sh.environment, savedAttrs = sh.varAttrs, savedCwd = sh.cwd;
     sh.environment = new Map(clear ? [] : [...savedEnv].filter(([k]) => sh.isExported(k) && !unsets.includes(k)));
     sh.varAttrs = new Map([...sh.environment.keys()].map(k => [k, 'x']));
     for (const [k, v] of sets) { sh.environment.set(k, v); sh.varAttrs.set(k, 'x'); }
     try {
-      if (args.length === 0) { printEnv(ctx); return 0; }
+      if (dir !== undefined) {
+        const abs = ctx.resolvePath(dir);
+        if (!ctx.fs.isDirectory(abs)) throw new ShellError(specMessage('env', 'cannotChdir', { dir, errno: ctx.fs.exists(abs) ? ERRNO.ENOTDIR : ctx.fs.whyMissing(abs) }), 125);
+        const pwd = sh.environment.get('PWD');
+        sh.cwd = abs;
+        if (pwd === undefined) sh.environment.delete('PWD'); else sh.environment.set('PWD', pwd); // env -C leaves PWD alone
+      }
+      if (args.length === 0) { print(); return 0; }
       // with no PATH, env searches /bin and /usr/bin, as execvp does
       if (!sh.environment.has('PATH') && !args[0].includes('/')) {
-        const dir = ['/bin/', '/usr/bin/'].find(d => ctx.fs.isFile(d + args[0]));
-        if (dir) args[0] = dir + args[0];
+        const found = ['/bin/', '/usr/bin/'].find(d => ctx.fs.isFile(d + args[0]));
+        if (found) args[0] = found + args[0];
       }
+      // env runs programs: a name that is none is env's own error, not the shell's
+      const bad = cannotRun(ctx, args[0]);
+      if (bad) throw new ShellError(specMessage('env', 'runFailed', { command: args[0], errno: bad[0] }), bad[1]);
       return await sh.invoke(args, ioOf(ctx), true);
-    } finally { sh.environment = savedEnv; sh.varAttrs = savedAttrs; }
+    } finally {
+      if (sh.cwd !== savedCwd) try { sh.cwd = savedCwd; } catch { /* removed meanwhile */ }
+      sh.environment = savedEnv; sh.varAttrs = savedAttrs;
+    }
   });
 
   reg('alias', ctx => {
@@ -483,9 +559,18 @@ export function registerBuiltins(shell: Shell) {
   });
 
   reg('unalias', ctx => {
-    if (ctx.args.includes('-a')) { ctx.shell.aliases.clear(); return 0; }
+    const usage = () => { ctx.stderr.write(`unalias: ${specMessage('unalias', 'usage')}\n`); return 2; };
+    let i = 0;
+    for (; i < ctx.args.length && ctx.args[i].length > 1 && ctx.args[i][0] === '-'; i++) {
+      if (ctx.args[i] === '--') { i++; break; }
+      const bad = [...ctx.args[i].slice(1)].find(c => c !== 'a');
+      if (bad !== undefined) { ctx.stderr.write(`${ctx.shell.errPrefix}unalias: ${specMessage('unalias', 'builtinInvalidOption', { option: '-' + bad })}\n`); return usage(); }
+      ctx.shell.aliases.clear();
+      return 0;
+    }
+    if (i >= ctx.args.length) return usage();
     let code = 0;
-    for (const a of ctx.args) if (!ctx.shell.aliases.delete(a)) { ctx.stderr.write(`${ctx.shell.errPrefix}unalias: ${specMessage('unalias', 'notFound', { name: a })}\n`); code = 1; }
+    for (const a of ctx.args.slice(i)) if (!ctx.shell.aliases.delete(a)) { ctx.stderr.write(`${ctx.shell.errPrefix}unalias: ${specMessage('unalias', 'notFound', { name: a })}\n`); code = 1; }
     return code;
   });
 
@@ -1035,10 +1120,39 @@ export function registerBuiltins(shell: Shell) {
     if (ctx.args.some(a => !a.startsWith('-'))) return 0; // setting a limit: accepted
     line(ctx, ctx.args.includes('-n') ? '1024' : ctx.args.includes('-s') ? '8192' : ctx.args.includes('-c') ? '0' : 'unlimited');
   });
-  reg('umask', ctx => { if (ctx.args.length === 0) line(ctx, '0022'); });
+  reg('umask', ctx => {
+    const fs = ctx.shell.agentFs;
+    let i = 0, symbolic = false, reusable = false;
+    for (; i < ctx.args.length && ctx.args[i].length > 1 && ctx.args[i][0] === '-'; i++) {
+      if (ctx.args[i] === '--') { i++; break; }
+      for (const c of ctx.args[i].slice(1)) {
+        if (c === 'S') symbolic = true;
+        else if (c === 'p') reusable = true;
+        else {
+          ctx.stderr.write(`${ctx.shell.errPrefix}umask: ${specMessage('umask', 'builtinInvalidOption', { option: '-' + c })}\n`);
+          ctx.stderr.write(`umask: ${specMessage('umask', 'usage')}\n`);
+          return 2;
+        }
+      }
+    }
+    const mode = ctx.args[i];
+    if (mode !== undefined) {
+      if (/^\d/.test(mode)) {
+        if (!/^[0-7]+$/.test(mode) || parseInt(mode, 8) > 0o777) throw new ShellError(specMessage('umask', 'octalOutOfRange', { value: mode }));
+        fs.umask = parseInt(mode, 8);
+      } else fs.umask = 0o777 & ~symbolicMode(mode, 0o777 & ~fs.umask);
+      if (!symbolic) return 0;
+    }
+    const m = fs.umask;
+    const text = symbolic ? ['u', 'g', 'o'].map((who, k) => {
+      const bits = (~m >> (6 - 3 * k)) & 7;
+      return who + '=' + (bits & 4 ? 'r' : '') + (bits & 2 ? 'w' : '') + (bits & 1 ? 'x' : '');
+    }).join(',') : m.toString(8).padStart(4, '0');
+    line(ctx, reusable ? `umask ${symbolic ? '-S ' : ''}${text}` : text);
+  });
   reg('times', ctx => ctx.stdout.write('0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n'), );
 
-  reg('eval', ctx => ctx.shell.runScriptText(ctx.args.join(' '), ioOf(ctx), false));
+  reg('eval', ctx => ctx.shell.runScriptText(ctx.args.join(' '), ioOf(ctx), false, undefined, undefined, undefined, 'eval'));
 
   reg('let', ctx => {
     if (ctx.args.length === 0) throw new ShellError(specMessage('let', 'expressionExpected'));
@@ -1050,8 +1164,15 @@ export function registerBuiltins(shell: Shell) {
   reg('command', async ctx => {
     const sh = ctx.shell;
     const args = [...ctx.args];
-    while (args[0] === '-p') args.shift();
+    let standardPath = false;
+    while (args[0] === '-p') { args.shift(); standardPath = true; }
     const isDescribe = args[0] === '-v' || args[0] === '-V';
+    if (!isDescribe && args.length > 0 && standardPath && !args[0].includes('/') && !isShellBuiltin(sh, args[0])) {
+      // -p: search the standard directories, not $PATH
+      const dir = ['/usr/bin/', '/bin/'].find(d => ctx.fs.isFile(d + args[0]) && ctx.fs.canExecute(d + args[0]));
+      if (dir === undefined) { ctx.stderr.write(diagnostic('commandNotFound', { command: args[0] }) + '\n'); return 127; }
+      args[0] = dir + args[0];
+    }
     if (!isDescribe) return args.length === 0 ? 0 : sh.invoke(args, ioOf(ctx), true);
     let code = 0;
     for (const n of args.slice(1)) {
@@ -1090,6 +1211,8 @@ export function registerBuiltins(shell: Shell) {
     const args = [...ctx.args];
     while (args.length && args[0].startsWith('-')) { const a = args.shift()!; if ((a === '-s' || a === '-k') && args.length) args.shift(); }
     if (args.length < 2) throw new ShellError(specMessage('timeout', 'missingOperand', {}), 125);
+    const bad = cannotRun(ctx, args[1]);
+    if (bad) throw new ShellError(specMessage('timeout', 'failedToRun', { command: args[1], errno: bad[0] }), bad[1]);
     const sh = ctx.shell;
     const parent = sh.deadline;
     const own: Deadline = { at: Date.now() + parseDuration(args[0]), parent };

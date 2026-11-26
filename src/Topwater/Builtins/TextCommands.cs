@@ -151,9 +151,13 @@ internal static partial class Builtins
                     }
                     if (p[j] == '-' && low != null && j + 1 < n && p[j + 1] != ']')
                     {
-                        if (p[j + 1] < low) return "Invalid range end";
+                        // the end may be a collating element: a-[.z.]
+                        bool collating = j + 3 < n && p[j + 1] == '[' && p[j + 2] == '.';
+                        int endClose = collating ? p.IndexOf(".]", j + 3, StringComparison.Ordinal) : -1;
+                        if (collating && endClose != j + 4) return endClose < 0 ? Unmatched : "Invalid collation character";
+                        if ((collating ? p[j + 3] : p[j + 1]) < low) return "Invalid range end";
                         low = null;
-                        j += 2;
+                        j += collating ? 6 : 2;
                         continue;
                     }
                     low = p[j++];
@@ -866,7 +870,8 @@ internal static class Sed
         {
             if (kind == 'e') { scripts.Add((value, $"-e expression #{++expressions}")); return; }
             string text;
-            try { text = value == "-" ? ctx.StdinText : ctx.Fs.ReadAllText(ctx.ResolvePath(value)); }
+            // a directory reads as an empty script, as GNU sed does
+            try { text = value == "-" ? ctx.StdinText : ctx.Fs.IsDirectory(ctx.ResolvePath(value)) ? "" : ctx.Fs.ReadAllText(ctx.ResolvePath(value)); }
             catch (ShellException e) { throw new ShellException(CommandSpec.Message("sed", "cannotOpenScript", ("file", value), ("errno", e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..])), 4); }
             scripts.Add((text, $"file {value}"));
         }
@@ -924,6 +929,7 @@ internal static class Sed
             AddScript('e', files[0]);
             files.RemoveAt(0);
         }
+        if (scripts[0].Text.StartsWith("#n")) quiet = true; // "#n" opening the script means -n
         var cmds = Parse(scripts, extended);
 
         if (inPlace)
@@ -1085,12 +1091,13 @@ internal static class Sed
             return null;
         }
 
-        string ReadLabel()
+        // a label ends at a blank too, and the next command may follow it directly (`bx;:x p`)
+        string ReadLabel(bool blanks = true)
         {
             SkipBlanks();
             int start = i;
-            while (i < n && script[i] is not (';' or '\n' or '}')) i++;
-            return script[start..i].Trim();
+            while (i < n && script[i] is not (';' or '\n' or '}') && !(blanks && script[i] is ' ' or '\t')) i++;
+            return blanks ? script[start..i] : script[start..i].Trim();
         }
 
         // text for a/i/c: `a text` or `a\` NEWLINE text, where a trailing backslash continues the text
@@ -1208,13 +1215,13 @@ internal static class Sed
                     break;
                 default:
                     int at = i;
-                    if (op is 'r' or 'R' or 'w' or 'W' && ReadLabel().Length == 0) throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
+                    if (op is 'r' or 'R' or 'w' or 'W' && ReadLabel(blanks: false).Length == 0) throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
                     if (!"=dDgGhHnNpPxz".Contains(op)) throw Fail(CommandSpec.Message("sed", "unknownCommand", ("op", op.ToString())), at);
                     break;
             }
             cmds.Add(c);
             SkipBlanks();
-            if (op != '{' && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail(CommandSpec.Message("sed", "extraCharacters"), i + 1);
+            if (op is not ('{' or ':' or 'b' or 't' or 'T') && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail(CommandSpec.Message("sed", "extraCharacters"), i + 1);
         }
         if (blocks.Count > 0) throw Fail(CommandSpec.Message("sed", "unmatchedBrace"), blocks.Peek().At, charZero: true);
         foreach (var c in cmds.Where(c => c.Op is 'b' or 't' or 'T'))

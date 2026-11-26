@@ -29,8 +29,8 @@
   ],
   "messages": {
     "badTimeStyle": "{problem} argument {value:locale} for ‘time style’\nValid arguments are:\n  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.",
-    "cannotAccess": "cannot access '{file}': {errno}",
-    "cannotOpenDirectory": "cannot open directory '{file}': {errno}",
+    "cannotAccess": "cannot access {file:shell-always}: {errno}",
+    "cannotOpenDirectory": "cannot open directory {file:shell-always}: {errno}",
     "alreadyListed": "{file}: not listing already-listed directory"
   }
 }

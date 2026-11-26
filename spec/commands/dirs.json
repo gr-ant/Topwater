@@ -4,5 +4,6 @@
   "category": "scripting",
   "summary": "Show the directory stack",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom"
 }

@@ -4,6 +4,7 @@
   "category": "scripting",
   "summary": "Run a shell builtin, bypassing a function of the same name",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom",
   "messages": {
     "notBuiltin": "{name}: not a shell builtin"

@@ -4,6 +4,7 @@
   "category": "scripting",
   "summary": "Change directory, remembering the old one",
   "shellBuiltin": true,
+  "programFile": false,
   "parser": "custom",
   "messages": {
     "noOtherDirectory": "no other directory",

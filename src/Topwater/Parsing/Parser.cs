@@ -2,7 +2,14 @@ using System.Text;
 
 namespace Topwater.Parsing;
 
-public sealed class ParseException(string message) : Exception(message);
+public sealed class ParseException(string message) : Exception(message)
+{
+    /// <summary>The line the error is on (0: not known yet), and for an unexpected token the source line bash echoes.</summary>
+    internal int Line { get; set; }
+    internal string? SourceLine { get; set; }
+    /// <summary>The input ended where a keyword was still expected.</summary>
+    internal bool AtEof { get; init; }
+}
 
 internal abstract record WordPart(bool Quoted);
 internal sealed record LiteralPart(string Text, bool Quoted) : WordPart(Quoted);
@@ -114,14 +121,14 @@ internal sealed record Token(TokenKind Kind, string Op = "", Word? Word = null, 
 }
 
 /// <summary>Clean-room lexer for a practical subset of POSIX sh / bash syntax.</summary>
-internal sealed class Lexer(string s)
+internal sealed class Lexer(string s, int firstLine = 1)
 {
     int _i;
     readonly List<HereDoc> _pending = [];
 
     char Peek(int o = 0) => _i + o < s.Length ? s[_i + o] : '\0';
 
-    int _linePos, _line = 1;
+    int _linePos, _line = firstLine;
 
     /// <summary>The 1-based line of position pos; positions only move forward, so this counts incrementally.</summary>
     int LineAt(int pos)
@@ -139,7 +146,8 @@ internal sealed class Lexer(string s)
             if (Peek() == '\\' && Peek(1) == '\n') { _i += 2; continue; }
             if (_i >= s.Length) break;
             int count = tokens.Count, start = _i;
-            LexOne(tokens);
+            try { LexOne(tokens); }
+            catch (ParseException e) when (e.Line == 0) { e.Line = LineAt(start); throw; }
             if (tokens.Count > count) tokens[count] = tokens[count] with { Line = LineAt(start), EndLine = LineAt(_i), Start = start, End = _i };
         }
         ReadHereDocBodies(); // heredoc on the last line with no trailing newline: body is empty
@@ -665,12 +673,22 @@ internal sealed class Parser
 
     Parser(List<Token> tokens, string source) { _t = tokens; _src = source; }
 
-    public static Script Parse(string source)
+    /// <param name="firstLine">The line number of the source's first line (eval and $(...) count on from the line they are on).</param>
+    public static Script Parse(string source, int firstLine = 1)
     {
-        var p = new Parser(new Lexer(source).Lex(), source);
-        var script = p.ParseScript();
-        if (p._p < p._t.Count) throw p.Unexpected();
-        return script;
+        var p = new Parser(new Lexer(source, firstLine).Lex(), source);
+        try
+        {
+            var script = p.ParseScript();
+            if (p._p < p._t.Count) throw p.Unexpected();
+            return script;
+        }
+        catch (ParseException e) when (e.Line == 0)
+        {
+            if (p.Cur is { } t) { e.Line = t.Line; e.SourceLine = source.Split('\n')[t.Line - firstLine]; }
+            else e.Line = firstLine + source.Count(c => c == '\n') + (source.EndsWith('\n') ? 0 : 1);
+            throw;
+        }
     }
 
     /// <summary>Lexes a string into plain words (used for alias values).</summary>
@@ -687,7 +705,7 @@ internal sealed class Parser
 
     void Expect(string word)
     {
-        if (!IsWord(word)) throw Cur == null ? new ParseException(CommandSpec.Format(CommandSpec.Diagnostics.UnexpectedEofExpecting, ("word", word))) : Unexpected();
+        if (!IsWord(word)) throw Cur == null ? new ParseException(CommandSpec.Diagnostics.UnexpectedEof) : Unexpected();
         _p++;
     }
 
@@ -786,7 +804,7 @@ internal sealed class Parser
             if (At(1) is { Kind: TokenKind.Op, Op: "(" } && At(2) is { Kind: TokenKind.Op, Op: ")" }) return ParseFunction(false);
         }
 
-        int line = Cur?.Line ?? 0;
+        int line = Cur?.Line ?? 0, first = _p;
         var assignments = new List<Assignment>();
         var words = new List<Word>();
         var redirects = new List<Redirect>();
@@ -800,8 +818,8 @@ internal sealed class Parser
             words.Add(w);
         }
         if (words.Count == 0 && assignments.Count == 0 && redirects.Count == 0) throw Unexpected();
-        // bash reports a command that spans lines (a quoted newline) at its last line
-        return new SimpleCommand(assignments, words) { Redirects = redirects, Line = _p > 0 ? Math.Max(line, _t[_p - 1].EndLine) : line };
+        // bash reports a command that spans lines at the line where its second word ends
+        return new SimpleCommand(assignments, words) { Redirects = redirects, Line = _p > first ? Math.Max(line, _t[Math.Min(first + 1, _p - 1)].EndLine) : line };
     }
 
     /// <summary>A compound command's list, which bash requires to hold at least one command (`if; then` is an error).</summary>
@@ -889,7 +907,7 @@ internal sealed class Parser
         var clauses = new List<(List<Word>, Script, string)>();
         while (!IsWord("esac"))
         {
-            if (Cur == null) throw new ParseException(CommandSpec.Diagnostics.EofEsac);
+            if (Cur == null) throw new ParseException(CommandSpec.Diagnostics.EofEsac) { AtEof = true };
             if (IsOp("(")) _p++;
             var patterns = new List<Word>();
             while (true)

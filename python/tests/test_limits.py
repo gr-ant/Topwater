@@ -45,6 +45,17 @@ def test_slow_regex_over_many_lines_stops_at_the_call_limit():
     hits_time_limit(quick(), "x=$(printf 'a%.0s' {1..28})b; for i in {1..200}; do echo $x; done > s.txt; grep -cE '(a|aa)+$' s.txt 2>/dev/null")
 
 
+@pytest.mark.parametrize("match", [
+    "grep -cE '(a+)+$' s.txt",
+    "sed -nE '/(a+)+$/p' s.txt",
+    "awk '/(a+)+$/' s.txt",
+    "[[ $(<s.txt) =~ (a+)+$ ]]",
+])
+def test_one_slow_regex_match_stops_at_the_call_limit(match):
+    # a single match that backtracks for minutes: Python's re checks for signals, which the call's alarm uses
+    hits_time_limit(quick(), "printf 'a%.0s' {1..28} > s.txt; echo b >> s.txt; " + match)
+
+
 @pytest.mark.parametrize("loop", [
     "awk 'BEGIN { while (1) x++ }'",
     "sed ':a; s/^/x/; ba' <<< x",  # the pattern space grows, so each step is slower than the last

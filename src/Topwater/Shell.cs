@@ -155,6 +155,8 @@ internal abstract class ControlFlow : Exception;
 internal sealed class LoopControl(bool isBreak, int levels) : ControlFlow { public bool IsBreak { get; } = isBreak; public int Levels { get; } = levels; }
 internal sealed class ReturnSignal(int code) : ControlFlow { public int Code { get; } = code; }
 internal sealed class ExitSignal(int code) : ControlFlow { public int Code { get; } = code; }
+/// <summary>An expansion error that ends a non-interactive bash (an arithmetic error in a subscript, a bad substitution).</summary>
+internal class FatalError(string message, int code) : ShellException(message, code);
 /// <summary>A safety limit was hit; ends the whole tool call so an outer loop or caller can't carry on.</summary>
 internal sealed class LimitExceeded(string message) : ControlFlow { public override string Message { get; } = message; }
 
@@ -540,10 +542,17 @@ public sealed partial class Shell
     /// <param name="process">Set for a new bash process: it sees only exported variables and functions.</param>
     /// <param name="sourced">The file `source` is running, for BASH_SOURCE.</param>
     internal async Task<int> RunScriptTextAsync(string text, Io io, bool subshell, CancellationToken ct, List<string>? positional = null,
-        NewProcess? process = null, string? sourced = null)
+        NewProcess? process = null, string? sourced = null, bool eval = false, bool substitution = false)
     {
         Script script;
-        try { script = Parser.Parse(text); }
+        try { script = Parser.Parse(text, eval || substitution ? Math.Max(_lineno, 1) : 1); }
+        catch (ParseException e) when (eval)
+        {
+            var at = $"{(_errWhere.Count > 0 ? _errWhere[^1].Name : "bash")}: eval: line {e.Line}: ";
+            io.Err.WriteLine(at + (e.AtEof ? CommandSpec.Diagnostics.UnexpectedEof : e.Message));
+            if (e.SourceLine != null) io.Err.WriteLine(at + CommandSpec.Format(CommandSpec.Diagnostics.SourceLine, ("line", e.SourceLine)));
+            return 2;
+        }
         catch (ParseException e) { io.Err.WriteLine($"bash: {e.Message}"); return 2; }
         if (++_scriptDepth > 100) throw new LimitExceeded("maximum script nesting level exceeded (100)");
         var savedArg0 = _arg0;
@@ -565,13 +574,15 @@ public sealed partial class Shell
             io = io with { Out = new SwitchWriter(io.Out), Err = new SwitchWriter(io.Err) }; // `exec >file` in a script ends with it
             if (process != null) BecomeNewProcess(process);
             if (positional != null) Positional = positional;
+            int outerSubshell = _subshell;
+            if (process != null) _subshell = 0; // a new bash ends with its own status (127 for set -u), not a subshell's 1
             try
             {
                 try { return await ExecScriptAsync(script, io, ct); }
                 finally { await RunExitTrapAsync(io, ct); }
             }
             catch (ExitSignal e) { return e.Code; }
-            finally { RestoreState(saved); }
+            finally { _subshell = outerSubshell; RestoreState(saved); }
         }
         finally
         {
@@ -614,6 +625,7 @@ public sealed partial class Shell
         public required (bool Noglob, bool Xtrace, bool Noclobber, bool IfsUnset) Flags { get; init; }
         public required Dictionary<string, string> Attrs { get; init; }
         public long VariableChars { get; init; }
+        public int Umask { get; init; }
     }
 
     // arrays are shared with the saved state and copied on first write (see Writable), so a subshell or
@@ -623,13 +635,14 @@ public sealed partial class Shell
         _epoch = NextEpoch();
         _subshell++;
         return new(_cwd, new(Environment), new(Aliases), new(Functions), Positional, Errexit, Pipefail, Nounset, [.. Shopts], new(Traps), new(Arrays))
-            { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs), VariableChars = _variableChars, Hashed = new(Hashed) };
+            { Flags = (Noglob, Xtrace, Noclobber, _ifsUnset), Attrs = new(VarAttrs), VariableChars = _variableChars, Hashed = new(Hashed), Umask = Fs.Umask };
     }
 
     void RestoreState(State s)
     {
         _epoch = NextEpoch();
         _subshell--;
+        Fs.Umask = s.Umask;
         (Noglob, Xtrace, Noclobber, _ifsUnset) = s.Flags;
         _variableChars = s.VariableChars; // was a bound for the state coming back
         VarAttrs = s.Attrs;
@@ -854,6 +867,7 @@ public sealed partial class Shell
                 _ => throw new InvalidOperationException(cmd.GetType().Name),
             };
         }
+        catch (FatalError e) { throw Fatal(rio, e.Message, e.ExitCode); }
         catch (ShellException e)
         {
             rio.Err.WriteLine($"{ErrPrefix}{e.Message}");
@@ -1263,7 +1277,7 @@ public sealed partial class Shell
                         : CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", argv[0])));
                     return 127;
                 }
-                Hashed[name] = (found, 1);
+                if (found.Contains('/')) Hashed[name] = (found, 1); // bash leaves a name found through an empty PATH entry out of the table
             }
             if (StubCommand(found) is not { } registered) return await RunScriptFileAsync(found, ResolvePath(found), [found, .. argv.Skip(1)], io, ct);
             name = registered;
@@ -1319,9 +1333,10 @@ public sealed partial class Shell
     }
 
     /// <summary>Where PATH would have <paramref name="name"/>, directory by directory, as written; an empty entry is the cwd, and a
-    /// leading ~ is expanded as bash does during the search.</summary>
+    /// leading ~ is expanded as bash does during the search.
+    /// A wholly empty PATH searches the cwd for the bare name, which bash runs as typed and leaves out of the hash table.</summary>
     IEnumerable<string> PathCandidates(string name) =>
-        Environment.GetValueOrDefault("PATH", "").Split(':').Select(d => TildePrefix(d) is { } t ? t.Home + d[t.Length..] : d)
+        Environment.GetValueOrDefault("PATH", "") == "" ? [name] : Environment.GetValueOrDefault("PATH", "").Split(':').Select(d => TildePrefix(d) is { } t ? t.Home + d[t.Length..] : d)
             .Select(d => d.Length == 0 ? "./" + name : d.TrimEnd('/') + "/" + name);
 
     /// <summary>PATH search as bash does it: the first executable regular file named <paramref name="name"/> in a directory the
@@ -1358,7 +1373,7 @@ public sealed partial class Shell
     {
         if (name.Contains('/')) return ResolvePath(name) is var abs && Fs.IsFile(abs) && Fs.CanExecute(abs) ? (name, false) : null;
         if (HashLookup(name) is { } h) return (h, true);
-        if (SearchPath(name) is { } p) return (p, false);
+        if (SearchPath(name) is { } p) return (p.Contains('/') ? p : ResolvePath(p), false);
         return IsAppOnly(name) ? ("/usr/bin/" + name, false) : null;
     }
 
@@ -1366,12 +1381,14 @@ public sealed partial class Shell
     internal List<string> LocateAll(string name)
     {
         if (name.Contains('/')) return Locate(name) is { } l ? [l.Path] : [];
-        var all = SearchPathAll(name).ToList();
+        var all = SearchPathAll(name).Select(p => p.Contains('/') ? p : ResolvePath(p)).ToList();
         if (all.Count == 0 && IsAppOnly(name)) all.Add("/usr/bin/" + name);
         return all;
     }
 
-    bool IsAppOnly(string name) => IsUnfiled(name) && !Builtins.IsShellBuiltin(this, name);
+    /// <summary>A command the host registered without a program file (not a built-in that only lives in the shell, like hash or time).</summary>
+    internal bool IsAppOnly(string name) =>
+        IsUnfiled(name) && !(CommandSpec.Commands.TryGetValue(name, out var c) && (c.ShellBuiltin || !c.ProgramFile) && IsBuiltin(name));
 
     internal void SyncHashed()
     {
@@ -1413,12 +1430,15 @@ public sealed partial class Shell
     async Task<int> RunInterpreterAsync(string name, string line, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
         var parts = line.Split([' ', '\t'], 2);
+        var opt = parts.Length > 1 ? parts[1].Trim() : "";
+        // an interpreter that is itself a script runs as one (Linux allows that a few levels deep; the caller counts the levels)
+        if (StubCommand(parts[0]) == null && ResolvePath(parts[0]) is var interp && Fs.IsFile(interp) && Fs.CanExecute(interp))
+            return await RunScriptFileAsync(parts[0], interp, [parts[0], .. opt == "" ? [] : new[] { opt }, name, .. argv.Skip(1)], io, ct);
         if (StubCommand(parts[0]) is not { } program)
         {
             io.Err.WriteLine(ErrPrefix + CommandSpec.Format(CommandSpec.Diagnostics.RequiredFileNotFound, ("name", name)));
             return 127;
         }
-        var opt = parts.Length > 1 ? parts[1].Trim() : "";
         List<string> words = opt == "" ? [] : program == "env" && opt.StartsWith("-S") ? [.. opt[2..].Split((char[])[' ', '\t'], StringSplitOptions.RemoveEmptyEntries)] : [opt];
         if (program != "env") return await InvokeAsync([program, .. words, name, .. argv.Skip(1)], io, ct, skipFunctions: true);
         // shortcut: env in a #! line only looks the program up on PATH; env's own options are not supported
@@ -1677,7 +1697,9 @@ public sealed partial class Shell
     internal string ArrayKey(ShellArray? array, string subscript, string name = "")
     {
         if (array is { Assoc: true }) return subscript;
-        long i = Arith.Eval(this, subscript);
+        long i;
+        try { i = Arith.Eval(this, subscript); }
+        catch (ShellException e) when (e is not FatalError) { throw new FatalError(e.Message, 1); }
         if (i < 0) i += array?.Next ?? 1;
         return i >= 0 ? i.ToString(CultureInfo.InvariantCulture) : throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadArraySubscript, ("name", name)));
     }
@@ -1924,6 +1946,26 @@ public sealed partial class Shell
     }
 
     /// <summary>An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1).</summary>
+    /// <summary>${x@}: the text bash names is the whole word, or the whole double-quoted string the expansion is in.</summary>
+    internal sealed class BadSubstitution(string text) : FatalError(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", text)), 127);
+
+    /// <summary>Expands parts[i]; a bad substitution there ends the script, naming the word or quoted string around it.</summary>
+    async Task<string> ExpandPartInAsync(IReadOnlyList<WordPart> parts, int i, Io io, CancellationToken ct)
+    {
+        try { return await ExpandPartAsync(parts[i], io, ct); }
+        catch (BadSubstitution)
+        {
+            int a = 0, b = parts.Count - 1;
+            if (parts[i].Quoted)
+            {
+                for (a = i; a > 0 && parts[a - 1].Quoted; a--) { }
+                for (b = i; b + 1 < parts.Count && parts[b + 1].Quoted; b++) { }
+            }
+            // shortcut: rebuilt from the parsed parts, so $x reads ${x} and quotes inside an unquoted word are gone; keep source spans if that matters
+            throw Fatal(io, CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", new Word(parts.Skip(a).Take(b - a + 1).ToList()).ToString())), 127);
+        }
+    }
+
     ExitSignal Fatal(Io io, string message, int code)
     {
         io.Err.WriteLine($"{ErrPrefix}{message}");
@@ -2014,7 +2056,7 @@ public sealed partial class Shell
             return GetVariable(expr[1..]).Length.ToString(CultureInfo.InvariantCulture);
         }
         var m = ParamRe.Match(expr);
-        if (!m.Success) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("expr", expr)));
+        if (!m.Success) throw new BadSubstitution("${" + expr + "}");
         var name = m.Groups[1].Value;
         var rest = m.Groups[2].Value;
         var value = GetVariable(name);
@@ -2104,7 +2146,7 @@ public sealed partial class Shell
                 'u' => value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..],
                 'A' => Builtins.AttributeFlags(this, Resolve(name)) is { Length: > 0 } flags ? $"declare -{flags} {name}={QuoteValue(value)}" : $"{name}={QuoteValue(value)}",
                 'P' => value,
-                _ => throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("expr", expr))),
+                _ => throw new BadSubstitution("${" + expr + "}"),
             };
         }
         if (rest[0] == ':')
@@ -2119,7 +2161,7 @@ public sealed partial class Shell
             if (len < 0 && (len += tail.Length) < 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.SubstringNegative, ("expression", spec[1].Trim())));
             return tail[..(int)Math.Min(len, tail.Length)];
         }
-        throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("expr", expr)));
+        throw new BadSubstitution("${" + expr + "}");
     }
 
     /// <summary>set -u: expanding an unset variable is an error that ends the (sub)shell, like bash.</summary>
@@ -2135,7 +2177,7 @@ public sealed partial class Shell
     {
         var errexit = Errexit;
         if (!Shopts.Contains("inherit_errexit")) Errexit = false;
-        try { return await RunScriptTextAsync(source, io, subshell: true, ct); }
+        try { return await RunScriptTextAsync(source, io, subshell: true, ct, substitution: true); }
         finally { Errexit = errexit; }
     }
 
@@ -2188,7 +2230,7 @@ public sealed partial class Shell
         var sb = new StringBuilder();
         for (int i = 0; i < word.Parts.Count; i++)
         {
-            var text = await ExpandPartAsync(word.Parts[i], io, ct);
+            var text = await ExpandPartInAsync(word.Parts, i, io, ct);
             if (i == 0 && word.Parts[i] is LiteralPart { Quoted: false } && TildePrefix(text) is var (home, length)) text = home + text[length..];
             if (sb.Length + (long)text.Length > Options.MaxStringBytes) throw TooLarge("expansion", "write the data to a file instead");
             sb.Append(text);
@@ -2204,7 +2246,7 @@ public sealed partial class Shell
         var sb = new StringBuilder();
         for (int i = 0; i < word.Parts.Count; i++)
         {
-            var text = await ExpandPartAsync(word.Parts[i], io, ct);
+            var text = await ExpandPartInAsync(word.Parts, i, io, ct);
             if (word.Parts[i] is LiteralPart { Quoted: false } && text.Contains('~'))
             {
                 bool atStart = i == 0 || sb.Length > 0 && sb[^1] == ':';
@@ -2365,7 +2407,7 @@ public sealed partial class Shell
                     }
                     if (name != vp.Name) part = vp with { Name = name };
                 }
-                var text = await ExpandPartAsync(part, io, ct);
+                var text = part == parts[i] ? await ExpandPartInAsync(parts, i, io, ct) : await ExpandPartAsync(part, io, ct);
                 if (part is LiteralPart)
                 {
                     if (i == 0 && !part.Quoted && TildePrefix(text) is var (home, length))

@@ -135,9 +135,18 @@ export function posixRegexError(p: string, extended: boolean, grep: boolean): st
           continue;
         }
         if (p[j] === '-' && low !== null && j + 1 < n && p[j + 1] !== ']') {
-          if (p[j + 1] < low) return 'Invalid range end';
+          // the end can be a collating symbol: [a-[.z.]]
+          let high = p[j + 1], next = j + 2;
+          if (p.startsWith('[.', j + 1)) {
+            const close = p.indexOf('.]', j + 3);
+            if (close < 0) return unmatched;
+            if (close - (j + 3) !== 1) return 'Invalid collation character';
+            high = p[j + 3];
+            next = close + 2;
+          }
+          if (high < low) return 'Invalid range end';
           low = null;
-          j += 2;
+          j = next;
           continue;
         }
         low = p[j++];
