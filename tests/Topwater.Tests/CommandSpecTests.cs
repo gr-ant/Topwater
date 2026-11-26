@@ -109,4 +109,50 @@ public class CommandSpecTests
             Assert.True(r.Stderr.Contains("invalid option") || r.Stderr.Contains("unrecognized option"), $"{name} {arg}: {r.Stderr}");
         }
     }
+
+    public static IEnumerable<object[]> Subcommands() =>
+        Spec.Values.Where(c => c.TryGetProperty("subcommands", out _))
+            .SelectMany(c => c.GetProperty("subcommands").EnumerateObject()
+                .Where(s => !s.Value.TryGetProperty("ports", out var p) || p.EnumerateArray().Any(x => x.GetString() == "cs"))
+                .Select(s => new object[] { c.GetProperty("name").GetString()!, s.Name }))
+            .OrderBy(x => (string)x[0], StringComparer.Ordinal).ThenBy(x => (string)x[1], StringComparer.Ordinal);
+
+    /// <summary>The generated table's entry for a subcommand (internal to the library, so read by reflection).</summary>
+    static (string Summary, string Help) Table(string name, string sub)
+    {
+        var spec = typeof(Shell).Assembly.GetType("Topwater.CommandSpec")!;
+        var commands = (System.Collections.IDictionary)spec.GetField("Commands", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+        var entry = commands[name]!;
+        var subs = (System.Collections.IDictionary)entry.GetType().GetProperty("Subcommands")!.GetValue(entry)!;
+        var s = subs[sub]!;
+        return ((string)s.GetType().GetProperty("Summary")!.GetValue(s)!, (string)s.GetType().GetProperty("Help")!.GetValue(s)!);
+    }
+
+    [Theory]
+    [MemberData(nameof(Subcommands))]
+    public async Task SubcommandsComeFromTheSpec(string name, string sub)
+    {
+        var s = Spec[name].GetProperty("subcommands").GetProperty(sub);
+        var (summary, help) = Table(name, sub);
+        Assert.Equal(Str(s, "summary"), summary);
+        var sh = new Shell();
+        Assert.Equal(help, (await sh.RunAsync($"{Q(name)} help {sub}")).Stdout);
+        Assert.Equal(help, (await sh.RunAsync($"{Q(name)} {sub} --help")).Stdout);
+        if (Bool(s, "unsupported", false))
+        {
+            var u = await sh.RunAsync($"{Q(name)} {sub}");
+            Assert.Equal(128, u.ExitCode);
+            Assert.StartsWith("fatal: ", u.Stderr);
+            return;
+        }
+        foreach (var (arg, valued) in Options(s))
+        {
+            var r = await new Shell().RunAsync($"cd /tmp && {Q(name)} init -q r && cd r && {Q(name)} {sub} {arg}{(valued ? " 1" : "")} </dev/null");
+            Assert.False(r.Stderr.Contains("unknown option") || r.Stderr.Contains("unknown switch"), $"{sub} {arg}: {r.Stderr}");
+        }
+        if (sub is "help" or "version" or "rev-parse" or "stash") return;  // these read their own arguments
+        var bad = await new Shell().RunAsync($"cd /tmp && {Q(name)} init -q r && cd r && {Q(name)} {sub} --no-such-option </dev/null");
+        Assert.Equal($"error: unknown option `no-such-option'\n{help}", bad.Stderr);
+        Assert.Equal(129, bad.ExitCode);
+    }
 }

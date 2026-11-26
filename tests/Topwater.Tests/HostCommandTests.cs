@@ -27,6 +27,8 @@ public class HostCommandTests
         if (!HasGit) return;
         var sh = new Shell();
         using var git = sh.RegisterHostCommand("git", options: new HostCommandOptions { Environment = GitEnv });
+        // the host program replaces the built-in git: only the real one has build options to print
+        Assert.Contains("cpu:", await Out(sh, "git version --build-options"));
 
         await Out(sh, "mkdir proj && cd proj && git init -q -b main && echo hello > a.txt && git add a.txt && git commit -q -m first");
         Assert.Equal(" M a.txt\n", await Out(sh, "echo world >> a.txt && git status --short"));
