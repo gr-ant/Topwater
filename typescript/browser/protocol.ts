@@ -17,7 +17,7 @@ export interface InitOptions extends Partial<Omit<ShellOptions, 'fileSystem'>> {
 
 export type ToWorker =
   | { t: 'init'; options: InitOptions; seed?: [path: string, content: string | Uint8Array][]; snapshot?: Snapshot;
-      /** a whole machine in the snapshot zip format (docs/reference.md "Snapshots") to start from; `snapshot` then applies on top */
+      /** a whole machine in the snapshot zip format (docs/snapshots-and-recordings.md) to start from; `snapshot` then applies on top */
       snapshotZip?: Uint8Array }
   | { t: 'run'; id: number; command: string }
   | { t: 'put'; id: number; name: string; data: Uint8Array };

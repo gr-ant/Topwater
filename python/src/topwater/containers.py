@@ -1,4 +1,4 @@
-"""Moves a machine between Topwater and a real Docker container, both ways ("Containers" in docs/reference.md).
+"""Moves a machine between Topwater and a real Docker container, both ways (docs/containers.md).
 
 Host APIs only: nothing here registers a command, so the agent inside the shell can never trigger an export, a build or
 an import. Only `_docker` starts processes: the docker CLI, with an argument list and no shell. Everything an import

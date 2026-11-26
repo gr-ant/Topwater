@@ -7,7 +7,7 @@ namespace Topwater.Containers;
 
 /// <summary>
 /// A Docker build context for a snapshot: a Dockerfile, a setup script and a tar layer with the files. Nothing here starts
-/// a process; <see cref="ContainerExport.BuildImageAsync"/> hands it to docker. See "Containers" in docs/reference.md.
+/// a process; <see cref="ContainerExport.BuildImageAsync"/> hands it to docker. See docs/containers.md.
 /// </summary>
 public sealed class BuildContext
 {

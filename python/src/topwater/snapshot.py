@@ -1,4 +1,4 @@
-"""Snapshots in the C# port's saved format (docs/reference.md "Snapshots"): a zip with manifest.json and blobs/<sha256>.
+"""Snapshots in the C# port's saved format (docs/snapshots-and-recordings.md): a zip with manifest.json and blobs/<sha256>.
 
 A snapshot saved by any port loads in the others. Loading treats the bytes as hostile, with the same limits as C#.
 """

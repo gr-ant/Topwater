@@ -12,7 +12,7 @@ namespace Topwater;
 /// <summary>
 /// A recorded session: the options and starting machine, then every tool call with what it returned. Replay it against a
 /// fresh shell, another starting machine, another Topwater version or a real Linux box to see what changed.
-/// See "Recordings" in docs/reference.md for the file format.
+/// See docs/snapshots-and-recordings.md for the file format.
 /// </summary>
 public sealed class Recording
 {

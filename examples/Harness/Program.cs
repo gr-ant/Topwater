@@ -6,7 +6,7 @@
 //   VARIANTS=plain,restricted,fake REPEAT=2 TASK_IDS=2,4 WORKERS=3 SYSTEM_PROMPT="..."   (all optional)
 //
 // Every run is saved to runs/harness-<time>.json as it goes (LOG=file.json to choose the path), and each one also as a
-// replayable recording in runs/harness-<time>/ (see "Recordings" in docs/reference.md).
+// replayable recording in runs/harness-<time>/ (see docs/snapshots-and-recordings.md).
 //   EXPORT_START=start.zip dotnet run --project examples/Harness   (save the starting machine and exit)
 using System.Text.RegularExpressions;
 using Topwater;

@@ -6,7 +6,7 @@ public sealed record ContainerReportItem(string What, string Why)
     public override string ToString() => $"{What}: {Why}";
 }
 
-/// <summary>What an export or import carried over and what it couldn't. See "Containers" in docs/reference.md.</summary>
+/// <summary>What an export or import carried over and what it couldn't. See docs/containers.md.</summary>
 public sealed class ContainerReport
 {
     internal readonly List<string> _carried = [], _deleted = [];

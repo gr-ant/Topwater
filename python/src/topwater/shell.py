@@ -653,7 +653,7 @@ class Shell:
                     self.fs.delete(d + name)
         return self.commands.pop(name, None) is not None
 
-    # ---------- snapshots (see snapshot.py and "Snapshots" in docs/reference.md) ----------
+    # ---------- snapshots (see snapshot.py and docs/snapshots-and-recordings.md) ----------
 
     def snapshot(self) -> "ShellSnapshot":
         """Captures the machine (files and session) as an immutable ShellSnapshot. Call it between calls."""

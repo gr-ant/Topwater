@@ -41,7 +41,7 @@ public class AgentFrameworkTests
         var model = new FakeModel();
         IChatClient chatClient = model;
 
-        // the docs/reference.md example, verbatim from here down
+        // the docs/integrations.md example, verbatim from here down
         var shell = new Shell();
         shell.Fs.WriteAllText("/home/agent/notes.txt", "one\ntwo\n");
 

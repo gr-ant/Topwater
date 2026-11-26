@@ -13,7 +13,7 @@ namespace Topwater;
 /// <summary>
 /// A shell's whole machine state at one moment: the filesystem and the session (variables, functions, aliases, cwd,
 /// options, traps, history, ...). Immutable: later changes to the shell never reach it, and restoring it twice gives the
-/// same state. Registered commands are not part of it. See "Snapshots" in docs/reference.md.
+/// same state. Registered commands are not part of it. See docs/snapshots-and-recordings.md.
 /// </summary>
 public sealed class ShellSnapshot
 {
