@@ -6,6 +6,10 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "THIRD-PARTY-NOTICES.md"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

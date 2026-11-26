@@ -28,5 +28,7 @@
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)..\assets\brand\topwater_icon_128.png" Pack="true" PackagePath="\icon.png" Visible="false" />
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- jq's help text is in the command tables Topwater.dll carries (and the CLI tool bundles) -->
+    <None Include="$(MSBuildThisFileDirectory)..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 </Project>
