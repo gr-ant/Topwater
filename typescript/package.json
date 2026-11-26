@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "A simulated bash shell for LLM agents: in-process interpreter, in-memory Ubuntu-like filesystem, ~100 standard commands.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gr-ant/Topwater.git",
+    "directory": "typescript"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

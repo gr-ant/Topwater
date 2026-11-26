@@ -5,6 +5,11 @@ Python and TypeScript packages are not published yet and are used from the repos
 
 ## Unreleased
 
+- **PyPI and npm release jobs.** A release tag can also publish the Python package to PyPI and the TypeScript
+  package to npm with trusted publishing, once each is switched on. Both run their port's tests first and take
+  their version from the tag: `v0.1.0-preview.4` is `0.1.0a4` on PyPI (PEP 440 has no "preview"; alpha, not
+  release candidate) and `0.1.0-preview.4` on npm, under the `next` tag.
+
 ## 0.1.0-preview.3 (2026-11-26)
 
 Everything since `0.1.0-preview.2`.

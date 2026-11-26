@@ -5,7 +5,7 @@ on:
   push:
     tags: ['v*']
 
-# Publishes with nuget.org trusted publishing: no stored API key. A policy on nuget.org (owner gr-ant, repository
+# NuGet, and when switched on PyPI and npm (jobs pypi and npm), publish with trusted publishing: no stored API key. A policy on nuget.org (owner gr-ant, repository
 # Topwater, workflow release.yml) lets this workflow exchange its GitHub OIDC token for a one-hour NuGet key.
 jobs:
   publish:
@@ -65,6 +65,78 @@ jobs:
         with:
           name: topwater-${{ matrix.rid }}
           path: dist/*
+
+  # PyPI trusted publishing: a publisher on pypi.org (project topwater, owner gr-ant, repository Topwater, workflow
+  # release.yml, no environment) accepts this job's OIDC token. Off until the repository variable PUBLISH_PYPI is 'true'.
+  pypi:
+    needs: [publish, binaries]   # nothing goes to PyPI unless the .NET tests passed and every binary built
+    if: vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # for the PyPI OIDC exchange
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest build twine
+      - run: python -m pytest -q
+      - name: Set the version from the tag
+        # v0.1.0-preview.4 -> 0.1.0a4 (PEP 440 alpha; plain "preview" would normalize to rc4), v0.1.0 -> 0.1.0
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            *-preview.*) n="${v##*-preview.}"; py="${v%%-*}a$n" ;;
+            *-*) echo "no PEP 440 form for $v" >&2; exit 1 ;;
+            *) py="$v" ;;
+          esac
+          [[ "$py" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a[0-9]+)?$ ]] || { echo "bad version $py" >&2; exit 1; }
+          sed -i "s/^version = \".*\"/version = \"$py\"/" pyproject.toml
+          grep -x "version = \"$py\"" pyproject.toml
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+
+  # npm trusted publishing: npm accepts this job's OIDC token for the package topwater (repository gr-ant/Topwater,
+  # workflow release.yml) and adds provenance. Off until the repository variable PUBLISH_NPM is 'true'.
+  npm:
+    needs: [publish, binaries]   # nothing goes to npm unless the .NET tests passed and every binary built
+    if: vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # for the npm OIDC exchange and provenance
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - run: npm install -g npm@^11.5.1   # trusted publishing needs npm 11.5.1 or later
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Set the version from the tag
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+      - run: npm publish --dry-run --access public --tag next   # builds through prepack and lists the files
+      - name: Publish to npm
+        env:
+          # OIDC first; NPM_TOKEN only for the very first publish, before the package exists to trust this workflow
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          tag=latest; case "$GITHUB_REF_NAME" in *-*) tag=next ;; esac
+          npm publish --provenance --access public --tag "$tag"
 
   github-release:
     needs: [publish, binaries]
