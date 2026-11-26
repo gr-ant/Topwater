@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ._spec import DIAGNOSTICS, diagnostic
+
 
 class ParseError(Exception):
     pass
@@ -334,7 +336,7 @@ class Lexer:
             tokens.append(Token("word", word=self.lex_word()))
             return
         if c == ">" and self.peek(1) == "(":
-            raise ParseError("process substitution >(...) is not supported by this shell (write to a file, then read it)")
+            raise ParseError(DIAGNOSTICS["processSubstitution"])
         if c in "<>":
             tokens.append(self.lex_redirect(1 if c == ">" else 0))
             return
@@ -400,7 +402,7 @@ class Lexer:
             while self.peek() in " \t":
                 self.i += 1
             if self.i >= len(s) or s[self.i] in "\n;|&<>()":
-                raise ParseError("syntax error near unexpected token `newline'")
+                raise ParseError(diagnostic("unexpectedToken", token="newline"))
             w = self.lex_word()
             doc = HereDoc(
                 "".join(p.text for p in w.parts if isinstance(p, Literal)),
@@ -520,7 +522,7 @@ class Lexer:
                 flush()
                 j = s.find("'", self.i + 1)
                 if j < 0:
-                    raise ParseError("unexpected EOF while looking for matching `''")
+                    raise ParseError(DIAGNOSTICS["eofSingleQuote"])
                 parts.append(Literal(s[self.i + 1:j], True))
                 self.i = j + 1
             elif c == '"':
@@ -590,7 +592,7 @@ class Lexer:
             else:
                 out.append("\\" + n)
         if i >= len(s):
-            raise ParseError("unexpected EOF while looking for matching `''")
+            raise ParseError(DIAGNOSTICS["eofSingleQuote"])
         self.i = i + 1
         return "".join(out)
 
@@ -633,7 +635,7 @@ class Lexer:
                 flush()
                 j = s.find("'", self.i + 1)
                 if j < 0:
-                    raise ParseError("unexpected EOF while looking for matching `''")
+                    raise ParseError(DIAGNOSTICS["eofSingleQuote"])
                 parts.append(Literal(s[self.i + 1:j], True))
                 self.i = j + 1
             elif c == '"':
@@ -685,7 +687,7 @@ class Lexer:
                 self.i += 1
         if terminator is not None:
             if self.i >= len(s):
-                raise ParseError(f"unexpected EOF while looking for matching `{terminator}'")
+                raise ParseError(diagnostic("eofMatching", terminator=terminator))
             self.i += 1
         flush()
         if not parts:
@@ -717,7 +719,7 @@ class Lexer:
                         break
                 k += 1
             if k >= len(s):
-                raise ParseError("unexpected EOF while looking for matching `]'")
+                raise ParseError(DIAGNOSTICS["eofBracket"])
             expr = s[self.i + 2:k]
             self.i = k + 1
             return ArithSub(expr, quoted)
@@ -735,7 +737,7 @@ class Lexer:
                     depth -= 1
                 k += 1
             if k >= len(s):
-                raise ParseError("unexpected EOF while looking for matching `}'")
+                raise ParseError(DIAGNOSTICS["eofBrace"])
             name = s[self.i + 2:k]
             self.i = k + 1
             return Variable(name, quoted)
@@ -762,7 +764,7 @@ class Lexer:
             sb.append(s[j])
             j += 1
         if j >= len(s):
-            raise ParseError("unexpected EOF while looking for matching ``'")
+            raise ParseError(DIAGNOSTICS["eofBacktick"])
         self.i = j + 1
         return CommandSub("".join(sb), quoted)
 
@@ -825,7 +827,7 @@ class Lexer:
             elif c == "<" and k + 2 < len(s) and s[k + 1] == "<" and s[k + 2] != "<" and (k == 0 or s[k - 1] != "<"):
                 k = self._skip_heredoc(k + 2) - 1  # its body is text: quotes and parentheses in it mean nothing
             k += 1
-        raise ParseError("unexpected EOF while looking for matching `)'")
+        raise ParseError(DIAGNOSTICS["eofParen"])
 
     def _skip_heredoc(self, k: int) -> int:
         """From just after a `<<`, returns the index after the heredoc's closing delimiter line."""
@@ -875,7 +877,7 @@ class Parser:
             p = Parser(Lexer(source).lex(), source)
             script = p.parse_script()
         except RecursionError:  # deeply nested input must not crash the host
-            raise ParseError("command is nested too deeply") from None
+            raise ParseError(DIAGNOSTICS["nestedTooDeeply"]) from None
         if p.p < len(p.t):
             raise p.unexpected()
         return script
@@ -907,12 +909,12 @@ class Parser:
             self.p += 1
 
     def unexpected(self) -> ParseError:
-        return ParseError(f"syntax error near unexpected token `{self.cur if self.cur else 'newline'}'")
+        return ParseError(diagnostic("unexpectedToken", token=str(self.cur) if self.cur else "newline"))
 
     def expect(self, word: str) -> None:
         if not self.is_word(word):
             if self.cur is None:
-                raise ParseError(f"syntax error: unexpected end of file (expected `{word}')")
+                raise ParseError(diagnostic("unexpectedEofExpecting", word=word))
             raise self.unexpected()
         self.p += 1
 
@@ -990,7 +992,7 @@ class Parser:
             self.p += 1
             body = self.parse_script(")" if sub else "}")
             if not (self.is_op(")") if sub else self.is_word("}")):
-                raise ParseError("syntax error: unexpected end of file") if self.cur is None else self.unexpected()
+                raise ParseError(DIAGNOSTICS["unexpectedEof"]) if self.cur is None else self.unexpected()
             self.p += 1
             return self.with_redirects(GroupCommand(body, sub), start)
         kw = c.word.unquoted_literal if c is not None and c.kind == "word" else None
@@ -1010,7 +1012,7 @@ class Parser:
             if kw == "select":
                 return self.with_redirects(self.parse_for(select=True), start)
             if kw == "coproc":
-                raise ParseError("'coproc' is not supported by this shell")
+                raise ParseError(DIAGNOSTICS["coproc"])
             if kw in _RESERVED:
                 raise self.unexpected()
             a1, a2 = self.at(1), self.at(2)
@@ -1081,7 +1083,7 @@ class Parser:
             self.p += 1
             parts = c.op.split(";")
             if len(parts) != 3:
-                raise ParseError("syntax error: expected `for (( init; cond; step ))'")
+                raise ParseError(DIAGNOSTICS["forArithmetic"])
             self.skip_separators()
             self.expect("do")
             body = self.parse_script("done")
@@ -1117,7 +1119,7 @@ class Parser:
         clauses = []
         while not self.is_word("esac"):
             if self.cur is None:
-                raise ParseError("syntax error: unexpected end of file (expected `esac')")
+                raise ParseError(DIAGNOSTICS["eofEsac"])
             if self.is_op("("):
                 self.p += 1
             patterns = []
@@ -1157,7 +1159,7 @@ class Parser:
             self.p += 1
         self.skip_newlines()
         if self.cur is None:
-            raise ParseError("syntax error: unexpected end of file")
+            raise ParseError(DIAGNOSTICS["unexpectedEof"])
         start = self.cur.start
         body = self.parse_command()
         return FunctionDef(name, body, source=self.src[start:max(start, self.t[self.p - 1].end)].rstrip())
@@ -1168,7 +1170,7 @@ class Parser:
         while not self.is_word("]]"):
             c = self.cur
             if c is None:
-                raise ParseError("syntax error: unexpected end of file (expected `]]')")
+                raise ParseError(DIAGNOSTICS["eofDoubleBracket"])
             if c.kind == "word":
                 items.append(c.word)
             elif c.kind == "op" and c.op in ("&&", "||", "(", ")"):

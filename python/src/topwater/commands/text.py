@@ -6,8 +6,9 @@ import re
 
 from .. import bytetext
 from ..shell import CommandContext, glob_to_regex
+from .._spec import COMMANDS, GETOPT
 from ..vfs import ShellError, UsageException, normalize
-from . import Args, inputs, quote_l, split_lines, unescape
+from . import Args, inputs, quote_l, spec_format, spec_message, split_lines, unescape
 
 
 _CLASSES = {
@@ -284,7 +285,7 @@ def _regex(patterns: list[str], extended: bool, fixed: bool, ignore_case: bool, 
     try:
         return re.compile(rx, re.IGNORECASE if ignore_case else 0)
     except re.error as e:
-        raise ShellError(f"invalid regular expression: {e}", 2) from None
+        raise ShellError(spec_message("grep", "invalidRegex", detail=str(e)), 2) from None
 
 
 def _parse_list(spec: str) -> tuple[set[int], float]:
@@ -294,7 +295,7 @@ def _parse_list(spec: str) -> tuple[set[int], float]:
     for part in spec.split(","):
         a, dash, b = part.partition("-")
         if not re.fullmatch(r"\d*", a) or not re.fullmatch(r"\d*", b) or (not a and not b) or (a and int(a) == 0):
-            raise ShellError("fields and positions are numbered from 1" if a == "0" else f"invalid field value '{part}'")
+            raise ShellError(spec_message("cut", "fieldsFromOne") if a == "0" else spec_message("cut", "invalidFieldValue", part=part))
         if not dash:
             result.add(int(a))
         elif not b:
@@ -346,18 +347,14 @@ def _grep(ctx):
                 continue
             if m is not None and value == "":
                 if i >= len(args):
-                    raise ShellError(f"option requires an argument -- '{kind}'", 2)
+                    raise UsageException(spec_format(GETOPT["missingShortArgument"], option=kind))
                 value = args[i]
                 i += 1
             if kind == "e":
                 patterns.append(value)
             else:
                 patterns.extend(split_lines(ctx.fs.read_text(ctx.resolve(value))) if value != "-" else split_lines(ctx.stdin))
-    a = Args.parse(rest, "invcrRlLEFwxohHqsIaZPU", "ABCm",
-                   "binary-files=I,text=a,ignore-case=i,line-number=n,invert-match=v,count=c,recursive=r,files-with-matches=l,"
-                   "files-without-match=L,extended-regexp=E,fixed-strings=F,word-regexp=w,line-regexp=x,only-matching=o,"
-                   "quiet=q,silent=q,max-count=m,perl-regexp=P,no-filename=h,with-filename=H,no-messages=s,"
-                   "color=U,colour=U,line-buffered=U,after-context=A,before-context=B,context=C,dereference-recursive=R")
+    a = Args.parse(rest, COMMANDS["grep"])
     positional = list(a.positional)
     if not patterns:
         if not positional:
@@ -372,7 +369,7 @@ def _grep(ctx):
     if a.has("E") and not a.has("F") and not a.has("P"):
         for p in patterns:
             if lead := re.search(r"^[*+?]|(?<!\\)[(|]([*+?])", p):
-                ctx.error(f"grep: warning: {lead.group(0)[-1]} at start of expression")
+                ctx.error("grep: " + spec_message("grep", "leadingRepetition", char=lead.group(0)[-1]))
     rx = _regex(patterns, a.has("E"), a.has("F"), a.has("i"), a.has("w"), a.has("x"), a.has("P"))
     after = int(a.value("A") or a.value("C") or 0)
     before = int(a.value("B") or a.value("C") or 0)
@@ -389,7 +386,7 @@ def _grep(ctx):
         walked = True
         if not recursive:
             if not a.has("s"):
-                ctx.error(f"grep: {f}: Is a directory")
+                ctx.error("grep: " + spec_message("grep", "openFailed", file=f, errno="Is a directory"))
             errors()
             continue
 
@@ -400,7 +397,7 @@ def _grep(ctx):
                 names = ctx.fs.listdir(d)
             except ShellError:
                 if not a.has("s"):
-                    ctx.error(f"grep: {display}: Permission denied")
+                    ctx.error("grep: " + spec_message("grep", "openFailed", file=display, errno="Permission denied"))
                 errors()
                 return
             for name in names:
@@ -461,7 +458,7 @@ def _grep(ctx):
             continue
         if binary:
             if hits:
-                ctx.print(f"grep: {name}: binary file matches")
+                ctx.print("grep: " + spec_message("grep", "binaryFileMatches", file=name))
             continue
         hit_set = set(hits)
         last_printed = -1
@@ -487,12 +484,11 @@ def _grep(ctx):
 def _head_tail(ctx):
     head = ctx.name == "head"
     # shortcut: tail -f/-F print what is there and return instead of following (nothing else writes the file)
-    a = Args.parse(Args.numeric_shorthand(ctx.args), "qvfF" if ctx.name == "tail" else "qv", "nc",
-                   "lines=n,bytes=c,quiet=q,silent=q,verbose=v" + (",follow=f,retry=F" if ctx.name == "tail" else ""))
+    a = Args.parse(Args.numeric_shorthand(ctx.args), COMMANDS[ctx.name])
     if a.value("n") is not None:  # a bad count is reported before any file is opened
-        _count_arg(a.value("n"), "lines")
+        _count_arg(ctx.name, a.value("n"), "lines")
     if a.value("c") is not None:
-        _count_arg(a.value("c"), "bytes")
+        _count_arg(ctx.name, a.value("c"), "bytes")
     errors = _Errors()
     items = list(inputs(ctx, a.positional, errors, raw=a.value("c") is not None))
     for k, (name, text) in enumerate(items):
@@ -500,7 +496,7 @@ def _head_tail(ctx):
             ctx.print(("\n" if k else "") + f"==> {name} <==")
         if a.value("c") is not None:  # byte counts; text is bytes here
             spec = a.value("c")
-            n = _count_arg(spec, "bytes")
+            n = _count_arg(ctx.name, spec, "bytes")
             if head:
                 chunk = text[: max(0, len(text) - n)] if spec.startswith("-") else text[:n]
             else:
@@ -508,7 +504,7 @@ def _head_tail(ctx):
             ctx.stdout.write(bytetext.decode(chunk))
             continue
         spec = a.value("n") or "10"
-        n = _count_arg(spec, "lines")
+        n = _count_arg(ctx.name, spec, "lines")
         lines = split_lines(text)
         if head:
             pick = lines[: max(0, len(lines) - n)] if spec.startswith("-") else lines[:n]
@@ -523,15 +519,15 @@ def _head_tail(ctx):
     return 1 if errors.hit else 0
 
 
-def _count_arg(spec: str, what: str) -> int:
+def _count_arg(cmd: str, spec: str, what: str) -> int:
     try:
         return int(spec.lstrip("+-") or "x")
     except ValueError:
-        raise ShellError(f"invalid number of {what}: {quote_l(spec)}") from None
+        raise ShellError(spec_message(cmd, "invalidCount", what=what, value=spec)) from None
 
 
 def _wc(ctx):
-    a = Args.parse(ctx.args, "lwcm", longs="lines=l,words=w,bytes=c,chars=m")
+    a = Args.parse(ctx.args, COMMANDS["wc"])
     every = not (a.flags & set("lwcm"))
     errors = _Errors()
     items = list(inputs(ctx, a.positional, errors, raw=True))
@@ -589,23 +585,20 @@ def _version_key(s: str) -> list:
 def _sort(ctx):
     import functools
 
-    a = Args.parse(ctx.args, "rnufhVgsbcCdiMRzZ", "kto",
-                   "reverse=r,numeric-sort=n,unique=u,ignore-case=f,key=k,field-separator=t,output=o,general-numeric-sort=g,"
-                   "human-numeric-sort=h,version-sort=V,stable=s,ignore-leading-blanks=b,check=c,dictionary-order=d,"
-                   "month-sort=M,random-sort=R,ignore-nonprinting=i,zero-terminated=z,debug=Z")
+    a = Args.parse(ctx.args, COMMANDS["sort"])
     keys_spec = [ctx.args[i + 1] for i in range(len(ctx.args) - 1) if ctx.args[i] in ("-k", "--key")]
     keys_spec += [x[2:] for x in ctx.args if x.startswith("-k") and len(x) > 2]
     keys_spec += [x[6:] for x in ctx.args if x.startswith("--key=")]
     sep = a.value("t")
     if sep is not None and len(unescape(sep)) != 1:
-        raise ShellError("multi-character tab '" + sep + "'", 2)
+        raise ShellError(spec_message("sort", "multiCharacterTab", value=sep), 2)
     sep = unescape(sep) if sep is not None else None
     global_opts = "".join(c for c in "bdfghnrMV" if a.has(c))
     keys = []  # (start field, start char, end field, end char, options)
     for spec in keys_spec:
         km = re.fullmatch(r"(\d+)(?:\.(\d+))?([a-zA-Z]*)(?:,(\d+)(?:\.(\d+))?([a-zA-Z]*))?", spec)
         if not km or int(km.group(1)) == 0:
-            raise ShellError(f"invalid number at field start: invalid count at start of {quote_l(spec)}", 2)
+            raise ShellError(spec_message("sort", "invalidKey", value=spec), 2)
         opts = km.group(3) + (km.group(6) or "")
         keys.append((int(km.group(1)), int(km.group(2) or 1), int(km.group(4)) if km.group(4) else None,
                      int(km.group(5) or 0), opts if set(opts) & _SORT_ORDERING else global_opts + opts))
@@ -667,7 +660,7 @@ def _sort(ctx):
         for i in range(1, len(items)):
             if cmp(items[i - 1], items[i]) > 0 or (a.has("u") and cmp(items[i - 1], items[i]) == 0):
                 if a.has("c"):
-                    ctx.error(f"sort: {named[0][0] if a.positional else '-'}:{i + 1}: disorder: {items[i][0]}")
+                    ctx.error("sort: " + spec_message("sort", "disorder", file=named[0][0] if a.positional else "-", line=str(i + 1), text=items[i][0]))
                 return 1
         return 0
     items.sort(key=functools.cmp_to_key(cmp))
@@ -686,7 +679,7 @@ def _sort(ctx):
 
 
 def _uniq(ctx):
-    a = Args.parse(ctx.args, "cdui", longs="count=c,repeated=d,unique=u,ignore-case=i")
+    a = Args.parse(ctx.args, COMMANDS["uniq"])
     errors = _Errors()
     text = "".join(t for _, t in inputs(ctx, a.positional[:1], errors))
     if errors.hit:
@@ -705,21 +698,20 @@ def _uniq(ctx):
 
 
 def _cut(ctx):
-    a = Args.parse(ctx.args, "snz", "dfcbO", "delimiter=d,fields=f,characters=c,bytes=b,only-delimited=s,complement=z,"
-                                             "output-delimiter=O")
+    a = Args.parse(ctx.args, COMMANDS["cut"])
     delim = a.value("d") if a.value("d") is not None else "\t"
     if len(delim) != 1:
-        raise ShellError("the delimiter must be a single character")
+        raise ShellError(spec_message("cut", "delimiterNotSingle"))
     chars = a.value("c") or a.value("b")
     if not chars and not a.value("f"):
-        raise UsageException("you must specify a list of bytes, characters, or fields")
+        raise UsageException(spec_message("cut", "listRequired"))
     wanted, open_from = _parse_list(chars or a.value("f"))
     complement = a.has("z")
 
     def pick(items: list) -> list:
         return [x for i, x in enumerate(items, 1) if (i >= open_from or i in wanted) != complement]
 
-    out_delim = a.value("O")
+    out_delim = a.value("\x02")  # --output-delimiter (long only)
     errors = _Errors()
     out = []
     for _, text in inputs(ctx, a.positional, errors):
@@ -758,11 +750,11 @@ def _expand_set(spec: str) -> str:
 
 
 def _tr(ctx):
-    a = Args.parse(ctx.args, "dscC", longs="delete=d,squeeze-repeats=s,complement=c")
+    a = Args.parse(ctx.args, COMMANDS["tr"])
     if not a.positional:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("tr", "missingOperand"))
     if len(a.positional) > 2:
-        raise UsageException(f"extra operand {quote_l(a.positional[2])}")
+        raise UsageException(spec_message("tr", "extraOperand", operand=a.positional[2]))
     set1 = _expand_set(a.positional[0])
     set2 = _expand_set(a.positional[1]) if len(a.positional) > 1 else ""
     complement = a.has("c") or a.has("C")
@@ -791,7 +783,7 @@ def _tr(ctx):
 
 
 def _tee(ctx):
-    a = Args.parse(ctx.args, "ai", longs="append=a,ignore-interrupts=i")
+    a = Args.parse(ctx.args, COMMANDS["tee"])
     code = 0
     for f in a.positional:
         path = ctx.resolve(f)
@@ -801,7 +793,7 @@ def _tee(ctx):
         try:
             (ctx.fs.append_text if a.has("a") else ctx.fs.write_text)(path, ctx.stdin)
         except ShellError as e:
-            ctx.error(f"tee: {f}: {str(e).rsplit(': ', 1)[-1]}")
+            ctx.error("tee: " + spec_message("tee", "writeFailed", file=f, reason=str(e).rsplit(": ", 1)[-1]))
             code = 1
     ctx.stdout.write(ctx.stdin)
     return code
@@ -824,7 +816,7 @@ def _xargs_words(text: str) -> list[str]:
             j = text.find(c, i + 1)
             if j < 0 or "\n" in text[i + 1:j]:
                 kind = "single" if c == "'" else "double"
-                raise ShellError(f"unmatched {kind} quote; by default quotes are special to xargs unless you use the -0 option")
+                raise ShellError(spec_message("xargs", "unmatchedQuote", kind=kind))
             cur.append(text[i + 1:j])
             in_word, i = True, j + 1
         elif c == "\\" and i + 1 < n:
@@ -848,8 +840,7 @@ async def _xargs(ctx):
             i += 1
             opts.append(args[i])
         i += 1
-    a = Args.parse(opts, "0rtpx", "InLdPsEa", "null=0,no-run-if-empty=r,verbose=t,max-args=n,max-lines=L,delimiter=d,"
-                                            "max-procs=P,replace=I,arg-file=a,interactive=p,exit=x,max-chars=s")
+    a = Args.parse(opts, COMMANDS["xargs"])
     command = list(args[i:]) or ["echo"]
     data = ctx.fs.read_text(ctx.resolve(a.value("a"))) if a.value("a") else ctx.stdin
     # shortcut: -P is accepted but commands run one after another (output order stays deterministic).
@@ -860,7 +851,7 @@ async def _xargs(ctx):
         else:
             per = int(a.value("L"))
             if per < 1:
-                raise ShellError(f"value {a.value('L')} for -L option should be >= 1")
+                raise ShellError(spec_message("xargs", "invalidValue", value=a.value("L"), option="L"))
             words = [_xargs_words(line) for line in lines]
             words = [w for w in words if w]
             groups = [[x for w in words[k:k + per] for x in w] for k in range(0, len(words), per)]
@@ -875,7 +866,7 @@ async def _xargs(ctx):
             items = _xargs_words(data)
         per = int(a.value("n")) if a.value("n") else max(1, len(items))
         if per < 1:
-            raise ShellError(f"value {a.value('n')} for -n option should be >= 1")
+            raise ShellError(spec_message("xargs", "invalidValue", value=a.value("n"), option="n"))
         groups = [items[k:k + per] for k in range(0, len(items), per)]
     if not groups:
         if a.has("r") or a.value("I") is not None:
@@ -893,7 +884,7 @@ async def _xargs(ctx):
         if rc == 127:
             return 127
         if rc == 255:
-            ctx.error(f"xargs: {argv[0]}: exited with status 255; aborting")
+            ctx.error("xargs: " + spec_message("xargs", "exitedWith255", command=argv[0]))
             return 124
         if rc != 0:
             code = 123
@@ -921,31 +912,7 @@ class _SedCmd:
         self.table: dict[int, str] = {}
 
 
-# our own summary of the options this sed takes (not GNU's help text); also printed after a usage error
-SED_USAGE = """Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...
-Run a script of editing commands over each line of the input and print the result.
-
-  -n, --quiet, --silent    print only what the script prints (p, s///p, ...)
-  -e script, --expression=script
-                           add the commands in script
-  -f script-file, --file=script-file
-                           add the commands in a file
-  -i[SUFFIX], --in-place[=SUFFIX]
-                           write the result back into each file; with SUFFIX,
-                           keep the original under the name FILE+SUFFIX
-  -E, -r, --regexp-extended
-                           read regular expressions as POSIX extended ones
-  -s, --separate           treat each file as its own input, not one stream
-  -u, --unbuffered         accepted, no effect
-      --debug, --posix, --sandbox, --follow-symlinks
-                           accepted, no effect
-      --help               show this help
-      --version            show the version
-
-Without -e or -f, the first operand is the script. The other operands are
-input files; with none, sed reads standard input.
-"""
-SED_HELP = SED_USAGE
+SED_USAGE = COMMANDS["sed"].help  # spec/commands/sed.json; also printed after a usage error
 
 
 def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
@@ -1019,21 +986,21 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
             out.append(ch)
             i += 1
         if i >= n or script[i] != delim:
-            raise fail({"addr": "unterminated address regex", "y": "unterminated `y' command"}.get(what, "unterminated `s' command"), i)
+            raise fail({"addr": spec_message("sed", "unterminatedAddress"), "y": spec_message("sed", "unterminatedY")}.get(what, spec_message("sed", "unterminatedS")), i)
         i += 1
         return "".join(out)
 
     def compile_rx(text: str, flags: int, error_at: int) -> re.Pattern:
         if text == "":
             if last_rx[0] is None:
-                raise fail("no previous regular expression", error_at)
+                raise fail(spec_message("sed", "noPreviousRegex"), error_at)
             return last_rx[0]
         if (error := posix_regex_error(text, extended, grep=False)) is not None:
             raise ShellError(error, 4) if error == CLASS_SYNTAX else fail(error, error_at)
         try:
             rx = re.compile(posix_to_python(text, extended), flags)
         except re.error as e:
-            raise fail(f"invalid regular expression: {e}", error_at) from None
+            raise fail(spec_message("sed", "invalidRegex", detail=str(e)), error_at) from None
         last_rx[0] = rx
         return rx
 
@@ -1086,7 +1053,7 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
         nonlocal i
         skip_blanks()
         if i >= n:
-            raise fail("expected \\ after `a', `c' or `i'", i)
+            raise fail(spec_message("sed", "expectedBackslash"), i)
         if script[i] == "\\":
             i += 1
             if i < n and script[i] == "\n":
@@ -1119,18 +1086,18 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
             skip_blanks()
             c.a2 = read_addr(True)
             if c.a2 is None:
-                raise fail("unexpected `,'", min(i + 1, n))
+                raise fail(spec_message("sed", "unexpectedComma"), min(i + 1, n))
         if c.a1 == ("zero",) and (c.a2 is None or c.a2[0] != "re"):
-            raise fail("invalid usage of line address 0", min(i + 1, n))
+            raise fail(spec_message("sed", "lineZero"), min(i + 1, n))
         skip_blanks()
         if i < n and script[i] == "!":
             c.negate = True
             i += 1
             skip_blanks()
             if i < n and script[i] == "!":
-                raise fail("multiple `!'s", i + 1)
+                raise fail(spec_message("sed", "multipleBang"), i + 1)
         if i >= n:
-            raise fail("missing command", i)
+            raise fail(spec_message("sed", "missingCommand"), i)
         c.op = script[i]
         i += 1
         op = c.op
@@ -1139,13 +1106,13 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
             blocks.append((len(cmds), i))
         elif op == "}":
             if not blocks:
-                raise fail("unexpected `}'", i)
+                raise fail(spec_message("sed", "unexpectedBrace"), i)
             if c.a1 is not None:
-                raise fail("} doesn't want any addresses", i)
+                raise fail(spec_message("sed", "braceAddresses"), i)
             cmds[blocks.pop()[0]].target = len(cmds) + 1
         elif op == "s":
             if i >= n:
-                raise fail("unterminated `s' command", i)
+                raise fail(spec_message("sed", "unterminatedS"), i)
             delim = script[i]
             i += 1
             find = read_delimited(delim, "regex")
@@ -1157,18 +1124,18 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
                 if f in "0123456789":
                     c.nth = read_number()
                     if numbered:
-                        raise fail("multiple number options to `s' command", i)
+                        raise fail(spec_message("sed", "multipleNumbers"), i)
                     if c.nth == 0:
-                        raise fail("number option to `s' command may not be zero", i)
+                        raise fail(spec_message("sed", "zeroNumber"), i)
                     numbered = True
                     continue
                 if f not in "gpiImMew":
                     break
                 i += 1
                 if f == "g" and c.glob:
-                    raise fail("multiple `g' options to `s' command", i)
+                    raise fail(spec_message("sed", "multipleG"), i)
                 if f == "p" and c.print:
-                    raise fail("multiple `p' options to `s' command", i)
+                    raise fail(spec_message("sed", "multipleP"), i)
                 if f == "g":
                     c.glob = True
                 elif f == "p":
@@ -1178,34 +1145,34 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
                 elif f in "mM":
                     flags |= re.MULTILINE
                 elif f == "w" and not script[i:].split("\n", 1)[0].strip():
-                    raise fail("missing filename in r/R/w/W commands", i)
+                    raise fail(spec_message("sed", "missingFilename"), i)
                 else:
-                    raise fail(f"the `{f}' flag of `s' is not supported", i)
+                    raise fail(spec_message("sed", "flagNotSupported", flag=f), i)
             skip_blanks()
             if i < n and script[i] not in ";\n}#":
-                raise fail("unknown option to `s'", i + 1)
+                raise fail(spec_message("sed", "unknownSOption"), i + 1)
             # GNU compiles the regex once it has read the character that ends the command
             compiled_at = i + 1 if i < n and script[i] in ";\n" else i
             c.rx = compile_rx(find, flags, compiled_at)
             refs = [p for p in c.repl if isinstance(p, int)]
             if refs and max(refs) > c.rx.groups:
-                raise fail(f"invalid reference \\{max(refs)} on `s' command's RHS", compiled_at)
+                raise fail(spec_message("sed", "invalidReference", number=str(max(refs))), compiled_at)
         elif op == "y":
             delim = script[i] if i < n else ""
             i += 1
             src = unescape(read_delimited(delim, "y"))
             dst = unescape(read_delimited(delim, "y"))
             if len(src) != len(dst):
-                raise fail("strings for `y' command are different lengths", i)
+                raise fail(spec_message("sed", "yLengths"), i)
             c.table = {ord(a): b for a, b in zip(src, dst)}
         elif op in "aic":
             c.text = read_text()
         elif op == ":":
             if c.a1 is not None:
-                raise fail(": doesn't want any addresses", i)
+                raise fail(spec_message("sed", "colonAddresses"), i)
             label = read_label()
             if not label:
-                raise fail("\":\" lacks a label", i)
+                raise fail(spec_message("sed", "colonLabel"), i)
             labels[label] = len(cmds)
         elif op in "btT":
             c.label = read_label()
@@ -1216,19 +1183,19 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
             c.code = read_number() if i < n and script[i].isdigit() else 0
         else:
             if op in "rRwW" and not read_label():
-                raise fail("missing filename in r/R/w/W commands", i)
+                raise fail(spec_message("sed", "missingFilename"), i)
             if op not in "=dDgGhHnNpPxz":
-                raise fail(f"unknown command: `{op}'", at)
+                raise fail(spec_message("sed", "unknownCommand", op=op), at)
         cmds.append(c)
         skip_blanks()
         if op != "{" and i < n and script[i] not in ";\n}#":
-            raise fail("extra characters after command", i + 1)
+            raise fail(spec_message("sed", "extraCharacters"), i + 1)
     if blocks:
-        raise fail("unmatched `{'", blocks[-1][1], char_zero=True)
+        raise fail(spec_message("sed", "unmatchedBrace"), blocks[-1][1], char_zero=True)
     for c in cmds:
         if c.op in "btT":
             if c.label and c.label not in labels:
-                raise ShellError(f"can't find label for jump to `{c.label}'", 4)
+                raise ShellError(spec_message("sed", "missingLabel", label=c.label), 4)
             c.target = labels[c.label] if c.label else len(cmds)
     return cmds
 
@@ -1399,7 +1366,7 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
         while pc < len(cmds):
             steps += 1
             if steps > 10_000_000:
-                raise ShellError("too many steps (a branch loops forever?)")
+                raise ShellError(spec_message("sed", "tooManySteps"))
             if ctx is not None and steps & 1023 == 0:
                 ctx.check_time()  # the call's time limit, or `timeout`
             if len(ps) > max_string or len(hold) > max_string:
@@ -1515,7 +1482,7 @@ def _sed(ctx):
         try:
             text = ctx.stdin if value == "-" else ctx.fs.read_text(ctx.resolve(value))
         except ShellError as e:
-            raise ShellError(f"couldn't open file {value}: {str(e).rsplit(': ', 1)[-1]}", 4) from None
+            raise ShellError(spec_message("sed", "cannotOpenScript", file=value, errno=str(e).rsplit(": ", 1)[-1]), 4) from None
         scripts.append((text, f"file {value}"))
 
     files: list[str] = []
@@ -1542,17 +1509,17 @@ def _sed(ctx):
             elif name in ("expression", "file"):
                 if not eq:
                     if i >= len(args):
-                        return bad(f"option '--{name}' requires an argument")
+                        return bad(spec_format(GETOPT["missingLongArgument"], option=name))
                     value = args[i]
                     i += 1
                 add_script(name[0], value)
             elif name in ("posix", "debug", "sandbox", "follow-symlinks", "unbuffered"):
                 pass
             elif name == "help":
-                ctx.stdout.write(SED_HELP)
+                ctx.stdout.write(SED_USAGE)
                 return 0
             else:
-                return bad(f"unrecognized option '{arg}'")
+                return bad(spec_format(GETOPT["unrecognizedOption"], option=arg))
             continue
         if len(arg) < 2 or arg[0] != "-":
             files.append(arg)
@@ -1576,13 +1543,13 @@ def _sed(ctx):
                 value = arg[k:]
                 if not value:
                     if i >= len(args):
-                        return bad(f"option requires an argument -- '{f}'")
+                        return bad(spec_format(GETOPT["missingShortArgument"], option=f))
                     value = args[i]
                     i += 1
                 add_script(f, value)
                 break
             else:
-                return bad(f"invalid option -- '{f}'")
+                return bad(spec_format(GETOPT["invalidOption"], option=f))
     if not scripts:
         if not files:
             return bad("")
@@ -1590,7 +1557,7 @@ def _sed(ctx):
     cmds = _sed_parse(scripts, extended)
     if in_place:
         if not files:
-            raise ShellError("no input files", 1)
+            raise ShellError(spec_message("sed", "noInputFiles"), 1)
         code = 0
         for f in files:
             path = ctx.resolve(f)
@@ -1598,10 +1565,10 @@ def _sed(ctx):
                 original = ctx.fs.read_text(path)
             except ShellError as e:
                 if ctx.fs.is_dir(path):
-                    ctx.error(f"sed: couldn't edit {f}: not a regular file")
+                    ctx.error("sed: " + spec_message("sed", "notRegularFile", file=f))
                     code = 4
                 else:
-                    ctx.error(f"sed: can't read {f}: {str(e).rsplit(': ', 1)[-1]}")
+                    ctx.error("sed: " + spec_message("sed", "openFailed", file=f, errno=str(e).rsplit(": ", 1)[-1]))
                     code = 2
                 continue
             buf = io.StringIO()
@@ -1632,18 +1599,17 @@ def _sed(ctx):
 
 def register(shell) -> None:
     r = shell.register_command
-    r("grep", _grep, "Search text with regular expressions")
+    r("grep", _grep)
     # Ubuntu's egrep and fgrep are scripts that run `grep -E` / `grep -F`, so messages say "grep:"
     for alias, flag in (("egrep", "-E"), ("fgrep", "-F")):
-        r(alias, lambda ctx, flag=flag: _grep(CommandContext(ctx.shell, "grep", [flag, *ctx.args], ctx._stdin, ctx.stdout, ctx.stderr)),
-          f"Search text, like grep {flag}")
-    r("head", _head_tail, "Print the first lines of files")
-    r("tail", _head_tail, "Print the last lines of files")
-    r("wc", _wc, "Count lines, words and bytes")
-    r("sort", _sort, "Sort lines")
-    r("uniq", _uniq, "Collapse adjacent duplicate lines")
-    r("cut", _cut, "Select fields or characters from lines")
-    r("tr", _tr, "Translate or delete characters")
-    r("tee", _tee, "Copy stdin to stdout and files")
-    r("xargs", _xargs, "Build and run commands from stdin")
-    r("sed", _sed, "Stream editor", SED_HELP)
+        r(alias, lambda ctx, flag=flag: _grep(CommandContext(ctx.shell, "grep", [flag, *ctx.args], ctx._stdin, ctx.stdout, ctx.stderr)))
+    r("head", _head_tail)
+    r("tail", _head_tail)
+    r("wc", _wc)
+    r("sort", _sort)
+    r("uniq", _uniq)
+    r("cut", _cut)
+    r("tr", _tr)
+    r("tee", _tee)
+    r("xargs", _xargs)
+    r("sed", _sed)

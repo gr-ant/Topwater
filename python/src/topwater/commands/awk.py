@@ -1454,4 +1454,4 @@ class _Runner:
 
 
 def register(shell) -> None:
-    shell.register_command("awk", lambda ctx: _Runner(ctx).run(), "Pattern scanning and processing language")
+    shell.register_command("awk", lambda ctx: _Runner(ctx).run())

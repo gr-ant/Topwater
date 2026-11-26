@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from .. import bytetext
 from ..parser import is_name
+from .._spec import COMMANDS, DEFAULT_MESSAGES, DIAGNOSTICS, GETOPT, CommandSpec
 from ..vfs import ShellError, UsageException, normalize
 
 
@@ -25,9 +26,13 @@ class Args:
         return self.values.get(c)
 
     @staticmethod
-    def parse(args, flags: str = "", valued: str = "", longs: str = "") -> "Args":
+    def parse(args, flags: "str | CommandSpec" = "", valued: str = "", longs: str = "") -> "Args":
         """flags: allowed boolean short flags ("rfi"); valued: short options taking a value ("n");
-        longs: long aliases ("recursive=r,ignore-case=i")."""
+        longs: long aliases ("recursive=r,ignore-case=i"). Or flags is a command's spec entry: its option table."""
+        if isinstance(flags, CommandSpec):
+            if flags.options is None:
+                raise ValueError(f"{flags.name} parses its own arguments")
+            flags, valued, longs = flags.options
         mapping = dict(x.split("=") for x in longs.split(",") if x)
         r = Args()
         i = 0
@@ -39,7 +44,7 @@ class Args:
             if a.startswith("--"):
                 name, eq, inline = a[2:].partition("=")
                 if name not in mapping:
-                    raise UsageException(f"unrecognized option '{a}'")
+                    raise UsageException(spec_format(GETOPT["unrecognizedOption"], option=a))
                 c = mapping[name]
                 if c in valued:
                     if eq:
@@ -48,7 +53,7 @@ class Args:
                         i += 1
                         r.values[c] = args[i]
                     else:
-                        raise UsageException(f"option '--{name}' requires an argument")
+                        raise UsageException(spec_format(GETOPT["missingLongArgument"], option=name))
                 else:
                     r.flags.add(c)
                 i += 1
@@ -66,10 +71,10 @@ class Args:
                         i += 1
                         r.values[c] = args[i]
                     else:
-                        raise UsageException(f"option requires an argument -- '{c}'")
+                        raise UsageException(spec_format(GETOPT["missingShortArgument"], option=c))
                     break
                 if c not in flags:
-                    raise UsageException(f"invalid option -- '{c}'")
+                    raise UsageException(spec_format(GETOPT["invalidOption"], option=c))
                 r.flags.add(c)
             i += 1
         return r
@@ -86,26 +91,13 @@ class Args:
         return out
 
 
-_BASH_VERSION = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)"
-_VERSIONS = {
-    "grep": "grep (GNU grep) 3.11", "sed": "sed (GNU sed) 4.9", "find": "find (GNU findutils) 4.9.0",
-    "xargs": "xargs (GNU findutils) 4.9.0", "diff": "diff (GNU diffutils) 3.10", "jq": "jq-1.7.1", "tree": "tree v2.1.1",
-    "bash": _BASH_VERSION, "sh": _BASH_VERSION, "file": "file-5.45", "sudo": "Sudo version 1.9.15p5", "less": "less 590 (GNU regular expressions)",
-    "ps": "ps from procps-ng 4.0.4", "free": "free from procps-ng 4.0.4", "uptime": "uptime from procps-ng 4.0.4",
-    "column": "column from util-linux 2.39.3", "rev": "rev from util-linux 2.39.3", "more": "more from util-linux 2.39.3",
-    "egrep": "grep (GNU grep) 3.11", "fgrep": "grep (GNU grep) 3.11",
-    "tar": "tar (GNU tar) 1.35", "gzip": "gzip 1.12", "gunzip": "gzip 1.12", "zcat": "gzip 1.12",
-}
-_NO_STANDARD_OPTIONS = {"sudo", "su", "echo", "printf", "test", "[", "true", "false", ":", "awk", "help", "exit", "return", "break", "continue",
-                        "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"}
-
-
 def standard_option(ctx, cmd, arg: str) -> bool:
     """`tool --version` / `tool --help` for built-ins, so probing them looks like a real system."""
-    if arg not in ("--version", "--help") or cmd.name in _NO_STANDARD_OPTIONS:
+    spec = COMMANDS.get(cmd.name)
+    if arg not in ("--version", "--help") or spec is None or not spec.standard_options:
         return False
     if arg == "--version":
-        ctx.print(_VERSIONS.get(cmd.name, f"{cmd.name} (GNU coreutils) 9.4"))
+        ctx.print(spec.version)
     else:
         ctx.stdout.write(cmd.usage or f"Usage: {cmd.name} [OPTION]... [ARG]...\n{cmd.description}.\n")
     return True
@@ -125,32 +117,35 @@ def write_lines(w, lines) -> None:
 
 def usage_error(cmd: str, message: str) -> str:
     """A bad command line the way GNU tools report one: the problem, then a pointer to --help."""
-    head = f"{cmd}: {message}\n" if message else ""
-    if cmd == "grep":
-        return head + "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
-    if cmd == "diff":
-        return head + "diff: Try 'diff --help' for more information.\n"
-    return head + f"Try '{cmd} --help' for more information.\n"
+    spec = COMMANDS.get(cmd)
+    shown, try_help = (spec.reports_as, spec.try_help) if spec else (cmd, f"Try '{cmd} --help' for more information.\n")
+    return (f"{shown}: {message}\n" if message else "") + try_help
 
 
 def cannot_read(cmd: str, f: str, why: str) -> str:
     """The message after "NAME: " when an input file can't be read, worded the way each GNU tool words it."""
     isdir = why == "Is a directory"
-    if cmd == "sed":
-        return f"read error on {f}: {why}" if isdir else f"can't read {f}: {why}"
-    if cmd in ("head", "tail"):
-        return f"error reading {quote_always(f)}: {why}" if isdir else f"cannot open {quote_always(f)} for reading: {why}"
-    if cmd == "uniq" and isdir:
-        return f"error reading {quote_always(f)}: {why}"
-    if cmd == "tac":
-        return f"{quote(f)}: read error: Invalid argument" if isdir else f"failed to open {quote_always(f)} for reading: {why}"
-    if cmd == "sort":
-        return f"read failed: {quote(f)}: {why}" if isdir else f"cannot read: {quote(f)}: {why}"
-    if cmd == "base64" and isdir:
-        return f"read error: {why}"
-    if cmd in ("grep", "egrep", "fgrep"):
-        return f"{f}: {why}"  # grep prints the name raw
-    return f"{quote(f)}: {why}"
+    return spec_message(cmd, "readDirectory" if isdir and "readDirectory" in COMMANDS[cmd].messages else "openFailed", file=f, errno=why)
+
+
+_PLACEHOLDER = re.compile(r"\{([A-Za-z]\w*)(?::([\w-]+))?\}")
+
+
+def spec_format(template: str, /, **values: str) -> str:
+    """Fills a spec template: {x} as given, {x:shell} / {x:shell-always} shell-quoted, {x:locale} in ‘curly quotes’."""
+    def one(m):
+        v = values.get(m.group(1))
+        if v is None:
+            return m.group(0)
+        how = m.group(2)
+        return quote(v) if how == "shell" else quote_always(v) if how == "shell-always" else quote_l(v) if how == "locale" else v
+    return _PLACEHOLDER.sub(one, template)
+
+
+def spec_message(command: str, key: str, /, **values: str) -> str:
+    """The command's message `key` from spec/ (or the shared default), filled in."""
+    spec = COMMANDS.get(command)
+    return spec_format(spec.messages[key] if spec and key in spec.messages else DEFAULT_MESSAGES[key], **values)
 
 
 def quote(s: str) -> str:
@@ -276,7 +271,7 @@ def _cd(ctx):
     if args and args[0] == "--":
         args.pop(0)
     if len(args) > 1:
-        raise ShellError("too many arguments")
+        raise ShellError(spec_message("cd", "tooManyArguments"))
     if not args:
         target = env.get("HOME", "/")
     elif args[0] == "-":
@@ -290,11 +285,11 @@ def _cd(ctx):
     if physical or not ctx.fs.is_dir(path):
         path = ctx.resolve(target)
     if not ctx.fs.exists(path):
-        raise ShellError(f"{target}: {ctx.fs.why_missing(path)}")
+        raise ShellError(spec_message("cd", "failed", dir=target, errno=ctx.fs.why_missing(path)))
     if not ctx.fs.is_dir(path):
-        raise ShellError(f"{target}: Not a directory")
+        raise ShellError(spec_message("cd", "failed", dir=target, errno="Not a directory"))
     if not ctx.fs.can_execute(path):
-        raise ShellError(f"{target}: Permission denied")
+        raise ShellError(spec_message("cd", "failed", dir=target, errno="Permission denied"))
     if physical:
         path = ctx.fs.real_path(path)[0] or path
     env["OLDPWD"] = ctx.shell.cwd
@@ -345,7 +340,7 @@ def _export(ctx):
         name = a[:eq - 1 if append else eq] if eq > 0 else a
         try:
             if not is_name(name):
-                raise ShellError(f"`{a}': not a valid identifier")
+                raise ShellError(spec_format(DIAGNOSTICS["notValidIdentifier"], name=a))
             if eq > 0:
                 sh.set_var(name, a[eq + 1:], append)
             else:
@@ -363,6 +358,66 @@ def _export(ctx):
     return code
 
 
+async def _env(ctx):
+    """env [-i] [-u NAME] [NAME=VALUE]... [COMMAND [ARG]...]: the exported variables, or COMMAND run with changed ones."""
+    sh = ctx.shell
+    args = list(ctx.args)
+    sets: list[tuple[str, str]] = []
+    unsets: list[str] = []
+    clear = False
+    while args:
+        if args[0] in ("-i", "-"):
+            clear = True
+            args.pop(0)
+        elif args[0] == "-u" and len(args) > 1:
+            unsets.append(args[1])
+            del args[:2]
+        elif args[0] == "--":
+            args.pop(0)
+            break
+        elif args[0].find("=") > 0:
+            k, _, v = args.pop(0).partition("=")
+            sets.append((k, v))
+        else:
+            break
+
+    def show():
+        for k in sorted(sh.env):
+            if sh.is_exported(k):
+                ctx.print(f"{k}={sh.env[k]}")
+
+    if not args and not sets and not clear and not unsets:
+        show()
+        return 0
+    saved = (sh.env, sh.var_attrs)
+    sh.env = {} if clear else {k: v for k, v in saved[0].items() if sh.is_exported(k) and k not in unsets}
+    sh.var_attrs = {k: "x" for k in sh.env}
+    for k, v in sets:
+        sh.env[k] = v
+        sh.var_attrs[k] = "x"
+    try:
+        if not args:
+            show()
+            return 0
+        if "PATH" not in sh.env and "/" not in args[0]:  # with no PATH, env searches /bin and /usr/bin, as execvp does
+            args[0] = next((d + args[0] for d in ("/bin/", "/usr/bin/") if ctx.fs.is_file(d + args[0])), args[0])
+        return await sh._invoke(args, ctx.io, skip_functions=True)
+    finally:
+        sh.env, sh.var_attrs = saved
+
+
+def _unalias(ctx):
+    if "-a" in ctx.args:
+        ctx.shell.aliases.clear()
+        return 0
+    code = 0
+    for a in ctx.args:
+        if ctx.shell.aliases.pop(a, None) is None:
+            ctx.error(f"{ctx.shell.err_prefix}unalias: " + spec_message("unalias", "notFound", name=a))
+            code = 1
+    return code
+
+
 def _alias(ctx):
     code = 0
     aliases = ctx.shell.aliases
@@ -376,7 +431,7 @@ def _alias(ctx):
         elif k in aliases:
             ctx.print(f"alias {k}='{aliases[k]}'")
         else:
-            ctx.error(f"{ctx.shell.err_prefix}alias: {k}: not found")
+            ctx.error(f"{ctx.shell.err_prefix}alias: " + spec_message("alias", "notFound", name=k))
             code = 1
     return code
 
@@ -394,23 +449,15 @@ def _which(ctx):
     return code
 
 
-# commands that are part of bash itself rather than programs in /usr/bin (for `type` and `command -v`)
-SHELL_BUILTINS = {
-    "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
-    "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
-    "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt", ":",
-    "pushd", "popd", "dirs", "mapfile", "readarray", "ulimit", "builtin", "caller", "times", "disown",
-}
-
-
 def is_shell_builtin(shell, name: str) -> bool:
-    return name in SHELL_BUILTINS and name in shell.commands and shell._builtin_names is not None and name in shell._builtin_names
+    spec = COMMANDS.get(name)
+    return spec is not None and spec.shell_builtin and name in shell.commands and shell._builtin_names is not None and name in shell._builtin_names
 
 
 def _type(ctx):
     from .more import SHELL_KEYWORDS, describe
     code = 0
-    opts = Args.parse(ctx.args, "atpPf")
+    opts = Args.parse(ctx.args, COMMANDS["type"])
     for a in opts.positional:
         sh = ctx.shell
         if opts.has("t") or opts.has("p") or opts.has("P"):
@@ -465,7 +512,7 @@ def test_unary(shell, op: str, arg: str) -> bool:
         return shell.is_variable_set(arg)
     if op == "-o":
         return any(n == arg and on for n, on in shell.option_list)
-    raise ShellError(f"{op}: unary operator expected", 2)
+    raise ShellError(spec_message("test", "unaryExpected", op=op), 2)
 
 
 def newer(sh, left: str, right: str) -> bool:
@@ -499,7 +546,7 @@ def _test_binary(sh, left: str, op: str, right: str) -> bool:
     try:
         l, r = int(left.strip()), int(right.strip())
     except ValueError:
-        raise ShellError(f"{left if not _is_int(left) else right}: integer expression expected", 2) from None
+        raise ShellError(spec_message("test", "integerExpected", value=left if not _is_int(left) else right), 2) from None
     return {"-eq": l == r, "-ne": l != r, "-lt": l < r, "-le": l <= r, "-gt": l > r, "-ge": l >= r}[op]
 
 
@@ -531,7 +578,7 @@ def evaluate_test(ctx, a: list[str]) -> bool:
             return not evaluate_test(ctx, a[1:])
         if a[0] == "(" and a[2] == ")":
             return a[1] != ""
-        raise ShellError(f"{a[1]}: binary operator expected", 2)
+        raise ShellError(spec_message("test", "binaryExpected", op=a[1]), 2)
     if n == 4 and a[0] == "!":
         return not evaluate_test(ctx, a[1:])
     pos = 0
@@ -566,12 +613,12 @@ def evaluate_test(ctx, a: list[str]) -> bool:
         nonlocal pos
         t = peek()
         if t is None:
-            raise ShellError("argument expected", 2)
+            raise ShellError(spec_message("test", "argumentExpected"), 2)
         if t == "(":
             pos += 1
             v = or_()
             if peek() != ")":
-                raise ShellError("`)' expected", 2)
+                raise ShellError(spec_message("test", "parenExpected"), 2)
             pos += 1
             return v
         if pos + 2 < n and a[pos + 1] in _TEST_BINARY:
@@ -585,13 +632,13 @@ def evaluate_test(ctx, a: list[str]) -> bool:
 
     v = or_()
     if pos < n:
-        raise ShellError("too many arguments", 2)
+        raise ShellError(spec_message("test", "tooManyArguments"), 2)
     return v
 
 
 def _bracket(ctx):
     if not ctx.args or ctx.args[-1] != "]":
-        raise ShellError("missing `]'", 2)
+        raise ShellError(spec_message("[", "missingBracket"), 2)
     return 0 if evaluate_test(ctx, ctx.args[:-1]) else 1
 
 
@@ -632,12 +679,12 @@ async def _run_script(ctx):
 
     if command:
         if not args:
-            raise ShellError("-c: option requires an argument", 2)
+            raise ShellError(spec_message(ctx.name, "cOptionArgument"), 2)
         return await sh._run_script_text(args[0], io_, subshell=True, positional=args[2:],
                                          process=_NewProcess(args[1] if len(args) > 1 else ctx.name, None, setup))
     if not args:
         if not is_bash:
-            raise ShellError("filename argument required", 2)
+            raise ShellError(spec_message(ctx.name, "filenameRequired"), 2)
         return await sh._run_script_text(ctx.stdin, replace(io_, stdin=StdinBuffer()), subshell=True, positional=[],
                                          process=_NewProcess(ctx.name, None, setup))
     try:
@@ -665,7 +712,7 @@ async def _unset(ctx):
         try:
             if "f" not in flags and not is_name(arg.split("[")[0]):
                 if "v" in flags:
-                    raise ShellError(f"`{arg}': not a valid identifier")
+                    raise ShellError(spec_format(DIAGNOSTICS["notValidIdentifier"], name=arg))
                 continue  # plain unset passes over what can be neither a variable nor a function, silently
             a = await sh.expand_subscript(arg, ctx.io)
             # with neither -v nor -f, a name that is no variable but a function unsets the function
@@ -684,7 +731,7 @@ def _help(ctx):
     if ctx.args:
         c = cmds.get(ctx.args[0])
         if c is None:
-            raise ShellError(f"no help topics match '{ctx.args[0]}'")
+            raise ShellError(spec_message("help", "noTopics", topic=ctx.args[0]))
         ctx.print(c.usage or f"{c.name}: {c.description}")
         return
     width = max(len(n) for n in cmds) + 2
@@ -811,7 +858,7 @@ def _printf(ctx):
     if args and args[0] == "--":
         args.pop(0)
     if not args:
-        raise ShellError("usage: printf [-v var] format [arguments]", 2)
+        raise ShellError(spec_message("printf", "usage"), 2)
     errors: list[str] = []
     text = printf_format(args[0], args[1:], errors)
     for e in errors:  # bash reports them as it goes, then writes the text
@@ -825,34 +872,34 @@ def _printf(ctx):
 
 def _register_shell_commands(shell) -> None:
     r = shell.register_command
-    r("true", lambda ctx: 0, "Do nothing, successfully")
-    r(":", lambda ctx: 0, "Do nothing, successfully (the null command)")
-    r("false", lambda ctx: 1, "Do nothing, unsuccessfully")
-    r("echo", _echo, "Print arguments")
-    r("printf", _printf, "Format and print data")
-    r("cd", _cd, "Change the working directory")
-    r("pwd", _pwd, "Print the working directory")
-    r("export", _export, "Set environment variables")
-    r("unset", _unset, "Remove variables or functions (-f)")
-    r("env", lambda ctx: [ctx.print(f"{k}={ctx.shell.env[k]}") for k in sorted(ctx.shell.env)] and 0, "Print the environment")
-    r("alias", _alias, "Define or list aliases")
-    r("unalias", lambda ctx: [ctx.shell.aliases.pop(a, None) for a in ctx.args] and 0, "Remove aliases")
-    r("history", lambda ctx: [ctx.print(f"{i + 1:5}  {h}") for i, h in enumerate(ctx.shell.history)] and 0, "Show command history")
-    r("which", _which, "Locate a command")
-    r("type", _type, "Describe a command")
-    r("test", lambda ctx: 0 if evaluate_test(ctx, list(ctx.args)) else 1, "Evaluate a conditional expression")
-    r("[", _bracket, "Evaluate a conditional expression")
-    r("bash", _run_script, "Run a command string (-c) or script file")
-    r("sh", _run_script, "Run a command string (-c) or script file")
-    r("source", _run_script, "Run a script in the current shell")
-    r(".", _run_script, "Run a script in the current shell")
-    r("help", _help, "List available commands")
+    r("true", lambda ctx: 0)
+    r(":", lambda ctx: 0)
+    r("false", lambda ctx: 1)
+    r("echo", _echo)
+    r("printf", _printf)
+    r("cd", _cd)
+    r("pwd", _pwd)
+    r("export", _export)
+    r("unset", _unset)
+    r("env", _env)
+    r("alias", _alias)
+    r("unalias", _unalias)
+    r("history", lambda ctx: [ctx.print(f"{i + 1:5}  {h}") for i, h in enumerate(ctx.shell.history)] and 0)
+    r("which", _which)
+    r("type", _type)
+    r("test", lambda ctx: 0 if evaluate_test(ctx, list(ctx.args)) else 1)
+    r("[", _bracket)
+    r("bash", _run_script)
+    r("sh", _run_script)
+    r("source", _run_script)
+    r(".", _run_script)
+    r("help", _help)
 
 
 # ---------- fake system info ----------
 
 def _uname(ctx):
-    a = Args.parse(ctx.args, "asnrvmo", longs="all=a")
+    a = Args.parse(ctx.args, COMMANDS["uname"])
     every = a.has("a")
     parts = []
     if every or a.has("s") or not a.flags:
@@ -912,29 +959,6 @@ def strftime(t: datetime, fmt: str) -> str:
 _UNITS = {"second": 1, "sec": 1, "minute": 60, "min": 60, "hour": 3600, "day": 86400, "week": 604800, "fortnight": 1209600}
 
 # our own summary of what this date supports (not GNU's help text)
-_DATE_USAGE = """\
-Usage: date [OPTION]... [+FORMAT]
-Print the current date and time, or the one given with -d, in UTC.
-
-  -d, --date=STRING        show the time described by STRING instead of now
-  -r, --reference=FILE     show FILE's last modification time
-  -u, --utc, --universal   use UTC (the clock is already UTC)
-  -I, --iso-8601           print the date as YYYY-MM-DD
-  -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000
-
-STRING can combine, in any order:
-  dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120
-  times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)
-  zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)
-  weekdays   Monday, fri   (moves forward to that day)
-  words      now  today  yesterday  tomorrow
-  relative   3 days ago   +2 hours   next week   last month   1 year
-  epoch      @1795168800
-
-FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,
-and %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s
-
-"""
 
 _MONTH_ABBR = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 _DAY_ABBR = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
@@ -947,7 +971,7 @@ def parse_date(text: str, now: datetime) -> datetime:
     (2026-11-20, 11/20/2026, 20 Nov 2026, Nov 20, 2026, 20261120), times (13:30[:00[.5]], 1pm), zones
     (UTC, Z, EST..., +0100, +01:00), a day of the week, today/now/yesterday/tomorrow, @EPOCH, and relative items
     ("3 days ago", "next week", "+2 hours") applied last. Results are UTC, the simulated machine's zone."""
-    bad = ShellError(f"invalid date {quote_l(text)}")
+    bad = ShellError(spec_message("date", "invalidDate", value=text))
     s = text.strip().lower()
     m = re.fullmatch(r"@(-?\d+(?:\.\d+)?)", s)
     if m:
@@ -1080,7 +1104,7 @@ def parse_date(text: str, now: datetime) -> datetime:
 
 def _date(ctx):
     # the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
-    a = Args.parse(ctx.args, "uIR", "dr", "utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R")
+    a = Args.parse(ctx.args, COMMANDS["date"])
     now = datetime.now(timezone.utc)
     if a.value("d") is not None:
         now = parse_date(a.value("d"), now)
@@ -1097,8 +1121,8 @@ def _date(ctx):
 
 def _register_system_commands(shell) -> None:
     r = shell.register_command
-    r("whoami", lambda ctx: ctx.print(ctx.shell.user), "Print the current user")
-    r("hostname", lambda ctx: ctx.print(ctx.shell.hostname), "Print the host name")
-    r("uname", _uname, "Print system information")
-    r("date", _date, "Print the date and time", _DATE_USAGE)
-    r("ps", lambda ctx: ctx.stdout.write("    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n"), "List processes")
+    r("whoami", lambda ctx: ctx.print(ctx.shell.user))
+    r("hostname", lambda ctx: ctx.print(ctx.shell.hostname))
+    r("uname", _uname)
+    r("date", _date)
+    r("ps", lambda ctx: ctx.stdout.write("    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n"))

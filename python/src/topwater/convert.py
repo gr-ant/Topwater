@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from html.parser import HTMLParser
 
+from .commands import spec_message
 from .vfs import ShellError
 
 MAX_UNCOMPRESSED = 100 * 1024 * 1024  # zip-bomb guard: total bytes read out of one archive
@@ -37,13 +38,13 @@ def to_markdown(data: bytes | str, filename: str) -> str:
     if fmt not in _CONVERTERS:
         fmt = _sniff(data)
     if fmt is None:
-        raise ShellError(f"unsupported format '{ext or filename}' (supported: {SUPPORTED})")
+        raise ShellError(spec_message("to-markdown", "unsupportedFormat", format=ext or filename, supported=SUPPORTED))
     try:
         return _CONVERTERS[fmt](data)
     except ShellError:
         raise
     except Exception as e:  # corrupt zip/XML/encoding: report, never crash the host
-        raise ShellError(f"not a valid {fmt[1:]} file ({e or type(e).__name__})") from None
+        raise ShellError(spec_message("to-markdown", "invalidFile", format=fmt[1:], detail=str(e or type(e).__name__))) from None
 
 
 def file_type(data: bytes) -> str | None:
@@ -108,7 +109,7 @@ class _Package:
             data = f.read(self.budget + 1)
         self.budget -= len(data)
         if self.budget < 0:
-            raise ShellError(f"archive expands to more than {MAX_UNCOMPRESSED // (1024 * 1024)} MB")
+            raise ShellError(spec_message("to-markdown", "archiveTooLarge", megabytes=str(MAX_UNCOMPRESSED // (1024 * 1024))))
         return data
 
     def xml(self, name: str):
@@ -116,7 +117,7 @@ class _Package:
         if data is None:
             return None
         if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
-            raise ShellError(f"{name}: DTDs are not allowed")
+            raise ShellError(spec_message("to-markdown", "dtdNotAllowed", name=name))
         return ET.fromstring(data)
 
     def rels(self, part: str) -> dict[str, str]:
@@ -174,7 +175,7 @@ def _docx(data: bytes) -> str:
     pkg = _Package(data)
     doc = pkg.xml("word/document.xml")
     if doc is None:
-        raise ShellError("not a valid docx file (word/document.xml is missing)")
+        raise ShellError(spec_message("to-markdown", "partMissing", format="docx", part="word/document.xml"))
     rels = pkg.rels("word/document.xml")
     styles: dict[str, tuple[str, tuple | None]] = {}  # styleId -> (name, (numId, ilvl) from the style)
     style_root = pkg.xml("word/styles.xml")
@@ -306,7 +307,7 @@ def _xlsx(data: bytes) -> str:
     pkg = _Package(data)
     wb = pkg.xml("xl/workbook.xml")
     if wb is None:
-        raise ShellError("not a valid xlsx file (xl/workbook.xml is missing)")
+        raise ShellError(spec_message("to-markdown", "partMissing", format="xlsx", part="xl/workbook.xml"))
     rels = pkg.rels("xl/workbook.xml")
     shared = []
     sst = pkg.xml("xl/sharedStrings.xml")
@@ -338,7 +339,7 @@ def _xlsx(data: bytes) -> str:
         first = min((min(r) for r in rows), default=0)
         last = max((max(r) for r in rows), default=-1)
         if (last - first + 1) * len(rows) > MAX_SHEET_CELLS:
-            raise ShellError(f"sheet '{sheet.get('name')}' is too large")
+            raise ShellError(spec_message("to-markdown", "sheetTooLarge", name=str(sheet.get('name'))))
         table = _table([[r.get(k, "") for k in range(first, last + 1)] for r in rows])
         parts.append(f"## {sheet.get('name', '')}" + ("\n\n" + table if table else ""))
     return "\n\n".join(parts) + "\n" if parts else ""
@@ -366,7 +367,7 @@ def _pptx(data: bytes) -> str:
     pkg = _Package(data)
     pres = pkg.xml("ppt/presentation.xml")
     if pres is None:
-        raise ShellError("not a valid pptx file (ppt/presentation.xml is missing)")
+        raise ShellError(spec_message("to-markdown", "partMissing", format="pptx", part="ppt/presentation.xml"))
     rels = pkg.rels("ppt/presentation.xml")
     parts = []
     for n, sld in enumerate(pres.iter(_P + "sldId"), 1):
@@ -601,7 +602,7 @@ def _json(data: bytes) -> str:
     try:
         value = json.loads(data.decode("utf-8-sig"))
     except ValueError as e:
-        raise ShellError(f"not a valid json file ({e})") from None
+        raise ShellError(spec_message("to-markdown", "invalidFile", format="json", detail=str(e))) from None
     return "```json\n" + json.dumps(value, indent=2, ensure_ascii=False) + "\n```\n"
 
 

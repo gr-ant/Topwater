@@ -18,8 +18,9 @@ from datetime import datetime, timezone
 
 from .. import bytetext
 from ..shell import glob_to_regex
+from .._spec import COMMANDS
 from ..vfs import ShellError, format_mode, get_parent, normalize
-from . import Args
+from . import Args, spec_message
 
 _UTC = timezone.utc
 
@@ -35,12 +36,12 @@ class _Budget:
     def entry(self) -> None:
         self._entries -= 1
         if self._entries < 0:
-            raise ShellError(f"archive exceeds the {self.max_entries}-entry extraction limit; stopping", self.exit_code)
+            raise ShellError(spec_message("tar", "entryLimit", limit=str(self.max_entries)), self.exit_code)
 
     def charge(self, n: int) -> None:
         self._bytes -= n
         if self._bytes < 0:
-            raise ShellError(f"output exceeds the {self.max_bytes}-byte extraction limit; stopping", self.exit_code)
+            raise ShellError(spec_message("tar", "byteLimit", limit=str(self.max_bytes)), self.exit_code)
 
     def read(self, stream) -> bytes:
         out = []
@@ -181,7 +182,7 @@ def _read_tar(data: bytes):
     while pos < len(data):
         block = data[pos:pos + 512]
         if len(block) < 512:
-            raise _TarError("This does not look like a tar archive" if first else "Unexpected EOF in archive")
+            raise _TarError(spec_message("tar", "notTar") if first else spec_message("tar", "unexpectedEof"))
         if block.count(0) == 512:
             return
         try:
@@ -193,7 +194,7 @@ def _read_tar(data: bytes):
             size = _num(block[124:136])
             mode, uid, gid, mtime = _num(block[100:108]), _num(block[108:116]), _num(block[116:124]), _num(block[136:148])
         except ValueError:
-            raise _TarError("This does not look like a tar archive" if first else "Unexpected EOF in archive") from None
+            raise _TarError(spec_message("tar", "notTar") if first else spec_message("tar", "unexpectedEof")) from None
         first = False
         kind = block[156:157].decode("latin-1") or "\0"
         name, link = _str(block[0:100]), _str(block[157:257])
@@ -201,7 +202,7 @@ def _read_tar(data: bytes):
             name = _str(block[345:500]) + "/" + name
         end = pos + 512 + size
         if end > len(data):
-            raise _TarError("Unexpected EOF in archive")
+            raise _TarError(spec_message("tar", "unexpectedEof"))
         body = data[pos + 512:end]
         pos = pos + 512 + (size + 511) // 512 * 512
         if kind == "L":
@@ -267,7 +268,7 @@ def _tar_prefix(name: str) -> str:
     return name[:cut]
 
 
-_USAGE = "\nTry 'tar --help' or 'tar --usage' for more information."
+_USAGE = "\n" + COMMANDS["tar"].try_help.rstrip("\n")
 
 
 def _tar(ctx):
@@ -280,16 +281,15 @@ def _tar(ctx):
             args.append("-" + c)
             if c in "fC":
                 if not rest:
-                    raise ShellError(f"Old option '{c}' requires an argument.{_USAGE}", 2)
+                    raise ShellError(spec_message("tar", "oldOptionNeedsArgument", option=c) + _USAGE, 2)
                 args.append(rest.pop(0))
         args += rest
-    a = Args.parse(args, "cxtzvOpo", "fC\x01", "create=c,extract=x,get=x,list=t,gzip=z,gunzip=z,ungzip=z,verbose=v,to-stdout=O,"
-                                                "file=f,directory=C,strip-components=\x01,preserve-permissions=p,no-same-owner=o")
+    a = Args.parse(args, COMMANDS["tar"])
     modes = sum(a.has(c) for c in "cxt")
     if modes == 0:
-        raise ShellError("You must specify one of the '-Acdtrux', '--delete' or '--test-label' options" + _USAGE, 2)
+        raise ShellError(spec_message("tar", "noMode") + _USAGE, 2)
     if modes > 1:
-        raise ShellError("You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option" + _USAGE, 2)
+        raise ShellError(spec_message("tar", "manyModes") + _USAGE, 2)
     try:
         strip = int(a.value("\x01") or 0)
     except ValueError:
@@ -299,10 +299,10 @@ def _tar(ctx):
     directory = ctx.resolve(a.value("C") or ".")
 
     def fatal(msg: str) -> str:
-        return msg + "\ntar: Error is not recoverable: exiting now"
+        return msg + "\ntar: " + spec_message("tar", "unrecoverable")
 
     if not fs.is_dir(directory):
-        raise ShellError(fatal(f"{a.value('C')}: Cannot open: {'Not a directory' if fs.exists(directory) else _why_missing(fs, directory)}"), 2)
+        raise ShellError(fatal(spec_message("tar", "cannotOpen", file=a.value('C'), errno='Not a directory' if fs.exists(directory) else _why_missing(fs, directory))), 2)
     code = 0
 
     def fail(msg: str) -> None:
@@ -312,12 +312,12 @@ def _tar(ctx):
 
     def done() -> int:
         if code:
-            ctx.stderr.write("tar: Exiting with failure status due to previous errors\n")
+            ctx.stderr.write("tar: " + spec_message("tar", "previousErrors") + "\n")
         return code
 
     if a.has("c"):
         if not a.positional:
-            raise ShellError("Cowardly refusing to create an empty archive" + _USAGE, 2)
+            raise ShellError(spec_message("tar", "emptyArchive") + _USAGE, 2)
         archive_path = None if archive == "-" else ctx.resolve(archive)
         verbose = ctx.stderr if archive == "-" else ctx.stdout
         out = io.BytesIO()
@@ -354,15 +354,15 @@ def _tar(ctx):
                 for child in children:
                     add(name.rstrip("/") + "/" + child, path.rstrip("/") + "/" + child)
             except ShellError as e:
-                fail(f"{name}: Cannot open: {_reason(e)}")
+                fail(spec_message("tar", "cannotOpen", file=name, errno=_reason(e)))
 
         for f in a.positional:
             if f.startswith("/") and not stripped:
                 stripped = True
-                ctx.stderr.write("tar: Removing leading `/' from member names\n")
+                ctx.stderr.write(spec_message("tar", "removingLeading", prefix="/") + "\n")
             path = normalize(directory, f)
             if not fs.exists(path, follow=False):
-                fail(f"{f}: Cannot stat: {_why_missing(fs, path)}")
+                fail(spec_message("tar", "cannotStat", file=f, errno=_why_missing(fs, path)))
             else:
                 add(f, path)
         out.write(b"\0" * 1024)
@@ -380,19 +380,19 @@ def _tar(ctx):
     else:
         path = ctx.resolve(archive)
         if not fs.is_file(path):
-            raise ShellError(fatal(f"{archive}: Cannot open: {'Is a directory' if fs.is_dir(path) else _why_missing(fs, path)}"), 2)
+            raise ShellError(fatal(spec_message("tar", "cannotOpen", file=archive, errno='Is a directory' if fs.is_dir(path) else _why_missing(fs, path))), 2)
         data = fs.read_bytes(path)
     if _is_gzip(data):
         if not a.has("z") and archive == "-":
-            raise ShellError(fatal("Archive is compressed. Use -z option"), 2)
+            raise ShellError(fatal(spec_message("tar", "compressedArchive")), 2)
         plain, error = _gunzip(data, _Budget(ctx.shell, 2))
         if plain is None:
-            ctx.stderr.write(f"\ngzip: stdin: {error}\ntar: Child returned status 1\n")
-            raise ShellError("Error is not recoverable: exiting now", 2)
+            ctx.stderr.write(spec_message("tar", "gzipChildFailed", error=error) + "\n")
+            raise ShellError(spec_message("tar", "unrecoverable"), 2)
         data = plain
     elif a.has("z"):
-        ctx.stderr.write("\ngzip: stdin: not in gzip format\ntar: Child returned status 1\n")
-        raise ShellError("Error is not recoverable: exiting now", 2)
+        ctx.stderr.write(spec_message("tar", "gzipChildFailed", error="not in gzip format") + "\n")
+        raise ShellError(spec_message("tar", "unrecoverable"), 2)
 
     budget = _Budget(ctx.shell, 2)
     made: set[str] = set()  # symbolic links this extraction created
@@ -430,11 +430,11 @@ def _tar(ctx):
             found[hit] = True
         if prefix and prefix not in announced:
             announced.add(prefix)
-            ctx.stderr.write(f"tar: Removing leading `{prefix}' from member names\n")
+            ctx.stderr.write(spec_message("tar", "removingLeading", prefix=prefix) + "\n")
         link_prefix = _tar_prefix(e.link) if e.type == "1" else ""
         if link_prefix and "link:" + link_prefix not in announced:
             announced.add("link:" + link_prefix)
-            ctx.stderr.write(f"tar: Removing leading `{link_prefix}' from hard link targets\n")
+            ctx.stderr.write(spec_message("tar", "removingLeadingLink", prefix=link_prefix) + "\n")
         if a.has("t"):
             if not a.has("v"):
                 ctx.print(name)
@@ -448,7 +448,7 @@ def _tar(ctx):
                       f"{_utc_naive(e.mtime):%Y-%m-%d %H:%M} {name}{link}")
             continue
         if ".." in prefix.split("/"):
-            fail(f"{name}: Member name contains '..'")
+            fail(spec_message("tar", "memberDotDot", name=name))
             continue
         parts = [p for p in rel.split("/") if p]
         if len(parts) <= strip:
@@ -495,22 +495,21 @@ def _tar(ctx):
                 made.add(target)
                 fs.set_modified_time(target, _utc_naive(e.mtime), follow=False)
             else:
-                fail(f"{name}: Cannot mknod: Operation not permitted")
+                fail(spec_message("tar", "cannotMknod", name=name))
         except ShellError as ex:
             if "extraction limit" in str(ex):
                 raise
-            fail(f"{name}: Cannot open: {_reason(ex)}")
+            fail(spec_message("tar", "cannotOpen", file=name, errno=_reason(ex)))
     for i, w in enumerate(wanted):
         if not found[i]:
-            fail(f"{a.positional[i]}: Not found in archive")
+            fail(spec_message("tar", "notFound", file=a.positional[i]))
     return done()
 
 
 # ---------- gzip command ----------
 
 def _gzip_cmd(ctx):
-    a = Args.parse(ctx.args, "cdkflvqtn123456789", "", "stdout=c,to-stdout=c,decompress=d,uncompress=d,keep=k,force=f,list=l,verbose=v,"
-                                                       "quiet=q,test=t,no-name=n,fast=1,best=9")
+    a = Args.parse(ctx.args, COMMANDS[ctx.name])
     decompress = ctx.name != "gzip" or a.has("d") or a.has("t") or a.has("l")
     to_stdout = ctx.name == "zcat" or a.has("c")
     level = max((int(c) for c in "123456789" if a.has(c)), default=6)
@@ -549,10 +548,10 @@ def _gzip_cmd(ctx):
         if f == "-":
             data = bytetext.encode(ctx.stdin)
         elif fs.is_dir(path):
-            warn(f"{f} is a directory -- ignored")
+            warn(spec_message("gzip", "isDirectory", file=f))
             continue
         elif not fs.is_file(path):
-            error(f"{f}: {_why_missing(fs, path)}")
+            error(spec_message("gzip", "fileError", file=f, errno=_why_missing(fs, path)))
             continue
         else:
             data = fs.read_bytes(path)
@@ -565,29 +564,28 @@ def _gzip_cmd(ctx):
                 continue
             if f.endswith(".gz"):
                 if not a.has("q"):
-                    ctx.stderr.write(f"gzip: {f} already has .gz suffix -- unchanged\n")
+                    ctx.stderr.write("gzip: " + spec_message("gzip", "alreadySuffix", file=f) + "\n")
                 continue
             if fs.exists(path + ".gz") and not a.has("f"):
-                warn(f"{f}.gz already exists;\tnot overwritten")
+                warn(spec_message("gzip", "alreadyExists", file=f + ".gz"))
                 continue
             replace(path, path + ".gz", packed)
             if a.has("v"):
-                ctx.stderr.write(f"{f}:\t{_ratio(len(packed) - _gzip_overhead(packed), len(data))}% -- "
-                                 f"{'created' if a.has('k') else 'replaced with'} {f}.gz\n")
+                ctx.stderr.write(spec_message("gzip", "ratio", file=f, ratio=_ratio(len(packed) - _gzip_overhead(packed), len(data)), action='created' if a.has('k') else 'replaced with', target=f + ".gz") + "\n")
             continue
 
         out_name = None
         if f != "-" and not to_stdout and not a.has("t") and not a.has("l"):
             suffix = next((x for x in (".gz", "-gz", ".z", "_z", ".tgz") if f.endswith(x) and len(f) > len(x)), None)
             if suffix is None:
-                warn(f"{f}: unknown suffix -- ignored")
+                warn(spec_message("gzip", "unknownSuffix", file=f))
                 continue
             out_name = f[:-len(suffix)] + (".tar" if suffix == ".tgz" else "")
         if not _is_gzip(data):
             if a.has("f") and to_stdout:  # gzip -dcf passes plain data through
                 _write(ctx, data)
                 continue
-            ctx.stderr.write(f"\ngzip: {shown}: not in gzip format\n")
+            ctx.stderr.write(spec_message("gzip", "notGzip", file=shown) + "\n")
             code = 1
             continue
         if a.has("l"):
@@ -601,7 +599,7 @@ def _gzip_cmd(ctx):
             continue
         plain, err = _gunzip(data, budget)
         if plain is None:
-            ctx.stderr.write(f"\ngzip: {shown}: {err}\n")
+            ctx.stderr.write(spec_message("gzip", "corrupt", file=shown, error=err) + "\n")
             code = 1
             continue
         if a.has("t"):
@@ -611,11 +609,11 @@ def _gzip_cmd(ctx):
             continue
         out_path = ctx.resolve(out_name)
         if fs.exists(out_path) and not a.has("f"):
-            warn(f"{out_name} already exists;\tnot overwritten")
+            warn(spec_message("gzip", "alreadyExists", file=out_name))
             continue
         replace(path, out_path, plain)
         if a.has("v"):
-            ctx.stderr.write(f"{f}:\t{_ratio(len(data) - _gzip_overhead(data), len(plain))}% -- replaced with {out_name}\n")
+            ctx.stderr.write(spec_message("gzip", "ratio", file=f, ratio=_ratio(len(data) - _gzip_overhead(data), len(plain)), action='replaced with', target=out_name) + "\n")
     if header and len(files) > 1:
         ctx.print(f"{total_c:>19} {total_u:>19} {_ratio(total_c - total_h, total_u):>5}% (totals)")
     return code
@@ -629,10 +627,10 @@ def _deflated_length(data: bytes) -> int:
 
 
 def _zip(ctx):
-    a = Args.parse(ctx.args, "rq", "", "recurse-paths=r,quiet=q")
+    a = Args.parse(ctx.args, COMMANDS["zip"])
     fs = ctx.fs
     if not a.positional:
-        raise ShellError("\nzip error: Nothing to do! (no archive given)", 12)
+        raise ShellError(spec_message("zip", "noArchive"), 12)
     archive = a.positional[0]
     if archive != "-" and "." not in archive.rstrip("/").rsplit("/", 1)[-1]:
         archive += ".zip"
@@ -645,7 +643,7 @@ def _zip(ctx):
                 for zi in zf.infolist():
                     entries[zi.filename] = (zi, zf.read(zi))
         except (zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error):
-            raise ShellError(f"\nzip error: Zip file structure invalid ({archive})", 3) from None
+            raise ShellError(spec_message("zip", "badStructure", archive=archive), 3) from None
     added = 0
     walking: set[str] = set()  # real paths of the directories being added
 
@@ -684,13 +682,13 @@ def _zip(ctx):
     names = a.positional[1:]
     for f in names:
         if not fs.exists(ctx.resolve(f)) and not a.has("q"):
-            info.write(f"\tzip warning: name not matched: {f}\n")
+            info.write(spec_message("zip", "nameNotMatched", file=f) + "\n")
     for f in names:
         if fs.exists(ctx.resolve(f)):
             add(f, ctx.resolve(f))
     if added == 0:
         hint = f"try: zip -r {archive} . -i {' '.join(names)}" if a.has("r") else archive
-        info.write(f"\nzip error: Nothing to do! ({hint})\n")
+        info.write(spec_message("zip", "nothingToDo", hint=hint) + "\n")
         return 12
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -704,7 +702,7 @@ def _zip(ctx):
 
 
 def _unzip(ctx):
-    a = Args.parse(ctx.args, "lopqn", "d")
+    a = Args.parse(ctx.args, COMMANDS["unzip"])
     fs = ctx.fs
     if not a.positional:
         ctx.print("UnZip 6.00 of 20 April 2009, by Debian. Original by Info-ZIP.\n\n"
@@ -713,7 +711,7 @@ def _unzip(ctx):
     name = a.positional[0]
     path = next((p for p in map(ctx.resolve, (name, name + ".zip", name + ".ZIP")) if fs.is_file(p)), None)
     if path is None:
-        ctx.stderr.write(f"unzip:  cannot find or open {name}, {name}.zip or {name}.ZIP.\n")
+        ctx.stderr.write(spec_message("unzip", "cannotFind", name=name) + "\n")
         return 9
     quiet, pipe = a.has("q"), a.has("p")
     try:
@@ -721,9 +719,8 @@ def _unzip(ctx):
     except zipfile.BadZipFile:
         if not quiet:
             ctx.print(f"Archive:  {name}")
-        ctx.stderr.write("  End-of-central-directory signature not found.  Either this file is not\n  a zipfile, or it constitutes one disk of a multi-part archive.  In the\n"
-                         "  latter case the central directory and zipfile comment will be found on\n  the last disk(s) of this archive.\n")
-        ctx.stderr.write(f"unzip:  cannot find zipfile directory in one of {name} or\n        {name}.zip, and cannot find {name}.ZIP, period.\n")
+        ctx.stderr.write(spec_message("unzip", "noEndSignature") + "\n")
+        ctx.stderr.write(spec_message("unzip", "noDirectory", name=name) + "\n")
         return 9
     if not quiet and not pipe:
         ctx.print(f"Archive:  {name}")
@@ -775,10 +772,10 @@ def _unzip(ctx):
                 parts = entry_name.split("/")
                 if ".." in parts:
                     if not quiet:
-                        ctx.print(f'warning:  skipped "../" path component(s) in {entry_name}')
+                        ctx.print(spec_message("unzip", "skippedDotDot", name=entry_name))
                     code = 1
                 if entry_name.startswith("/"):
-                    ctx.stderr.write(f"warning:  stripped absolute path spec from {entry_name}\n")
+                    ctx.stderr.write(spec_message("unzip", "strippedAbsolute", name=entry_name) + "\n")
                     code = 1
                 rel = "/".join(p for p in parts if p not in ("", ".", ".."))
                 if not rel:
@@ -797,7 +794,7 @@ def _unzip(ctx):
                         if a.has("n") or none:
                             continue
                         # shortcut: no interactive stdin, so the prompt always reads EOF, as unzip does with </dev/null
-                        ctx.stderr.write(f'replace {shown}? [y]es, [n]o, [A]ll, [N]one, [r]ename:  NULL\n(EOF or read error, treating as "[N]one" ...)\n')
+                        ctx.stderr.write(spec_message("unzip", "replacePrompt", file=shown) + "\n")
                         none = True
                         code = max(code, 1)
                         continue
@@ -813,21 +810,21 @@ def _unzip(ctx):
                 except ShellError as ex:
                     if "extraction limit" in str(ex):
                         raise
-                    ctx.stderr.write(f"error:  cannot create {shown}\n        {_reason(ex)}\n")
+                    ctx.stderr.write(spec_message("unzip", "cannotCreate", file=shown, errno=_reason(ex)) + "\n")
                     code = max(code, 1)
     for i, p in enumerate(found):
         if not p:
             if not a.has("l"):
-                ctx.stderr.write(f"caution: filename not matched:  {a.positional[i + 1]}\n")
+                ctx.stderr.write(spec_message("unzip", "filenameNotMatched", pattern=a.positional[i + 1]) + "\n")
             code = 11
     return code
 
 
 def register(shell) -> None:
     r = shell.register_command
-    r("tar", _tar, "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components)")
-    r("gzip", _gzip_cmd, "Compress or decompress files (-c -d -k -f -l -t -v -1..-9)")
-    r("gunzip", _gzip_cmd, "Decompress .gz files (gzip -d)")
-    r("zcat", _gzip_cmd, "Decompress .gz files to stdout (gzip -dc)")
-    r("zip", _zip, "Package files into a zip archive (-r, -q)")
-    r("unzip", _unzip, "List or extract a zip archive (-l -o -n -d -p -q)")
+    r("tar", _tar)
+    r("gzip", _gzip_cmd)
+    r("gunzip", _gzip_cmd)
+    r("zcat", _gzip_cmd)
+    r("zip", _zip)
+    r("unzip", _unzip)

@@ -1874,4 +1874,4 @@ def _jq(ctx):
 
 
 def register(shell) -> None:
-    shell.register_command("jq", _jq, "Command-line JSON processor")
+    shell.register_command("jq", _jq)

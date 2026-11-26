@@ -9,6 +9,7 @@ from typing import NamedTuple
 from datetime import datetime, timezone
 
 from . import bytetext
+from ._spec import ERRNO
 
 
 class ShellError(Exception):
@@ -46,7 +47,7 @@ class FileStat:
         return 0 if self.is_symlink else (self.size + 4095) // 4096 * 8  # a short link lives in its inode: no blocks
 
 
-NO_SPACE = "No space left on device"
+NO_SPACE = ERRNO["ENOSPC"]
 
 
 def utc_now() -> datetime:
@@ -128,7 +129,7 @@ class _Spot(NamedTuple):
 
 
 MAX_LINK_HOPS = 40  # symbolic links followed in one lookup before it fails with LOOP, as on Linux
-LOOP = "Too many levels of symbolic links"
+LOOP = ERRNO["ELOOP"]
 
 
 def _tree_size(n) -> int:
@@ -232,7 +233,7 @@ class VirtualFileSystem:
     def _find_why(self, path: str, follow: bool = True):
         """(node, why): why says why a missing node can't be reached."""
         spot = self._walk(path, follow)
-        return spot.node, spot.why or "No such file or directory"
+        return spot.node, spot.why or ERRNO["ENOENT"]
 
     def _walk(self, path: str, follow: bool = True) -> _Spot:
         """Walks `path`; like Linux, each directory passed through needs search (x) permission, symbolic links in the middle
@@ -252,12 +253,12 @@ class VirtualFileSystem:
         while todo:
             seg = todo.pop()
             if on_file:
-                return fail("Not a directory")
+                return fail(ERRNO["ENOTDIR"])
             if seg in ("", "."):
                 continue
             d = chain[-1][1]
             if not self._permits(d, user, 1):
-                return fail("Permission denied")
+                return fail(ERRNO["EACCES"])
             if seg == "..":
                 if len(chain) > 1:
                     chain.pop()
@@ -266,7 +267,7 @@ class VirtualFileSystem:
             bare = not todo  # no trailing slash, which would mean a directory
             nxt = d.children.get(seg)
             if nxt is None:
-                return _Spot(d if bare else None, seg, None, real(seg), "No such file or directory") if final else fail("No such file or directory")
+                return _Spot(d if bare else None, seg, None, real(seg), ERRNO["ENOENT"]) if final else fail(ERRNO["ENOENT"])
             if isinstance(nxt, _Link) and (not bare or follow):
                 hops += 1
                 if hops > MAX_LINK_HOPS:
@@ -293,14 +294,14 @@ class VirtualFileSystem:
         """Why `path` can't be reached: "Permission denied", "Not a directory", "Too many levels of symbolic links" or
         "No such file or directory"."""
         node, why = self._find_why(path, follow)
-        return why if node is None else "No such file or directory"
+        return why if node is None else ERRNO["ENOENT"]
 
     def _missing(self, path: str) -> ShellError:
         return ShellError(f"{path}: {self.why_missing(path)}")
 
     def _require_not_sticky(self, d: _Dir, entry, path: str) -> None:
         if self._restricted and d.mode & 0o1000 and entry.owner != self.run_as and d.owner != self.run_as:
-            raise ShellError(f"{path}: Operation not permitted")
+            raise ShellError(f"{path}: {ERRNO['EPERM']}")
 
     def _place(self, path: str) -> _Spot:
         """Where an entry is created, removed or renamed: its directory (which needs search permission) and name. The last
@@ -315,7 +316,7 @@ class VirtualFileSystem:
 
     def _require(self, n, bit: int, path: str) -> None:
         if not self._allowed(n, bit):
-            raise ShellError(f"{path}: Permission denied")
+            raise ShellError(f"{path}: {ERRNO['EACCES']}")
 
     def exists(self, path: str, follow: bool = True) -> bool:
         """follow=False: a symbolic link counts itself (lstat), even one whose target is missing."""
@@ -370,7 +371,7 @@ class VirtualFileSystem:
         name may be missing (`readlink -f`). The path is None, with why, when it can't be resolved."""
         spot = self._walk(path)
         ok = spot.node is not None or (not existing and spot.parent is not None)
-        return (spot.real if ok else None), spot.why or "No such file or directory"
+        return (spot.real if ok else None), spot.why or ERRNO["ENOENT"]
 
     def normalize_physical(self, cwd: str, path: str) -> str:
         """Like normalize, but ".." leaves where the path so far really is, after its symbolic links, as the kernel resolves
@@ -391,10 +392,10 @@ class VirtualFileSystem:
     def create_symlink(self, path: str, target: str) -> None:
         """Creates a symbolic link at `path` holding `target` (`ln -s`), which need not exist."""
         if not target:
-            raise ShellError(f"{path}: No such file or directory")
+            raise ShellError(f"{path}: {ERRNO['ENOENT']}")
         spot = self._place(path)
         if spot.node is not None:
-            raise ShellError(f"{path}: File exists")
+            raise ShellError(f"{path}: {ERRNO['EEXIST']}")
         self._require(spot.parent, 2, path)
         spot.parent.children[spot.name] = _Link(target, owner=self.run_as or spot.parent.owner)
         spot.parent.modified = utc_now()
@@ -409,10 +410,10 @@ class VirtualFileSystem:
             raise ShellError(f"{existing}: hard link not allowed for directory")
         spot = self._place(path)
         if spot.node is not None:
-            raise ShellError(f"{path}: File exists")
+            raise ShellError(f"{path}: {ERRNO['EEXIST']}")
         self._require(spot.parent, 2, path)
         if self._restricted and node.owner != self.run_as and not self._allowed(node, 6):
-            raise ShellError(f"{path}: Operation not permitted")
+            raise ShellError(f"{path}: {ERRNO['EPERM']}")
         node.nlink += 1
         spot.parent.children[spot.name] = node
         spot.parent.modified = utc_now()
@@ -436,7 +437,7 @@ class VirtualFileSystem:
             self._require(n, 4, path)
             return n
         if isinstance(n, _Dir):
-            raise ShellError(f"{path}: Is a directory")
+            raise ShellError(f"{path}: {ERRNO['EISDIR']}")
         raise self._missing(path)
 
     def write_bytes(self, path: str, data: bytes) -> None:
@@ -472,7 +473,7 @@ class VirtualFileSystem:
             raise ShellError(f"{path}: {'Is a directory' if existing is not None else spot.why}")
         if existing is not None:
             if not isinstance(existing, _File):
-                raise ShellError(f"{path}: Is a directory")
+                raise ShellError(f"{path}: {ERRNO['EISDIR']}")
             self._require(existing, 2, path)
             existing.store(content, append, lambda delta: self._reserve(delta, path))
             existing.modified = utc_now()
@@ -507,7 +508,7 @@ class VirtualFileSystem:
         if n is None:
             raise ShellError(f"{path}: {why}")
         if self._restricted and n.owner != self.run_as:
-            raise ShellError(f"{path}: Operation not permitted")
+            raise ShellError(f"{path}: {ERRNO['EPERM']}")
         n.modified = when
 
     def touch(self, path: str) -> None:
@@ -515,8 +516,8 @@ class VirtualFileSystem:
         if n is not None:
             self._require(n, 2, path)
             n.modified = utc_now()
-        elif why == "Permission denied":
-            raise ShellError(f"{path}: Permission denied")
+        elif why == ERRNO["EACCES"]:
+            raise ShellError(f"{path}: {ERRNO['EACCES']}")
         else:
             self.write_text(path, "")
 
@@ -525,7 +526,7 @@ class VirtualFileSystem:
         if self._find(path, follow=False) is not None:  # a symbolic link counts, even a dangling one
             if parents and self.is_dir(path):
                 return
-            raise ShellError(f"cannot create directory '{path}': File exists")
+            raise ShellError(f"cannot create directory '{path}': {ERRNO['EEXIST']}")
         if parents and not self.exists(get_parent(path)):
             self.mkdir(get_parent(path), True)
         spot = self._place(path)
@@ -539,7 +540,7 @@ class VirtualFileSystem:
         if isinstance(n, _Dir):
             self._require(n, 4, path)
             return sorted(n.children)
-        raise ShellError(f"{path}: {why if n is None else 'Not a directory'}")
+        raise ShellError(f"{path}: {why if n is None else ERRNO['ENOTDIR']}")
 
     def delete(self, path: str, recursive: bool = False) -> None:
         """Removes an entry (a symbolic link itself, never what it leads to); recursive for a directory with entries,
@@ -551,7 +552,7 @@ class VirtualFileSystem:
         if n is None:
             raise ShellError(f"{path}: {why}")
         if isinstance(n, _Dir) and n.children and not recursive:
-            raise ShellError(f"{path}: Directory not empty")
+            raise ShellError(f"{path}: {ERRNO['ENOTEMPTY']}")
         spot = self._place(path)
         parent = spot.parent
         if isinstance(n, _Dir):
@@ -588,7 +589,7 @@ class VirtualFileSystem:
             raise ShellError(f"cannot copy a directory, '{source}', into itself, '{dest}'")
         target = self._find(dest) if isinstance(place.node, _Link) else place.node  # a file is copied through a link onto its target
         if isinstance(target, _Dir) and not isinstance(n, _Dir):
-            raise ShellError(f"{dest}: Is a directory")
+            raise ShellError(f"{dest}: {ERRNO['EISDIR']}")
         parent = place.parent
         self._require(target if target is not None else parent, 2, dest)
         user = self.run_as if self._restricted else None
@@ -617,7 +618,7 @@ class VirtualFileSystem:
                 tick()
             if not self._permits(node, user, 5 if isinstance(node, _Dir) else 4):
                 if denied is None:
-                    raise ShellError(f"{p}: Permission denied")
+                    raise ShellError(f"{p}: {ERRNO['EACCES']}")
                 denied(p, isinstance(node, _Dir))
                 return None
             if isinstance(node, _File):
@@ -661,7 +662,7 @@ class VirtualFileSystem:
             raise ShellError(f"cannot move '{source}' to a subdirectory of itself, '{dest}'")
         existing, target = to.node, to.parent
         if isinstance(existing, _Dir):
-            raise ShellError(f"{dest}: Is a directory")
+            raise ShellError(f"{dest}: {ERRNO['EISDIR']}")
         if existing is n:
             return  # two hard links of one file: rename(2) leaves both
         self._require(origin.parent, 2, source)
@@ -682,7 +683,7 @@ class VirtualFileSystem:
         if n is None:
             raise ShellError(f"cannot access '{path}': {self.why_missing(path)}")
         if self._restricted and n.owner != self.run_as:
-            raise ShellError(f"changing permissions of '{path}': Operation not permitted")
+            raise ShellError(f"changing permissions of '{path}': {ERRNO['EPERM']}")
         n.mode = mode & 0o7777
 
     def set_owner(self, path: str, owner: str, recursive: bool = False) -> None:
@@ -691,7 +692,7 @@ class VirtualFileSystem:
         if n is None:
             raise ShellError(f"cannot access '{path}': {self.why_missing(path)}")
         if self._restricted:
-            raise ShellError(f"changing ownership of '{path}': Operation not permitted")
+            raise ShellError(f"changing ownership of '{path}': {ERRNO['EPERM']}")
 
         def apply(node):
             node.owner = owner
@@ -743,7 +744,7 @@ class VirtualFileSystem:
                 if same is None or isinstance(same, _Dir):
                     raise ShellError(f"{path}: hard link to {hard_link}, which is not an earlier file")
                 if get_name(path) in parent.children:
-                    raise ShellError(f"{path}: File exists")
+                    raise ShellError(f"{path}: {ERRNO['EEXIST']}")
                 same.nlink += 1
                 parent.children[get_name(path)] = same
                 continue
@@ -762,6 +763,6 @@ class VirtualFileSystem:
                 continue
             name = get_name(path)
             if name in parent.children:
-                raise ShellError(f"{path}: File exists")
+                raise ShellError(f"{path}: {ERRNO['EEXIST']}")
             parent.children[name] = node
         self._root, self.used_bytes = root, used

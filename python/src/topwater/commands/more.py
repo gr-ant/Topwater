@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 from .. import arith, bytetext
 from ..convert import file_type
 from ..shell import ExitSignal, LoopControl, ReturnSignal
-from ..vfs import ShellError, UsageException, format_mode, normalize, utc_now
-from . import Args, inputs, is_shell_builtin, printf_format, quote, quote_always, quote_l, split_lines, unescape, write_lines
+from .._spec import COMMANDS, DIAGNOSTICS
+from ..vfs import ShellError, UsageException, format_mode, get_parent, normalize, utc_now
+from . import Args, inputs, is_shell_builtin, printf_format, quote, quote_always, quote_l, spec_format, spec_message, split_lines, unescape, write_lines
 
 
 class _Errors:
@@ -34,13 +35,13 @@ def _count(ctx, fallback: int) -> int:
     try:
         return int(ctx.args[0])
     except ValueError:
-        raise ShellError(f"{ctx.args[0]}: numeric argument required", 2) from None
+        raise ShellError(spec_message(ctx.name, "numericArgument", value=ctx.args[0]), 2) from None
 
 
 def _duration(s: str) -> float:
     m = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", s)
     if not m:
-        raise ShellError(f"invalid time interval '{s}'")
+        raise ShellError(spec_message("sleep", "invalidTimeInterval", value=s))
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
 
 
@@ -49,21 +50,21 @@ def _duration(s: str) -> float:
 def _exit(ctx):
     if ctx.args and not re.fullmatch(r"[+-]?\d+", ctx.args[0]):
         # bash still exits, with status 2
-        ctx.error(f"{ctx.shell.err_prefix}exit: {ctx.args[0]}: numeric argument required")
+        ctx.error(f"{ctx.shell.err_prefix}exit: " + spec_message("exit", "numericArgument", value=ctx.args[0]))
         raise ExitSignal(2)
     raise ExitSignal(_count(ctx, ctx.shell.last_exit_code) & 255)
 
 
 def _return(ctx):
     if not ctx.shell.in_function and ctx.shell.source_depth == 0:
-        raise ShellError("can only `return' from a function or sourced script", 2)
+        raise ShellError(spec_message("return", "notInFunction"), 2)
     raise ReturnSignal(_count(ctx, ctx.shell.last_exit_code) & 255)
 
 
 def _break(ctx):
     if ctx.shell.loop_depth > 0:
         raise LoopControl(ctx.name == "break", max(1, _count(ctx, 1)))
-    ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: only meaningful in a `for', `while', or `until' loop")
+    ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: " + spec_message(ctx.name, "onlyInLoop"))
     return 0
 
 
@@ -105,11 +106,11 @@ def _set(ctx):
                     continue
                 i += 1
                 if not sh.set_option(args[i], on):
-                    raise ShellError(f"{args[i]}: invalid option name", 2)
+                    raise ShellError(spec_message("set", "invalidOptionName", name=args[i]), 2)
             elif c in _SET_LETTERS:
                 sh.set_option(_SET_LETTERS[c], on)
             elif c not in "abhkmnpvBEHPT":  # accepted, no effect here
-                raise ShellError(f"{a[0]}{c}: invalid option", 2)
+                raise ShellError(spec_message("set", "builtinInvalidOption", option=a[0] + c), 2)
         i += 1
     if i < len(args):
         sh.positional = args[i:]
@@ -155,13 +156,13 @@ _SHOPTS = ["assoc_expand_once", "autocd", "cdable_vars", "cdspell", "checkhash",
 
 
 def _shopt(ctx):
-    a = Args.parse(ctx.args, "supqo")
+    a = Args.parse(ctx.args, COMMANDS["shopt"])
     sh = ctx.shell
     if a.has("o"):
         # shopt -o: the set -o options
         for n in a.positional:
             if not sh.set_option(n, a.has("s")) and (a.has("s") or a.has("u")):
-                raise ShellError(f"{n}: invalid option name")
+                raise ShellError(spec_message("shopt", "invalidOptionName", name=n))
         if a.has("s") or a.has("u"):
             return 0
         for n, on in sh.option_list:
@@ -172,13 +173,13 @@ def _shopt(ctx):
     if a.has("s") or a.has("u"):
         for n in names:
             if n not in _SHOPTS:
-                raise ShellError(f"{n}: invalid shell option name")
+                raise ShellError(spec_message("shopt", "invalidShellOptionName", name=n))
             (sh.shopts.add if a.has("s") else sh.shopts.discard)(n)
         return 0
     code = 0
     for n in names:
         if n not in _SHOPTS:
-            ctx.error(f"shopt: {n}: invalid shell option name")
+            ctx.error("shopt: " + spec_message("shopt", "invalidShellOptionName", name=n))
             code = 1
             continue
         on = n in sh.shopts
@@ -213,7 +214,7 @@ def describe(ctx, a: str, all_: bool = False) -> bool:
             p, hashed = found
             lines.append(f"{a} is hashed ({'' if p.startswith(('/', './')) else './'}{p})" if hashed else f"{a} is {p}")
     if not lines:
-        ctx.error(f"{ctx.shell.err_prefix}type: {a}: not found")
+        ctx.error(f"{ctx.shell.err_prefix}type: " + spec_message("type", "notFound", name=a))
         return False
     for line in lines if all_ else lines[:1]:
         ctx.print(line)
@@ -300,7 +301,7 @@ def _declare(ctx):
                 else:
                     off += c
             else:
-                raise ShellError(f"-{c}: invalid option", 2)
+                raise ShellError(spec_message(ctx.name, "builtinInvalidOption", option="-" + c), 2)
     if functions or function_names:
         return _print_functions(ctx, names, function_names)
     if not names:
@@ -322,7 +323,7 @@ def _declare(ctx):
             if line is not None:
                 ctx.print(line)
             else:
-                ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: {n}: not found")
+                ctx.error(f"{ctx.shell.err_prefix}{ctx.name}: " + spec_message(ctx.name, "notFound", name=n))
                 code = 1
         return code
     local = ctx.name == "local" or (ctx.name in ("declare", "typeset") and sh.in_function and not glob)
@@ -333,7 +334,7 @@ def _declare(ctx):
         value = arg[eq + 1:] if eq > 0 else None
         try:
             if not is_name(name):
-                raise ShellError(f"`{arg}': not a valid identifier")
+                raise ShellError(spec_format(DIAGNOSTICS["notValidIdentifier"], name=arg))
             if local:
                 sh.declare_local(name, None)  # shortcut: `local x` is empty here, unset in bash
             if "n" in on:
@@ -401,13 +402,13 @@ def _input_fd(ctx, u: str | None):
     v = (ctx.fds or {}).get(fd)
     buf = v if isinstance(v, StdinBuffer) else ctx.shell.input_fd(fd)
     if buf is None:
-        raise ShellError(f"{u}: invalid file descriptor: Bad file descriptor")
+        raise ShellError(spec_message(ctx.name, "badFileDescriptor", fd=u))
     return buf
 
 
 def _read(ctx):
     from ..shell import split_fields
-    a = Args.parse(ctx.args, "rsea", "ptdnuNi")
+    a = Args.parse(ctx.args, COMMANDS["read"])
     sh = ctx.shell
     names = a.positional or ["REPLY"]
     inp = _input_fd(ctx, a.value("u"))
@@ -450,7 +451,7 @@ def _read(ctx):
 
 
 def _mapfile(ctx):
-    a = Args.parse(ctx.args, "t", "dnsuCcO")
+    a = Args.parse(ctx.args, COMMANDS[ctx.name])
     sh = ctx.shell
     name = a.positional[0] if a.positional else "MAPFILE"
     inp = _input_fd(ctx, a.value("u"))
@@ -480,7 +481,7 @@ def _mapfile(ctx):
 
 def _getopts(ctx):
     if len(ctx.args) < 2:
-        raise ShellError("usage: getopts optstring name [arg ...]", 2)
+        raise ShellError(spec_message("getopts", "usage"), 2)
     sh = ctx.shell
     spec, name = ctx.args[0], ctx.args[1]
     args = ctx.args[2:] if len(ctx.args) > 2 else sh.positional
@@ -515,7 +516,7 @@ def _getopts(ctx):
         if silent:
             sh.set_var("OPTARG", c)
         else:
-            ctx.error(f"{sh.get_variable('0')}: illegal option -- {c}")
+            ctx.error(spec_message("getopts", "illegalOption", script=sh.get_variable('0'), option=c))
             sh.unset("OPTARG")
         return done(0, "?")
     if at + 1 >= len(spec) or spec[at + 1] != ":":
@@ -532,7 +533,7 @@ def _getopts(ctx):
         sh.set_var("OPTARG", c)
         return done(0, ":")
     else:
-        ctx.error(f"{sh.get_variable('0')}: option requires an argument -- {c}")
+        ctx.error(spec_message("getopts", "missingArgument", script=sh.get_variable('0'), option=c))
         sh.unset("OPTARG")
         return done(0, "?")
     return done(0, c)
@@ -561,12 +562,12 @@ def _wait(ctx):
             code = 0
             continue
         if not i.isdigit():
-            ctx.error(f"{ctx.shell.err_prefix}wait: `{i}': not a pid or valid job spec")
+            ctx.error(f"{ctx.shell.err_prefix}wait: " + spec_message("wait", "notPid", id=i))
             code = 2
             continue
         code = ctx.shell.wait_for(int(i))
         if code == 127:
-            ctx.error(f"{ctx.shell.err_prefix}wait: pid {i} is not a child of this shell")
+            ctx.error(f"{ctx.shell.err_prefix}wait: " + spec_message("wait", "notChild", pid=str(i)))
     return code
 
 
@@ -593,13 +594,13 @@ def _kill(ctx):
         targets.append(a)
         i += 1
     if not targets:
-        raise ShellError("usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]", 2)
+        raise ShellError(spec_message("kill", "usage"), 2)
     for t in targets:
         if t == "4242":  # the shell itself
             if signal != 0:
                 raise ExitSignal(128 + signal)
             continue
-        ctx.error(f"{ctx.shell.err_prefix}kill: {t}: no such job" if t.startswith("%") else f"{ctx.shell.err_prefix}kill: ({t}) - No such process")
+        ctx.error(f"{ctx.shell.err_prefix}kill: " + (spec_message("kill", "noSuchJob", job=t) if t.startswith("%") else spec_message("kill", "noSuchProcess", pid=t)))
         code = 1
     return code
 
@@ -631,7 +632,7 @@ def _hash(ctx):
             elif ch == "l":
                 listing = True
             else:
-                raise UsageException(f"-{ch}: invalid option")
+                raise UsageException(spec_message("hash", "builtinInvalidOption", option="-" + ch))
         i += 1
     names = args[i:]
     if (show or delete) and not names:
@@ -657,14 +658,14 @@ def _hash(ctx):
         elif path is not None:
             sh.hashed[n] = [path, 0]
         elif show or delete:
-            ctx.error(f"{sh.err_prefix}hash: {n}: not found")
+            ctx.error(f"{sh.err_prefix}hash: " + spec_message("hash", "notFound", name=n))
             code = 1
         elif "/" in n or is_shell_builtin(sh, n) or n in sh.functions or sh.is_unfiled(n):
             pass
         elif sh.search_path_all(n):
             sh.hashed[n] = [sh.search_path_all(n)[0], 0]
         else:
-            ctx.error(f"{sh.err_prefix}hash: {n}: not found")
+            ctx.error(f"{sh.err_prefix}hash: " + spec_message("hash", "notFound", name=n))
             code = 1
     return code
 
@@ -673,7 +674,7 @@ async def _builtin(ctx):
     if not ctx.args:
         return 0
     if not is_shell_builtin(ctx.shell, ctx.args[0]):
-        raise ShellError(f"{ctx.args[0]}: not a shell builtin")
+        raise ShellError(spec_message("builtin", "notBuiltin", name=ctx.args[0]))
     return await ctx.shell._invoke(list(ctx.args), ctx.io, skip_functions=True)
 
 
@@ -689,7 +690,7 @@ def _dirs_line(sh) -> str:
 def _change_dir(ctx, d: str) -> None:
     path = ctx.resolve(d)
     if not ctx.fs.is_dir(path):
-        raise ShellError(f"{d}: No such file or directory")
+        raise ShellError(spec_message("pushd", "noDirectory", dir=d))
     ctx.shell.env["OLDPWD"] = ctx.shell.cwd
     ctx.shell.cwd = path
 
@@ -700,7 +701,7 @@ def _pushd(ctx):
     old = sh.cwd
     if not args:
         if not sh.dir_stack:
-            raise ShellError("no other directory")
+            raise ShellError(spec_message("pushd", "noOtherDirectory"))
         _change_dir(ctx, sh.dir_stack[0])
         sh.dir_stack[0] = old
     else:
@@ -713,7 +714,7 @@ def _pushd(ctx):
 def _popd(ctx):
     sh = ctx.shell
     if not sh.dir_stack:
-        raise ShellError("directory stack empty")
+        raise ShellError(spec_message("popd", "stackEmpty"))
     _change_dir(ctx, sh.dir_stack[0])
     sh.dir_stack.pop(0)
     ctx.print(_dirs_line(sh))
@@ -746,7 +747,7 @@ async def _eval(ctx):
 
 def _let(ctx):
     if not ctx.args:
-        raise ShellError("expression expected")
+        raise ShellError(spec_message("let", "expressionExpected"))
     v = 0
     for expr in ctx.args:
         v = arith.evaluate(ctx.shell, expr)
@@ -794,7 +795,7 @@ def _printenv(ctx):
 
 async def _sleep(ctx):
     if not ctx.args:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("sleep", "missingOperand"))
     total = sum(_duration(a) for a in ctx.args)
     sh = ctx.shell
     # the call's deadline (or a `timeout`) cuts the sleep short
@@ -808,7 +809,7 @@ async def _timeout(ctx):
     while args and args[0].startswith("-"):
         args.pop(0)
     if len(args) < 2:
-        raise ShellError("missing operand", 125)
+        raise ShellError(spec_message("timeout", "missingOperand"), 125)
     sh = ctx.shell
     outer = sh._deadline
     mine = time.monotonic() + _duration(args[0])
@@ -834,9 +835,9 @@ async def _time(ctx):
 # ---------- utilities ----------
 
 def _basename(ctx):
-    a = Args.parse(ctx.args, "az", "s", "multiple=a,suffix=s,zero=z")
+    a = Args.parse(ctx.args, COMMANDS["basename"])
     if not a.positional:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("basename", "missingOperand"))
     suffix = a.value("s") or (a.positional[1] if not a.has("a") and len(a.positional) == 2 else None)
     names = a.positional if a.has("a") or a.value("s") else a.positional[:1]
     for n in names:
@@ -848,9 +849,9 @@ def _basename(ctx):
 
 
 def _dirname(ctx):
-    a = Args.parse(ctx.args, "z", longs="zero=z")
+    a = Args.parse(ctx.args, COMMANDS["dirname"])
     if not a.positional:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("dirname", "missingOperand"))
     for n in a.positional:
         t = n.rstrip("/")
         i = t.rfind("/")
@@ -858,13 +859,12 @@ def _dirname(ctx):
 
 
 def _realpath(ctx):
-    a = Args.parse(ctx.args, "fesmqnzvLP", longs="canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,no-symlinks=s,quiet=q,"
-                                                 "no-newline=n,zero=z,verbose=v,logical=L,physical=P")
+    a = Args.parse(ctx.args, COMMANDS[ctx.name])
     readlink = ctx.name == "readlink"
     plain = readlink and not (a.has("f") or a.has("e") or a.has("m"))
     report = a.has("v") if readlink else not a.has("q")  # readlink is silent about failures unless -v; realpath reports them unless -q
     if not a.positional and readlink:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("readlink", "missingOperand"))
     end = "\0" if a.has("z") else "" if readlink and a.has("n") and len(a.positional) == 1 else "\n"
     code = 0
     for p in a.positional or ["."]:
@@ -883,7 +883,7 @@ def _realpath(ctx):
                 result = path
         if result is None:
             if report:
-                ctx.error(f"{ctx.name}: {quote(p)}: {why}")
+                ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "failed", file=p, errno=why))
             code = 1
             continue
         ctx.stdout.write(result + end)
@@ -891,14 +891,14 @@ def _realpath(ctx):
 
 
 def _stat(ctx):
-    a = Args.parse(ctx.args, "Lt", "c", "format=c,dereference=L,terse=t")
+    a = Args.parse(ctx.args, COMMANDS["stat"])
     user = ctx.shell.user
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
         follow = a.has("L")
         if not ctx.fs.exists(path, follow):
-            ctx.error(f"stat: cannot statx '{p}': {ctx.fs.why_missing(path, follow)}")
+            ctx.error("stat: " + spec_message("stat", "cannotStat", file=p, errno=ctx.fs.why_missing(path, follow)))
             code = 1
             continue
         st = ctx.fs.stat(path, follow)
@@ -923,7 +923,7 @@ def _stat(ctx):
 
 
 def _du(ctx):
-    a = Args.parse(ctx.args, "shacSk", "d", "summarize=s,human-readable=h,all=a,total=c,max-depth=d")
+    a = Args.parse(ctx.args, COMMANDS["du"])
     max_depth = 0 if a.has("s") else int(a.value("d")) if a.value("d") else 10**9
 
     def fmt(kb: int) -> str:
@@ -952,7 +952,7 @@ def _du(ctx):
     for p in a.positional or ["."]:
         path = ctx.resolve(p)
         if not ctx.fs.exists(path, follow=False):
-            ctx.error(f"du: cannot access '{p}': No such file or directory")
+            ctx.error("du: " + spec_message("du", "cannotAccess", file=p, errno="No such file or directory"))
             code = 1
             continue
         grand += walk(path, p, 0)
@@ -994,7 +994,7 @@ def chmod_parse(spec: str, mode: int, is_dir: bool) -> int:
     for clause in spec.split(","):
         m = re.fullmatch(r"([ugoa]*)([-+=])([rwxXt]*)", clause)
         if not m:
-            raise ShellError(f"invalid mode: '{spec}'")
+            raise ShellError(spec_message("chmod", "invalidMode", mode=spec))
         who = "ugo" if m.group(1) in ("", "a") else m.group(1).replace("a", "ugo")
         bits, sticky = 0, False
         for c in m.group(3):
@@ -1030,15 +1030,15 @@ def _chmod(ctx):
         elif arg in ("-f", "--silent", "--quiet"):
             quiet = True
         elif arg.startswith("--") and len(arg) > 2:
-            raise UsageException(f"unrecognized option '{arg}'")
+            raise UsageException(spec_message("chmod", "unrecognizedOption", option=arg))
         elif len(arg) > 1 and arg[0] == "-" and (bad := next((c for c in arg if c not in "-rwxXstugoa+=,01234567"), None)):
-            raise UsageException(f"invalid option -- '{bad}'")
+            raise UsageException(spec_message("chmod", "invalidOption", option=bad))
         elif spec is None:
             spec = arg  # may look like an option, e.g. -x or -w
         else:
             files.append(arg)
     if spec is None or not files:
-        raise UsageException("missing operand" if spec is None else f"missing operand after {quote_l(spec)}")
+        raise UsageException(spec_message("chmod", "missingOperand") if spec is None else spec_message("chmod", "missingOperandAfter", operand=spec))
     code = 0
 
     def fmt(st, m):
@@ -1052,7 +1052,7 @@ def _chmod(ctx):
             ctx.fs.chmod(path, mode)
         except ShellError:
             if not quiet:
-                ctx.error(f"chmod: changing permissions of '{display}': Operation not permitted")
+                ctx.error("chmod: " + spec_message("chmod", "cannotChangePermissions", file=display))
             code = 1
             return
         if mode != st.mode and (verbose or changes):
@@ -1070,7 +1070,7 @@ def _chmod(ctx):
     for f in files:
         path = ctx.resolve(f)
         if not ctx.fs.exists(path):
-            ctx.error(f"chmod: cannot access '{f}': {ctx.fs.why_missing(path)}")
+            ctx.error("chmod: " + spec_message("chmod", "cannotAccess", file=f, reason=ctx.fs.why_missing(path)))
             code = 1
             continue
         apply(f, path)
@@ -1081,13 +1081,13 @@ def _chown(ctx):
     operands = [x for x in ctx.args if not x.startswith("-")]
     files = operands[1:]  # first operand is the owner
     if not files:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message(ctx.name, "missingOperand"))
     owner = operands[0].split(":")[0]
     code = 0
     for f in files:
         path = ctx.resolve(f)
         if not ctx.fs.exists(path):
-            ctx.error(f"{ctx.name}: cannot access '{f}': {ctx.fs.why_missing(path)}")
+            ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "cannotAccess", file=f, reason=ctx.fs.why_missing(path)))
             code = 1
             continue
         try:
@@ -1105,22 +1105,22 @@ def _sudo(ctx):
         ctx.print("Sudo version 1.9.15p5")
         return 0
     if not ctx.args:
-        ctx.error("usage: sudo -h | -K | -k | -V\nusage: sudo [-AbEHknPS] [-u user] [command [arg ...]]")
+        ctx.error(spec_message("sudo", "usage"))
         return 1
     if ctx.args[0] in ("-l", "--list"):
-        ctx.error(f"Sorry, user {user} may not run sudo on {ctx.shell.hostname}.")
+        ctx.error(spec_message("sudo", "listDenied", user=user, host=ctx.shell.hostname))
         return 1
-    ctx.error(f"{user} is not in the sudoers file.")
+    ctx.error(spec_message("sudo", "notSudoer", user=user))
     return 1
 
 
 def _su(ctx):
-    ctx.error("Password: \nsu: Authentication failure")
+    ctx.error(spec_message("su", "authenticationFailure"))
     return 1
 
 
 def _nl(ctx):
-    a = Args.parse(ctx.args, "", "bsw")
+    a = Args.parse(ctx.args, COMMANDS["nl"])
     every = a.value("b") == "a"
     width = int(a.value("w") or 6)
     sep = a.value("s") or "\t"
@@ -1160,7 +1160,7 @@ def _file(ctx):
             continue
         path = ctx.resolve(p)
         if not ctx.fs.exists(path):
-            desc, code = f"cannot open `{p}' (No such file or directory)", 1
+            desc, code = spec_message("file", "cannotOpen", file=p), 1
         elif ctx.fs.is_dir(path):
             desc = "directory"
         else:
@@ -1202,7 +1202,7 @@ def _tac(ctx):
 
 
 def _paste(ctx):
-    a = Args.parse(ctx.args, "s", "d", "serial=s,delimiters=d")
+    a = Args.parse(ctx.args, COMMANDS["paste"])
     delims = unescape(a.value("d") if a.value("d") is not None else "\t") or "\0"
 
     def join(cells):
@@ -1237,7 +1237,7 @@ def _paste(ctx):
 
 
 def _column(ctx):
-    a = Args.parse(ctx.args, "tn", "so", "table=t,separator=s,output-separator=o")
+    a = Args.parse(ctx.args, COMMANDS["column"])
     errors = _Errors()
     lines = [l for _, t in inputs(ctx, a.positional, errors) for l in split_lines(t)]
     if not a.has("t"):
@@ -1257,7 +1257,7 @@ def _column(ctx):
 
 
 def _base64(ctx):
-    a = Args.parse(ctx.args, "di", "w", "decode=d,ignore-garbage=i,wrap=w")
+    a = Args.parse(ctx.args, COMMANDS["base64"])
     errors = _Errors()
     data = b"".join(t for _, t in inputs(ctx, a.positional, errors, raw=True))
     if a.has("d"):
@@ -1285,11 +1285,11 @@ def _hasher(algo):
 
 
 def _mktemp(ctx):
-    a = Args.parse(ctx.args, "dqu", "pt", "directory=d,quiet=q,tmpdir=p")
+    a = Args.parse(ctx.args, COMMANDS["mktemp"])
     template = a.positional[0] if a.positional else "tmp.XXXXXXXXXX"
     chars = string.ascii_letters + string.digits
     name = re.sub(r"X{3,}$", lambda m: "".join(random.choice(chars) for _ in m.group(0)), template)
-    path = ctx.resolve(name) if "/" in template and a.value("p") is None else normalize(a.value("p") or "/tmp", name)
+    path = ctx.resolve(name) if "/" in template and a.value("p") is None and not a.has("t") else normalize(a.value("p") or "/tmp", name)
     if a.has("d"):
         ctx.fs.mkdir(path)
     else:
@@ -1309,7 +1309,7 @@ def _seq(ctx):
             equal_width = True
         elif x == "-s":
             if i + 1 >= len(args):
-                raise ShellError("option requires an argument -- 's'")
+                raise ShellError(spec_message("seq", "optionRequiresArgument", option="s"))
             i += 1
             sep = args[i]
         elif x.startswith("-s"):
@@ -1319,22 +1319,22 @@ def _seq(ctx):
         elif x in ("-f", "--format") or x.startswith(("-f", "--format=")):
             if x in ("-f", "--format"):
                 if i + 1 >= len(args):
-                    raise ShellError("option requires an argument -- 'f'")
+                    raise ShellError(spec_message("seq", "optionRequiresArgument", option="f"))
                 i += 1
                 fmt = args[i]
             else:
                 fmt = x[2:] if x.startswith("-f") else x[9:]
         else:
-            raise ShellError(f"invalid option -- '{x.lstrip('-')}'")
+            raise ShellError(spec_message("seq", "invalidOption", option=x.lstrip("-")))
         i += 1
     if not nums or len(nums) > 3:
-        raise UsageException("missing operand" if not nums else f"extra operand {quote_l(nums[3])}")
+        raise UsageException(spec_message("seq", "missingOperand") if not nums else spec_message("seq", "extraOperand", operand=nums[3]))
     v = [float(x) for x in nums]
     first = v[0] if len(v) > 1 else 1
     step = v[1] if len(v) == 3 else 1
     last = v[-1]
     if step == 0:
-        raise ShellError("invalid Zero increment value: '0'")
+        raise ShellError(spec_message("seq", "zeroIncrement"))
     decimals = max((len(x) - x.index(".") - 1 if "." in x else 0) for x in nums)
     items, k = [], 0
     while True:
@@ -1343,7 +1343,7 @@ def _seq(ctx):
             break
         items.append(printf_format(fmt, [repr(x)]) if fmt else f"{x:.{decimals}f}")
         if len(items) > 1_000_000:
-            raise ShellError("too many numbers")
+            raise ShellError(spec_message("seq", "tooManyNumbers"))
         k += 1
     if equal_width and items:
         w = max(len(s) for s in items)
@@ -1353,18 +1353,17 @@ def _seq(ctx):
 
 
 def _diff(ctx):
-    a = Args.parse(ctx.args, "uqsiwbBNr", "U", "unified=u,brief=q,report-identical-files=s,ignore-case=i,"
-                                               "ignore-all-space=w,ignore-space-change=b,recursive=r")
+    a = Args.parse(ctx.args, COMMANDS["diff"])
     if len(a.positional) != 2:
-        raise UsageException(f"missing operand after '{a.positional[-1] if a.positional else 'diff'}'"
-                             if len(a.positional) < 2 else f"extra operand '{a.positional[2]}'")
+        raise UsageException(spec_message("diff", "missingOperandAfter", operand=a.positional[-1] if a.positional else "diff")
+                             if len(a.positional) < 2 else spec_message("diff", "extraOperand", operand=a.positional[2]))
 
     def read(p):
         if p == "-":
             return ctx.stdin
         path = ctx.resolve(p)
         if not ctx.fs.exists(path):
-            raise ShellError(f"{p}: No such file or directory", 2)
+            raise ShellError(spec_message("diff", "fileNotFound", file=p), 2)
         if ctx.fs.is_dir(path):
             raise ShellError(f"{p}: Is a directory (directory diff is not supported)", 2)
         return ctx.fs.read_text(path)
@@ -1426,7 +1425,7 @@ def _diff(ctx):
 
 def _id(ctx):
     u = ctx.shell.user
-    a = Args.parse(ctx.args, "ugnGr")
+    a = Args.parse(ctx.args, COMMANDS["id"])
     ctx.print((u if a.has("n") else "1000") if a.has("u") or a.has("g") else f"uid=1000({u}) gid=1000({u}) groups=1000({u})")
 
 
@@ -1446,69 +1445,70 @@ def _free(ctx):
 
 def register(shell) -> None:
     r = shell.register_command
-    r("exit", _exit, "Exit the shell")
-    r("return", _return, "Return from a function")
-    r("break", _break, "Exit a loop")
-    r("continue", _break, "Next loop iteration")
-    r("shift", _shift, "Shift positional parameters")
-    r("trap", _trap, "Run a command when the shell exits (EXIT), a command fails (ERR) or a function returns (RETURN)")
-    r("shopt", _shopt, "Set shell options (nullglob, dotglob, globstar, extglob, nocasematch ...)")
-    r("set", _set, "Set shell options (-e, -u, -x, -f, -C, -o pipefail) or positional parameters")
-    r("local", _declare, "Declare function-local variables")
-    r("declare", _declare, "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)")
-    r("typeset", _declare, "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)")
-    r("readonly", _declare, "Make variables read-only")
-    r("read", _read, "Read a line from stdin into variables")
-    r("mapfile", _mapfile, "Read lines from stdin into an array (-t drops the newlines)")
-    r("readarray", _mapfile, "Read lines from stdin into an array (-t drops the newlines)")
-    r("getopts", _getopts, "Parse command-line options")
-    r("exec", _exec, "Replace the shell with a command, or redirect the shell's own input and output")
-    r("wait", _wait, "Wait for background jobs (they run to completion when started)")
-    r("jobs", lambda ctx: 0, "List background jobs (none are ever still running)")
-    r("disown", lambda ctx: 0, "Forget background jobs")
-    r("kill", _kill, "Send a signal to a process (background jobs have always finished already)")
-    r("hash", _hash, "Remember command locations")
-    r("builtin", _builtin, "Run a shell builtin, bypassing a function of the same name")
-    r("pushd", _pushd, "Change directory, remembering the old one")
-    r("popd", _popd, "Return to the directory pushd left")
-    r("dirs", _dirs, "Show the directory stack")
-    r("ulimit", _ulimit, "Show resource limits")
-    r("times", lambda ctx: ctx.stdout.write("0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n") and 0, "Show the shell's CPU times")
-    r("eval", _eval, "Run arguments as a shell command")
-    r("let", _let, "Evaluate arithmetic expressions")
-    r("command", _command, "Run a command, or describe it with -v")
-    r("printenv", _printenv, "Print environment variables")
-    r("sleep", _sleep, "Pause for a number of seconds")
-    r("timeout", _timeout, "Run a command with a time limit")
-    r("time", _time, "Time a command")
-    r("clear", lambda ctx: 0, "Clear the terminal")
-    r("basename", _basename, "Strip directory and suffix from a path")
-    r("dirname", _dirname, "Strip the last component from a path")
-    r("realpath", _realpath, "Print the absolute path")
-    r("readlink", _realpath, "Print resolved path (-f)")
-    r("stat", _stat, "Show file status")
-    r("du", _du, "Estimate disk usage")
-    r("df", _df, "Report filesystem disk space")
-    r("chmod", _chmod, "Change file mode bits")
-    r("chown", _chown, "Change file owner")
-    r("chgrp", _chown, "Change file group")
-    r("sudo", _sudo, "Execute a command as another user")
-    r("su", _su, "Run a command with a substitute user ID")
-    r("nl", _nl, "Number lines")
-    r("less", _pager, "View files (non-interactive: prints them)")
-    r("more", _pager, "View files (non-interactive: prints them)")
-    r("file", _file, "Determine file type")
-    r("rev", _rev, "Reverse each line")
-    r("tac", _tac, "Print lines in reverse order")
-    r("paste", _paste, "Merge lines of files")
-    r("column", _column, "Format input into aligned columns (-t)")
-    r("base64", _base64, "Base64 encode/decode")
+    r("exit", _exit)
+    r("return", _return)
+    r("break", _break)
+    r("continue", _break)
+    r("shift", _shift)
+    r("trap", _trap)
+    r("shopt", _shopt)
+    r("set", _set)
+    r("local", _declare)
+    r("declare", _declare)
+    r("typeset", _declare)
+    r("readonly", _declare)
+    r("read", _read)
+    r("mapfile", _mapfile)
+    r("readarray", _mapfile)
+    r("getopts", _getopts)
+    r("exec", _exec)
+    r("wait", _wait)
+    r("jobs", lambda ctx: 0)
+    r("disown", lambda ctx: 0)
+    r("kill", _kill)
+    r("hash", _hash)
+    r("builtin", _builtin)
+    r("pushd", _pushd)
+    r("popd", _popd)
+    r("dirs", _dirs)
+    r("ulimit", _ulimit)
+    r("times", lambda ctx: ctx.stdout.write("0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n") and 0)
+    r("umask", lambda ctx: None if ctx.args else ctx.print("0022"))
+    r("eval", _eval)
+    r("let", _let)
+    r("command", _command)
+    r("printenv", _printenv)
+    r("sleep", _sleep)
+    r("timeout", _timeout)
+    r("time", _time)
+    r("clear", lambda ctx: 0)
+    r("basename", _basename)
+    r("dirname", _dirname)
+    r("realpath", _realpath)
+    r("readlink", _realpath)
+    r("stat", _stat)
+    r("du", _du)
+    r("df", _df)
+    r("chmod", _chmod)
+    r("chown", _chown)
+    r("chgrp", _chown)
+    r("sudo", _sudo)
+    r("su", _su)
+    r("nl", _nl)
+    r("less", _pager)
+    r("more", _pager)
+    r("file", _file)
+    r("rev", _rev)
+    r("tac", _tac)
+    r("paste", _paste)
+    r("column", _column)
+    r("base64", _base64)
     for name, algo in (("md5sum", "md5"), ("sha1sum", "sha1"), ("sha256sum", "sha256"), ("sha512sum", "sha512")):
-        r(name, _hasher(algo), f"Compute {algo.upper()} checksums")
-    r("mktemp", _mktemp, "Create a temporary file or directory")
-    r("seq", _seq, "Print a sequence of numbers")
-    r("diff", _diff, "Compare files line by line (-u for unified)")
-    r("id", _id, "Print user and group IDs")
-    r("uptime", _uptime, "Show how long the system has been running")
-    r("free", _free, "Display memory usage")
-    r("nproc", lambda ctx: ctx.print("4"), "Print the number of processors")
+        r(name, _hasher(algo))
+    r("mktemp", _mktemp)
+    r("seq", _seq)
+    r("diff", _diff)
+    r("id", _id)
+    r("uptime", _uptime)
+    r("free", _free)
+    r("nproc", lambda ctx: ctx.print("4"))

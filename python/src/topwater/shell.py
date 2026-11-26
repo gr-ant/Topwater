@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Union
 
 from . import arith, bytetext
+from ._spec import COMMANDS, DIAGNOSTICS, ERRNO, diagnostic
 from .parser import (
     ArithCommand, ArithForCommand, ArithSub, Assignment, CaseCommand, CommandSub, CondCommand, ExpandedText, ForCommand,
     FunctionDef, GroupCommand, IfCommand, Lexer, Literal, LoopCommand, Parser, ParseError, Pipeline, ProcSub, Script,
@@ -319,9 +320,6 @@ class _NewProcess:
 
 # bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
 SNAPSHOT_SET_OPTIONS = ("errexit", "pipefail", "nounset", "noglob", "xtrace", "noclobber")  # the set -o options a shell can change
-_NO_PROGRAM_FILE = {"alias", "break", "cd", "command", "continue", "declare", "eval", "exit", "export", "help", "history", "let",
-                    "local", "mapfile", "read", "readarray", "readonly", "return", "set", "shift", "shopt", "source", "trap",
-                    "type", "typeset", "unalias", "unset"}
 _DEFAULT_SHOPTS = {"cmdhist", "complete_fullquote", "extquote", "force_fignore", "globasciiranges", "globskipdots", "hostcomplete",
                    "interactive_comments", "patsub_replacement", "progcomp", "promptvars", "sourcepath"}
 _BASH_VERSINFO = ["5", "2", "21", "1", "release", "x86_64-pc-linux-gnu"]
@@ -562,6 +560,8 @@ class Shell:
 
     def register_command(self, name: str, handler: Handler, description: str = "", usage: str | None = None) -> "Shell":
         """Registers a handler(ctx) -> exit code (sync or async)."""
+        if self._builtin_names is None and not description and usage is None and name in COMMANDS:
+            description, usage = COMMANDS[name].summary, COMMANDS[name].help  # built-ins: from spec/ (_spec.py)
         self.commands[name] = RegisteredCommand(name, description, usage, handler)
         if self._builtin_names is not None:
             self._builtin_names.discard(name)  # an app command replacing a built-in owns its own --help/--version
@@ -569,7 +569,8 @@ class Shell:
         return self
 
     def _write_program_file(self, name: str, builtin: bool) -> None:
-        if not (builtin and name in _NO_PROGRAM_FILE) and "/" not in name and name not in (".", "..", ":") and self.fs.is_dir("/usr/bin"):
+        spec = COMMANDS.get(name)
+        if not (builtin and spec is not None and not spec.program_file) and "/" not in name and name not in (".", "..", ":") and self.fs.is_dir("/usr/bin"):
             with self.fs.as_root():
                 for d in ("/usr/bin/", "/bin/"):
                     if self.fs.is_dir(d):
@@ -1201,7 +1202,7 @@ class Shell:
                     elif target.isdigit() and self._descriptor(int(target), io_) is not None:
                         dup = self._descriptor(int(target), io_)
                     else:
-                        raise ShellError(f"{target}: {'Bad file descriptor' if target.isdigit() else 'ambiguous redirect'}")
+                        raise ShellError(diagnostic("redirectFailed", target=target, reason=ERRNO["EBADF"] if target.isdigit() else DIAGNOSTICS["ambiguousRedirect"]))
                     io_ = _with_fd(io_, r.fd, dup)
                 else:  # > >> >| &> &>>
                     def open_sink(path: str):
@@ -1242,7 +1243,7 @@ class Shell:
         if self.fs.is_dir(path):
             raise ShellError(f"{target}: Is a directory")
         if self.noclobber and r.op in (">", "&>") and self.fs.is_file(path):
-            raise ShellError(f"{target}: cannot overwrite existing file")
+            raise ShellError(diagnostic("noclobber", target=target))
         if not r.op.endswith(">>") or not self.fs.exists(path):
             self.fs.write_text(path, "")  # truncate on open, like bash
         return open_(path)
@@ -1273,7 +1274,7 @@ class Shell:
                         d = self._descriptor(int(t), io_)
                         target = d.target if isinstance(d, SwitchWriter) else d
                     else:
-                        raise ShellError(f"{t}: Bad file descriptor")
+                        raise ShellError(diagnostic("redirectFailed", target=t, reason=ERRNO["EBADF"]))
                 else:
                     target = await self._open_output(r, io_, lambda path: FileAppender(self.fs, path))
                 if r.fd_variable is None:
@@ -1420,7 +1421,7 @@ class Shell:
                     found = self.search_path(name)
                     if found is None:
                         io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n" if not self.env.get("PATH")
-                                      else f"{argv[0]}: command not found (run 'help' to list available commands)\n")
+                                      else diagnostic("commandNotFound", command=argv[0]) + "\n")
                         return 127
                     self.hashed[name] = [found, 1]
                 registered = self.stub_command(found)
@@ -1429,7 +1430,7 @@ class Shell:
                 name = registered
         cmd = self.commands.get(name)
         if cmd is None:
-            io_.err.write(f"{argv[0]}: command not found (run 'help' to list available commands)\n")
+            io_.err.write(diagnostic("commandNotFound", command=argv[0]) + "\n")
             return 127
         self.check_deadline()
         ctx = CommandContext(self, name, list(argv[1:]), io_.stdin, io_.out, io_.err, io_.fds)
@@ -1451,8 +1452,8 @@ class Shell:
             if is_shell_builtin(self, name):
                 io_.err.write(f"{self.err_prefix}{name}: {e}\n")
                 return 2
-            io_.err.write(usage_error("grep" if name in ("egrep", "fgrep") else name, str(e)))
-            return 2 if name in ("ls", "grep", "egrep", "fgrep", "sort", "diff") else 1
+            io_.err.write(usage_error(name, str(e)))
+            return COMMANDS[name].usage_exit_code if name in COMMANDS else 1
         except ShellError as e:
             io_.err.write(f"{self.err_prefix if is_shell_builtin(self, name) else ''}{name}: {e}\n")
             return e.exit_code
@@ -1477,7 +1478,7 @@ class Shell:
             stub = self.stub_command(path)
             if stub is not None:
                 return await self._invoke([stub, *argv[1:]], io_, skip_functions=True)
-            io_.err.write(f"{self.err_prefix}{name}: cannot execute binary file\n")
+            io_.err.write(self.err_prefix + diagnostic("cannotExecuteBinary", name=name) + "\n")
             return 126
         if text.startswith("#!"):
             line = text[2:].split("\n", 1)[0].strip()
@@ -1498,7 +1499,7 @@ class Shell:
         parts = re.split(r"[ \t]", line, maxsplit=1)
         program = self.stub_command(parts[0])
         if program is None:
-            io_.err.write(f"{self.err_prefix}{name}: cannot execute: required file not found\n")
+            io_.err.write(self.err_prefix + diagnostic("requiredFileNotFound", name=name) + "\n")
             return 127
         opt = parts[1].strip() if len(parts) > 1 else ""
         words = [] if not opt else opt[2:].split() if program == "env" and opt.startswith("-S") else [opt]
@@ -1677,7 +1678,7 @@ class Shell:
     def declare_local(self, name: str, value: str | None) -> None:
         """`local NAME[=VALUE]`: remembers the outer value and attributes so they are restored when the function returns."""
         if not self._locals:
-            raise ShellError("can only be used in a function")
+            raise ShellError(DIAGNOSTICS["onlyInFunction"])
         frame = self._locals[-1]
         if name not in frame:
             frame[name] = (self.env.get(name), self.var_attrs.get(name))
@@ -1737,7 +1738,7 @@ class Shell:
             self.set_element(r[1], r[2], self._converted(self.resolve_name(r[1]), value, self.get_element(r[1], r[2]) if append else None))
             return
         if not is_name(name):
-            raise ShellError(f"`{name}': not a valid identifier")
+            raise ShellError(diagnostic("notValidIdentifier", name=name))
         self._check_writable(name)
         if name == "PATH":
             self.hashed = {}  # even to the same value
@@ -1764,7 +1765,7 @@ class Shell:
 
     def _check_writable(self, name: str) -> None:
         if self.has_attr(name, "r"):
-            raise ShellError(f"{name}: readonly variable")
+            raise ShellError(diagnostic("readonlyVariable", name=name))
 
     def get_array(self, name: str) -> ShellArray | None:
         """The array called name (through namerefs), including the shell's own FUNCNAME, PIPESTATUS and BASH_VERSINFO."""
@@ -1850,7 +1851,7 @@ class Shell:
         if i < 0:
             i += array.next if array is not None else 1
         if i < 0:
-            raise ShellError(f"{name}: bad array subscript")
+            raise ShellError(diagnostic("badArraySubscript", name=name))
         return str(i)
 
     def get_element(self, name: str, subscript: str) -> str | None:
@@ -1880,7 +1881,7 @@ class Shell:
             return
         name = r[1] if r is not None else target
         if self.has_attr(name, "r"):
-            raise ShellError(f"{name}: cannot unset: readonly variable")
+            raise ShellError(diagnostic("cannotUnsetReadonly", name=name))
         self.env.pop(name, None)
         self.arrays.pop(name, None)
         self.var_attrs.pop(name, None)
@@ -1912,7 +1913,7 @@ class Shell:
                 msg = await self._param_word_expand(word, quoted, io_) if word else "parameter null or not set"
                 raise self._fatal(io_, f"{rname}[{sub}]: {msg}", 127)
             if op.endswith("=") and missing:
-                raise ShellError(f"{rname}[{sub}]: bad array subscript")
+                raise ShellError(diagnostic("badArraySubscript", name=f"{rname}[{sub}]"))
             if op.endswith("-"):
                 return [await self._param_word_expand(word, quoted, io_)] if missing else items
             if op.endswith("+"):
@@ -1923,7 +1924,7 @@ class Shell:
             frm = await self._arith(spec[0], io_)
             count = (1 << 62) if len(spec) == 1 else await self._arith(spec[1], io_)
             if count < 0:
-                raise ShellError(f"{spec[1].strip()}: substring expression < 0")
+                raise ShellError(diagnostic("substringNegative", expression=spec[1].strip()))
             # an indexed array is sliced by index, so a sparse array skips its gaps: offsets count from the first index >= from
             if a is not None and not a.assoc:
                 ks = [int(k) for k in a.keys()]
@@ -2109,7 +2110,7 @@ class Shell:
             try:
                 return arith.evaluate(self, expr)
             except RecursionError:
-                raise ShellError("expression is nested too deeply") from None
+                raise ShellError(DIAGNOSTICS["expressionNested"]) from None
         finally:
             if self._arith_depth > 0:
                 self._arith_depth -= 1
@@ -2141,7 +2142,7 @@ class Shell:
             return None  # ${!ref} of a nameref is the name it refers to
         target = self.get_variable(name)
         if not target:
-            raise ShellError(f"{name}: invalid indirect expansion")
+            raise ShellError(diagnostic("invalidIndirect", name=name))
         return target + m.group(2)
 
     def _param_word(self, text: str, quoted: bool) -> Word:
@@ -2219,7 +2220,7 @@ class Shell:
             return str(len(self.get_variable(expr[1:])))
         m = _PARAM.match(expr)
         if not m:
-            raise ShellError(f"${{{expr}}}: bad substitution")
+            raise ShellError(diagnostic("badSubstitution", expr=expr))
         name, rest = m.group(1), m.group(2)
         value = self.get_variable(name)
         d = default_op(rest)
@@ -2238,7 +2239,7 @@ class Shell:
                 if not missing:
                     return value
                 if not is_name(name):
-                    raise ShellError(f"${name}: cannot assign in this way")
+                    raise ShellError(diagnostic("cannotAssign", name=name))
                 self.set_var(name, await self._param_word_expand(word, quoted, io_))
                 return self.get_variable(name)
             if kind == "+":
@@ -2343,7 +2344,7 @@ class Shell:
                 return f"declare -{flags} {name}={quote_value(value)}" if flags else f"{name}={quote_value(value)}"
             if c == "P":
                 return value
-            raise ShellError(f"${{{expr}}}: bad substitution")
+            raise ShellError(diagnostic("badSubstitution", expr=expr))
         if rest[0] == ":":
             spec = rest[1:].split(":", 1)
             offset = await self._arith(spec[0], io_)
@@ -2358,15 +2359,15 @@ class Shell:
             if length < 0:
                 length += len(tail)
                 if length < 0:
-                    raise ShellError(f"{spec[1].strip()}: substring expression < 0")
+                    raise ShellError(diagnostic("substringNegative", expression=spec[1].strip()))
             return tail[:length]
-        raise ShellError(f"${{{expr}}}: bad substitution")
+        raise ShellError(diagnostic("badSubstitution", expr=expr))
 
     def _check_set(self, name: str, io_: _Io) -> None:
         """set -u: expanding an unset variable is an error that ends the (sub)shell, like bash."""
         if not self.nounset or name in ("@", "*") or self._is_set(name):
             return
-        raise self._fatal(io_, f"{name}: unbound variable", 127)
+        raise self._fatal(io_, diagnostic("unboundVariable", name=name), 127)
 
     async def _run_substitution(self, source: str, io_: _Io) -> int:
         """$(...) and <(...) run in a subshell that, as in bash, does not inherit set -e (unless shopt inherit_errexit)."""
@@ -2702,10 +2703,10 @@ class _CondEvaluator:
 
     async def evaluate(self) -> bool:
         if not self.items:
-            raise ShellError("syntax error in conditional expression", 2)
+            raise ShellError(DIAGNOSTICS["conditionalSyntax"], 2)
         v = await self.or_()
         if self.p < len(self.items):
-            raise ShellError(f"syntax error in conditional expression near `{self.items[self.p]}'", 2)
+            raise ShellError(diagnostic("conditionalSyntaxNear", token=str(self.items[self.p])), 2)
         return v
 
     async def or_(self) -> bool:
@@ -2736,11 +2737,11 @@ class _CondEvaluator:
             self.p += 1
             v = await self.or_()
             if not self.is_op(")"):
-                raise ShellError("syntax error in conditional expression: expected `)'", 2)
+                raise ShellError(DIAGNOSTICS["conditionalParen"], 2)
             self.p += 1
             return v
         if self.p >= len(items):
-            raise ShellError("syntax error in conditional expression: unexpected end", 2)
+            raise ShellError(DIAGNOSTICS["conditionalEnd"], 2)
         u = items[self.p].unquoted_literal
         if u in self.UNARY and self.p + 1 < len(items) and not (self.p + 2 < len(items) and is_cond_binary(items[self.p + 1])):
             arg = await sh._expand_single(items[self.p + 1], self.io)
@@ -2754,7 +2755,7 @@ class _CondEvaluator:
             op = items[self.p].unquoted_literal
             self.p += 1
             if self.p >= len(items):
-                raise ShellError(f"unexpected argument to conditional binary operator `{op}'", 2)
+                raise ShellError(diagnostic("conditionalBinaryArgument", op=op), 2)
             right = items[self.p]
             self.p += 1
             lv = await sh._expand_single(left, self.io)
@@ -2849,7 +2850,7 @@ def _brace_text(text: str) -> list[str]:
             for alt in alts:
                 results.extend(_brace_text(text[:open_] + alt + text[close + 1:]))
                 if len(results) > _MAX_BRACE:
-                    raise ShellError("brace expansion: too many items")
+                    raise ShellError(DIAGNOSTICS["braceTooMany"])
             return results
         open_ = text.find("{", open_ + 1)
     return [text]
@@ -2876,7 +2877,7 @@ def _brace_alternatives(inner: str) -> list[str] | None:
         pad = any(len(g) > 1 and g.lstrip("-").startswith("0") for g in (m.group(1), m.group(2)))
         width = max(len(m.group(1)), len(m.group(2)))
         if abs(b - a) // step > _MAX_BRACE:
-            raise ShellError("brace expansion: too many items")
+            raise ShellError(DIAGNOSTICS["braceTooMany"])
         rng = range(a, b + 1, step) if a <= b else range(a, b - 1, -step)
         return [str(v).zfill(width) if pad else str(v) for v in rng]
     m = re.fullmatch(r"([a-zA-Z])\.\.([a-zA-Z])(?:\.\.(-?\d+))?", inner)

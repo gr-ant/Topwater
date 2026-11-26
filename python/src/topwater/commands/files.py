@@ -6,8 +6,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from ..shell import glob_to_regex
+from .._spec import COMMANDS
 from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, get_parent, normalize, utc_now
-from . import Args, inputs, parse_date, quote_always, quote_l, split_lines, strftime
+from . import Args, inputs, parse_date, quote_always, quote_l, spec_message, split_lines, strftime
 
 
 def typed(message: str, arg: str, abs_path: str) -> tuple[str, str]:
@@ -75,9 +76,7 @@ def _time_style(arg: str) -> str:
         return arg
     hits = [arg] if arg in _TIME_STYLES else [x for x in _TIME_STYLES if x.startswith(arg)]
     if len(hits) != 1:
-        raise ShellError(f"{'invalid' if not hits else 'ambiguous'} argument {quote_l(arg)} for \u2018time style\u2019\nValid arguments are:\n"
-                         "  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n"
-                         "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.", 2)
+        raise ShellError(spec_message("ls", "badTimeStyle", problem="ambiguous" if hits else "invalid", value=arg), 2)
     return hits[0].removeprefix("posix-")
 
 
@@ -122,9 +121,7 @@ def _long_entries(ctx, entries, human: bool, width_from=(), style: str | None = 
 
 def _ls(ctx):
     # \x01: --time-style=STYLE, \x02: --full-time
-    a = Args.parse(ctx.args, "alhA1dFrtRSZskLH\x02", "\x01",
-                   "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\x01,full-time=\x02,"
-                   "dereference=L,dereference-command-line=H")
+    a = Args.parse(ctx.args, COMMANDS["ls"])
     paths = a.positional or ["."]
     lng, human, blocks, deref, fs = a.has("l") or a.has("\x02"), a.has("h"), a.has("s"), a.has("L"), ctx.fs
     style = "full-iso" if a.has("\x02") else _time_style(a.value("\x01")) if lng and a.value("\x01") is not None else None
@@ -158,7 +155,7 @@ def _ls(ctx):
 
     for p in paths:
         if not exists(p):
-            ctx.error(f"ls: cannot access '{p}': {fs.why_missing(ctx.resolve(p), deref or p.endswith('/'))}")
+            ctx.error("ls: " + spec_message("ls", "cannotAccess", file=p, errno=fs.why_missing(ctx.resolve(p), deref or p.endswith("/"))))
             code = 2
     def ordered(ps):  # operands are listed like directory entries: byte order (C locale), or by -t / -S, reversed by -r
         ps = sorted(ps, key=lambda p: p.encode("utf-8", "surrogateescape"))
@@ -181,7 +178,7 @@ def _ls(ctx):
         path = fs.real_path(path)[0] or path  # where it really is, so "." and ".." are the directories themselves
         if a.has("R") and deref:
             if path in listed:
-                ctx.error(f"ls: {label}: not listing already-listed directory")
+                ctx.error("ls: " + spec_message("ls", "alreadyListed", file=label))
                 code = 2
                 return
             listed.add(path)
@@ -189,13 +186,13 @@ def _ls(ctx):
             ctx.print(("" if first[0] else "\n") + label + ":")
         first[0] = False
         if not fs.can_read(path):
-            ctx.error(f"ls: cannot open directory '{label}': Permission denied")
+            ctx.error("ls: " + spec_message("ls", "cannotOpenDirectory", file=label, errno="Permission denied"))
             code = 2
             return
         entries = [n for n in fs.listdir(path) if a.has("a") or a.has("A") or not n.startswith(".")]
         if deref and (lng or blocks):  # a link leading nowhere: an error, then a row of question marks
             for n in [n for n in entries if not fs.exists(normalize(path, n))]:
-                ctx.error(f"ls: cannot access '{'' if label == '.' else label.rstrip('/') + '/'}{n}': {fs.why_missing(normalize(path, n))}")
+                ctx.error("ls: " + spec_message("ls", "cannotAccess", file=("" if label == "." else label.rstrip("/") + "/") + n, errno=fs.why_missing(normalize(path, n))))
                 code = 1
 
         def st(n):
@@ -231,8 +228,7 @@ def _show_nonprinting(line: str) -> str:
 
 
 def _cat(ctx):
-    a = Args.parse(ctx.args, "nbsAETveTu", longs="number=n,number-nonblank=b,squeeze-blank=s,show-all=A,show-ends=E,"
-                                                 "show-tabs=T,show-nonprinting=v")
+    a = Args.parse(ctx.args, COMMANDS["cat"])
     ends, tabs, nonprint = a.has("A") or a.has("E") or a.has("e"), a.has("A") or a.has("T"), a.has("A") or a.has("v") or a.has("e")
     code = 0
     line_no = 0
@@ -269,39 +265,39 @@ def _cat(ctx):
 
 
 def _mkdir(ctx):
-    a = Args.parse(ctx.args, "pvZ", longs="parents=p,verbose=v")
+    a = Args.parse(ctx.args, COMMANDS["mkdir"])
     if not a.positional:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("mkdir", "missingOperand"))
     code = 0
     for p in a.positional:
         try:
             ctx.fs.mkdir(ctx.resolve(p), a.has("p"))
         except ShellError as e:
-            ctx.error(f"mkdir: cannot create directory {quote_l(p)}: {str(e).rsplit(': ', 1)[-1]}")
+            ctx.error("mkdir: " + spec_message("mkdir", "cannotCreateDirectory", file=p, reason=str(e).rsplit(": ", 1)[-1]))
             code = 1
     return code
 
 
 def _touch(ctx):
     # shortcut: one modification time per file; -a and -m both set it
-    a = Args.parse(ctx.args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h")
+    a = Args.parse(ctx.args, COMMANDS["touch"])
     if not a.positional:
-        raise UsageException("missing file operand")
+        raise UsageException(spec_message("touch", "missingFileOperand"))
     when = None
     if (reference := a.value("r")) is not None:
         ref = ctx.resolve(reference)
         if not ctx.fs.exists(ref):
-            raise ShellError(f"failed to get attributes of {quote_always(reference)}: {ctx.fs.why_missing(ref)}")
+            raise ShellError(spec_message("touch", "failedToGetAttributes", file=reference, reason=ctx.fs.why_missing(ref)))
         when = ctx.fs.stat(ref).modified
     if (d := a.value("d")) is not None:
         try:
             when = parse_date(d, (when or utc_now()).replace(tzinfo=timezone.utc)).replace(tzinfo=None)
         except ShellError:
-            raise ShellError(f"invalid date format {quote_l(d)}") from None
+            raise ShellError(spec_message("touch", "invalidDateFormat", value=d)) from None
     if (t := a.value("t")) is not None:
         when = touch_stamp(t, utc_now())
         if when is None:
-            raise ShellError(f"invalid date format {quote_l(t)}")
+            raise ShellError(spec_message("touch", "invalidDateFormat", value=t))
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
@@ -317,32 +313,32 @@ def _touch(ctx):
                     ctx.fs.touch(path)
                 ctx.fs.set_modified_time(path, when)
         except ShellError as e:
-            ctx.error(f"touch: cannot touch {quote_always(p)}: {typed(str(e), p, path)[1]}")
+            ctx.error("touch: " + spec_message("touch", "cannotTouch", file=p, reason=typed(str(e), p, path)[1]))
             code = 1
     return code
 
 
 def _rm(ctx):
-    a = Args.parse(ctx.args, "rRfvd", longs="recursive=r,force=f")
+    a = Args.parse(ctx.args, COMMANDS["rm"])
     recursive = a.has("r") or a.has("R")
     if not a.positional and not a.has("f"):
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("rm", "missingOperand"))
     code = 0
     for p in a.positional:
         path = ctx.resolve(p)
         if not ctx.fs.exists(path, follow=False):
             why = ctx.fs.why_missing(path, follow=False)
             if not a.has("f") or why != "No such file or directory":
-                ctx.error(f"rm: cannot remove '{p}': {why}")
+                ctx.error("rm: " + spec_message("rm", "cannotRemove", file=p, reason=why))
                 code = 1
             continue
         if ctx.fs.is_dir(path, follow=p.endswith("/")) and not recursive and not a.has("d"):
-            ctx.error(f"rm: cannot remove '{p}': Is a directory")
+            ctx.error("rm: " + spec_message("rm", "cannotRemove", file=p, reason="Is a directory"))
             code = 1
             continue
         if p.endswith("/") and ctx.fs.is_symlink(path) and not ctx.fs.is_dir(path):  # "link/" names what it leads to, which is no directory
             if not a.has("f"):
-                ctx.error(f"rm: cannot remove '{p}': Not a directory")
+                ctx.error("rm: " + spec_message("rm", "cannotRemove", file=p, reason="Not a directory"))
                 code = 1
             continue
         if recursive and p.endswith("/") and ctx.fs.is_symlink(path) and ctx.fs.is_dir(path):
@@ -352,28 +348,28 @@ def _rm(ctx):
                     ctx.fs.delete(path + "/" + n, True)
                 except ShellError as e:
                     shown, why = typed(str(e), p.rstrip("/") + "/" + n, path + "/" + n)
-                    ctx.error(f"rm: cannot remove '{shown}': {why}")
+                    ctx.error("rm: " + spec_message("rm", "cannotRemove", file=shown, reason=why))
             if not a.has("f"):
-                ctx.error(f"rm: cannot remove '{p}': Not a directory")
+                ctx.error("rm: " + spec_message("rm", "cannotRemove", file=p, reason="Not a directory"))
                 code = 1
             continue
         try:
             ctx.fs.delete(path, recursive)
         except ShellError as e:
             shown, why = typed(str(e), p, path)
-            ctx.error(f"rm: cannot remove '{shown}': {why}")
+            ctx.error("rm: " + spec_message("rm", "cannotRemove", file=shown, reason=why))
             code = 1
     return code
 
 
 def _rmdir(ctx):
-    a = Args.parse(ctx.args, "pv", longs="parents=p,verbose=v")
+    a = Args.parse(ctx.args, COMMANDS["rmdir"])
     if not a.positional:
-        raise UsageException("missing operand")
+        raise UsageException(spec_message("rmdir", "missingOperand"))
     code = 0
     for arg in a.positional:
         if arg.endswith("/") and ctx.fs.is_symlink(ctx.resolve(arg)):
-            ctx.error(f"rmdir: failed to remove {quote_always(arg)}: Symbolic link not followed")
+            ctx.error("rmdir: " + spec_message("rmdir", "failedToRemove", file=arg, reason="Symbolic link not followed"))
             code = 1
             continue
         p = arg.rstrip("/")
@@ -388,7 +384,7 @@ def _rmdir(ctx):
                 except ShellError as e:
                     why = typed(str(e), p, path)[1]
             if why is not None:
-                ctx.error(f"rmdir: failed to remove {quote_always(p)}: {why}")
+                ctx.error("rmdir: " + spec_message("rmdir", "failedToRemove", file=p, reason=why))
                 code = 1
                 break
             i = p.rfind("/")
@@ -415,68 +411,67 @@ def _copy_into_itself(ctx, src: str, to: str, created: set[str]) -> bool:
 
 def _copy_or_move(ctx):
     move = ctx.name == "mv"
-    a = Args.parse(ctx.args, "fvniZ" if move else "rRfvanpZLPHd", longs="recursive=r,force=f,dereference=L,no-dereference=P")
+    a = Args.parse(ctx.args, COMMANDS[ctx.name])
     # cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
     follow_top = not move and not (a.has("P") or a.has("d") or a.has("a")) and (a.has("L") or a.has("H") or not (a.has("r") or a.has("R")))
     if len(a.positional) < 2:
-        raise UsageException("missing file operand" if not a.positional else f"missing destination file operand after {quote_always(a.positional[0])}")
+        raise UsageException(spec_message(ctx.name, "missingFileOperand") if not a.positional else spec_message(ctx.name, "missingDestination", file=a.positional[0]))
     *sources, dest_arg = a.positional
     dest = ctx.resolve(dest_arg)
     dest_is_dir = ctx.fs.is_dir(dest)
     if (len(sources) > 1 or dest_arg.endswith("/") and not ctx.fs.is_dir(ctx.resolve(sources[0]))) and not dest_is_dir:
         if len(sources) == 1 and not ctx.fs.exists(ctx.resolve(sources[0])):
-            raise ShellError(f"cannot stat '{sources[0]}': No such file or directory")
+            raise ShellError(spec_message(ctx.name, "cannotStat", file=sources[0], errno="No such file or directory"))
         if len(sources) > 1:
-            raise ShellError(f"target '{dest_arg}': {'Not a directory' if ctx.fs.exists(dest) else 'No such file or directory'}")
-        raise ShellError(f"cannot move '{sources[0]}' to '{dest_arg}': Not a directory" if move
-                         else f"cannot create regular file '{dest_arg}': Not a directory")
+            raise ShellError(spec_message(ctx.name, "targetFailed", file=dest_arg, errno="Not a directory" if ctx.fs.exists(dest) else "No such file or directory"))
+        raise ShellError(spec_message("mv", "cannotMove", source=sources[0], dest=dest_arg, errno="Not a directory") if move
+                         else spec_message("cp", "cannotCreate", kind="regular file", file=dest_arg, errno="Not a directory"))
     code = 0
     for s in sources:
         src = ctx.resolve(s)
         if not ctx.fs.exists(src, follow_top):
-            ctx.error(f"{ctx.name}: cannot stat '{s}': {ctx.fs.why_missing(src, follow_top)}")
+            ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "cannotStat", file=s, errno=ctx.fs.why_missing(src, follow_top)))
             code = 1
             continue
         if not move and ctx.fs.is_dir(src, follow_top) and not (a.has("r") or a.has("R") or a.has("a")):
-            ctx.error(f"cp: -r not specified; omitting directory '{s}'")
+            ctx.error("cp: " + spec_message("cp", "omittingDirectory", file=s))
             code = 1
             continue
         target = normalize(dest, get_name(src)) if dest_is_dir else dest
         if target != src and not move and follow_top and ctx.fs.same_file(src, target):  # through a link or another hard link; the plain case is a clash below
-            ctx.error(f"cp: {quote_always(s)} and {quote_always(dest_arg.rstrip('/') + '/' + get_name(src) if dest_is_dir else dest_arg)} are the same file")
+            ctx.error("cp: " + spec_message("cp", "sameFile", source=s, dest=dest_arg.rstrip('/') + '/' + get_name(src) if dest_is_dir else dest_arg))
             code = 1
             continue
         if not move and ctx.fs.is_file(src, follow_top) and ctx.fs.is_symlink(target) and not ctx.fs.exists(target):
-            ctx.error(f"cp: not writing through dangling symlink '{dest_arg.rstrip('/') + '/' + get_name(src) if dest_is_dir else dest_arg}'")
+            ctx.error("cp: " + spec_message("cp", "danglingSymlink", file=dest_arg.rstrip('/') + '/' + get_name(src) if dest_is_dir else dest_arg))
             code = 1
             continue
         if target == "/dev/null" and not move:
             continue  # copying to /dev/null discards the data
         shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
         src_dir = ctx.fs.is_dir(src, follow_top)
-        qs, qd = quote_always(s), quote_always(shown)
         # mv onto another name of the same file, or onto the file a link names, loses it; mv refuses as GNU mv does
         same = target == src or move and (ctx.fs.same_file(src, target, follow=False)
                                           or ctx.fs.is_symlink(src) and not ctx.fs.is_symlink(target) and ctx.fs.same_file(src, target))
         if same:
-            clash = f"{qs} and {qd} are the same file"
+            clash = "sameFile"
         elif src_dir and target.startswith(src + "/"):
-            clash = f"cannot move {qs} to a subdirectory of itself, {qd}" if move else f"cannot copy a directory, {qs}, into itself, {qd}"
+            clash = "intoItself"
         elif not ctx.fs.exists(target):
             clash = None
         elif src_dir and not ctx.fs.is_dir(target):
-            clash = f"cannot overwrite non-directory {qd} with directory {qs}"
+            clash = "overwriteNonDirectory"
         elif not src_dir and ctx.fs.is_dir(target):
-            clash = f"cannot overwrite directory {qd} with non-directory"
+            clash = "overwriteDirectory"
         elif move and src_dir and ctx.fs.listdir(target):
-            clash = f"cannot overwrite {qd}: Directory not empty"
+            clash = "notEmpty"
         else:
             clash = None
         if clash:
-            ctx.error(f"{ctx.name}: {clash}")
+            ctx.error(f"{ctx.name}: " + spec_message(ctx.name, clash, source=s, dest=shown))
             code = 1
             # cp creates the copy and fills it until it reaches the copy itself
-            if not move and clash.startswith("cannot copy"):
+            if not move and clash == "intoItself":
                 _copy_into_itself(ctx, src, target, set())
             continue
         if move and src_dir and ctx.fs.is_dir(target):
@@ -485,12 +480,12 @@ def _copy_or_move(ctx):
 
         def denied(p, is_dir, s=s, src=src):
             shown = typed(p + ": ", s, src)[0]
-            ctx.error(f"cp: cannot access '{shown}': Permission denied" if is_dir else f"cp: cannot open '{shown}' for reading: Permission denied")
+            ctx.error("cp: " + spec_message("cp", "cannotAccess" if is_dir else "cannotOpen", file=shown, errno="Permission denied"))
             nonlocal_code[0] = 1
 
         def broken(p, why, s=s, src=src):
             shown = typed(p + ": ", s, src)[0]
-            ctx.error(f"cp: cannot copy cyclic symbolic link '{shown}'" if why == "cyclic" else f"cp: cannot stat '{shown}': {why}")
+            ctx.error("cp: " + (spec_message("cp", "cyclicLink", file=shown) if why == "cyclic" else spec_message("cp", "cannotStat", file=shown, errno=why)))
             nonlocal_code[0] = 1
 
         try:
@@ -498,19 +493,18 @@ def _copy_or_move(ctx):
         except ShellError as e:
             shown = dest_arg.rstrip("/") + "/" + get_name(src) if dest_is_dir else dest_arg
             if " into itself, " in str(e) or " to a subdirectory of itself, " in str(e):
-                ctx.error(f"mv: cannot move '{s}' to a subdirectory of itself, '{shown}'" if move
-                          else f"cp: cannot copy a directory, '{s}', into itself, '{shown}'")
+                ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "intoItselfPlain", source=s, dest=shown))
                 code = 1
                 continue
             if str(e).endswith(NO_SPACE):
-                ctx.error(f"{ctx.name}: error writing '{shown}': {NO_SPACE}")
+                ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "errorWriting", file=shown, errno=NO_SPACE))
                 code = 1
                 continue
             if not (str(e).endswith("Permission denied") or str(e).endswith("Operation not permitted")):
                 raise
             why = typed(str(e), s, src)[1]
-            ctx.error(f"mv: cannot move '{s}' to '{shown}': {why}" if move
-                      else f"cp: cannot create {'directory' if ctx.fs.is_dir(src) else 'regular file'} '{shown}': {why}")
+            ctx.error("mv: " + spec_message("mv", "cannotMove", source=s, dest=shown, errno=why) if move
+                      else "cp: " + spec_message("cp", "cannotCreate", kind="directory" if ctx.fs.is_dir(src) else "regular file", file=shown, errno=why))
             code = 1
             continue
         code = nonlocal_code[0]
@@ -520,20 +514,19 @@ def _copy_or_move(ctx):
 
 
 def _ln(ctx):
-    a = Args.parse(ctx.args, "sfnvTrLPb", "t", "symbolic=s,force=f,no-dereference=n,no-target-directory=T,target-directory=t,verbose=v,"
-                                               "relative=r,logical=L,physical=P")
+    a = Args.parse(ctx.args, COMMANDS["ln"])
     fs, sym, ops, t_opt = ctx.fs, a.has("s"), list(a.positional), a.value("t")
     into = t_opt
     if t_opt is None and not a.has("T") and (len(ops) > 2 or len(ops) == 2 and fs.is_dir(ctx.resolve(ops[-1]), not a.has("n"))):
         into = ops[-1]
     if not ops or (len(ops) == 1 and a.has("T") and into is None):
-        raise UsageException("missing file operand" if not ops else f"missing destination file operand after {quote_always(ops[0])}")
+        raise UsageException(spec_message("ln", "missingFileOperand") if not ops else spec_message("ln", "missingDestination", file=ops[0]))
     if into is not None and t_opt is None:
         ops = ops[:-1]
     if into is not None and not fs.is_dir(ctx.resolve(into)):
         exists = fs.exists(ctx.resolve(into))
-        raise ShellError(f"failed to access {quote_always(into)}: {fs.why_missing(ctx.resolve(into))}" if t_opt is not None and not exists
-                         else f"target {quote_always(into)} is not a directory" if exists else f"target {quote_always(into)}: No such file or directory")
+        raise ShellError(spec_message("ln", "failedToAccess", file=into, errno=fs.why_missing(ctx.resolve(into))) if t_opt is not None and not exists
+                         else spec_message("ln", "targetNotDirectory", file=into) if exists else spec_message("ln", "targetFailed", file=into, errno="No such file or directory"))
     # (what the link points to, the link's name): `ln f` links into ".", `ln f d` into d when it is a directory
     if into is not None or len(ops) == 1:
         pairs = [(t, (into.rstrip("/") + "/" if into is not None else "") + get_name(t)) for t in ops]
@@ -546,15 +539,15 @@ def _ln(ctx):
 
         def fail(why, arrow=True):
             tail = "" if not arrow else (" -> ''" if not target else "") if sym else " => " + quote_always(target)
-            return f"ln: failed to create {'symbolic' if sym else 'hard'} link {quote_always(shown)}{tail}: {why}"
+            return "ln: " + spec_message("ln", "createFailed", kind="symbolic" if sym else "hard", file=shown, arrow=tail, errno=why)
 
         try:
             if not sym and not fs.exists(src, a.has("L")):
-                ctx.error(f"ln: failed to access {quote_always(target)}: {fs.why_missing(src, a.has('L'))}")
+                ctx.error("ln: " + spec_message("ln", "failedToAccess", file=target, errno=fs.why_missing(src, a.has("L"))))
                 code = 1
                 continue
             if not sym and fs.is_dir(src):
-                ctx.error(f"ln: {target}: hard link not allowed for directory")
+                ctx.error("ln: " + spec_message("ln", "hardLinkDirectory", file=target))
                 code = 1
                 continue
             if fs.exists(path, follow=False):
@@ -563,11 +556,11 @@ def _ln(ctx):
                     code = 1
                     continue
                 if fs.is_dir(path, follow=False):
-                    ctx.error(f"ln: {name}: cannot overwrite directory")
+                    ctx.error("ln: " + spec_message("ln", "overwriteDirectory", file=name))
                     code = 1
                     continue
                 if fs.same_file(path, normalize(get_parent(path), target) if sym else src):
-                    ctx.error(f"ln: {quote_always(target)} and {quote_always(name)} are the same file")
+                    ctx.error("ln: " + spec_message("ln", "sameFile", source=target, dest=name))
                     code = 1
                     continue
                 fs.delete(path)
@@ -633,7 +626,7 @@ class _Find:
 
         expr = self.parse_or() if args else always
         if self.p < len(args):
-            raise ShellError(f"unexpected `{args[self.p]}'")
+            raise ShellError(spec_message("find", "unexpected", token=args[self.p]))
 
         async def walk(path, display, depth, start, follow):
             ctx.check_time()  # -L can make the walk far bigger than the tree: the call's time limit
@@ -641,7 +634,7 @@ class _Find:
             is_dir = fs.is_dir(path, follow)
             real = (fs.real_path(path)[0] or path) if is_dir and follow else path
             if is_dir and follow and (loop := next((d for r, d in self.above if r == real), None)) is not None:
-                ctx.error(f"find: File system loop detected; {quote_l(display)} is part of the same file system loop as {quote_l(loop)}.")
+                ctx.error("find: " + spec_message("find", "loop", dir=display, loop=loop))
                 self.denied = True
                 return
             if depth >= self.min_depth and await expr((path, get_name(path), display, depth, start, follow)) and not self.has_action:
@@ -651,7 +644,7 @@ class _Find:
             try:
                 names = fs.listdir(path)
             except ShellError:
-                ctx.error(f"find: {quote_l(display)}: Permission denied")
+                ctx.error("find: " + spec_message("find", "cannotRead", file=display, errno="Permission denied"))
                 self.denied = True
                 return
             self.above.append((real, display))
@@ -665,7 +658,7 @@ class _Find:
                 path = ctx.resolve(s)
                 follow = mode != "P" or s.endswith("/")
                 if not fs.exists(path, follow) and not fs.exists(path, follow=False):
-                    ctx.error(f"find: {quote_l(s)}: {fs.why_missing(path, follow)}")
+                    ctx.error("find: " + spec_message("find", "cannotRead", file=s, errno=fs.why_missing(path, follow)))
                     code = 1
                     continue
                 await walk(path, s, 0, s, follow)
@@ -686,7 +679,7 @@ class _Find:
         while self.is_("-o") or self.is_("-or"):
             self.p += 1
             if self.p >= len(self.args):
-                raise ShellError(f"expected an expression after '{self.args[self.p - 1]}'")
+                raise ShellError(spec_message("find", "expectedExpression", token=self.args[self.p - 1]))
             l, r = left, self.parse_and()
 
             async def either(e, l=l, r=r):
@@ -700,7 +693,7 @@ class _Find:
             if self.is_("-a") or self.is_("-and"):
                 self.p += 1
                 if self.p >= len(self.args):
-                    raise ShellError(f"expected an expression after '{self.args[self.p - 1]}'")
+                    raise ShellError(spec_message("find", "expectedExpression", token=self.args[self.p - 1]))
             l, r = left, self.parse_not()
 
             async def both(e, l=l, r=r):
@@ -720,7 +713,7 @@ class _Find:
             self.p += 1
             inner = self.parse_or()
             if not self.is_(")"):
-                raise ShellError("invalid expression; expected `)'")
+                raise ShellError(spec_message("find", "expectedParen"))
             self.p += 1
             return inner
         return self.primary()
@@ -732,7 +725,7 @@ class _Find:
 
         def arg():
             if self.p >= len(self.args):
-                raise ShellError(f"missing argument to `{tok}'")
+                raise ShellError(spec_message("find", "missingArgument", predicate=tok))
             self.p += 1
             return self.args[self.p - 1]
 
@@ -761,7 +754,7 @@ class _Find:
         if tok in ("-type", "-xtype"):
             t = arg()
             if t not in ("f", "d", "l"):
-                raise ShellError(f"Unknown argument to {tok}: {t}")
+                raise ShellError(spec_message("find", "unknownType", predicate=tok, value=t))
             # -xtype: the other view of a link (what it leads to under -P, the link itself under -L)
             return pred_e(lambda e: _find_type(stat(e if tok == "-type" else e[:5] + (not e[5],))) == t)
         if tok in ("-maxdepth", "-mindepth"):
@@ -774,7 +767,7 @@ class _Find:
         if tok in ("-mmin", "-mtime"):
             spec = arg()
             if not re.fullmatch(r"\d+\.?\d*|\.\d+", spec[1:] if spec[:1] in ("+", "-") else spec):
-                raise ShellError(f"invalid argument `{spec}' to `{tok}'")
+                raise ShellError(spec_message("find", "invalidArgument", value=spec, predicate=tok))
             unit, num = (60 if tok == "-mmin" else 86400), float(spec.lstrip("+-"))
 
             def age_ok(e):
@@ -784,16 +777,16 @@ class _Find:
         if tok == "-newer":
             reference = arg()
             if not fs.exists(ctx.resolve(reference)):
-                raise ShellError(f"{quote_l(reference)}: {fs.why_missing(ctx.resolve(reference))}")
+                raise ShellError(spec_message("find", "cannotRead", file=reference, errno=fs.why_missing(ctx.resolve(reference))))
             ref = fs.stat(ctx.resolve(reference)).modified
             return pred_e(lambda e: stat(e).modified > ref)
         if tok == "-size":
             spec = arg()
             m = re.fullmatch(r"([+-]?)(\d+)([cwbkMG]?)", spec)
             if not m and (bad := re.match(r"[+-]?\d+(\D)", spec)):
-                raise ShellError(f"invalid -size type `{bad.group(1)}'")
+                raise ShellError(spec_message("find", "invalidSizeType", unit=bad.group(1)))
             if not m:
-                raise ShellError(f"invalid argument `{spec}' to `-size'")
+                raise ShellError(spec_message("find", "invalidArgument", value=spec, predicate="-size"))
             unit = {"c": 1, "w": 2, "k": 1024, "M": 1 << 20, "G": 1 << 30}.get(m.group(3), 512)
             num = int(m.group(2))
 
@@ -839,9 +832,9 @@ class _Find:
                 cmd.append(self.args[self.p])
                 self.p += 1
             if self.p >= len(self.args):
-                raise ShellError(f"missing argument to `{tok}'")
+                raise ShellError(spec_message("find", "missingArgument", predicate=tok))
             if not cmd:
-                raise ShellError(f"invalid argument `{self.args[self.p]}' to `{tok}'")
+                raise ShellError(spec_message("find", "invalidArgument", value=self.args[self.p], predicate=tok))
             terminator = self.args[self.p]
             self.p += 1
             if terminator == "+":
@@ -852,7 +845,7 @@ class _Find:
             async def run_exec(e):
                 return await ctx.invoke([x.replace("{}", e[2]) for x in cmd]) == 0
             return run_exec
-        raise ShellError(f"unknown predicate `{tok}'")
+        raise ShellError(spec_message("find", "unknownPredicate", predicate=tok))
 
 
 class _FindQuit(Exception):
@@ -927,12 +920,12 @@ async def _find(ctx):
 
 
 def _tree(ctx):
-    a = Args.parse(ctx.args, "ad", "L")
+    a = Args.parse(ctx.args, COMMANDS["tree"])
     max_depth = int(a.value("L")) if a.value("L") else 10**9
     root = a.positional[0] if a.positional else "."
     path = ctx.resolve(root)
     if not ctx.fs.is_dir(path):
-        raise ShellError(f"{root} [error opening dir]")
+        raise ShellError(spec_message("tree", "errorOpeningDir", dir=root))
     counts = {"dirs": 0, "files": 0}
     out = [root + "\n"]
 
@@ -959,14 +952,14 @@ def _tree(ctx):
 
 def register(shell) -> None:
     r = shell.register_command
-    r("ls", _ls, "List directory contents")
-    r("cat", _cat, "Print files")
-    r("mkdir", _mkdir, "Create directories")
-    r("touch", _touch, "Create empty files / update timestamps")
-    r("rm", _rm, "Remove files or directories")
-    r("rmdir", _rmdir, "Remove empty directories")
-    r("cp", _copy_or_move, "Copy files and directories")
-    r("mv", _copy_or_move, "Move or rename files")
-    r("ln", _ln, "Make links between files (-s symbolic, -f replace)")
-    r("find", _find, "Search for files")
-    r("tree", _tree, "Show a directory tree")
+    r("ls", _ls)
+    r("cat", _cat)
+    r("mkdir", _mkdir)
+    r("touch", _touch)
+    r("rm", _rm)
+    r("rmdir", _rmdir)
+    r("cp", _copy_or_move)
+    r("mv", _copy_or_move)
+    r("ln", _ln)
+    r("find", _find)
+    r("tree", _tree)

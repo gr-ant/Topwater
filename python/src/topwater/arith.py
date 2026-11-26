@@ -4,6 +4,7 @@ from __future__ import annotations
 import functools
 import re
 
+from ._spec import diagnostic
 from .vfs import ShellError
 
 _OPS = [
@@ -39,13 +40,13 @@ def _tokenize(s: str) -> tuple[str, ...]:
                             break
                     j += 1
                 if depth > 0:
-                    raise ShellError(f"{s}: syntax error: bad array subscript")
+                    raise ShellError(diagnostic("arithmeticBadSubscript", expression=s))
             tokens.append(s[i:j])
             i = j
             continue
         op = next((o for o in _OPS if s.startswith(o, i)), None)
         if op is None:
-            raise ShellError(f'{s}: syntax error: invalid arithmetic operator (error token is "{s[i:]}")')
+            raise ShellError(diagnostic("invalidArithmeticOperator", expression=s, token=s[i:]))
         # `5--3` (after $a-$b is substituted) is two minus signs; `--` is one operator only next to a name
         next_is_name = i + 2 < len(s) and (s[i + 2].isalpha() or s[i + 2] == "_")
         if op in ("++", "--") and not next_is_name and not (tokens and _is_ident(tokens[-1])):
@@ -57,7 +58,7 @@ def _tokenize(s: str) -> tuple[str, ...]:
 
 def evaluate(shell, expr: str, depth: int = 0) -> int:
     if depth > 20:
-        raise ShellError(f"{expr}: expression recursion level exceeded")
+        raise ShellError(diagnostic("recursionExceeded", expression=expr))
     if "$" in expr:
         expr = _VAR_REF.sub(lambda m: shell.get_variable(m.group(1)), expr)
     tokens = _tokenize(expr)
@@ -83,13 +84,13 @@ def _wrap(x: int) -> int:
 def _literal(digits: str, radix: int, tok: str) -> int:
     """A literal in the given base (2-64: 0-9 a-z A-Z @ _); values past 64 bits wrap around like bash."""
     if not digits or not 2 <= radix <= 64:
-        raise ShellError(f'{tok}: invalid arithmetic base (error token is "{tok}")')
+        raise ShellError(diagnostic("invalidBase", token=tok))
     v = 0
     for c in digits:
         d = (ord(c) - 48 if c.isdigit() and c.isascii() else ord(c) - 87 if "a" <= c <= "z"
              else (ord(c) - 55 if radix <= 36 else ord(c) - 29) if "A" <= c <= "Z" else 62 if c == "@" else 63 if c == "_" else 99)
         if d >= radix:
-            raise ShellError(f'{tok}: value too great for base (error token is "{tok}")')
+            raise ShellError(diagnostic("valueTooGreat", token=tok))
         v = v * radix + d
     return _wrap(v)
 
@@ -108,7 +109,7 @@ class _Arith:
         self.sh, self.src, self.t, self.p, self.depth = shell, src, tokens, 0, depth
 
     def syntax(self, token: str) -> ShellError:
-        return ShellError(f'{self.src.strip()}: syntax error in expression (error token is "{token}")')
+        return ShellError(diagnostic("arithmeticSyntax", expression=self.src.strip(), token=token))
 
     @property
     def peek(self):
@@ -186,7 +187,7 @@ class _Arith:
     def apply(self, op: str, l: int, r: int, ev: bool) -> int:
         if op in ("/", "%") and r == 0:
             if ev:
-                raise ShellError(f"{self.src.strip()}: division by 0")
+                raise ShellError(diagnostic("divisionByZero", expression=self.src.strip()))
             return 0
         ops = {
             "+": lambda: l + r, "-": lambda: l - r, "*": lambda: l * r, "/": lambda: _cdiv(l, r), "%": lambda: _cmod(l, r),
@@ -200,7 +201,7 @@ class _Arith:
 
     def power(self, b: int, e: int) -> int:
         if e < 0:
-            raise ShellError(f'{self.src.strip()}: exponent less than 0 (error token is "{e}")')
+            raise ShellError(diagnostic("negativeExponent", expression=self.src.strip(), token=str(e)))
         return _wrap(pow(b, e, 1 << 64))
 
     def unary(self, ev: bool) -> int:
