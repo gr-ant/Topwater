@@ -1498,16 +1498,16 @@ def _diff_dirs(ctx, a, an, bn, depth):
             if a.has("N") and not (dir_a or dir_b):
                 rc = _diff_files(ctx, a, x, y, _diff_header(ctx, a, x, y))
             else:
-                ctx.print(f"Only in {an if in_a else bn}: {name}")
+                ctx.print(spec_message("diff", "onlyIn", dir=an if in_a else bn, name=name))
                 rc = 1
         elif dir_a and dir_b:
             if a.has("r"):
                 rc = _diff_dirs(ctx, a, x, y, depth + 1)
             else:
-                ctx.print(f"Common subdirectories: {x} and {y}")
+                ctx.print(spec_message("diff", "commonSubdirectories", file1=x, file2=y))
                 rc = 0
         elif dir_a or dir_b:
-            ctx.print(f"File {x} is a {'directory' if dir_a else 'regular file'} while file {y} is a {'directory' if dir_b else 'regular file'}")
+            ctx.print(spec_message("diff", "typeMismatch", file1=x, kind1="directory" if dir_a else "regular file", file2=y, kind2="directory" if dir_b else "regular file"))
             rc = 1
         else:
             rc = _diff_files(ctx, a, x, y, _diff_header(ctx, a, x, y))

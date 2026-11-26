@@ -1210,16 +1210,16 @@ internal static class Diff
             if (!inA || !inB)
             {
                 if (a.Has('N') && !(dirA || dirB)) rc = Files(ctx, a, x, y, Header(ctx, a, x, y));
-                else { ctx.Stdout.WriteLine($"Only in {(inA ? an : bn)}: {name}"); rc = 1; }
+                else { ctx.Stdout.WriteLine(CommandSpec.Message("diff", "onlyIn", ("dir", inA ? an : bn), ("name", name))); rc = 1; }
             }
             else if (dirA && dirB)
             {
                 if (a.Has('r')) rc = Dirs(ctx, a, x, y, depth + 1);
-                else { ctx.Stdout.WriteLine($"Common subdirectories: {x} and {y}"); rc = 0; }
+                else { ctx.Stdout.WriteLine(CommandSpec.Message("diff", "commonSubdirectories", ("file1", x), ("file2", y))); rc = 0; }
             }
             else if (dirA || dirB)
             {
-                ctx.Stdout.WriteLine($"File {x} is a {(dirA ? "directory" : "regular file")} while file {y} is a {(dirB ? "directory" : "regular file")}");
+                ctx.Stdout.WriteLine(CommandSpec.Message("diff", "typeMismatch", ("file1", x), ("kind1", dirA ? "directory" : "regular file"), ("file2", y), ("kind2", dirB ? "directory" : "regular file")));
                 rc = 1;
             }
             else rc = Files(ctx, a, x, y, Header(ctx, a, x, y));

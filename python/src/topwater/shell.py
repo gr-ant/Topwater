@@ -483,8 +483,6 @@ class Shell:
         self._deadline = float("inf")
         self._param_words: dict = {}
         self._recorder = None
-        self._not_found_hinted = False
-        self._call_stderr = None
         home = f"/home/{user}"
         for d in (home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log"):
             self.fs.mkdir(d, parents=True)
@@ -561,7 +559,7 @@ class Shell:
         seed("/etc/hosts", f"127.0.0.1\tlocalhost\n127.0.1.1\t{h}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\n"
                            "ff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n")
         seed("/etc/group", f"root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n{user}:x:1000:\n")
-        seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n")
+        seed("/etc/shells", "# Shells a user may have as a login shell\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n")
         seed("/etc/debian_version", "trixie/sid\n")
         seed("/var/lib/shells.state", "")
         seed("/etc/profile", ETC_PROFILE)
@@ -800,7 +798,6 @@ class Shell:
     async def _run_call(self, command_line: str) -> ShellResult:
         self.history.append(command_line)
         out, err = CappedWriter(self), CappedWriter(self)
-        self._call_stderr = err
         trailer = None
         previous_user, self.fs.run_as = self.fs.run_as, self.user  # the agent's commands run as a regular user
         self.fs.umask = self.umask
@@ -1509,16 +1506,8 @@ class Shell:
         return argv
 
     def _report_not_found(self, io_: _Io, name: str) -> None:
-        """bash's own "command not found" line. The first time in a session that it goes straight to the tool output
-        (stderr not redirected or captured), a one-line hint about `help` follows, so that output a script captures stays bash's."""
+        """bash's own "command not found" line, and nothing else (the tool description already points at `help`)."""
         io_.err.write(self.err_prefix + diagnostic("commandNotFound", command=name) + "\n")
-        err = io_.err
-        while isinstance(err, SwitchWriter):
-            err = err.target
-        if self._not_found_hinted or err is not self._call_stderr:
-            return
-        self._not_found_hinted = True
-        io_.err.write(diagnostic("commandNotFoundHint") + "\n")
 
     async def _invoke(self, argv: list[str], io_: _Io, skip_functions: bool = False) -> int:
         """skip_functions: `command ls` / `builtin cd` run the command itself even when a function has its name."""

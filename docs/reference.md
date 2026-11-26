@@ -1069,12 +1069,9 @@ converts an old recording.
 ### Programs that are not here
 
 A command the machine doesn't have fails exactly as in bash: `bash: line 1: python3: command not found` on stderr,
-status 127. The first time in a session that this message goes straight to the tool output, one more line follows:
-`(run 'help' to list the available commands; nothing else can be installed on this machine)`. The hint is left out
-when stderr is redirected or captured (`2>&1`, `2>/dev/null`, `out=$(cmd 2>&1)`), so a script that inspects the
-message, or `${out:0:7}`, sees what bash prints; earlier versions appended the hint to every such line, which leaked
-into captured output. Showing it once is enough for an agent to learn that `help` exists without making later output
-differ from bash's.
+status 127, and nothing else, so captured output (`out=$(cmd 2>&1)`, `${out:0:7}`) is what bash gives. Earlier
+versions appended `(run 'help' to list available commands)`; the tool description already says what the machine lacks
+and that `help` lists what it has, and the package managers below say the same.
 
 What each commonly tried program does:
 

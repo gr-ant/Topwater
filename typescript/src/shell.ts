@@ -379,7 +379,7 @@ export class Shell implements ArithHost {
     fs.writeText('/dev/null', '');
     seed('/etc/hosts', `127.0.0.1\tlocalhost\n127.0.1.1\t${host}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\nff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n`);
     seed('/etc/group', `root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n${user}:x:1000:\n`);
-    seed('/etc/shells', '# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n');
+    seed('/etc/shells', '# Shells a user may have as a login shell\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n');
     seed('/etc/debian_version', 'trixie/sid\n');
     seed('/var/lib/shells.state', '');
     seed('/etc/profile', ETC_PROFILE);
@@ -553,8 +553,7 @@ export class Shell implements ArithHost {
     const callDeadline: Deadline = { at: Date.now() + this.options.maxCallDurationMs };
     this.deadline = callDeadline;
     const tee = (w: Writer, stream: 'stdout' | 'stderr'): Writer => onOutput ? { write(t) { w.write(t); onOutput(printable(t), stream); } } : w;
-    const callStderr = this.callStderr = tee(stderr, 'stderr');
-    const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(tee(stdout, 'stdout')), err: new SwitchWriter(callStderr) };
+    const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(tee(stdout, 'stdout')), err: new SwitchWriter(tee(stderr, 'stderr')) };
     const raw = (s: string) => { stderr.clear; (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
       // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
@@ -1283,19 +1282,10 @@ export class Shell implements ArithHost {
     return argv;
   }
 
-  /** bash's own "command not found" line. The first time in a session that it goes straight to the tool output
-   * (stderr not redirected or captured), a one-line hint about `help` follows, so that output a script captures stays bash's. */
+  /** bash's own "command not found" line, and nothing else (the tool description already points at `help`). */
   private reportNotFound(io: Io, name: string) {
     io.err.write(this.errPrefix + diagnostic('commandNotFound', { command: name }) + '\n');
-    let err = io.err;
-    while (err instanceof SwitchWriter) err = err.target;
-    if (this.notFoundHinted || err !== this.callStderr) return;
-    this.notFoundHinted = true;
-    io.err.write(DIAGNOSTICS.commandNotFoundHint + '\n');
   }
-
-  private notFoundHinted = false;
-  private callStderr: Writer | undefined;
 
   /** @internal Runs argv: a function, a script file, or a registered command. `skipFunctions`: `command ls` / `builtin cd`. */
   async invoke(argv: string[], io: Io, skipFunctions = false): Promise<number> {

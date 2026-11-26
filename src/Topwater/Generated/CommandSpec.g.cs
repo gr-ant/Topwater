@@ -132,6 +132,9 @@ internal static partial class CommandSpec
             ["missingOperandAfter"] = "missing operand after '{operand}'",
             ["extraOperand"] = "extra operand '{operand}'",
             ["fileNotFound"] = "{file}: No such file or directory",
+            ["onlyIn"] = "Only in {dir}: {name}",
+            ["commonSubdirectories"] = "Common subdirectories: {file1} and {file2}",
+            ["typeMismatch"] = "File {file1} is a {kind1} while file {file2} is a {kind2}",
             ["tooLarge"] = "files too large to compare",
         }),
         ["dirname"] = new("dirname", "Strip the last component from a path", null, "dirname (GNU coreutils) 9.4", true, false, true, "dirname", 1, "Try 'dirname --help' for more information.\n", ("z", "", "zero=z"), Empty),
@@ -611,7 +614,6 @@ internal static partial class CommandSpec
         internal const string Coproc = "'coproc' is not supported by this shell";
         internal const string AmbiguousRedirect = "ambiguous redirect";
         internal const string CommandNotFound = "{command}: command not found";
-        internal const string CommandNotFoundHint = "(run 'help' to list the available commands; nothing else can be installed on this machine)";
         internal const string EofMatching = "unexpected EOF while looking for matching `{terminator}'";
         internal const string UnexpectedToken = "syntax error near unexpected token `{token}'";
         internal const string SourceLine = "`{line}'";

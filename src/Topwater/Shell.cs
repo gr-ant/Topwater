@@ -257,7 +257,7 @@ public sealed partial class Shell
         void Link(string path, string target) { if (!Fs.Exists(path) && !Fs.IsSymlink(path)) Fs.CreateSymlink(path, target); }
         Seed("/etc/hosts", $"127.0.0.1\tlocalhost\n127.0.1.1\t{Options.Hostname}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\nff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n");
         Seed("/etc/group", $"root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n{user}:x:1000:\n");
-        Seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n");
+        Seed("/etc/shells", "# Shells a user may have as a login shell\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n");
         Seed("/etc/debian_version", "trixie/sid\n");
         Seed("/var/lib/shells.state", "");
         Seed("/etc/profile", EtcProfile);
@@ -512,7 +512,6 @@ public sealed partial class Shell
         _history.Add(commandLine);
         var stdout = new CappedWriter(this);
         var stderr = new CappedWriter(this);
-        _callStderr = stderr;
         int code;
         string? trailer = null;
         var previousUser = Fs.RunAs;
@@ -1340,20 +1339,9 @@ public sealed partial class Shell
         return argv;
     }
 
-    /// <summary>bash's own "command not found" line. The first time in a session that it goes straight to the tool output
-    /// (stderr not redirected or captured), a one-line hint about `help` follows, so that output a script captures stays bash's.</summary>
-    void ReportNotFound(Io io, string name)
-    {
+    /// <summary>bash's own "command not found" line, and nothing else (the tool description already points at `help`).</summary>
+    void ReportNotFound(Io io, string name) =>
         io.Err.WriteLine(ErrPrefix + CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", name)));
-        var err = io.Err;
-        while (err is SwitchWriter sw) err = sw.Target;
-        if (_notFoundHinted || !ReferenceEquals(err, _callStderr)) return;
-        _notFoundHinted = true;
-        io.Err.WriteLine(CommandSpec.Diagnostics.CommandNotFoundHint);
-    }
-
-    bool _notFoundHinted;
-    TextWriter? _callStderr;
 
     /// <param name="skipFunctions">`command ls` / `builtin cd`: run the command itself even when a function has its name.</param>
     internal async Task<int> InvokeAsync(IReadOnlyList<string> argv, Io io, CancellationToken ct, bool skipFunctions = false)

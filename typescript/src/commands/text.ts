@@ -908,12 +908,12 @@ function diff(ctx: CommandContext): number {
       let rc: number;
       if (!inA || !inB) {
         if (a.has('N') && !(dirA || dirB)) rc = files(x, y, header(x, y));
-        else { out.w(`Only in ${inA ? an : bn}: ${name}\n`); rc = 1; }
+        else { out.w(specMessage('diff', 'onlyIn', { dir: inA ? an : bn, name }) + '\n'); rc = 1; }
       } else if (dirA && dirB) {
         if (a.has('r')) rc = dirs(x, y, depth + 1);
-        else { out.w(`Common subdirectories: ${x} and ${y}\n`); rc = 0; }
+        else { out.w(specMessage('diff', 'commonSubdirectories', { file1: x, file2: y }) + '\n'); rc = 0; }
       } else if (dirA || dirB) {
-        out.w(`File ${x} is a ${dirA ? 'directory' : 'regular file'} while file ${y} is a ${dirB ? 'directory' : 'regular file'}\n`);
+        out.w(specMessage('diff', 'typeMismatch', { file1: x, kind1: dirA ? 'directory' : 'regular file', file2: y, kind2: dirB ? 'directory' : 'regular file' }) + '\n');
         rc = 1;
       } else rc = files(x, y, header(x, y));
       code = Math.max(code, rc);

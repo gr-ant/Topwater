@@ -25,6 +25,9 @@
     "missingOperandAfter": "missing operand after '{operand}'",
     "extraOperand": "extra operand '{operand}'",
     "fileNotFound": "{file}: No such file or directory",
+    "onlyIn": "Only in {dir}: {name}",
+    "commonSubdirectories": "Common subdirectories: {file1} and {file2}",
+    "typeMismatch": "File {file1} is a {kind1} while file {file2} is a {kind2}",
     "tooLarge": "files too large to compare"
   }
 }

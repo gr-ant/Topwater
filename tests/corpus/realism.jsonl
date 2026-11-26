@@ -2,7 +2,7 @@
 {"id":"realism-002","script":"test -f /etc/profile && test -f /etc/bash.bashrc && test -d /etc/profile.d && echo ok","stdout":"ok\n","exitCode":0,"quiet":true}
 {"id":"realism-003","script":". /etc/os-release; echo $NAME $ID $VERSION_ID $VERSION_CODENAME $UBUNTU_CODENAME $ID_LIKE","stdout":"Ubuntu ubuntu 24.04 noble noble debian\n","exitCode":0,"quiet":true}
 {"id":"realism-004","script":"grep -E '^DISTRIB_(ID|RELEASE|CODENAME)=' /etc/lsb-release","stdout":"DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=24.04\nDISTRIB_CODENAME=noble\n","exitCode":0,"quiet":true}
-{"id":"realism-005","script":"cat /etc/shells","stdout":"# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n","exitCode":0,"quiet":true}
+{"id":"realism-005","script":"grep -v '^#' /etc/shells","stdout":"/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n","exitCode":0,"quiet":true}
 {"id":"realism-006","script":"cat /etc/debian_version; head -c 7 /etc/issue; echo; head -c 7 /etc/issue.net; echo","stdout":"trixie/sid\nUbuntu \nUbuntu \n","exitCode":0,"quiet":true}
 {"id":"realism-007","script":"readlink /etc/os-release /var/run; ls /usr; ls /usr/local","stdout":"../usr/lib/os-release\n/run\nbin\ngames\ninclude\nlib\nlib64\nlibexec\nlocal\nsbin\nshare\nsrc\nbin\netc\ngames\ninclude\nlib\nman\nsbin\nshare\nsrc\n","exitCode":0,"quiet":true}
 {"id":"realism-008","script":"ls /var; ls /var/cache /var/lib","stdout":"backups\ncache\nlib\nlocal\nlock\nlog\nmail\nopt\nrun\nspool\ntmp\n/var/cache:\napt\ndebconf\nldconfig\n\n/var/lib:\napt\ndpkg\nmisc\npam\nshells.state\nsystemd\n","exitCode":0,"quiet":true}

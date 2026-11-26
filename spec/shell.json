@@ -67,7 +67,6 @@
     "coproc": "'coproc' is not supported by this shell",
     "ambiguousRedirect": "ambiguous redirect",
     "commandNotFound": "{command}: command not found",
-    "commandNotFoundHint": "(run 'help' to list the available commands; nothing else can be installed on this machine)",
     "eofMatching": "unexpected EOF while looking for matching `{terminator}'",
     "unexpectedToken": "syntax error near unexpected token `{token}'",
     "sourceLine": "`{line}'",
