@@ -42,7 +42,9 @@ export class Timelines {
     if (have) { this.states.set(k, have); return have; }
     let from = i - 1;
     while (!this.states.has(this.key(b, from)) && !this.call(b, from).snapshot) from--;
-    const shell = this.recording.createShell(undefined, await this.stateAt(b, from));
+    // recorded web responses from the first call re-run (none for typed calls): a re-run never touches the network
+    const first = this.owner(b, from + 1) === 0 ? from + 1 : this.recording.calls.length;
+    const shell = this.recording.createShell(undefined, await this.stateAt(b, from), first);
     for (let j = from + 1; j <= i; j++) {
       const c = this.call(b, j), r = await shell.run(c.command);
       this.reran.set(this.key(b, j), { matches: r.stdout === c.stdout && r.stderr === c.stderr && r.exitCode === c.exitCode, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode });
@@ -61,7 +63,7 @@ export class Timelines {
   async run(b: number, command: string): Promise<{ call: RecordedCall; result: ShellResult }> {
     if (b <= 0 || !this.branches[b]) throw new RangeError(`no branch ${b}`);
     const last = this.length(b) - 1, before = await this.stateAt(b, last);
-    const shell = this.live.get(b) ?? this.recording.createShell(undefined, before);
+    const shell = this.live.get(b) ?? this.recording.createShell(undefined, before, this.recording.calls.length); // no web: nothing recorded to serve
     this.live.delete(b); // until the call is done: if it throws, the next one starts again from the snapshot
     const time = shell.now(), t0 = performance.now();
     const result = await shell.run(command);

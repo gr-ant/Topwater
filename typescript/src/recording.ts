@@ -2,7 +2,8 @@
 // history.jsonl (a header, then one line per call) and checkpoints/<n>.json, the machine after n calls. All three ports
 // write and read it. The JSON Lines recordings this replaced (snapshots embedded or in side-car files) still load.
 import { DEFAULTS, Shell, type ShellOptions, type ShellResult } from './shell.js';
-import { HOST, ShellSnapshot, SnapshotError, USER, openTopwater, parseTime, writeTopwater } from './snapshot.js';
+import { HOST, ShellSnapshot, SnapshotError, USER, openTopwater, parseTime, sha256, writeTopwater } from './snapshot.js';
+import { WebSession, type WebExchange, type WebPolicy } from './web.js';
 import { sameEntry, type VfsEntry } from './vfs.js';
 
 export const RECORDING_FORMAT_VERSION = 1;
@@ -31,6 +32,8 @@ export interface RecordedCall {
   files?: string[];
   /** the machine right after this call, when the recorder took a snapshot here */
   snapshot?: ShellSnapshot;
+  /** the web requests the call made and what came back, in order */
+  web?: WebExchange[];
 }
 
 export interface ReplayDifference { index: number; command: string; field: 'stdout' | 'stderr' | 'exitCode' | 'trailer'; expected: string; actual: string }
@@ -47,16 +50,25 @@ export class Recording {
   /** the app's own commands the shell had: a replay target needs them registered too */
   appCommands: string[] = [];
   calls: RecordedCall[] = [];
+  /** The web access the shell had (allowWeb), credentials as host names only (their values are ""), no transport. A shell
+   * made from the recording serves the recorded responses under it and never touches the network. */
+  web?: WebPolicy;
 
   constructor(public start: ShellSnapshot, public options: RecordedOptions) {}
 
   /** True when the run had a virtual clock and a random seed, so a replay on the same port and version must match exactly. */
   get isDeterministic() { return this.options.startTime !== undefined && this.options.randomSeed !== undefined; }
 
-  /** A fresh shell at the recording's start (or `start`): its options, then `configure` (register your commands), then the snapshot. */
-  createShell(configure?: (shell: Shell) => void, start: ShellSnapshot = this.start): Shell {
+  /**
+   * A fresh shell at the recording's start (or `start`): its options, then `configure` (register your commands), then the
+   * snapshot. `firstCall` is the call it runs first, so its web requests get that call's recorded responses.
+   */
+  createShell(configure?: (shell: Shell) => void, start: ShellSnapshot = this.start, firstCall = 0): Shell {
     const shell = new Shell({ ...this.options, user: start.user, hostname: start.hostname });
     configure?.(shell);
+    if (this.web) // the recorded responses, never the network, and no credential is looked up
+      shell.web = new WebSession({ ...this.web, transport: undefined, credentials: Object.fromEntries(Object.keys(this.web.credentials ?? {}).map(h => [h, () => ''])) },
+        this.calls.slice(firstCall).flatMap(c => c.web ?? []));
     start.restore(shell);
     return shell;
   }
@@ -69,7 +81,7 @@ export class Recording {
     if (!Number.isInteger(index) || index < -1 || index >= this.calls.length) throw new RangeError(`no call ${index}`);
     let from = index;
     while (from >= 0 && !this.calls[from].snapshot) from--;
-    const shell = this.createShell(configure, from >= 0 ? this.calls[from].snapshot : this.start);
+    const shell = this.createShell(configure, from >= 0 ? this.calls[from].snapshot : this.start, from + 1);
     for (let i = from + 1; i <= index; i++) {
       const actual = await shell.run(this.calls[i].command); // run even without onCall: `onCall?.(..., await ...)` would skip it
       onCall?.(this.calls[i], actual);
@@ -101,17 +113,30 @@ export class Recording {
       }),
       appCommands: this.appCommands.length ? this.appCommands : undefined,
       metadata: Object.keys(this.metadata).length ? this.metadata : undefined,
+      web: this.web && (p => ({
+        domains: p.domains, methods: p.methods, allowHttp: p.allowHttp, maxResponseBytes: p.maxResponseBytes, maxRequestsPerCall: p.maxRequestsPerCall,
+        maxRequests: p.maxRequests, timeoutMs: p.timeoutMs, maxRedirects: p.maxRedirects, explainBlocked: p.explainBlocked,
+        credentials: Object.keys(p.credentials).sort((a, b) => a < b ? -1 : a > b ? 1 : 0),
+      }))(new WebSession(this.web).policy),
     });
+    const blobs = new Map<string, Uint8Array>();
+    const exchange = async (x: WebExchange) => {
+      if (x.error) return { method: x.method, url: x.url, error: x.error };
+      const body = x.body.length ? await sha256(x.body) : undefined;
+      if (body) blobs.set(body, x.body);
+      return { method: x.method, url: x.url, status: x.status, reason: x.reason, headers: x.headers, body, size: x.body.length };
+    };
     const lines = [JSON.stringify(header)];
     const checkpoints: [string, ShellSnapshot][] = [['checkpoints/0.json', this.start]];
-    this.calls.forEach((c, i) => {
+    for (const [i, c] of this.calls.entries()) {
       lines.push(JSON.stringify(dropUndefined({
         index: c.index, command: c.command, stdout: c.stdout, stderr: c.stderr, exitCode: c.exitCode, trailer: c.trailer,
         elapsedMs: Math.round(c.elapsedMs * 1000) / 1000, time: c.time === undefined ? undefined : iso(c.time), files: c.files?.length ? c.files : undefined,
+        web: c.web?.length ? await Promise.all(c.web.map(exchange)) : undefined,
       })));
       if (c.snapshot) checkpoints.push([`checkpoints/${i + 1}.json`, c.snapshot]);
-    });
-    return writeTopwater([['manifest.json', checkpoints[checkpoints.length - 1][1]], ['history.jsonl', lines.join('\n') + '\n'], ...checkpoints]);
+    }
+    return writeTopwater([['manifest.json', checkpoints[checkpoints.length - 1][1]], ['history.jsonl', lines.join('\n') + '\n'], ...checkpoints], blobs);
   }
 
   /**
@@ -144,7 +169,8 @@ export class Recording {
       }
       throw bad(`${what} has no snapshot`);
     };
-    return fromLines(input, FORMAT, RECORDING_FORMAT_VERSION, limits, h => read(h.start, 'the start'), e => e.snapshot ? read(e.snapshot, `call ${e.index}`) : undefined);
+    return fromLines(input, FORMAT, RECORDING_FORMAT_VERSION, limits, h => read(h.start, 'the start'), e => e.snapshot ? read(e.snapshot, `call ${e.index}`) : undefined,
+      (_blob, _size, where) => { throw bad(`${where}: web responses need a .topwater file`); });
   }
 }
 
@@ -199,8 +225,20 @@ async function loadTopwater(bytes: Uint8Array, limits: RecordedOptions): Promise
     if (!checkpoints.has(0)) throw bad('checkpoints/0.json (the start) is missing');
     return checkpoint(0);
   };
-  let calls = 0;
-  const rec = await fromLines(history, HISTORY, HISTORY_VERSION, limits, start, () => { calls++; return checkpoints.has(calls) ? checkpoint(calls) : undefined; });
+  let calls = 0, webBytes = 0;
+  const maxWeb = limits.maxFileSystemBytes ?? DEFAULTS.maxFileSystemBytes;
+  const blob = async (hash: unknown, size: number, where: string) => {
+    // every response body together within one machine's worth of files
+    if ((webBytes += size) > maxWeb) throw bad(`${where}: the recorded responses hold more than ${maxWeb} bytes (MaxFileSystemBytes)`);
+    if (size === 0) return new Uint8Array(0);
+    if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) throw bad(`${where}: bad blob ${JSON.stringify(hash ?? null)}`);
+    if (!z.has('blobs/' + hash)) throw bad(`${where}: blob ${hash} is missing`);
+    let b: Uint8Array;
+    try { b = z.bytes('blobs/' + hash, size); } catch { throw bad(`${where}: blob ${hash} doesn't hold the ${size} bytes it should`); }
+    if (b.length !== size || await sha256(b) !== hash) throw bad(`${where}: blob ${hash} doesn't hold the ${size} bytes it should`);
+    return b;
+  };
+  const rec = await fromLines(history, HISTORY, HISTORY_VERSION, limits, start, () => { calls++; return checkpoints.has(calls) ? checkpoint(calls) : undefined; }, blob);
   const beyond = [...checkpoints].find(n => n > calls);
   if (beyond !== undefined) throw bad(`checkpoints/${beyond}.json is after the last call`);
   // the machine of the file is the one after the last checkpoint: a reader of either must see the same
@@ -238,7 +276,8 @@ function* linesOf(input: string | Uint8Array): Generator<string> {
 
 /** The recording in `input`: a header line, then one line per call (the old format and history.jsonl alike). */
 async function fromLines(input: string | Uint8Array, format: string, version: number, limits: RecordedOptions,
-  start: (header: Record<string, any>) => Promise<ShellSnapshot>, after: (line: Record<string, any>) => Promise<ShellSnapshot> | undefined): Promise<Recording> {
+  start: (header: Record<string, any>) => Promise<ShellSnapshot>, after: (line: Record<string, any>) => Promise<ShellSnapshot> | undefined,
+  blob: (hash: unknown, size: number, where: string) => Promise<Uint8Array>): Promise<Recording> {
   const lines = linesOf(input);
   const first = lines.next().value ?? '';
   let h: Record<string, any>;
@@ -264,6 +303,7 @@ async function fromLines(input: string | Uint8Array, format: string, version: nu
   rec.topwater = typeof h.topwater === 'string' ? h.topwater : undefined;
   if (h.metadata && typeof h.metadata === 'object') for (const [k, v] of Object.entries(h.metadata)) if (typeof v === 'string') rec.metadata[k] = v;
   if (Array.isArray(h.appCommands)) rec.appCommands = h.appCommands.filter((c: unknown): c is string => typeof c === 'string');
+  if (h.web != null) rec.web = webPolicy(h.web);
   const maxCalls = limits.maxExtractEntries ?? DEFAULTS.maxExtractEntries;
   let n = 1;
   for (const line of lines) {
@@ -284,9 +324,60 @@ async function fromLines(input: string | Uint8Array, format: string, version: nu
       time: e.time == null ? undefined : time(e.time, `line ${n} time`),
       files: e.files ?? undefined,
       snapshot: await after(e),
+      web: e.web == null ? undefined : await exchanges(e.web, `line ${n}`, blob),
     });
   }
   return rec;
+}
+
+/** The policy in the header: everything but the credentials' values and the transport. */
+function webPolicy(w: any): WebPolicy {
+  if (typeof w !== 'object' || Array.isArray(w)) throw bad('bad web policy');
+  const strings = (v: unknown, what: string, fallback: string[]) => {
+    if (v == null) return fallback;
+    if (!Array.isArray(v) || !v.every(x => typeof x === 'string')) throw bad(`bad web policy: ${what} is not a list of strings`);
+    return v as string[];
+  };
+  const num = (v: unknown, what: string, max = 2 ** 53) => {
+    if (v == null) return 0;
+    if (!(Number.isSafeInteger(v) && (v as number) >= 0)) throw bad(`bad web policy: bad ${what}`);
+    return Math.min(v as number, max);
+  };
+  const bool = (v: unknown, what: string) => { if (v != null && typeof v !== 'boolean') throw bad(`bad web policy: bad ${what}`); return v === true; };
+  const policy: WebPolicy = {
+    domains: strings(w.domains, 'domains', []), methods: strings(w.methods, 'methods', ['GET']), allowHttp: bool(w.allowHttp, 'allowHttp'),
+    maxResponseBytes: num(w.maxResponseBytes, 'maxResponseBytes'), maxRequestsPerCall: num(w.maxRequestsPerCall, 'maxRequestsPerCall', 2 ** 31 - 1),
+    maxRequests: num(w.maxRequests, 'maxRequests', 2 ** 31 - 1), timeoutMs: num(w.timeoutMs, 'timeoutMs', 2 ** 31 - 1),
+    maxRedirects: num(w.maxRedirects, 'maxRedirects', 2 ** 31 - 1), explainBlocked: bool(w.explainBlocked, 'explainBlocked'),
+    credentials: Object.fromEntries(strings(w.credentials, 'credentials', []).map(h => [h, () => ''])),
+  };
+  try { void new WebSession(policy); } catch (e) { throw bad('bad web policy: ' + (e as Error).message); }
+  return policy;
+}
+
+const ERRORS = ['resolve', 'blocked', 'connect', 'timeout', 'tls', 'recv'];
+
+/** One call's requests and responses; each body is a blob. */
+async function exchanges(list: unknown, where: string, blob: (hash: unknown, size: number, where: string) => Promise<Uint8Array>): Promise<WebExchange[]> {
+  if (!Array.isArray(list)) throw bad(`${where}: web is not a list`);
+  const out: WebExchange[] = [];
+  for (const [i, x] of list.entries()) {
+    const w = `${where} web ${i}`;
+    if (x == null || typeof x !== 'object') throw bad(`${where}: null in web`);
+    if (typeof x.method !== 'string' || !x.method || typeof x.url !== 'string' || !x.url) throw bad(`${w}: method and url are required`);
+    if (x.error != null) {
+      if (!ERRORS.includes(x.error)) throw bad(`${w}: unknown error ${JSON.stringify(x.error)}`);
+      out.push({ method: x.method, url: x.url, status: 0, reason: '', headers: [], body: new Uint8Array(0), error: x.error });
+      continue;
+    }
+    const size = x.size ?? 0;
+    if (!(Number.isInteger(x.status) && x.status >= 100 && x.status <= 999) || !(Number.isSafeInteger(size) && size >= 0)
+      || (x.reason != null && typeof x.reason !== 'string')
+      || (x.headers != null && !(Array.isArray(x.headers) && x.headers.every((h: unknown) => Array.isArray(h) && h.length === 2 && h.every(s => typeof s === 'string')))))
+      throw bad(`${w}: bad response`);
+    out.push({ method: x.method, url: x.url, status: x.status, reason: x.reason ?? '', headers: x.headers ?? [], body: await blob(x.body, size, w) });
+  }
+  return out;
 }
 
 /** The file's limits, never above the caller's (or the defaults). */
@@ -323,9 +414,11 @@ export function startRecording(shell: Shell, options: RecordingOptions = {}) {
     const keep = every > 0 && (index + 1) % every === 0;
     const snapshot = keep ? ShellSnapshot.capture(shell) : ShellSnapshot.lazy(() => ShellSnapshot.capture(shell), shell.options.user, shell.options.hostname, shell.now());
     const files = changes();
+    recording.web ??= shell.web?.policy;
+    const web = shell.web?.takeLog();
     recording.calls.push({
       index, command, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, trailer: r.trailer, elapsedMs: performance.now() - t0,
-      time, files: files.length ? files : undefined, snapshot,
+      time, files: files.length ? files : undefined, snapshot, web: web?.length ? web : undefined,
     });
     return r;
   };

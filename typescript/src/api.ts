@@ -26,7 +26,7 @@ export interface ApiEndpoint {
 
 // headers that cannot carry a credential, change the destination or smuggle a second request
 // The reason phrase when a response carries none (HTTP/2 never does); Node's http.STATUS_CODES, trimmed to the common ones.
-const REASONS: Record<number, string> = {
+export const REASONS: Record<number, string> = {
   200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content', 206: 'Partial Content',
   301: 'Moved Permanently', 302: 'Found', 303: 'See Other', 304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
   400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed', 406: 'Not Acceptable',
@@ -94,6 +94,12 @@ function buildUrl(base: URL, allowed: string[] | undefined, path: string, extraQ
   const same = url.protocol === base.protocol && url.host === base.host && url.username === '' && url.password === ''
     && (url.pathname === basePath || url.pathname.startsWith(basePath + '/'));
   return same ? url.href : null;
+}
+
+/** @internal What to scrub from responses: the credential and the token after its scheme, longest first. */
+export function secretsOf(credential: string): string[] {
+  const sp = credential.indexOf(' ');
+  return [...new Set([credential, sp > 0 ? credential.slice(sp + 1).trim() : ''].filter(s => s.length >= 8))].sort((a, b) => b.length - a.length); // a very short "secret" would shred ordinary output
 }
 
 const titleCase = (name: string) => name.replace(/(^|-)([a-z])/g, (_, d, c) => d + c.toUpperCase());
@@ -202,8 +208,7 @@ export function registerApi(shell: Shell, program: string, endpoints: Record<str
       ctx.stderr.write(`${program}: the credentials for ${alias} are not available\n`); // the message may describe the secret
       return 1;
     }
-    const sp = credential.indexOf(' ');
-    const secrets = [...new Set([credential, sp > 0 ? credential.slice(sp + 1).trim() : ''].filter(s => s.length >= 8))].sort((a, b) => b.length - a.length); // a very short "secret" would shred ordinary output
+    const secrets = secretsOf(credential);
     const scrub = (s: string) => secrets.reduce((t, secret) => t.split(secret).join('[REDACTED]'), s);
 
     const reqHeaders = new Headers();

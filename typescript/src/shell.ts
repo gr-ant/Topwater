@@ -15,6 +15,7 @@ import { posixToJs } from './regex.js';
 import { COMMANDS, DIAGNOSTICS, ERRNO, diagnostic } from './spec.generated.js';
 import { registerAll } from './commands/index.js';
 import { registerApi, type ApiEndpoint } from './api.js';
+import { WebSession, type WebPolicy } from './web.js';
 import { registerTools, mountMcp, type ToolSpec, type ToolInvoker, type McpClientLike, type McpMountOptions } from './tools.js';
 import { testUnary, testNewer, attributeFlags } from './commands/builtins.js';
 import { SNAPSHOT_SET_OPTIONS, type ShellStateData } from './snapshot.js';
@@ -532,6 +533,19 @@ export class Shell implements ArithHost {
     return this;
   }
 
+  /** @internal The web access in force (allowWeb), or undefined: no network. */
+  web?: WebSession;
+
+  /**
+   * Lets the agent's `curl` and `wget` reach the hosts in `policy`, over https unless it allows http. Every URL and
+   * redirect is checked against it; names are resolved once, private, loopback, link-local and other internal addresses
+   * are refused, and the connection goes to the address that was checked.
+   */
+  allowWeb(policy: WebPolicy): this {
+    this.web = new WebSession(policy);
+    return this;
+  }
+
   unregister(name: string): boolean {
     for (const dir of ['/usr/bin/', '/bin/']) if (this.fs.isFile(dir + name)) this.fs.delete(dir + name);
     return this.commands.delete(name);
@@ -550,6 +564,7 @@ export class Shell implements ArithHost {
     let code: number;
     let trailer: string | undefined;
     this.totalIterations = this.scriptDepth = this.callDepth = this.arithDepth = this.lineno = 0; // each call is a new bash -c: its lines count from 1
+    this.web?.beginCall();
     const callDeadline: Deadline = { at: Date.now() + this.options.maxCallDurationMs };
     this.deadline = callDeadline;
     const tee = (w: Writer, stream: 'stdout' | 'stderr'): Writer => onOutput ? { write(t) { w.write(t); onOutput(printable(t), stream); } } : w;

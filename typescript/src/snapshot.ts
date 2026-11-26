@@ -136,7 +136,7 @@ const check = (v: unknown, shape: RegExp, what: string): string => {
 type Limits = { maxFileSystemBytes: number; maxStringBytes: number; maxExtractEntries: number };
 
 /** @internal Writes a zip holding the given machines (manifest.json, checkpoints) and text entries, every file content once as blobs/<sha256>. */
-export async function writeTopwater(parts: [name: string, content: ShellSnapshot | string][]): Promise<Uint8Array> {
+export async function writeTopwater(parts: [name: string, content: ShellSnapshot | string][], extraBlobs: ReadonlyMap<string, Uint8Array> = new Map()): Promise<Uint8Array> {
   const zip: ZipEntry[] = [], blobs: ZipEntry[] = [];
   const [time, date] = dosTime(Date.now());
   const add = async (to: ZipEntry[], name: string, raw: Uint8Array) =>
@@ -156,6 +156,7 @@ export async function writeTopwater(parts: [name: string, content: ShellSnapshot
   };
   for (const [name, part] of parts)
     await add(zip, name, enc.encode(typeof part === 'string' ? part : JSON.stringify(await manifestOf(part, content))));
+  for (const [hash, bytes] of extraBlobs) if (!written.has(hash)) { written.add(hash); await add(blobs, 'blobs/' + hash, bytes); }
   return writeZip([...zip, ...blobs]);
 }
 
@@ -485,7 +486,8 @@ export function parseTime(s: unknown, what: string): number {
   return ms;
 }
 
-async function sha256(data: Uint8Array): Promise<string> {
+/** @internal */
+export async function sha256(data: Uint8Array): Promise<string> {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', data as never));
   let s = '';
   for (const b of h) s += b.toString(16).padStart(2, '0');

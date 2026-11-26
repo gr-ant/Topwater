@@ -9,6 +9,7 @@ import { registerFiles } from './files.js';
 import { registerArchives } from './archive.js';
 import { registerDocuments } from './documents.js';
 import { registerGit } from './git.js';
+import { registerWeb } from './web.js';
 
 /** Every built-in program, registered on a new shell. */
 export function registerAll(shell: Shell) {
@@ -22,4 +23,5 @@ export function registerAll(shell: Shell) {
   registerArchives(shell);
   registerDocuments(shell);
   registerGit(shell);
+  registerWeb(shell);
 }
