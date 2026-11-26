@@ -33,10 +33,12 @@ A command handler gets a `CommandContext`: `args`, `stdout`/`stderr` writers, `s
 `resolvePath()`, `checkTime()` (call it in long loops so the call's time limit can stop you) and `invoke()`. Throw
 `ShellError(message, exitCode)` for a `name: message` error; any other exception becomes `name: message`, exit 1.
 
-## Vercel AI SDK and OpenAI Agents
+## Agent frameworks
 
-Optional adapters (separate entry points; the core has no dependencies). Install the SDK you use: `npm i ai` or
-`npm i @openai/agents zod`. Both return the `bash` tool wired to a `Shell`; calls through one adapter run one at a time.
+Optional adapters (separate entry points; the core has no dependencies). Install the SDK you use: `npm i ai`,
+`npm i @openai/agents zod`, `npm i langchain @langchain/core`, `npm i @mastra/core zod` or
+`npm i @anthropic-ai/claude-agent-sdk @modelcontextprotocol/sdk zod`. Each returns the same `bash` tool wired to a
+`Shell`; calls through one adapter run one at a time.
 
 ```ts
 import { Shell } from 'topwater';
@@ -55,6 +57,35 @@ import { Agent, run } from '@openai/agents';
 const shell = new Shell();
 const agent = new Agent({ name: 'Assistant', instructions: 'Use bash to ...', tools: [bashTool(shell)] });
 await run(agent, '...');
+```
+
+LangChain.js agents (`createAgent`, built on LangGraph) and LangGraph's `ToolNode` take the LangChain tool:
+
+```ts
+import { bashTool } from 'topwater/langchain';
+import { createAgent } from 'langchain';
+
+const agent = createAgent({ model: 'anthropic:claude-sonnet-4-5', tools: [bashTool(new Shell())] });
+await agent.invoke({ messages: [{ role: 'user', content: '...' }] });
+```
+
+```ts
+import { bashTool } from 'topwater/mastra';
+import { Agent } from '@mastra/core/agent';
+
+const agent = new Agent({ id: 'assistant', name: 'Assistant', instructions: 'Use bash to ...', model, tools: { bash: bashTool(new Shell()) } });
+await agent.generate('...');
+```
+
+The Claude Agent SDK takes tools from in-process MCP servers. `bashMcpServer` is one, and the model sees the tool as
+`mcp__topwater__bash`. `tools: []` turns off Claude Code's own tools, including its Bash, which runs on the host:
+
+```ts
+import { bashMcpServer } from 'topwater/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
+const options = { mcpServers: { topwater: bashMcpServer(new Shell()) }, tools: [], allowedTools: ['mcp__topwater__bash'] };
+for await (const message of query({ prompt: '...', options })) if (message.type === 'result') console.log(message);
 ```
 
 ## Deterministic runs, snapshots and recordings

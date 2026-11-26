@@ -186,8 +186,8 @@ Adapters do the wiring for common frameworks:
   SDKs plug in through their `AsIChatClient()`; MCP clients use `topwater mcp`. See
   [the reference](docs/reference.md#microsoft-agent-framework).
 - **Python:** LangChain and LlamaIndex, see [python/README.md](python/README.md#langchain-and-llamaindex).
-- **TypeScript:** Vercel AI SDK and OpenAI Agents, see
-  [typescript/README.md](typescript/README.md#vercel-ai-sdk-and-openai-agents).
+- **TypeScript:** Vercel AI SDK, OpenAI Agents, LangChain.js/LangGraph.js, Mastra and the Claude Agent SDK, see
+  [typescript/README.md](typescript/README.md#agent-frameworks).
 
 ## Add your own programs
 

@@ -23,6 +23,18 @@
     "./openai-agents": {
       "types": "./dist/integrations/openai-agents.d.ts",
       "default": "./dist/integrations/openai-agents.js"
+    },
+    "./langchain": {
+      "types": "./dist/integrations/langchain.d.ts",
+      "default": "./dist/integrations/langchain.js"
+    },
+    "./mastra": {
+      "types": "./dist/integrations/mastra.d.ts",
+      "default": "./dist/integrations/mastra.js"
+    },
+    "./claude-agent-sdk": {
+      "types": "./dist/integrations/claude-agent-sdk.d.ts",
+      "default": "./dist/integrations/claude-agent-sdk.js"
     }
   },
   "engines": {
@@ -38,7 +50,11 @@
   },
   "peerDependencies": {
     "ai": "^7.0.0",
-    "@openai/agents": ">=0.22.0 <1"
+    "@openai/agents": ">=0.22.0 <1",
+    "@langchain/core": "^1.5.0",
+    "@mastra/core": "^1.86.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0 || ^4.0.0"
   },
   "peerDependenciesMeta": {
     "ai": {
@@ -46,13 +62,29 @@
     },
     "@openai/agents": {
       "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@mastra/core": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@langchain/core": "^1.5.1",
+    "@mastra/core": "^1.86.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@openai/agents": "^0.22.0",
     "@types/node": "^26.6.7",
     "ai": "^7.0.181",
     "esbuild": "^0.28.2",
+    "langchain": "^1.6.8",
     "playwright": "^1.65.1",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1",
