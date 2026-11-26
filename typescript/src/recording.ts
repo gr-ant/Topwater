@@ -70,7 +70,10 @@ export class Recording {
     let from = index;
     while (from >= 0 && !this.calls[from].snapshot) from--;
     const shell = this.createShell(configure, from >= 0 ? this.calls[from].snapshot : this.start);
-    for (let i = from + 1; i <= index; i++) onCall?.(this.calls[i], await shell.run(this.calls[i].command));
+    for (let i = from + 1; i <= index; i++) {
+      const actual = await shell.run(this.calls[i].command); // run even without onCall: `onCall?.(..., await ...)` would skip it
+      onCall?.(this.calls[i], actual);
+    }
     return shell;
   }
 

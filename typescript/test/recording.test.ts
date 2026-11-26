@@ -512,3 +512,15 @@ describe('the viewer\'s line diff', () => {
     expect(diffLines('x\n'.repeat(3000), 'y\n'.repeat(3000))).toBeNull(); // too big to diff
   });
 });
+
+describe('shellAt', () => {
+  it('runs the calls after the nearest checkpoint without an onCall callback', async () => {
+    const sh = new Shell(deterministic);
+    const { recording, stop } = startRecording(sh);
+    await sh.run('echo 1 > a');
+    await sh.run('echo 2 > b');
+    stop();
+    const rec = await Recording.load(await recording.save());
+    expect((await (await rec.shellAt(0)).run('ls')).stdout).toBe('a\n');
+  });
+});
