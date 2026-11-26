@@ -169,6 +169,8 @@ class Repo:
     def obj(self, sha: str) -> tuple[str, bytes]:
         if sha in self._objects:
             return self._objects[sha]
+        if any(sha in p.offsets for p in self.packs()):  # packs first, as git does: a dictionary lookup, no file walk
+            return self._packed(sha)
         raw = self.gread(f"objects/{sha[:2]}/{sha[2:]}") if re.fullmatch(r"[0-9a-f]{40}", sha) else None
         if raw is None:
             return self._packed(sha)
@@ -219,7 +221,7 @@ class Repo:
         raise fatal("missingObject", object=sha)
 
     def has(self, sha: str) -> bool:
-        return self.gexists(f"objects/{sha[:2]}/{sha[2:]}") or any(sha in p.offsets for p in self.packs())
+        return any(sha in p.offsets for p in self.packs()) or self.gexists(f"objects/{sha[:2]}/{sha[2:]}")
 
     def put(self, kind: str, data: bytes) -> str:
         sha = object_id(kind, data)

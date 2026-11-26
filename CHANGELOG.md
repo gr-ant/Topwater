@@ -16,6 +16,15 @@ Python and TypeScript packages are not published yet and are used from the repos
   URLs and no `--fail-early`, `curl` now exits with the last URL's status, as curl does.
   `--retry` waits at least the server's `Retry-After`; on a virtual clock the `-w` times read 0, so recordings replay.
 - **`find -links N`** selects by link count, and `/usr/local/man` is a link to `share/man` as on Ubuntu.
+- **git reads packed repositories.** A repository copied in after `git clone` or `git gc`, with its objects in
+  `.git/objects/pack` and its refs in `packed-refs`, works for every command; new objects are written loose next to the
+  pack. The pack and its index are checked and bounded as hostile input (checksums, offsets, delta depth and cycles,
+  inflated sizes). `git gc` and `git repack` are not available: git here writes no packs. This replaces the "history
+  is packed" error.
+- **git shows a clone's remote-tracking branches.** `branch -r`/`-a`/`-vv`, `log --decorate`, ahead/behind in
+  `status` and `status -sb`, `checkout <name>` creating a tracking branch from `origin/<name>`, `@{u}`, and
+  `remote -v` listing the remotes in `.git/config`. A detached HEAD is named after what was checked out
+  ("HEAD detached at v1"), as real git does.
 
 ## 0.1.0-preview.3 (2026-11-26)
 

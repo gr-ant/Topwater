@@ -69,7 +69,8 @@ regex gets GNU's message.
 ## git
 
 `git` is Topwater's own implementation of the common commands of git 2.43, for repositories in the machine. There is
-no network: `clone`, `fetch`, `pull`, `push` and `submodule` answer that, `remote` lists nothing, and less common
+no network: `clone`, `fetch`, `pull`, `push` and `submodule` answer that, `remote` lists only the remotes a copied-in
+clone names, and less common
 local commands (`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are not available and name a substitute.
 `git help` lists what is there and `git help <command>` describes each one; options are in
 [`spec/commands/git.json`](../spec/commands/git.json).
@@ -78,16 +79,25 @@ local commands (`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are no
 |---|---|
 | Work | `init` `status` (`-s`, `-b`, `--porcelain`, `-u`) `add` (`-A`, `-u`, `-f`, `-n`) `rm` (`--cached`, `-r`) `mv` `commit` (`-m`, `-F`, `-a`, `--amend`, `--no-edit`, `--allow-empty`, `--author`, `--date`, paths) `restore` (`--staged`, `--source`) `reset` (`--soft`, `--mixed`, `--hard`, paths) `stash` (`push`, `save`, `list`, `show`, `pop`, `apply`, `drop`, `clear`, `-u`) `clean` (`-n`, `-f`, `-d`, `-x`, `-X`) |
 | History | `log` (`--oneline`, `-n`/`-<n>`, `--stat`, `-p`, `--format`/`--pretty` with `%H %h %s %b %an %ae %ad %d` and more, `--graph` for linear history, `--all`, `--author`, `--grep`, `--since`, `a..b`, `-- paths`) `show` (commits, tags, `rev:path`) `diff` (work tree, `--cached`, commits, `a..b`, `a...b`, `--stat`, `--name-only`, `--name-status`, `--numstat`, `-U<n>`, `--quiet`) |
-| Branches | `branch` (`-d`, `-D`, `-m`, `-v`, `--show-current`) `checkout` (`-b`, `-B`, `--detach`, `-- paths`) `switch` (`-c`, `-C`, `--detach`, `-`) `merge` (fast-forward, three-way with conflict markers, `--no-ff`, `--ff-only`, `--abort`, `--continue`) `tag` (`-a`, `-m`, `-d`, `-l`) |
+| Branches | `branch` (`-d`, `-D`, `-m`, `-v`, `-vv`, `-r`, `-a`, `--show-current`) `checkout` (`-b`, `-B`, `--detach`, `-- paths`) `switch` (`-c`, `-C`, `--detach`, `-`) `merge` (fast-forward, three-way with conflict markers, `--no-ff`, `--ff-only`, `--abort`, `--continue`) `tag` (`-a`, `-m`, `-d`, `-l`) |
 | Plumbing | `rev-parse` `rev-list` `ls-files` `cat-file` `config` (`--global`, `--local`, `--get`, `--unset`, `--list`), `git -C dir`, `git -c name=value` |
 
-Revisions: `HEAD`, `@`, branch and tag names, full or short ids, `~n`, `^n`, `^{tree}`, `rev:path`, `@{-1}`.
+Revisions: `HEAD`, `@`, branch, tag and remote-tracking names (`origin/main`, `origin`), full or short ids, `~n`, `^n`,
+`^{tree}`, `rev:path`, `@{-1}`, `@{u}`.
 `.gitignore` files (with `!`, `dir/`, `**` and anchored patterns) and `.git/info/exclude` apply.
 
 **Format.** The repository is git's own: zlib-compressed loose objects named by their SHA-1, a version 2 index, loose
 refs (packed-refs are read and updated), reflogs for `HEAD` and branches, and stash entries in `refs/stash`'s reflog.
-Real git reads what Topwater writes (`git fsck --strict` is clean) and Topwater reads what real git writes, except
-packfiles: a repository whose objects were packed (by `git gc` or a clone) gets a clear error.
+Real git reads what Topwater writes (`git fsck --strict` is clean) and Topwater reads what real git writes.
+
+**Packed repositories.** A repository copied in after `git clone` or `git gc` keeps its objects in
+`.git/objects/pack/*.pack` with a version 2 `.idx`; every command reads them (offset and reference deltas, 64-bit
+offsets), and new objects (commits, merges, stashes) are written loose next to the pack, as real git does between
+`gc` runs. Topwater never writes a pack: `git gc` and `git repack` say they are not available. A clone's
+remote-tracking branches (`refs/remotes/origin/*`) show in `branch -r`/`-a`, `log --decorate` and, through
+`branch.<name>.remote`/`.merge`, in `status` ("Your branch is ahead of 'origin/main' by 1 commit."), `status -sb` and
+`branch -vv`; `git checkout <name>` with only `origin/<name>` present creates the branch and sets its upstream, as real
+git does. Nothing is fetched: the remote-tracking branches stay where the clone left them.
 
 **Identity.** As in real git, a commit needs an email: from `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL`, `user.email`
 (`git config --global` writes `~/.gitconfig`) or `EMAIL`; otherwise `git commit` fails with git's "Please tell me who
@@ -114,9 +124,16 @@ commits read as about 120 MB).
 diffs that would take too long (they fall back to "all lines changed") are bounded, and long walks stop at the call's
 time limit. Everything under `.git` is untrusted: objects are checked against their ids, the index against its
 checksum, no path inside `.git` is followed through a symbolic link, and tree or index entries named `..`, `.git` or
-containing `/` are refused, so a hostile repository cannot write outside its work tree.
+containing `/` are refused, so a hostile repository cannot write outside its work tree. A pack is checked when first
+needed: the signatures, versions and SHA-1 checksums of both files, that they belong together, that the index's
+fanout is monotonic, its names sorted and every offset inside the pack; each object is checked against its id after
+reading. A pack or index file over the string limit, more than 256 packs, a delta chain over 4,096 deep, a cycle of
+reference deltas, an inflated size over the string limit or different from the one the entry states, and a delta that
+copies outside its base all fail with `fatal: ... is corrupt` (exit 128) instead of running away. Inflated objects are
+cached for reuse as delta bases, up to 32 MB per pack.
 
-**Differences from real git.** No packfiles, submodules, hooks, editor, pager or colors; reflogs are written but there
+**Differences from real git.** No writing packfiles (and no multi-pack-index, bitmaps or commit-graph use: they are
+ignored), no submodules, hooks, editor, pager or colors; reflogs are written but there
 is no `reflog` command or `@{n}`; `--graph` draws linear history only; when a change could be placed at several equal
 positions, diffs place it at the lowest one, where real git's indent heuristic sometimes picks another.
 
