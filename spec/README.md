@@ -88,6 +88,11 @@ what each does. What a real program *prints* when it runs (messages, version lin
 
 ## Adding or changing a command
 
+**Spec first, always.** A new command, subcommand, option or message starts as JSON in `spec/` and is regenerated
+before any port's code changes. No port hard-codes a summary, help text, option table or message. If the schema
+cannot express something a command needs (subcommands, an argument shape), extend `command.schema.json` and
+`gen.py` first, then write the command against it.
+
 1. Write or edit `spec/commands/<name>.json`. List only options Topwater accepts, with `ports` for the ones a port
    lacks (or `custom: true` for one the command reads itself before the shared parser), and describe each in your own
    words. Check behaviour against real ubuntu:24.04 with `tests/corpus/record.py`.
