@@ -186,6 +186,50 @@ var answer = await kernel.InvokePromptAsync("How many lines are in notes.txt?", 
 
 The model sees it as `shell-bash` (Semantic Kernel prefixes the plugin name), with the same description and schema.
 
+Tested with Semantic Kernel 1.82. For new agents Microsoft points to Agent Framework, below.
+
+### Microsoft Agent Framework
+
+Agent Framework (`Microsoft.Agents.AI`, the successor to Semantic Kernel agents and AutoGen) builds agents on
+`IChatClient` and takes `AITool`s, so the shell's function goes straight in:
+
+```csharp
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using Topwater;
+using Topwater.AI;
+
+var shell = new Shell();
+shell.Fs.WriteAllText("/home/agent/notes.txt", "one\ntwo\n");
+
+AIAgent agent = chatClient.AsAIAgent(instructions: "You are a helpful assistant.", tools: [shell.AsAIFunction()]);
+AgentSession session = await agent.CreateSessionAsync();
+AgentResponse response = await agent.RunAsync("How many lines are in notes.txt?", session);
+Console.WriteLine(response.Text);
+```
+
+The agent invokes the tool itself; there is no `UseFunctionInvocation` to add. Tested with `Microsoft.Agents.AI` 1.28.
+`examples/AgentFrameworkAgent` is a complete agent on OpenAI.
+
+### OpenAI and Anthropic SDKs
+
+Both official SDKs give an `IChatClient`, which then takes the function as above:
+
+```csharp
+IChatClient openai = new OpenAIClient(key).GetChatClient(model).AsIChatClient();   // package Microsoft.Extensions.AI.OpenAI
+IChatClient claude = new AnthropicClient().AsIChatClient(model);                   // package Anthropic
+```
+
+If you drive the OpenAI SDK without `IChatClient`, `shell.AsAIFunction().AsOpenAIChatTool()` (or `AsOpenAIResponseTool()`)
+gives its tool type; send the tool call's `command` to `BashTool.ExecuteAsync`. Tested with `OpenAI` 2.15 and `Anthropic`
+13.14, against a fake HTTP server.
+
+### MCP clients
+
+Clients that speak MCP (Claude Desktop, Claude Code, Cursor, VS Code, or your own `ModelContextProtocol` client) need no
+code: run [`topwater mcp`](#command-line-and-mcp-server), which serves the same `bash` tool over stdio. `Topwater.Mcp`
+is the other direction: it mounts MCP servers inside the shell.
+
 ## Command line and MCP server
 
 The `Topwater.Cli` package is a .NET global tool, `topwater`:

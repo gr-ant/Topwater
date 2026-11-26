@@ -181,7 +181,10 @@ Use one shell per conversation; a shell is not safe to share between threads.
 Adapters do the wiring for common frameworks:
 
 - **.NET:** with Microsoft.Extensions.AI, `options.Tools = [shell.AsAIFunction()]` (package `Topwater.AI`). Semantic
-  Kernel takes the same function: `kernel.Plugins.AddFromFunctions("shell", [shell.AsAIFunction().AsKernelFunction()])`.
+  Kernel takes the same function: `kernel.Plugins.AddFromFunctions("shell", [shell.AsAIFunction().AsKernelFunction()])`,
+  and so does Microsoft Agent Framework: `chatClient.AsAIAgent(tools: [shell.AsAIFunction()])`. The OpenAI and Anthropic
+  SDKs plug in through their `AsIChatClient()`; MCP clients use `topwater mcp`. See
+  [the reference](docs/reference.md#microsoft-agent-framework).
 - **Python:** LangChain and LlamaIndex, see [python/README.md](python/README.md#langchain-and-llamaindex).
 - **TypeScript:** Vercel AI SDK and OpenAI Agents, see
   [typescript/README.md](typescript/README.md#vercel-ai-sdk-and-openai-agents).
@@ -297,7 +300,8 @@ Without `URL`, WebShell listens on all network interfaces.
 
 `examples/` also has three complete agents: one triages issues through an MCP server (`McpAgent`), one writes a
 Word document with the real OfficeCLI (`OfficeAgent`), and one answers questions over CSV files with the real DuckDB
-(`DuckDbAgent`). They need a Gemini API key. `python/examples/` has Python examples, and the installed
+(`DuckDbAgent`). They need a Gemini API key. `AgentFrameworkAgent` is the shell in a Microsoft Agent Framework agent on
+OpenAI (`OPENAI_API_KEY`). `python/examples/` has Python examples, and the installed
 Python package has a web terminal: `python -m topwater.web --demo`. The TypeScript port builds a terminal and a
 recording viewer that run entirely [in the browser](typescript/README.md#in-the-browser).
 
