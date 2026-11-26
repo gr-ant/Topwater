@@ -8,6 +8,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "LICENSE",
     "THIRD-PARTY-NOTICES.md"
   ],
   "exports": {
@@ -29,6 +30,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p browser/tsconfig.json",
     "test": "vitest run",
     "build:browser": "node scripts/build-browser.mjs",

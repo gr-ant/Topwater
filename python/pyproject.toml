@@ -7,7 +7,8 @@ name = "topwater"
 version = "0.1.0"
 description = "Give your agent one `bash` tool backed by a simulated Linux shell and your own Python tools."
 readme = "README.md"
-license-files = ["THIRD-PARTY-NOTICES.md"]  # a copy of the repository's: jq's help text is in _spec.py
+license = "MIT"
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]  # copies of the repository's: jq's help text is in _spec.py
 requires-python = ">=3.10"
 dependencies = []
 keywords = ["agents", "llm", "tool-use", "bash", "shell", "sandbox", "simulation"]
