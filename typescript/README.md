@@ -1,7 +1,7 @@
 # Topwater for TypeScript
 
 One `bash` tool for your LLM agent, backed by a simulated Linux machine that runs inside your Node process or in the
-browser. No runtime dependencies. The same code runs in Node 22 or later and in browsers.
+browser. No runtime dependencies. The same code runs in Node 22.3 or later and in browsers.
 
 This page covers the TypeScript API. The [main README](../README.md) explains what Topwater is, and
 [docs/](../docs/README.md) is the reference; its samples are C#, and this package follows it except where
@@ -49,7 +49,9 @@ const toolResult = await BashTool.execute(shell, 'ls -la');
 | `shell.Fs.WriteAllText / WriteAllBytes` | `shell.fs.writeText / writeBytes` (also `readText`, `mkdir`, `chmod`, `setOwner`, ...) |
 | `shell.RegisterTools(program, specs, invoke)` | `shell.registerTools(program, specs, (tool, args) => ({ text, isError }))` |
 | `shell.MountMcpAsync(program, client)` | `await shell.mountMcp(program, client, { include })` with any MCP client that has `listTools`/`callTool` (the official SDK `Client` fits) |
+| `shell.AllowWeb(new WebPolicy { ... })` | `shell.allowWeb({ domains, methods, credentials, ... })`: [web access](../docs/web.md) for `curl` and `wget` |
 | `BashTool.ExecuteAsync(shell, cmd)` | `BashTool.execute(shell, cmd)` |
+| `BashTool.DescriptionFor(shell)` | `BashTool.descriptionFor(shell)` |
 
 A command handler gets a `CommandContext`: `args`, `stdout`/`stderr` writers, `stdinText`, `readLine()`, `fs`,
 `resolvePath()`, `checkTime()` (call it in long loops so the call's time limit can stop you) and `invoke()`. Throw

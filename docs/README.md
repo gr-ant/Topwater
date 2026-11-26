@@ -8,6 +8,7 @@ and say where each implementation differs.
 |---|---|
 | [The machine](machine.md) | The shell language, the built-in programs, `git`, files and permissions, documents, what is not there |
 | [Your programs](programs.md) | Your functions, JSON Schema tools, MCP servers, authenticated HTTP APIs and real host programs as commands |
+| [Web access](web.md) | `curl` and `wget` to the sites you allow: the policy, the guarantees, recordings |
 | [Connect to a model](integrations.md) | The tool definition, and the adapters for agent frameworks |
 | [Command line and MCP server](cli.md) | The `topwater` command: install, commands, options, MCP clients |
 | [Snapshots and recordings](snapshots-and-recordings.md) | Undo, fork, save and load; deterministic runs; record and replay; the `.topwater` file |
@@ -23,5 +24,6 @@ Elsewhere in the repository:
 | [spec/README.md](../spec/README.md) | The command spec: every command, option, help text and message, as JSON |
 | [spec/topwater-file](../spec/topwater-file/README.md) | JSON Schemas for the `.topwater` file |
 | [tests/corpus](../tests/corpus/README.md) | The cases recorded from real bash that all three implementations run |
+| [tests/web](../tests/web/README.md) | The `curl` and `wget` cases recorded from the real programs |
 | [CHANGELOG.md](../CHANGELOG.md) | What changed between releases |
 | [AGENTS.md](../AGENTS.md) | Rules for contributors, human or AI |

@@ -11,6 +11,7 @@ keep working. Its sections moved as follows:
 | Your own commands, MCP servers | [Your programs](programs.md) |
 | Authenticated API calls | [Your programs](programs.md#authenticated-api-calls) |
 | Real host programs | [Your programs](programs.md#real-host-programs) |
+| <a id="web-access"></a>Web access | [Web access](web.md) |
 | The tool description | [Connect to a model](integrations.md#the-tool-description) |
 | Microsoft.Extensions.AI, Semantic Kernel, Microsoft Agent Framework, OpenAI and Anthropic SDKs, MCP clients | [Connect to a model](integrations.md#microsoftextensionsai) |
 | Command line and MCP server | [Command line and MCP server](cli.md) |

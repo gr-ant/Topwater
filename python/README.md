@@ -44,7 +44,8 @@ output = shell.run("orders --status open | jq length").to_tool_output()
 # inside async code: output = await topwater.execute_tool(shell, command)
 ```
 
-- **Tool definition for your model:** `topwater.TOOL_NAME`, `TOOL_DESCRIPTION`, `TOOL_INPUT_SCHEMA`.
+- **Tool definition for your model:** `topwater.TOOL_NAME`, `TOOL_DESCRIPTION`, `TOOL_INPUT_SCHEMA`. On a shell with
+  [web access](../docs/web.md), use `topwater.tool_description(shell)`, which names the sites; the adapters do.
 - **Limits**, all on by default:
   `Shell(max_call_duration=120, max_file_system_bytes=128 << 20, max_string_bytes=32 << 20, ...)`. Option names are
   the C# ones in snake_case, and `max_call_duration` is in seconds. `ShellResult.trailer` holds the note a limit adds.
@@ -74,6 +75,9 @@ mount_mcp(shell, "files", StdioMcpClient(["npx", "-y", "@modelcontextprotocol/se
 from topwater.api import ApiEndpoint, register_api     # authenticated HTTP APIs
 register_api(shell, "api", {"jira": ApiEndpoint("https://acme.atlassian.net/rest/api/3",
                                                 auth=lambda: f"Bearer {secrets.get('jira')}", paths=["/issue/", "/search"])})
+
+from topwater import WebPolicy                         # web access: curl and wget to the sites you list
+shell.allow_web(WebPolicy(domains=["api.github.com", "*.wikipedia.org"]))
 
 from topwater.host import bubblewrap, register_host_command   # real host programs
 duckdb = register_host_command(shell, "duckdb", launcher=bubblewrap())   # duckdb.close() removes its folder

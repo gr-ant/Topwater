@@ -111,7 +111,7 @@ Inside async code, use `await topwater.execute_tool(shell, command)` instead of 
 
 ### TypeScript
 
-Requires Node 22 or later. No runtime dependencies; the package is an ES module. Not on npm yet, so build it from
+Requires Node 22.3 or later. No runtime dependencies; the package is an ES module. Not on npm yet, so build it from
 the repository:
 
 ```bash
@@ -200,6 +200,7 @@ built-in tools and the developer's own Claude Code settings left out. See
 | Tools described by JSON Schema | `shell.RegisterTools(...)` | `register_tools(shell, ...)` | `shell.registerTools(...)` |
 | An MCP server | `shell.MountMcpAsync(...)` (package `Topwater.Mcp`) | `topwater.mcp.mount_mcp(shell, ...)` | `shell.mountMcp(...)` |
 | An HTTP API, credentials hidden from the model | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `shell.registerApi(...)` |
+| [Web access](docs/web.md) to sites you list, through `curl` and `wget` | `shell.AllowWeb(new WebPolicy { ... })` | `shell.allow_web(WebPolicy(...))` | `shell.allowWeb({ ... })` |
 | A real program from your machine | `shell.RegisterHostCommand("duckdb")` | `register_host_command(shell, "duckdb")` | not yet |
 
 An MCP server becomes one program with a subcommand per tool (`github list-issues --repo acme/api`), so its tool
@@ -245,11 +246,9 @@ What is not there:
 | | |
 |---|---|
 | Python, Node, Perl, compilers | `command not found`, as bash prints it |
-| Network | None: no `curl`, `wget` or `ssh`, and `git clone`, `fetch` and `push` say so. The agent reaches outside only through the APIs, MCP servers and host programs you register |
+| Network | None by default. `curl` and `wget` exist and fail as on an offline machine, until you [allow a list of sites](docs/web.md). There is no `ssh`, and `git clone`, `fetch` and `push` say there is no network |
 | Packages | `apt` and `dpkg` exist only to say that nothing can be installed |
 | Background jobs and job control | `cmd &` runs to completion |
-
-<!-- Web access: when allow-listed web access lands, add it to the Network row above. -->
 
 [The machine](docs/machine.md) lists the shell features, every command and the
 [differences from bash](docs/machine.md#not-supported).
@@ -263,7 +262,7 @@ the cases it does not pass yet.
 ## Safety
 
 **Simulated.** Shell commands are interpreted in your process and read and write only the in-memory filesystem.
-They cannot open host files, start processes or use the network.
+They cannot open host files, start processes or use the network, unless you allow a list of sites with `AllowWeb`.
 
 **Limited.** Every limit is on by default, with the same defaults in all three. When one is reached, the model gets
 a message that says what was cut off and what to do instead:
@@ -283,6 +282,8 @@ memory use in .NET.
 **Real, and your responsibility:**
 
 - **Your functions, MCP servers and registered APIs do real work.** Expose only what you would let the agent do.
+- **Web access reaches the sites you list,** and the agent can send what it has read to any of them that accepts
+  the methods you allow. Keep it to `GET` and exact hosts. See [Web access](docs/web.md#what-it-guarantees).
 - **Host programs run with your process's permissions.** Topwater does not sandbox them unless you ask:
   `Launcher = HostSandbox.Bubblewrap()` in .NET, or `launcher=bubblewrap()` in Python, runs the program under
   bubblewrap with a private copy of the agent's files and no network. Read
@@ -302,14 +303,14 @@ Topwater is in preview. APIs may change before 1.0. [CHANGELOG.md](CHANGELOG.md)
 | **TypeScript** | [`typescript/`](typescript/README.md) | not on npm; build from the repository |
 | **Browser** | [demo](https://gr-ant.github.io/Topwater/), [`typescript/`](typescript/README.md#in-the-browser) | the TypeScript build in a Web Worker |
 
-This README describes `main`. `git`, symbolic links and the `.topwater` recording file are newer than the published
-.NET packages; to use them now, reference the projects in `src/` from a clone. The `bc` calculator is in .NET only,
-and the tables above show what Python and TypeScript do not have yet.
+This README describes `main`. `git`, web access, symbolic links and the `.topwater` recording file are newer than
+the published .NET packages; to use them now, reference the projects in `src/` from a clone. The `bc` calculator is
+in .NET only, and the tables above show what Python and TypeScript do not have yet.
 
 ## Documentation
 
 - [docs/](docs/README.md): [the machine](docs/machine.md), [your programs](docs/programs.md),
-  [connecting to a model](docs/integrations.md), [command line and MCP server](docs/cli.md),
+  [web access](docs/web.md), [connecting to a model](docs/integrations.md), [command line and MCP server](docs/cli.md),
   [snapshots and recordings](docs/snapshots-and-recordings.md), [containers](docs/containers.md) and
   [limits and safety](docs/limits.md). Samples use the .NET API.
 - [Python](python/README.md) and [TypeScript](typescript/README.md): each package's API, its framework adapters and

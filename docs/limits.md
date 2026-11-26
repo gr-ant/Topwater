@@ -8,14 +8,16 @@
 ## What is simulated, and what is real
 
 **Simulated.** Shell commands are interpreted in your process and read and write only the in-memory filesystem.
-They cannot open host files, start processes or use the network. On a shell with nothing registered, nothing the agent
-types reaches the host.
+They cannot open host files, start processes or use the network. On a shell with nothing registered and no web
+access allowed, nothing the agent types reaches the host.
 
 **Real, and your responsibility:**
 
 - **Your functions, MCP servers and registered APIs do real work.** Expose only what you would let the agent do.
   [Authenticated API calls](programs.md#authenticated-api-calls) lists what `RegisterApi` guarantees and what it does
   not.
+- **Web access reaches the sites you list.** The agent can read anything there, and send what it has read to any
+  allowed site with an allowed method. [Web access](web.md) lists the guarantees.
 - **Host programs run with your process's permissions.** Topwater does not sandbox them unless you ask. Read
   [Real host programs](programs.md#real-host-programs) before registering one.
 - **Files you load are untrusted.** Snapshots, recordings and container imports are checked and bounded

@@ -25,7 +25,9 @@ If your framework is listed below, an adapter does this wiring for you.
 ## The tool description
 
 The default description tells the model the truth: it is in a sandboxed shell, git works on local repositories,
-Python, the network and package installation are not available, and your programs are live. In testing this beat
+Python, the network and package installation are not available, and your programs are live. On a shell with
+[web access](web.md#the-tool-description) it names the sites and methods `curl` and `wget` can reach
+instead. In testing this beat
 both pretending to be an ordinary machine and announcing "this is a simulation". Every adapter lets you pass your
 own description; the wording matters, so measure before you change it.
 

@@ -47,6 +47,7 @@ do not: they reset after every call, so one stray `set -e` cannot affect later c
 | Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
 | System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `clear` `sudo` `su` `apt` `apt-get` `apt-cache` `dpkg` (the six from `sudo` on only refuse; see [Programs that are not here](#programs-that-are-not-here)) |
 | Version control | `git`: see [git](#git) |
+| Web | `curl` `wget`: offline unless the host allows sites; see [Network](#network) |
 
 `help` lists every program, yours included. Standard tools answer `--help` and `--version`. The options each command
 accepts, and which implementation accepts them, are in [`spec/commands`](../spec/README.md).
@@ -190,11 +191,16 @@ out as serial numbers. Only files are byte-exact; data sent through a pipe is tr
 
 ## Network
 
-The machine has no network. `git clone`, `fetch`, `pull` and `push` say so, and there is no `curl`, `wget` or `ssh`.
-The agent reaches the outside only through what the host registers: [an HTTP API](programs.md#authenticated-api-calls),
-[an MCP server](programs.md#mcp-servers) or [a real host program](programs.md#real-host-programs).
+By default the machine has no network. `curl` and `wget` exist, but every host fails to resolve
+(`curl: (6) Could not resolve host`), as on a machine that is offline. `git clone`, `fetch`, `pull` and `push` say
+there is no network, and there is no `ssh`.
 
-<!-- Web access: when allow-listed web access lands, document it here. -->
+The host can open it in four ways:
+
+- [Web access](web.md): `curl` and `wget` reach the sites the host lists, and only those.
+- [An HTTP API](programs.md#authenticated-api-calls) called by alias, with a credential the agent never sees.
+- [An MCP server](programs.md#mcp-servers).
+- [A real host program](programs.md#real-host-programs).
 
 ## Programs that are not here
 
@@ -211,7 +217,8 @@ What each commonly tried program does:
 | `dpkg` | exists; prints `dpkg: error: packages cannot be installed or listed ...` and exits 2 | same, with dpkg's status |
 | `sudo apt ...`, `sudo dpkg ...` | the package manager's own message | more useful than the sudoers refusal every other `sudo` command gets |
 | `snap` | command not found | not in Ubuntu's server or container images either |
-| `curl`, `wget`, `ssh` | command not found | the machine has no [network](#network) |
+| `curl`, `wget` | exist; fail with `Could not resolve host` unless the host allowed the site | see [Network](#network) |
+| `ssh` | command not found | the machine has no [network](#network) |
 
 ## Not supported
 
@@ -219,7 +226,7 @@ What each commonly tried program does:
 - Job control (`fg`, `bg`, `%1`), `>(...)`, `coproc`, `compgen`/`complete` and `caller`.
 - Shell commands run from inside `awk` (`print | "cmd"`).
 - Group permissions: a file has an owner and no group of its own.
-- A real `python`, and network access.
+- A real `python`, and network access beyond [web access](web.md) to the sites the host allows.
 
 `sleep` really waits, up to the call's time limit, unless the shell has a
 [virtual clock](snapshots-and-recordings.md#deterministic-runs).

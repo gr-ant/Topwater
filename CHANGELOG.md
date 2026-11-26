@@ -19,13 +19,16 @@ Everything on `main` since `0.1.0-preview.2`.
   `(run 'help' ...)` hint after it.
 - **Error messages follow bash and GNU.** The shell's own errors start `bash: line N:`, and file and usage errors
   use the GNU wording. Code that matched Topwater's earlier messages needs a look.
-- **The default tool description changed:** it now says that git works on local repositories.
+- **The default tool description changed:** it now says that git works on local repositories, and on a shell with
+  web access it names the sites and methods. Integrations compute it per shell (`BashTool.DescriptionFor(shell)`,
+  `tool_description(shell)`, `BashTool.descriptionFor(shell)`) unless you pass your own.
+- **`curl` and `wget` exist.** Without a web policy they fail as on an offline machine (`Could not resolve host`,
+  exit 6 and 4) where they used to be `command not found` (127).
+- **TypeScript needs Node 22.3 or later** (was 22).
 - **The CLI refuses a recording as `--state`,** because the state file is rewritten as the machine alone. Use
   `--from`, or `topwater import`.
 - **The npm package declares no framework peers.** `ai` and `@openai/agents` are no longer optional peer
   dependencies; install the SDK you use. The package now packs only `dist`.
-
-<!-- Web access: when allow-listed web access lands, add its notes here (curl and wget, the web policy). -->
 
 ### The machine
 
@@ -39,6 +42,20 @@ Everything on `main` since `0.1.0-preview.2`.
 - **`apt`, `apt-get`, `apt-cache` and `dpkg`** exist and say that nothing can be installed.
 - **Closer to the real tools:** `cmp`, `diff -r`, `sed` `r` and `R`, `cp --backup`, `date -I` and `%:z`,
   `ls -s`, `--time-style` and `--full-time`, `umask`, `env` options, `awk` division by zero as in mawk.
+
+### Web access
+
+- **Allow-listed web access** in all three implementations: `shell.AllowWeb(new WebPolicy { ... })`,
+  `shell.allow_web(WebPolicy(...))`, `shell.allowWeb({ ... })`. `curl` and `wget` reach the hosts you list
+  (`name`, `*.name`, `name:port`) with the methods you list, `GET` by default.
+- **Guarantees:** internal and private addresses are always refused, connections go to the address that was
+  checked, every redirect is checked like the first URL, and nothing of your process's proxy settings or cookies is
+  used.
+- **Credentials per host,** added in your code and scrubbed from what comes back. For such a host a compressed
+  body is decoded before the scrub and the agent's `Range` is dropped. `RegisterApi` has the same fix.
+- **A blocked host explains itself** by default (`Blocked by the web policy: ... is not an allowed host`), so the
+  agent stops retrying; `ExplainBlocked = false` makes it look like an unknown host.
+- **Recordings hold the web exchanges,** and a replay serves them without touching the network.
 
 ### Files, recordings and containers
 

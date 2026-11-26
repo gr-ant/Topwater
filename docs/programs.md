@@ -9,6 +9,7 @@ real work when the agent calls it, so expose only what you would let the agent d
 | [Tools described by a JSON Schema](#tools-described-by-a-json-schema) | `shell.RegisterTools(...)` | `register_tools(shell, ...)` | `shell.registerTools(...)` |
 | [An MCP server](#mcp-servers) | `shell.MountMcpAsync(...)` (package `Topwater.Mcp`) | `topwater.mcp.mount_mcp(shell, ...)` | `shell.mountMcp(...)` |
 | [An HTTP API](#authenticated-api-calls), credentials hidden from the agent | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `shell.registerApi(...)` |
+| [Web access](web.md) to sites you list, through `curl` and `wget` | `shell.AllowWeb(new WebPolicy { ... })` | `shell.allow_web(WebPolicy(...))` | `shell.allowWeb({ ... })` |
 | [A real program from your machine](#real-host-programs) | `shell.RegisterHostCommand(...)` | `register_host_command(shell, ...)` | not yet |
 
 The samples below are C#. [python/README.md](../python/README.md) and [typescript/README.md](../typescript/README.md)
@@ -78,8 +79,7 @@ shell.RegisterTools("crm", specs, async (tool, arguments, ct) => new ToolResult(
 
 ## Authenticated API calls
 
-The machine has no [network](machine.md#network). `RegisterApi` lets the agent call a few real HTTP APIs that you
-choose, with credentials it never sees:
+`RegisterApi` lets the agent call a few real HTTP APIs that you choose, with credentials it never sees:
 
 ```csharp
 shell.RegisterApi("api", new Dictionary<string, ApiEndpoint>

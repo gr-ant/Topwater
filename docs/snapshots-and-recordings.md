@@ -151,6 +151,9 @@ exit code and trailer call by call. The `ReplayReport` lists the calls that ran,
 A recording made with a virtual clock and a seed (`recording.IsDeterministic`) replays exactly on the same Topwater
 version. One made without them still replays, but needs `ReplayNormalizers.Volatile` for anything that prints the time.
 
+A shell with [web access](web.md#recordings) records every request and its response with the call. A shell built
+from the recording serves those responses in order and never touches the network.
+
 ### The machine at any turn
 
 `await recording.ShellAtAsync(i)` gives a shell as it was right after call `i` (-1: before the first). It restores the

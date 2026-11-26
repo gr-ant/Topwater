@@ -37,7 +37,8 @@ shell.Register(new Tools());   // agent: orders --status open | jq -r '.[].Custo
 
 Commands are interpreted in your process and only touch the in-memory filesystem. Runaway loops, slow regular
 expressions, oversized output, calls that run too long and runaway memory or disk use are all cut off. Nothing the
-agent types reaches your machine unless you register a real host program, an MCP server or an HTTP API.
+agent types reaches your machine or the network unless you register a real host program, an MCP server or an HTTP
+API, or allow a list of web sites with `AllowWeb`.
 
 ## More
 
