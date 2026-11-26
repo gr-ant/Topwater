@@ -1,9 +1,9 @@
 # Topwater.Containers
 
-Move a [Topwater](https://github.com/gr-ant/Topwater) machine into a real Docker container and back. Build an image from
-a snapshot to give an agent real programs (python, git, compilers) on the same files, user, working directory and
-environment. Or import a container as a snapshot, so an agent can investigate a copy of a real machine in the simulation,
-where it can be forked and rewound.
+Move a [Topwater](https://github.com/gr-ant/Topwater) machine into a real Docker container and back. Build an image
+from a snapshot to give an agent real programs (python, git, compilers) on the same files, user, working directory and
+environment. Or import a container as a snapshot, so an agent can investigate a copy of a real machine in the
+simulation, where it can be forked and rewound.
 
 ```bash
 dotnet add package Topwater.Containers --prerelease

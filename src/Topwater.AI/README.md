@@ -1,7 +1,7 @@
 # Topwater.AI
 
-Use a [Topwater](https://github.com/gr-ant/Topwater) shell as the one `bash` tool of any Microsoft.Extensions.AI `IChatClient`
-(OpenAI, Azure OpenAI, Ollama, ...).
+Use a [Topwater](https://github.com/gr-ant/Topwater) shell as the one `bash` tool of any Microsoft.Extensions.AI
+`IChatClient` (OpenAI, Azure OpenAI, Ollama, ...).
 
 ```bash
 dotnet add package Topwater.AI --prerelease
@@ -37,9 +37,10 @@ AIAgent agent = chatClient.AsAIAgent(instructions: "You are a helpful assistant.
 Console.WriteLine(await agent.RunAsync("How many lines are in notes.txt?"));
 ```
 
-The OpenAI and Anthropic .NET SDKs give an `IChatClient` (`chatClient.AsIChatClient()` from Microsoft.Extensions.AI.OpenAI,
-`anthropicClient.AsIChatClient(model)` from Anthropic). For MCP clients such as Claude Desktop or VS Code, run
-`topwater mcp` (package Topwater.Cli) instead.
+The OpenAI and Anthropic .NET SDKs give an `IChatClient` (`chatClient.AsIChatClient()` from
+Microsoft.Extensions.AI.OpenAI, `anthropicClient.AsIChatClient(model)` from Anthropic). For MCP clients such as Claude
+Desktop or VS Code, run `topwater mcp` (package Topwater.Cli) instead.
 
 The function is named `bash` and takes one `command` string. Calls from the same shell run one at a time.
-See [Connect to a model](https://github.com/gr-ant/Topwater/blob/main/docs/integrations.md#microsoftextensionsai) for details.
+See [Connect to a model](https://github.com/gr-ant/Topwater/blob/main/docs/integrations.md#microsoftextensionsai) for
+details.

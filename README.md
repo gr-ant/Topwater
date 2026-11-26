@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  One <code>bash</code> tool for your LLM agent, backed by a simulated Linux shell that runs inside your application.
+  One <code>bash</code> tool for your LLM agent, backed by a simulated Linux machine that runs inside your application.
 </p>
 
 <p align="center">
@@ -55,6 +55,8 @@ Requires .NET 8 or later.
 ```bash
 dotnet add package Topwater --prerelease
 ```
+
+This installs `0.1.0-preview.2`; [Status](#status) says what `main` has that it does not.
 
 ```csharp
 using Topwater;
@@ -286,8 +288,8 @@ memory use in .NET.
   bubblewrap with a private copy of the agent's files and no network. Read
   [Real host programs](docs/programs.md#real-host-programs) before registering one.
 - **Python and TypeScript cannot always interrupt a single regular-expression match.** Run the shell in a separate
-  process or worker thread if you need a hard stop. See
-  [the differences](docs/limits.md#differences-in-python-and-typescript).
+  process or worker thread if you need a hard stop. See [the
+  differences](docs/limits.md#differences-in-python-and-typescript).
 
 ## Status
 

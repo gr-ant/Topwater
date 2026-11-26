@@ -84,8 +84,9 @@ own `openFailed` reports an unreadable file as `{file:shell}: {errno}`, and gene
 
 Summaries, help texts and option descriptions are our own words about what Topwater does, short and factual; never
 copy a real program's `--help`, `help` or manual text (the project is clean-room). An option Topwater accepts but does
-nothing with says "accepted and ignored" and carries `"ignored"`. `ports` says which implementations accept it; the corpus is the record of
-what each does. What a real program *prints* when it runs (messages, version lines) is behaviour and is matched.
+nothing with says "accepted and ignored" and carries `"ignored"`. `ports` says which implementations accept it; the
+corpus is the record of what each does. What a real program *prints* when it runs (messages, version lines) is
+behaviour and is matched.
 
 ## Adding or changing a command
 

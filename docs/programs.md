@@ -78,8 +78,8 @@ shell.RegisterTools("crm", specs, async (tool, arguments, ct) => new ToolResult(
 
 ## Authenticated API calls
 
-The machine has no [network](machine.md#network). `RegisterApi` lets the agent call a few real HTTP APIs that you choose, with
-credentials it never sees:
+The machine has no [network](machine.md#network). `RegisterApi` lets the agent call a few real HTTP APIs that you
+choose, with credentials it never sees:
 
 ```csharp
 shell.RegisterApi("api", new Dictionary<string, ApiEndpoint>

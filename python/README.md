@@ -3,8 +3,8 @@
 One `bash` tool for your LLM agent, backed by a simulated Linux machine that runs inside your Python process. Your
 functions are commands on it. Python 3.10 or later, standard library only.
 
-This page covers the Python API. The [main README](../README.md) explains what Topwater is, and [docs/](../docs/README.md)
-is the reference; its samples are C#, and the names below are their Python equivalents.
+This page covers the Python API. The [main README](../README.md) explains what Topwater is, and
+[docs/](../docs/README.md) is the reference; its samples are C#, and the names below are their Python equivalents.
 
 - [Install](#install)
 - [Quickstart](#quickstart)
@@ -28,6 +28,8 @@ or, from a clone, `pip install ./python`.
 
 ## Quickstart
 
+`db` stands for your own data; the [main README](../README.md#python) has a version that runs as it is.
+
 ```python
 import topwater
 from topwater import Shell, command
@@ -38,14 +40,14 @@ class Tools:
         return db.orders(status, limit)
 
 shell = Shell().register(Tools())
-output = await topwater.execute_tool(shell, "orders --status open | jq length")
-# or, outside async code: shell.run(command).to_tool_output()
+output = shell.run("orders --status open | jq length").to_tool_output()
+# inside async code: output = await topwater.execute_tool(shell, command)
 ```
 
 - **Tool definition for your model:** `topwater.TOOL_NAME`, `TOOL_DESCRIPTION`, `TOOL_INPUT_SCHEMA`.
-- **Limits**, all on by default: `Shell(max_call_duration=120, max_file_system_bytes=128 << 20, max_string_bytes=32 << 20, ...)`.
-  Option names are the C# ones in snake_case, and `max_call_duration` is in seconds. `ShellResult.trailer` holds the
-  note a limit adds.
+- **Limits**, all on by default:
+  `Shell(max_call_duration=120, max_file_system_bytes=128 << 20, max_string_bytes=32 << 20, ...)`. Option names are
+  the C# ones in snake_case, and `max_call_duration` is in seconds. `ShellResult.trailer` holds the note a limit adds.
 - **`shell.run()`** wraps `asyncio.run`. Inside an event loop use `await shell.run_async()`.
 - **Web terminal:** `python -m topwater.web --demo`, then open http://127.0.0.1:8000.
 
@@ -216,34 +218,37 @@ mode, and Microsoft points new projects to Microsoft Agent Framework.
 
 ## Where Python differs
 
-- **Not ported yet:** `bc`, the virtual clock and random seed ([deterministic runs](../docs/snapshots-and-recordings.md#deterministic-runs)),
-  and replaying a recording as a test or on real bash in Docker (`Topwater.Replay`).
-- **Errors.** Snapshot load errors are `topwater.snapshot.SnapshotError` (a `ValueError`; C#'s `InvalidDataException`) and
-  `SnapshotVersionError` (C#'s `NotSupportedException`); a bad recording raises `RecordingError`, a `SnapshotError`.
+- **Not ported yet:** `bc`, the virtual clock and random seed ([deterministic
+  runs](../docs/snapshots-and-recordings.md#deterministic-runs)), and replaying a recording as a test or on real bash
+  in Docker (`Topwater.Replay`).
+- **Errors.** Snapshot load errors are `topwater.snapshot.SnapshotError` (a `ValueError`; C#'s `InvalidDataException`)
+  and `SnapshotVersionError` (C#'s `NotSupportedException`); a bad recording raises `RecordingError`, a
+  `SnapshotError`.
 - **Clock.** Without a virtual clock or random seed, Python writes no `clock` or `random` and ignores them when
-  loading (after checking them). A recording's `start_time` and `random_seed` are kept and written back, never used, so a
-  replay here compares wall-clock output (pass `normalize=`). A call's `time` is the wall clock when it started.
-- **Containers.** `topwater.containers` is synchronous (it shells out to the docker CLI, and an import runs `session.sh` with
-  `Shell.run`), so call it outside a running event loop. Names: `to_build_context`, `build_image`, `from_container`,
-  `from_image`, `from_tar(rootfs, ContainerConfig(user, working_dir, env), changes, options)`, `docker_available()`;
-  `ImportOptions(paths, include_binaries, restore_session, limits)` where `limits` is a dict of `Shell()` arguments.
-  Bad container data (a malformed archive, one over a limit, a time or owner no snapshot can hold) raises
-  `InvalidContainerData`, docker failures `ContainerError`. The export quotes every name in `setup.sh`, leaves out
-  account names starting with `-`, and refuses a base image name with a line break.
-- **MCP.** `topwater.mcp` is a small standard-library client for servers spoken to over stdio; `mount_mcp` accepts any object
-  with `list_tools()` and `call_tool(name, arguments)` returning MCP's dict shapes, so the official `mcp` SDK adapts in
-  a few lines.
-- **APIs.** `register_api` takes a `transport` function `(method, url, headers, body, timeout, limit) -> (status, reason,
-  headers, body)` in place of an `HttpMessageHandler`. The default uses `urllib` with redirects disabled; a transport
-  you pass must not follow redirects either (it can't be checked).
-- **Regular expressions.** The standard `re` module has no timeout, but it checks for signals while it backtracks. On the main thread, a grep,
-  sed, awk or `[[ =~ ]]` match runs under a one-shot `SIGALRM` for the time the call has left, so one catastrophically
-  backtracking match (`grep -E '(a+)+$'` on a long run of `a`s) stops at the call's time limit. The alarm is set only
-  around the match, and only when the host has no `SIGALRM` handler or interval timer of its own; both are left as
-  they were. In a worker thread, on Windows, or when the host uses `SIGALRM`, such a match runs to completion and the
-  time limit is checked between lines, records and steps.
-- **Nesting and memory.** Nesting is bounded by Python's recursion limit instead of the .NET stack. Memory use has not been measured; text is
-  held as Python strings.
+  loading (after checking them). A recording's `start_time` and `random_seed` are kept and written back, never used,
+  so a replay here compares wall-clock output (pass `normalize=`). A call's `time` is the wall clock when it started.
+- **Containers.** `topwater.containers` is synchronous (it shells out to the docker CLI, and an import runs
+  `session.sh` with `Shell.run`), so call it outside a running event loop. Names: `to_build_context`, `build_image`,
+  `from_container`, `from_image`, `from_tar(rootfs, ContainerConfig(user, working_dir, env), changes,
+  options)`, `docker_available()`; `ImportOptions(paths, include_binaries, restore_session,
+  limits)` where `limits` is a dict of `Shell()` arguments. Bad container data (a malformed archive, one over a limit,
+  a time or owner no snapshot can hold) raises `InvalidContainerData`, docker failures `ContainerError`. The export
+  quotes every name in `setup.sh`, leaves out account names starting with `-`, and refuses a base image name with a
+  line break.
+- **MCP.** `topwater.mcp` is a small standard-library client for servers spoken to over stdio; `mount_mcp` accepts any
+  object with `list_tools()` and `call_tool(name, arguments)` returning MCP's dict shapes, so the official `mcp` SDK
+  adapts in a few lines.
+- **APIs.** `register_api` takes a `transport` function `(method, url, headers, body, timeout, limit) -> (status,
+  reason, headers, body)` in place of an `HttpMessageHandler`. The default uses `urllib` with redirects disabled; a
+  transport you pass must not follow redirects either (it can't be checked).
+- **Regular expressions.** The standard `re` module has no timeout, but it checks for signals while it backtracks. On
+  the main thread, a grep, sed, awk or `[[ =~ ]]` match runs under a one-shot `SIGALRM` for the time the call has
+  left, so one catastrophically backtracking match (`grep -E '(a+)+$'` on a long run of `a`s) stops at the call's time
+  limit. The alarm is set only around the match, and only when the host has no `SIGALRM` handler or interval timer of
+  its own; both are left as they were. In a worker thread, on Windows, or when the host uses `SIGALRM`, such a match
+  runs to completion and the time limit is checked between lines, records and steps.
+- **Nesting and memory.** Nesting is bounded by Python's recursion limit instead of the .NET stack. Memory use has not
+  been measured; text is held as Python strings.
 
 ## Development
 

@@ -1,8 +1,9 @@
 # Shared test corpus
 
-About 2,000 cases in 32 areas: one copy of the recorded shell behaviour, run by all three implementations: C# (`tests/Topwater.Tests/CorpusTests.cs`),
-Python (`python/tests/test_corpus.py`) and TypeScript (`typescript/test/corpus.test.ts`). Change behaviour here, never in
-a port's own copy, so the implementations cannot drift apart.
+About 2,000 cases in 32 areas, recorded from real bash and the GNU tools. There is one copy, run by all three
+implementations: C# (`tests/Topwater.Tests/CorpusTests.cs`), Python (`python/tests/test_corpus.py`) and TypeScript
+(`typescript/test/corpus.test.ts`). Change behaviour here, never in a port's own copy, so the implementations cannot
+drift apart.
 
 ## Format
 
@@ -55,11 +56,10 @@ python3 tests/corpus/record.py ls-long --agent 'touch -d 2020-01-01 f; ls -l'   
 python3 tests/corpus/record.py git --git 'git init -q r && git -C r status'     # an image with git, fixed identity and dates
 ```
 
-The tool runs the script as `bash -c` in an empty `/tmp/w` (`TZ=UTC`, `LC_ALL=C.UTF-8`, no network, a time limit),
-and appends
-`{id, script, stdout, exitCode, quiet}` with the real output. Keep scripts independent of the machine: no `$USER`,
-`$HOME`, `$PWD` beyond `/tmp/w`, hostnames, clocks or PIDs, since the simulated machine differs there on purpose. Then run
-the three suites; a case a port cannot pass yet goes in its skip list.
+The tool runs the script as `bash -c` in an empty `/tmp/w` (`TZ=UTC`, `LC_ALL=C.UTF-8`, no network, a time limit), and
+appends `{id, script, stdout, exitCode, quiet}` with the real output. Keep scripts independent of the machine: no
+`$USER`, `$HOME`, `$PWD` beyond `/tmp/w`, hostnames, clocks or PIDs, since the simulated machine differs there on
+purpose. Then run the three suites; a case a port cannot pass yet goes in its skip list.
 
 ## Skip lists
 

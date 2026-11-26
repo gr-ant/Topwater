@@ -67,10 +67,11 @@ regex gets GNU's message.
 
 ## git
 
-`git` is Topwater's own implementation of the common commands of git 2.43, for repositories in the machine. There is no
-network: `clone`, `fetch`, `pull`, `push` and `submodule` answer that, `remote` lists nothing, and less common local
-commands (`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are not available and name a substitute. `git help` lists what is there and
-`git help <command>` describes each one; options are in [`spec/commands/git.json`](../spec/commands/git.json).
+`git` is Topwater's own implementation of the common commands of git 2.43, for repositories in the machine. There is
+no network: `clone`, `fetch`, `pull`, `push` and `submodule` answer that, `remote` lists nothing, and less common
+local commands (`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are not available and name a substitute.
+`git help` lists what is there and `git help <command>` describes each one; options are in
+[`spec/commands/git.json`](../spec/commands/git.json).
 
 | | |
 |---|---|
@@ -114,8 +115,8 @@ time limit. Everything under `.git` is untrusted: objects are checked against th
 checksum, no path inside `.git` is followed through a symbolic link, and tree or index entries named `..`, `.git` or
 containing `/` are refused, so a hostile repository cannot write outside its work tree.
 
-**Differences from real git.** No packfiles, submodules, hooks, editor, pager or colors; reflogs are written but
-there is no `reflog` command or `@{n}`; `--graph` draws linear history only; when a change could be placed at several equal
+**Differences from real git.** No packfiles, submodules, hooks, editor, pager or colors; reflogs are written but there
+is no `reflog` command or `@{n}`; `--graph` draws linear history only; when a change could be placed at several equal
 positions, diffs place it at the lowest one, where real git's indent heuristic sometimes picks another.
 
 ## Files and permissions
@@ -152,7 +153,8 @@ The machine looks like an Ubuntu 24.04 install that has been in use for a while:
 - **`/etc`.** `os-release` (a link to `/usr/lib/os-release`, as on Ubuntu), `lsb-release`, `issue`, `shells`,
   `debian_version`, `passwd`, `group`, `hosts`, `profile`, `bash.bashrc`, `profile.d` and the skeleton dotfiles in
   `/etc/skel`.
-- **`/proc`.** `cpuinfo` and `meminfo` agree with `nproc` and `free`. `/proc/self` points at the shell's own process (`$$`).
+- **`/proc`.** `cpuinfo` and `meminfo` agree with `nproc` and `free`. `/proc/self` points at the shell's own process
+  (`$$`).
 - **Programs.** `/bin` and `/usr/bin` list every program, yours included, with plausible sizes and install dates.
   Shell built-ins such as `cd` and `eval` have no file there, as on a real system. Commands are found through `PATH`,
   with bash's `hash` table.

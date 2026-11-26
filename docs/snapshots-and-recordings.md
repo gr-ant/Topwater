@@ -170,12 +170,12 @@ public Task Todo_session_still_behaves() =>
     Replay.AssertMatches("recordings/todo.topwater", configure: s => s.Register(new OrderTools()));
 ```
 
-A relative path is relative to the test's source file, so recordings sit next to the tests without being copied to
-the output folder. A deterministic recording is compared exactly; others with `ReplayNormalizers.Volatile`. When a
-change is intended, run the tests with `TOPWATER_RERECORD=1`: `AssertMatches` then rewrites each file with what this
-Topwater returns instead of comparing (header, metadata and start kept; snapshots retaken where there were some),
-as a `.topwater` file even if it was an older `.jsonl` one.
-Review the diff and commit it. `recording.RerecordAsync(target)` does the same in code.
+A relative path is relative to the test's source file, so recordings sit next to the tests without being copied to the
+output folder. A deterministic recording is compared exactly; others with `ReplayNormalizers.Volatile`. When a change
+is intended, run the tests with `TOPWATER_RERECORD=1`: `AssertMatches` then rewrites each file with what this Topwater
+returns instead of comparing (header, metadata and start kept; snapshots retaken where there were some), as a
+`.topwater` file even if it was an older `.jsonl` one. Review the diff and commit it.
+`recording.RerecordAsync(target)` does the same in code.
 
 ### Real bash in Docker
 
@@ -192,18 +192,19 @@ await using var linux = await DockerTarget.StartAsync(recording.Start, new Docke
 var report = await recording.ReplayAsync(linux, new ReplayOptions { Normalize = ReplayNormalizers.Volatile });
 ```
 
-The container has no network unless `Network = true`, 1 GB of memory and no swap, one CPU, 512 processes, files of at most
-1 GB, no capabilities but `CHOWN`, `DAC_OVERRIDE` and `FOWNER` (which the root setup step needs to write files with their
-owners), and `no-new-privileges`, so a setuid program gains nothing. The 1 GB limit is per file: nothing caps the
-container's total disk use, so a recording can still fill the docker host's disk. Commands run by number, uid and gid
-1000 (the snapshot's `/etc/passwd` cannot turn that into root); only a snapshot whose user is `root` runs as root,
-and then with those three capabilities. The snapshot's symbolic links go in as links, never followed. It gets the snapshot's host name and user (uid 1000, in place of the
-image's `ubuntu`), the files a fresh Topwater machine doesn't have or has differently (with modes, owners and times;
-not `/proc`, `/dev` or the program stubs, which the image provides for real), the variables and the working
-directory. Each call runs as `bash -c` under that user; the working directory, variables and functions are saved after
-each call and restored before the next, so state carries over as in Topwater. Aliases and `set`/`shopt` options
-don't carry over. `DockerTarget.IsAvailableAsync()` tells tests whether to skip. User, owner and variable names go into
-its root setup script quoted, and names no account or variable can have are left out.
+The container has no network unless `Network = true`, 1 GB of memory and no swap, one CPU, 512 processes, files of at
+most 1 GB, no capabilities but `CHOWN`, `DAC_OVERRIDE` and `FOWNER` (which the root setup step needs to write files
+with their owners), and `no-new-privileges`, so a setuid program gains nothing. The 1 GB limit is per file: nothing
+caps the container's total disk use, so a recording can still fill the docker host's disk. Commands run by number, uid
+and gid 1000 (the snapshot's `/etc/passwd` cannot turn that into root); only a snapshot whose user is `root` runs as
+root, and then with those three capabilities. The snapshot's symbolic links go in as links, never followed. It gets
+the snapshot's host name and user (uid 1000, in place of the image's `ubuntu`), the files a fresh Topwater machine
+doesn't have or has differently (with modes, owners and times; not `/proc`, `/dev` or the program stubs, which the
+image provides for real), the variables and the working directory. Each call runs as `bash -c` under that user; the
+working directory, variables and functions are saved after each call and restored before the next, so state carries
+over as in Topwater. Aliases and `set`/`shopt` options don't carry over. `DockerTarget.IsAvailableAsync()` tells tests
+whether to skip. User, owner and variable names go into its root setup script quoted, and names no account or variable
+can have are left out.
 
 `tools/ReplayGaps` uses this to measure Topwater against Linux on many sessions at once: it converts the example
 harness's saved transcripts (`runs/*.json`) and public agent trajectories into recordings, replays each on Topwater
@@ -212,9 +213,9 @@ The example harness itself now saves a deterministic recording of every run next
 
 ### The recording viewer
 
-The [replay viewer](https://gr-ant.github.io/Topwater/replay.html) is a static page built from the TypeScript port
-(`replay.html` in the [browser build](../typescript/README.md#in-the-browser)). It runs entirely in the browser: the
-file you open is not uploaded. Open a `.topwater` file or an older `.jsonl` recording and it:
+The [replay viewer](https://gr-ant.github.io/Topwater/replay.html) is a static page built from the TypeScript
+implementation (`replay.html` in the [browser build](../typescript/README.md#in-the-browser)). It runs entirely in the
+browser: the file you open is not uploaded. Open a `.topwater` file or an older `.jsonl` recording and it:
 
 - steps through the recording turn by turn, with each turn's command and output;
 - shows the files as they were after each turn, and a diff of what the turn changed;
@@ -236,7 +237,8 @@ prints the time. Where the implementations' commands differ, so does the output.
 
 Snapshots and recordings are one format, the `.topwater` file: a zip. A snapshot is a `.topwater` file without
 history. Zip is self-describing, every platform can open it (`unzip -l machine.topwater`), and the contents of
-different files can be read one at a time. The JSON Schemas are in [`spec/topwater-file`](../spec/topwater-file/README.md).
+different files can be read one at a time. The JSON Schemas are in
+[`spec/topwater-file`](../spec/topwater-file/README.md).
 
 | Entry | |
 |---|---|
@@ -269,7 +271,7 @@ The machine itself is two kinds of entry:
   are stored once, and after loading they share one copy in memory again.
 
 Version 2 added `symlink` entries and `link`. A machine without any link is written as version 1, but a default
-machine has one (`/etc/os-release`), so in practice every machine saved by this version is version 2 and
+machine has four (`/etc/os-release` among them), so in practice every machine saved by this version is version 2 and
 `0.1.0-preview.2` cannot load it. A newer `version` than this Topwater knows fails with `NotSupportedException`:
 `snapshot format version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it`. Later
 versions of Topwater are meant to keep reading versions 1 and 2.
@@ -303,18 +305,19 @@ Every later line is one call, in order:
 
 `trailer` (the note a safety limit adds) and `files` (paths the call added, changed or removed, sorted) are present
 only when set. `time` is the shell's clock when the call started. `elapsedMs` is wall time, kept for information and
-never compared. `index` counts from 0. The checkpoint after call `index` is `checkpoints/<index + 1>.json`, if there is one.
+never compared. `index` counts from 0. The checkpoint after call `index` is `checkpoints/<index + 1>.json`, if there is
+one.
 
 Version rules: readers ignore fields they don't know, so later versions may add optional fields without changing
 `version`. A change that older readers would misread raises `version`; loading a newer version fails with
 `NotSupportedException`, and later Topwater versions keep reading version 1. Loading treats the file as untrusted:
 every manifest and checkpoint loads under the default limits or the `ShellOptions` passed to `Load` (never limits the
-file names) with every check described in [Loading untrusted files](#loading-untrusted-files). The replay shell's limits are
-the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000 checkpoints load;
-together they may hold at most 4 x `MaxFileSystemBytes` of content and 4 x `MaxExtractEntries` files and directories.
-`history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and `MaxExtractEntries` calls.
-Checkpoint names must be `0` or a number without leading zeros no greater than the number of calls, and no two zip
-entries may share a name.
+file names) with every check described in [Loading untrusted files](#loading-untrusted-files). The replay shell's
+limits are the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000
+checkpoints load; together they may hold at most 4 x `MaxFileSystemBytes` of content and 4 x `MaxExtractEntries` files
+and directories. `history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and
+`MaxExtractEntries` calls. Checkpoint names must be `0` or a number without leading zeros no greater than the number
+of calls, and no two zip entries may share a name.
 
 Older files still load: snapshot zips are `.topwater` files already, and the JSON Lines recordings that came before
 (header `"format":"topwater-recording"`, snapshots embedded as base64 zips or in side-car files) load with the same
@@ -340,12 +343,12 @@ come from the `ShellOptions` you pass (the defaults otherwise):
 - Each blob is read only up to the size its entry declares, so a zip bomb stops there. It must then match its size
   and SHA-256 hash.
 - Paths must be absolute and canonical: no `.` or `..` segments, no empty segments, no trailing `/`, no NUL. A parent
-  must come before its children, and a path may appear only once. Only directories, regular files and symlinks
-  exist: devices and other types are refused. A parent is found without following symlinks, so no entry lands
-  anywhere but its own path. A symlink's `target` is 1-4096 characters without NUL and may point anywhere, even at
-  itself: it is only resolved later, with the agent's permissions, and 40 links in one lookup fail as on Linux. A
-  `link` must name an earlier file or symlink, never a directory. Modes must be octal up to `7777`. Owners, the user and the host name must be
-  plain names, so `"user": "../../etc"` can't steer the home directory.
+  must come before its children, and a path may appear only once. Only directories, regular files and symlinks exist:
+  devices and other types are refused. A parent is found without following symlinks, so no entry lands anywhere but
+  its own path. A symlink's `target` is 1-4096 characters without NUL and may point anywhere, even at itself: it is
+  only resolved later, with the agent's permissions, and 40 links in one lookup fail as on Linux. A `link` must name
+  an earlier file or symlink, never a directory. Modes must be octal up to `7777`. Owners, the user and the host name
+  must be plain names, so `"user": "../../etc"` can't steer the home directory.
 - Variable names must be valid identifiers, and indexed arrays must have non-negative integer indices. Each function
   body is parsed again as `name() body` and must come back as exactly that one function, so a body can't smuggle in
   extra commands. Exit codes must be 0-255, and `set` options must be ones the shell has.

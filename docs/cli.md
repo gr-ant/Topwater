@@ -29,8 +29,8 @@ irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows:
 ```
 
 The scripts check the download against the release's `SHA256SUMS`. `TOPWATER_VERSION` picks a release tag and
-`TOPWATER_INSTALL_DIR` the folder. The binaries are also on the
-[releases page](https://github.com/gr-ant/Topwater/releases).
+`TOPWATER_INSTALL_DIR` the folder. The binaries are also on the [releases
+page](https://github.com/gr-ant/Topwater/releases).
 
 From source: `dotnet run --project src/Topwater.Cli -- run "ls /"`.
 
@@ -101,8 +101,8 @@ same `command` and `args`.
 ## What touches your computer
 
 - **The machine is simulated.** It is an interpreter and an in-memory filesystem inside the `topwater` process.
-  Commands never run on your computer, there is no network and no host programs, and nothing the model types reads
-  or writes your files.
+  No command starts a process on your computer, there is no network and no host programs, and nothing the model
+  types reads or writes your files.
 - **The host is touched only where you say so on the command line.**
   - `--state` and `--from` read the file, checked as [untrusted](snapshots-and-recordings.md#loading-untrusted-files).
     `--state` also writes it.

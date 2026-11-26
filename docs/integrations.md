@@ -68,9 +68,8 @@ Console.WriteLine(response.Text);
 
 The function is named `bash`, takes one string parameter `command` (the schema in `BashTool.InputSchemaJson`) and
 returns the same text as `BashTool.ExecuteAsync`, `[exit code N]` included. `shell.AsAIFunction("...")` replaces the
-description. Models may ask for several calls at once: calls
-through functions made from the same shell run one at a time, in arrival order. Calling `shell.RunAsync` yourself
-at the same time is not covered.
+description. Models may ask for several calls at once: calls through functions made from the same shell run one at a
+time, in arrival order. Calling `shell.RunAsync` yourself at the same time is not covered.
 
 ### Semantic Kernel
 
@@ -122,11 +121,11 @@ IChatClient openai = new OpenAIClient(key).GetChatClient(model).AsIChatClient();
 IChatClient claude = new AnthropicClient().AsIChatClient(model);                   // package Anthropic
 ```
 
-If you drive the OpenAI SDK without `IChatClient`, `shell.AsAIFunction().AsOpenAIChatTool()` (or `AsOpenAIResponseTool()`)
-gives its tool type; send the tool call's `command` to `BashTool.ExecuteAsync`. Tested with `OpenAI` 2.15 and `Anthropic`
-13.14, against a fake HTTP server.
+If you drive the OpenAI SDK without `IChatClient`, `shell.AsAIFunction().AsOpenAIChatTool()` (or
+`AsOpenAIResponseTool()`) gives its tool type; send the tool call's `command` to `BashTool.ExecuteAsync`. Tested with
+`OpenAI` 2.15 and `Anthropic` 13.14, against a fake HTTP server.
 
-### MCP clients
+## MCP clients
 
 Clients that speak MCP (Claude Desktop, Claude Code, Cursor, VS Code, or your own `ModelContextProtocol` client) need no
 code: run [`topwater mcp`](cli.md), which serves the same `bash` tool over stdio. `Topwater.Mcp`

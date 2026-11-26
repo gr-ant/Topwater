@@ -11,8 +11,8 @@ This page covers the TypeScript API. The [main README](../README.md) explains wh
 - [Quickstart](#quickstart)
 - [Agent frameworks](#agent-frameworks)
 - [Deterministic runs, snapshots and recordings](#deterministic-runs-snapshots-and-recordings)
-- [In the browser](#in-the-browser)
 - [Differences from the C# version](#differences-from-the-c-version)
+- [In the browser](#in-the-browser)
 - [Layout and tests](#layout-and-tests)
 
 ## Install
@@ -129,15 +129,15 @@ const { recording, stop } = startRecording(shell, { metadata: { task: 'demo' }, 
 await shell.run('ls');
 stop();
 const bytes = await recording.save();                     // .topwater: the end machine, history.jsonl and checkpoints
-const again = await Recording.load(bytes);                // also any port's .topwater, snapshot zip or old .jsonl recording
+const again = await Recording.load(bytes);                // also any implementation's .topwater, snapshot zip or old .jsonl recording
 const afterTurn3 = await again.shellAt(2);                // nearest checkpoint, then re-runs the calls after it
 console.log(again.calls[0].files, (await again.replay()).differences);
 ```
 
-A recording's `manifest.json` is the machine after the last call, so `ShellSnapshot.load` opens it as that machine. Each
-call records the shell's clock when it started (`time`) and the paths it added, changed or removed (`files`). A
-deterministic recording made in another port re-runs here with the same times, `$RANDOM` values and `mktemp` names;
-where the ports' commands differ, so does the output.
+A recording's `manifest.json` is the machine after the last call, so `ShellSnapshot.load` opens it as that machine.
+Each call records the shell's clock when it started (`time`) and the paths it added, changed or removed (`files`). A
+deterministic recording made in another implementation re-runs here with the same times, `$RANDOM` values and `mktemp`
+names; where the implementations' commands differ, so does the output.
 
 ## Differences from the C# version
 

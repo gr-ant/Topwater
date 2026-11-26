@@ -8,12 +8,14 @@
 ## What is simulated, and what is real
 
 **Simulated.** Shell commands are interpreted in your process and read and write only the in-memory filesystem.
-They cannot open host files, start processes or use the network. The agent's `bash` tool never reaches the host.
+They cannot open host files, start processes or use the network. On a shell with nothing registered, nothing the agent
+types reaches the host.
 
 **Real, and your responsibility:**
 
 - **Your functions, MCP servers and registered APIs do real work.** Expose only what you would let the agent do.
-  [Authenticated API calls](programs.md#authenticated-api-calls) lists what `RegisterApi` guarantees and what it does not.
+  [Authenticated API calls](programs.md#authenticated-api-calls) lists what `RegisterApi` guarantees and what it does
+  not.
 - **Host programs run with your process's permissions.** Topwater does not sandbox them unless you ask. Read
   [Real host programs](programs.md#real-host-programs) before registering one.
 - **Files you load are untrusted.** Snapshots, recordings and container imports are checked and bounded
@@ -79,13 +81,13 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
   256 MB, and reading a file that was built by appends briefly holds it twice. Plan on roughly 1 GB per hostile
   session at the defaults, less with lower `MaxFileSystemBytes` and `MaxStringBytes`. The time-limit recipes
   (`sleep 99999`, a shell loop of awk runs, slow regex over many lines) stay under 60 MB.
-- **Archives** are untrusted. `tar` and `unzip` never write outside the target directory: names with `..` are
-  refused (tar) or cleaned (unzip), and leading `/` is dropped. tar extracts symlinks, but like GNU tar it writes
-  nothing below, and hard-links nothing through, a symlink the archive itself created (`Cannot open: Not a
-  directory`), and a member replaces a symlink in its way rather than writing through it. Hard links only reach
-  entries already inside the target. One extraction or decompression stops with an error past 64 MB (`MaxExtractBytes`) or
-  100,000 entries (`MaxExtractEntries`). Binary data survives pipes and redirects (`tar czf - . | gzip -l`,
-  `gzip -c f > f.gz`); in the tool output it shows as U+FFFD.
+- **Archives** are untrusted. `tar` and `unzip` never write outside the target directory: names with `..` are refused
+  (tar) or cleaned (unzip), and leading `/` is dropped. tar extracts symlinks, but like GNU tar it writes nothing
+  below, and hard-links nothing through, a symlink the archive itself created (`Cannot open: Not a directory`), and a
+  member replaces a symlink in its way rather than writing through it. Hard links only reach entries already inside
+  the target. One extraction or decompression stops with an error past 64 MB (`MaxExtractBytes`) or 100,000 entries
+  (`MaxExtractEntries`). Binary data survives pipes and redirects (`tar czf - . | gzip -l`, `gzip -c f > f.gz`); in
+  the tool output it shows as U+FFFD.
 - **Tool output** is cut at 30,000 characters with a note saying how much was dropped. Error output is cut
   separately, so the error message and exit code are always shown.
 - **Options.** `set -e` and `pipefail` reset after every tool call, so one stray `set -e` can't affect later calls.
@@ -98,11 +100,11 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 The limits table describes .NET. The defaults and messages are the same in Python and TypeScript, with these
 differences:
 
-- **A single regular-expression match.** .NET caps one match at 5 s. Python's `re` has no timeout: on the main
-  thread a match is interrupted at the call's time limit, but in a worker thread, on Windows, or when the host uses
+- **A single regular-expression match.** .NET caps one match at 5 s. Python's `re` has no timeout: on the main thread
+  a match is interrupted at the call's time limit, but in a worker thread, on Windows, or when the host uses
   `SIGALRM`, a catastrophically backtracking match runs to completion. In Node such a match switches to V8's
-  linear-time engine, except for patterns with backreferences, which can overrun the time limit. Browsers have no
-  such fallback. Run the shell in a separate process or worker thread if you need a hard stop. Details are in
+  linear-time engine, except for patterns with backreferences, which can overrun the time limit. Browsers have no such
+  fallback. Run the shell in a separate process or worker thread if you need a hard stop. Details are in
   [python/README.md](../python/README.md#where-python-differs) and
   [typescript/README.md](../typescript/README.md#differences-from-the-c-version).
 - **Nesting** is bounded by Python's recursion limit, or the JavaScript stack, instead of the .NET stack.

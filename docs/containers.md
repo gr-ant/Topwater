@@ -17,8 +17,8 @@ dotnet add package Topwater.Containers --prerelease
 
 Two uses:
 
-- **Graduate an agent from the simulation to real programs.** Python, git and compilers run in the container, on the same
-  files, as the same user, in the same working directory and with the same environment.
+- **Graduate an agent from the simulation to real programs.** Python, git and compilers run in the container, on the
+  same files, as the same user, in the same working directory and with the same environment.
 - **Give an agent a safe copy of a real machine.** Import a server's `/var/log` and `/etc` as a snapshot. The agent
   investigates it in the simulation, where it can be forked and rewound and cannot touch the server.
 
@@ -209,4 +209,5 @@ Account and group names from the snapshot reach `setup.sh` only as quoted words;
 **An exported image is agent-authored content.** It holds what the agent wrote: its files and scripts, its
 `~/.bashrc` and the session script that `~/.bashrc` sources, file modes and owners. Starting a shell in it runs that
 content. Treat the image as untrusted, and run it with the same care, limits and isolation you would give the agent
-itself. For example `docker run -it --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 512 my-agent`.
+itself. For example `docker run -it --network none --cap-drop ALL --security-opt no-new-privileges --memory 1g
+--pids-limit 512 my-agent`.

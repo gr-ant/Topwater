@@ -9,9 +9,9 @@ Everything on `main` since `0.1.0-preview.2`.
 
 ### Compatibility
 
-- **Snapshots are format 2.** A default machine now holds a symbolic link (`/etc/os-release`), so every machine this
-  version saves is snapshot format 2. `0.1.0-preview.2` refuses such a file and asks for an upgrade. This version
-  still loads format 1.
+- **Snapshots are format 2.** A default machine now holds symbolic links (`/etc/os-release` and three more), so every
+  machine this version saves is snapshot format 2. `0.1.0-preview.2` refuses such a file and asks for an upgrade. This
+  version still loads format 1.
 - **Recordings are `.topwater` files.** A recording is saved as one zip that holds the machine, the calls and the
   checkpoints, the same file a snapshot is. Older `.jsonl` recordings still load, and saving one again (or
   `topwater export`, or a test run with `TOPWATER_RERECORD=1`) converts it.
