@@ -3,7 +3,7 @@
 // write and read it. The JSON Lines recordings this replaced (snapshots embedded or in side-car files) still load.
 import { DEFAULTS, Shell, type ShellOptions, type ShellResult } from './shell.js';
 import { HOST, ShellSnapshot, SnapshotError, USER, openTopwater, parseTime, writeTopwater } from './snapshot.js';
-import type { VfsEntry } from './vfs.js';
+import { sameEntry, type VfsEntry } from './vfs.js';
 
 export const RECORDING_FORMAT_VERSION = 1;
 const FORMAT = 'topwater-recording', HISTORY = 'topwater-history', HISTORY_VERSION = 1;
@@ -145,13 +145,14 @@ export class Recording {
   }
 }
 
-/** Counts a recording's snapshots and their files' bytes against the caps for all of them together. */
+/** Counts a recording's snapshots and their files' bytes (`held`, or else counted from its entries) against the caps for all of them together. */
 function totals(limits: RecordedOptions) {
   let snapshots = 0, bytes = 0;
   const max = MAX_SNAPSHOTS_FILE_SYSTEMS * (limits.maxFileSystemBytes ?? DEFAULTS.maxFileSystemBytes);
-  return (s: ShellSnapshot) => {
+  return (s: ShellSnapshot, held?: number) => {
     if (++snapshots > MAX_SNAPSHOTS) throw bad(`more than ${MAX_SNAPSHOTS} snapshots`);
-    for (const e of s.entries) bytes += e.data?.length ?? e.text?.length ?? 0;
+    if (held !== undefined) bytes += held;
+    else for (const e of s.entries) bytes += e.data?.length ?? e.text?.length ?? 0;
     if (bytes > max) throw bad(`the snapshots hold more than ${max} bytes of files together (${MAX_SNAPSHOTS_FILE_SYSTEMS} x maxFileSystemBytes)`);
     return s;
   };
@@ -161,8 +162,8 @@ const CHECKPOINT = /^checkpoints\/(0|[1-9][0-9]{0,8})\.json$/;
 
 async function loadTopwater(bytes: Uint8Array, limits: RecordedOptions): Promise<Recording> {
   const z = openTopwater(bytes, limits, 4);
-  const end = await z.machine('manifest.json');
   if (!z.has('history.jsonl')) {
+    const end = await z.machine('manifest.json');
     const rec = new Recording(end, clamp({ user: end.user, hostname: end.hostname }, limits));
     rec.created = end.created;
     rec.topwater = undefined;
@@ -173,9 +174,15 @@ async function loadTopwater(bytes: Uint8Array, limits: RecordedOptions): Promise
   const checkpoints = new Set<number>();
   const total = totals(limits);
   const budget = { entries: 4 * (limits.maxExtractEntries ?? DEFAULTS.maxExtractEntries) };
+  const kept: ShellSnapshot[] = []; // the few checkpoints built at a time
+  const wrap = (n: number) => (e: unknown) => e instanceof SnapshotError ? bad(`checkpoints/${n}.json: ${e.message.replace(/^not a valid Topwater snapshot: /, '')}`) : e;
+  // the start is built now; the others are checked against the limits now and built when a replay needs one
   const checkpoint = async (n: number) => {
-    try { return total(await z.machine(`checkpoints/${n}.json`, budget)); }
-    catch (e) { throw e instanceof SnapshotError ? bad(`checkpoints/${n}.json: ${e.message.replace(/^not a valid Topwater snapshot: /, '')}`) : e; }
+    try {
+      if (n === 0) return total(await z.machine('checkpoints/0.json', budget));
+      const { snapshot, held } = await z.outline(`checkpoints/${n}.json`, budget, kept, wrap(n));
+      return total(snapshot, held);
+    } catch (e) { throw wrap(n)(e); }
   };
   // runs once the header's version is known to be one this reads
   const start = () => {
@@ -193,12 +200,30 @@ async function loadTopwater(bytes: Uint8Array, limits: RecordedOptions): Promise
   const rec = await fromLines(history, HISTORY, HISTORY_VERSION, limits, start, () => { calls++; return checkpoints.has(calls) ? checkpoint(calls) : undefined; });
   const beyond = [...checkpoints].find(n => n > calls);
   if (beyond !== undefined) throw bad(`checkpoints/${beyond}.json is after the last call`);
+  // the machine of the file is the one after the last checkpoint: a reader of either must see the same
+  const last = `checkpoints/${Math.max(...checkpoints)}.json`;
+  if (!z.has('manifest.json')) throw bad('manifest.json is missing');
+  const max = 4 * (limits.maxStringBytes ?? DEFAULTS.maxStringBytes) + 1024 * (limits.maxExtractEntries ?? DEFAULTS.maxExtractEntries);
+  if (!sameJson(z.bytes('manifest.json', max), z.bytes(last, max))) throw bad(`manifest.json is not the machine of ${last}, the last checkpoint`);
   return rec;
+}
+
+function sameJson(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length === b.length && a.every((x, i) => x === b[i])) return true;
+  const text = (x: Uint8Array) => { try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(x)); } catch { return undefined; } };
+  const same = (x: unknown, y: unknown): boolean => {
+    if (x === y) return true;
+    if (typeof x !== 'object' || typeof y !== 'object' || x === null || y === null || Array.isArray(x) !== Array.isArray(y)) return false;
+    const kx = Object.keys(x), ky = Object.keys(y);
+    return kx.length === ky.length && kx.every(k => Object.hasOwn(y, k) && same((x as any)[k], (y as any)[k]));
+  };
+  const x = text(a);
+  return x !== undefined && same(x, text(b));
 }
 
 /** The lines of a text, or of UTF-8 bytes, one at a time: the text may be large, so never all of them at once. */
 function* linesOf(input: string | Uint8Array): Generator<string> {
-  const utf8 = new TextDecoder('utf-8', { fatal: true });
+  const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }); // a BOM is kept, so it fails as JSON like in the other ports
   for (let at = 0, n = 1; at < input.length; n++) {
     let end = typeof input === 'string' ? input.indexOf('\n', at) : input.indexOf(0x0a, at);
     if (end < 0) end = input.length;
@@ -221,11 +246,11 @@ async function fromLines(input: string | Uint8Array, format: string, version: nu
     throw new Error(`${format === FORMAT ? 'recording' : 'history'} format version ${h.version} is newer than this version of Topwater supports (${version}); upgrade Topwater to read it`);
   const o = h.options;
   if (!o || typeof o !== 'object') throw bad('options are missing');
-  const int = (v: unknown, what: string) => { if (v == null) return undefined; if (!Number.isSafeInteger(v)) throw bad(`bad ${what}`); return v as number; };
+  const int = (v: unknown, what: string, range = 2 ** 53) => { if (v == null) return undefined; if (!(Number.isSafeInteger(v) && (v as number) >= -range && (v as number) < range)) throw bad(`bad ${what}`); return v as number; };
   const name = (v: unknown, shape: RegExp, what: string) => { if (v == null) return undefined; if (typeof v !== 'string' || !shape.test(v)) throw bad(`bad ${what} ${JSON.stringify(v)}`); return v; };
   const options: RecordedOptions = {
     user: name(o.user, USER, 'user'), hostname: name(o.hostname, HOST, 'hostname'),
-    startTime: o.startTime == null ? undefined : time(o.startTime, 'startTime'), randomSeed: int(o.randomSeed, 'randomSeed'),
+    startTime: o.startTime == null ? undefined : time(o.startTime, 'startTime'), randomSeed: int(o.randomSeed, 'randomSeed', 2 ** 31),
     maxLoopIterations: int(o.maxLoopIterations, 'maxLoopIterations'), maxExtractBytes: int(o.maxExtractBytes, 'maxExtractBytes'),
     maxExtractEntries: int(o.maxExtractEntries, 'maxExtractEntries'), maxCallDurationMs: o.maxCallDurationMs === -1 ? Infinity : int(o.maxCallDurationMs, 'maxCallDurationMs'),
     maxFileSystemBytes: int(o.maxFileSystemBytes, 'maxFileSystemBytes'), maxStringBytes: int(o.maxStringBytes, 'maxStringBytes'),
@@ -246,7 +271,7 @@ async function fromLines(input: string | Uint8Array, format: string, version: nu
     try { e = JSON.parse(line); } catch { throw bad(`line ${n} is not JSON`); }
     if (!e || typeof e.command !== 'string') throw bad(`line ${n} has no command`);
     if (e.index != null && !(Number.isSafeInteger(e.index) && e.index >= 0)) throw bad(`line ${n}: bad index`);
-    if (e.elapsedMs != null && !(typeof e.elapsedMs === 'number' && Number.isFinite(e.elapsedMs) && e.elapsedMs >= 0)) throw bad(`line ${n}: bad elapsedMs`);
+    if (e.elapsedMs != null && !(typeof e.elapsedMs === 'number' && Number.isFinite(e.elapsedMs) && e.elapsedMs >= 0 && e.elapsedMs <= 1e12)) throw bad(`line ${n}: bad elapsedMs`);
     if (e.files != null && !(Array.isArray(e.files) && e.files.every((f: unknown) => typeof f === 'string'))) throw bad(`line ${n}: files is not a list of paths`);
     rec.calls.push({
       index: e.index ?? rec.calls.length, command: e.command,
@@ -282,45 +307,46 @@ export function startRecording(shell: Shell, options: RecordingOptions = {}) {
   recording.appCommands = [...shell.commands.keys()].filter(n => !shell.isBuiltin(n)).sort();
   const every = options.snapshotEvery ?? 0;
   const run = shell.run;
-  let before = recording.start;
+  const changes = shell.fs.trackChanges(); // the paths each call changed, without a snapshot per call
   shell.run = async (command, onOutput) => {
     const time = shell.now(), t0 = performance.now();
     const r = await run.call(shell, command, onOutput);
     const index = recording.calls.length;
-    // a capture after every call gives the files it touched and keeps the end state; only the last call and every Nth keep theirs
-    const after = ShellSnapshot.capture(shell);
     const last = recording.calls[index - 1];
     if (last && !(every > 0 && index % every === 0)) last.snapshot = undefined;
-    const files = changedPaths(before.entries, after.entries);
-    before = after;
+    // the last call always has a snapshot, the end state; it is taken when first used (or at stop()), since the next call
+    // usually replaces it.
+    // shortcut: a change made to the shell outside run() after the last call, before then, is in it too; capture every call again if a host needs that
+    const keep = every > 0 && (index + 1) % every === 0;
+    const snapshot = keep ? ShellSnapshot.capture(shell) : ShellSnapshot.lazy(() => ShellSnapshot.capture(shell), shell.options.user, shell.options.hostname, shell.now());
+    const files = changes();
     recording.calls.push({
       index, command, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, trailer: r.trailer, elapsedMs: performance.now() - t0,
-      time, files: files.length ? files : undefined, snapshot: after,
+      time, files: files.length ? files : undefined, snapshot,
     });
     return r;
   };
-  return { recording, stop: () => { shell.run = run; } };
+  return {
+    recording,
+    stop: () => {
+      if (shell.run === run) return;
+      shell.run = run;
+      void recording.calls.at(-1)?.snapshot?.entries; // the end state, before the shell moves on
+    },
+  };
 }
 
-/** Paths whose entry was added, removed or changed between two captures, sorted ordinally. */
-function changedPaths(a: readonly VfsEntry[], b: readonly VfsEntry[]): string[] {
+/** @internal Paths whose entry was added, removed or changed between two captures, sorted ordinally. */
+export function changedPaths(a: readonly VfsEntry[], b: readonly VfsEntry[]): string[] {
   const old = new Map(a.map(e => [e.path, e]));
   const out: string[] = [];
   for (const e of b) {
     const o = old.get(e.path);
     old.delete(e.path);
-    if (!o || o.isDirectory !== e.isDirectory || o.mode !== e.mode || o.owner !== e.owner || o.modified !== e.modified || o.linkTarget !== e.linkTarget ||
-      o.hardLink !== e.hardLink || o.reportedSize !== e.reportedSize || o.text !== e.text || !sameBytes(o.data, e.data)) out.push(e.path);
+    if (!o || !sameEntry(o, e)) out.push(e.path);
   }
   out.push(...old.keys());
   return out.sort((x, y) => x < y ? -1 : x > y ? 1 : 0);
-}
-
-function sameBytes(x: Uint8Array | null, y: Uint8Array | null) {
-  if (x === y) return true;
-  if (!x || !y || x.length !== y.length) return false;
-  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
-  return true;
 }
 
 function compare(c: RecordedCall, a: ShellResult, n: (s: string) => string): ReplayDifference[] {

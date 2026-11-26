@@ -5,6 +5,7 @@ import { deflateRawSync } from 'node:zlib';
 import { Shell, ShellSnapshot, SnapshotError, Recording, startRecording } from '../src/index.js';
 import { buildZip, crc32, readZip, writeZip } from '../src/commands/zipfile.js';
 import { inflateRaw } from '../src/inflate.js';
+import { changedPaths } from '../src/recording.js';
 
 const fromCSharp = readFileSync(new URL('../../tests/Topwater.Tests/recordings/basics.jsonl', import.meta.url), 'utf8');
 const deterministic = { startTime: Date.UTC(2026, 2, 4, 5, 6, 7), randomSeed: 42 };
@@ -345,10 +346,65 @@ describe('recordings in the C# format', () => {
       [l => { l[1].index = -1; }, /bad index/], [l => { l[1].index = '1'; }, /bad index/], [l => { l[1].index = 1.5; }, /bad index/],
       [l => { l[1].files = { a: 1 }; }, /files is not a list/], [l => { l[1].files = ['/a', null]; }, /files is not a list/],
       [l => { l[1].time = '2026'; }, /bad line 2 time/],
-      [l => { l[1].elapsedMs = -1; }, /bad elapsedMs/],
+      [l => { l[1].elapsedMs = -1; }, /bad elapsedMs/], [l => { l[1].elapsedMs = 1e13; }, /line 2: bad elapsedMs/],
+      [l => { l[0].options.randomSeed = 2 ** 40; }, /bad randomSeed/],
     ];
     for (const [f, why] of refused) await expect(Recording.load(edit(f)), String(why)).rejects.toThrow(why);
+    await expect(Recording.load(editEntry(good, 'history.jsonl', t => '\uFEFF' + t))).rejects.toThrow(/the header is not JSON/); // a BOM
     expect(() => writeZip(Array.from({ length: 65536 }, () => ({ name: 'x', method: 0, flags: 0, crc: 0, usize: 0, time: 0, date: 0, ext: 0, data: new Uint8Array() })))).toThrow(/at most 65535 entries/);
+  });
+
+  it('builds a checkpoint only when a replay needs one, a few at a time', async () => {
+    const sh = new Shell(deterministic);
+    await sh.run('mkdir d && cd d && for i in $(seq 1500); do mkdir d$i; done');
+    const { recording, stop } = startRecording(sh, { snapshotEvery: 1 });
+    for (let i = 0; i < 60; i++) await sh.run(`echo ${i} > /home/agent/f${i}`);
+    stop();
+    const file = await recording.save();
+    const t0 = performance.now();
+    const loaded = await Recording.load(file);
+    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(loaded.calls.every(c => c.snapshot)).toBe(true);
+    for (let i = 0; i < 60; i++) expect((await (await loaded.shellAt(i)).run(`cat /home/agent/f${i}`)).stdout).toBe(`${i}\n`);
+    expect(entryText(await loaded.save(), 'checkpoints/31.json')).toBe(entryText(file, 'checkpoints/31.json'));
+    // so a checkpoint wrong inside (a blob that doesn't match its hash) loads, and fails when it is built
+    const blob = 'blobs/' + /"path":"\/home\/agent\/f29"[^}]*"blob":"([0-9a-f]+)"/.exec(entryText(file, 'checkpoints/30.json'))![1];
+    const tampered = await Recording.load(editEntry(file, blob, () => 'XX\n'));
+    await expect(tampered.shellAt(40)).rejects.toThrow(/checkpoints\/41.json: \/home\/agent\/f29: blob [0-9a-f]+ doesn't match its hash/);
+  }, 60_000);
+
+  it('refuses a file whose manifest is not the last checkpoint', async () => {
+    const sh = new Shell(deterministic);
+    const { recording, stop } = startRecording(sh, { snapshotEvery: 2 });
+    for (const c of ['echo 1 > a', 'echo 2 > b', 'echo 3 > c', 'echo 4 > d']) await sh.run(c);
+    stop();
+    const good = await recording.save();
+    await expect(Recording.load(editEntry(good, 'manifest.json', () => entryText(good, 'checkpoints/2.json'))))
+      .rejects.toThrow('manifest.json is not the machine of checkpoints/4.json, the last checkpoint');
+    await expect(Recording.load(writeZip(readZip(good).filter(e => e.name !== 'manifest.json')))).rejects.toThrow(/manifest.json is missing/);
+    const m = JSON.parse(entryText(good, 'manifest.json'));
+    const reordered = JSON.stringify(Object.fromEntries(Object.entries(m).reverse()), null, 2);
+    expect((await Recording.load(editEntry(good, 'manifest.json', () => reordered))).calls.length).toBe(4);
+  });
+
+  it('the files each call changed come from the filesystem, the same as comparing captures', async () => {
+    const sh = new Shell(deterministic);
+    await sh.run('mkdir -p a/b c && echo 1 > a/b/x && echo 2 > a/y && ln a/y c/h && ln -s ../a c/s');
+    const { recording, stop } = startRecording(sh);
+    const captures = [ShellSnapshot.capture(sh)];
+    for (const command of [
+      'cat a/y; ls -R', 'echo 3 > a/b/x', 'echo 3 > a/b/x', 'mkdir n && cp -r a n/', 'mv a/b c/b', 'mv n/a c/b2 && rm -r n',
+      'mkdir -p m/b && mv c/b m/ 2>&1; mv -T c/b2 m/b 2>&1; ls m/b', 'ln a/y a/z && rm c/h', 'mv a/y a/zz', 'echo 4 >> a/z',
+      'chmod 700 c && touch -d 2020-01-01 c/s', 'rm -r m && mkdir m && echo q > m/b', 'cd c && rm -rf ../a && mkdir ../a', 'true',
+      'rm -rf /home/agent/* && mkdir a', 'for i in 1 2 3; do echo $i > f$i; done; mv f1 f4; ln f2 f5; rm f2',
+    ]) {
+      await sh.run(command);
+      captures.push(ShellSnapshot.capture(sh));
+    }
+    stop();
+    recording.calls.forEach((c, i) => expect(c.files ?? [], `call ${i}`).toEqual(changedPaths(captures[i].entries, captures[i + 1].entries)));
+    expect(recording.calls[8].files).toContain('/home/agent/a/zz');
+    expect(recording.calls[2].files).toBeUndefined(); // the same content again, on a clock that stands still
   });
 
   it('the shell\'s files a call touched: added, changed and removed, with links', async () => {

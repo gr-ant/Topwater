@@ -3,7 +3,7 @@
 // the same limits in every port.
 import { readZip, writeZip, crc32, dosTime, ZipFormatError, type ZipEntry } from './commands/zipfile.js';
 import { inflateRaw } from './inflate.js';
-import { deflate } from './compress.js';
+import { deflate, inflateRawNative } from './compress.js';
 import { parse, ParseError, type Script } from './parser.js';
 import type { Shell, ShellOptions } from './shell.js';
 import type { VfsEntry } from './vfs.js';
@@ -56,13 +56,37 @@ const bad = (why: string) => new SnapshotError(why);
 /** A whole machine at one moment: every file and the session. Immutable once made; restore it into any shell. */
 export class ShellSnapshot {
   private constructor(
-    /** @internal */ readonly files: readonly VfsEntry[],
-    /** @internal */ readonly state: ShellStateData,
+    private _files: readonly VfsEntry[] | undefined,
+    private _state: ShellStateData | undefined,
     readonly user: string,
     readonly hostname: string,
     /** when it was taken, ms since the epoch (the virtual clock for a deterministic shell) */
     readonly created: number,
+    private load?: () => ShellSnapshot,
+    private kept?: ShellSnapshot[],
   ) {}
+
+  /**
+   * @internal A snapshot whose machine `load` builds when first used: a recording's checkpoint, read from the file when a
+   * replay needs it (and dropped again once `kept` holds more than a few), or the machine after a recorder's last call.
+   */
+  static lazy(load: () => ShellSnapshot, user: string, hostname: string, created: number, kept?: ShellSnapshot[]): ShellSnapshot {
+    return new ShellSnapshot(undefined, undefined, user, hostname, created, load, kept);
+  }
+
+  /** @internal */ get files(): readonly VfsEntry[] { return this._files ?? this.build()._files!; }
+  /** @internal */ get state(): ShellStateData { return this._state ?? this.build()._state!; }
+
+  private build(): ShellSnapshot {
+    const built = this.load!();
+    this._files = built._files; this._state = built._state;
+    if (!this.kept) this.load = undefined; // built once for good
+    else {
+      this.kept.push(this);
+      while (this.kept.length > KEPT) { const old = this.kept.shift()!; old._files = old._state = undefined; }
+    }
+    return built;
+  }
 
   /** Captures a shell's files and session. */
   static capture(shell: Shell): ShellSnapshot {
@@ -91,11 +115,15 @@ export class ShellSnapshot {
    * SnapshotError for anything malformed, Error("... newer ...") for a newer format version.
    */
   static async load(bytes: Uint8Array, limits: Partial<ShellOptions> = {}): Promise<ShellSnapshot> {
-    return openTopwater(bytes, limits).machine('manifest.json');
+    // a recording may be four times a snapshot's size; its machine is bounded by the same limits
+    return openTopwater(bytes, limits, 4).machine('manifest.json');
   }
 }
 
 export class SnapshotVersionError extends Error {}
+
+/** How many lazily read checkpoints of one file stay built; older ones are read again when needed. */
+const KEPT = 4;
 
 /** @internal */
 export const USER = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$/, HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$/, VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -187,6 +215,31 @@ export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, s
     try { return inflateRaw(e.data, max); } catch { throw bad(`${what} is larger than ${max} bytes or corrupt`); }
   };
   const blobs: BlobCache = new Map();
+  const hashes = new Map<string, string>(); // blob:size -> the hash of the bytes there, so a machine builds without awaiting
+  const blobBytes = (blob: string, size: number) => byName.has(blob) ? open(blob, size, blob) : null;
+  const parsed = (name: string, raw?: Uint8Array): Record<string, any> => {
+    if (!byName.has(name)) throw bad(`${name} is missing`);
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw ?? open(name, maxManifest, name))); }
+    catch (e) { throw e instanceof SnapshotError ? e : bad(`${name} is not JSON`); }
+  };
+  /** an entry's bytes like `open`, inflated natively: a recording's checkpoints are many and large */
+  const openFast = async (name: string, max: number) => {
+    const e = byName.get(name);
+    if (e?.method !== 8) return open(name, max, name);
+    try { return await inflateRawNative(e.data, max); } catch { throw bad(`${name} is larger than ${max} bytes or corrupt`); }
+  };
+  /** hashes the blobs a manifest's checked file list names (anything wrong with one is reported when the machine is built) */
+  const hashBlobs = async (files: any[]) => {
+    for (const f of files) {
+      if (!(f?.type === 'file' && f.link == null && Number.isSafeInteger(f.size) && f.size > 0 && typeof f.blob === 'string' && BLOB.test(f.blob))) continue;
+      const key = `${f.blob}:${f.size}`;
+      if (hashes.has(key)) continue;
+      let raw: Uint8Array | null = null;
+      try { raw = blobBytes('blobs/' + f.blob, f.size); } catch { /* reported when built */ }
+      if (raw) hashes.set(key, await sha256(raw));
+    }
+  };
+  const build = (m: Record<string, any>, name: string, h: Head) => readMachine(m, name, o, h, blobs, blobBytes, hashes);
   return {
     names: [...byName.keys()],
     has: (name: string) => byName.has(name),
@@ -194,11 +247,21 @@ export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, s
     bytes: (name: string, max: number) => guard(() => open(name, max, name)),
     /** manifest.json or a checkpoint, checked like a snapshot; `budget.entries` (when given) is what all checkpoints may still hold */
     machine: (name: string, budget?: { entries: number }) => guardAsync(async () => {
-      if (!byName.has(name)) throw bad(`${name} is missing`);
-      let m: Record<string, any>;
-      try { m = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(open(name, maxManifest, name))); }
-      catch (e) { throw e instanceof SnapshotError ? e : bad(`${name} is not JSON`); }
-      return readMachine(m, name, o, blobs, (blob, size) => byName.has(blob) ? open(blob, size, blob) : null, budget);
+      const m = parsed(name), h = head(m, name, o, budget);
+      await hashBlobs(h.files);
+      return build(m, name, h);
+    }),
+    /**
+     * A checkpoint checked against the limits (and `budget`) without building it: format, version, user, hostname, time,
+     * entry count and file bytes. It is built, and checked whole, when first used; `kept` holds the few that stay built.
+     * Also returns the bytes its files hold once (hard links share their first name's), for the file's byte budget.
+     */
+    outline: (name: string, budget: { entries: number }, kept: ShellSnapshot[], wrap: (e: unknown) => unknown) => guardAsync(async () => {
+      const m = parsed(name, byName.has(name) ? await openFast(name, maxManifest) : undefined), h = head(m, name, o, budget);
+      const created = parseTime(m.created, 'created');
+      await hashBlobs(h.files);
+      const load = () => { try { const m = parsed(name); return build(m, name, head(m, name, o)); } catch (e) { throw wrap(passThrough(e)); } };
+      return { snapshot: ShellSnapshot.lazy(load, h.user, h.hostname, created, kept), held: h.held };
     }),
   };
 }
@@ -208,7 +271,10 @@ const passThrough = (e: unknown) => e instanceof SnapshotError || e instanceof S
 function guard<T>(f: () => T): T { try { return f(); } catch (e) { throw passThrough(e); } }
 async function guardAsync<T>(f: () => Promise<T>): Promise<T> { try { return await f(); } catch (e) { throw passThrough(e); } }
 
-async function readMachine(m: Record<string, any>, name: string, o: Limits, cache: BlobCache, blobBytes: (entry: string, size: number) => Uint8Array | null, budget?: { entries: number }): Promise<ShellSnapshot> {
+type Head = { user: string; hostname: string; files: any[]; held: number };
+
+/** A manifest's format, version, user, hostname, entry count and file bytes, checked before anything is built. */
+function head(m: Record<string, any>, name: string, o: Limits, budget?: { entries: number }): Head {
   if (!m || typeof m !== 'object' || m.format !== FORMAT) throw bad(`${name} is not a Topwater snapshot manifest`);
   if (typeof m.version !== 'number') throw bad('no format version');
   if (m.version > SNAPSHOT_FORMAT_VERSION)
@@ -222,12 +288,21 @@ async function readMachine(m: Record<string, any>, name: string, o: Limits, cach
     if (fileList.length > budget.entries) throw bad(`the checkpoints hold more than ${4 * o.maxExtractEntries} files and directories together (4 x MaxExtractEntries)`);
     budget.entries -= fileList.length;
   }
-  let total = 0;
+  let total = 0, held = 0;
   for (const f of fileList) {
     if (f && typeof f === 'object' && f.size == null) f.size = 0; // C# leaves zero sizes out
-    if (f?.type === 'file') { if (!(Number.isSafeInteger(f.size) && f.size >= 0)) throw bad(`${f.path}: bad size`); total += f.size; }
+    if (f?.type === 'file') {
+      if (!(Number.isSafeInteger(f.size) && f.size >= 0)) throw bad(`${f.path}: bad size`);
+      total += f.size;
+      if (f.link == null) held += f.size;
+    }
     if (total > o.maxFileSystemBytes) throw bad(`the files hold more than ${o.maxFileSystemBytes} bytes (MaxFileSystemBytes)`);
   }
+  return { user, hostname, files: fileList, held };
+}
+
+function readMachine(m: Record<string, any>, name: string, o: Limits, { user, hostname, files: fileList }: Head, cache: BlobCache,
+  blobBytes: (entry: string, size: number) => Uint8Array | null, hashes: Map<string, string>): ShellSnapshot {
   const files: VfsEntry[] = [];
   const seen = new Set<string>(), dirs = new Set<string>(['/']);
   const strict = new TextDecoder('utf-8', { fatal: true });
@@ -262,7 +337,7 @@ async function readMachine(m: Record<string, any>, name: string, o: Limits, cach
           const raw = blobBytes('blobs/' + blob, f.size);
           if (!raw) throw bad(`${path}: blob ${blob} is missing`);
           if (raw.length !== f.size) throw bad(`${path}: blob ${blob} holds ${raw.length} bytes, not ${f.size}`);
-          if (await sha256(raw) !== blob) throw bad(`${path}: blob ${blob} doesn't match its hash`);
+          if (hashes.get(`${blob}:${f.size}`) !== blob) throw bad(`${path}: blob ${blob} doesn't match its hash`);
           let content;
           try { content = f.binary ? raw.slice() : strict.decode(raw); } catch { throw bad(`${path}: text is not valid UTF-8`); }
           cache.set(key, cached = { content, size: raw.length });

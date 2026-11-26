@@ -28,27 +28,65 @@ export interface FileStat {
   isSymlink: boolean;
 }
 
+/** Counts changes to every filesystem's nodes, so a change tracker visits only what moved since it last looked. */
+let changeClock = 0;
+
 abstract class Node {
-  modified = Date.now();
-  owner = 'root';
-  mode = 0;
-  nlink = 1; // names this file or link has (hard links); unused for directories
+  private _modified = Date.now();
+  private _owner = 'root';
+  private _mode = 0;
+  private _nlink = 1;
+  /** when this node last changed, on changeClock */
+  changed = ++changeClock;
+  get modified() { return this._modified; }
+  set modified(v: number) { this._modified = v; this.changed = ++changeClock; }
+  get owner() { return this._owner; }
+  set owner(v: string) { this._owner = v; this.changed = ++changeClock; }
+  get mode() { return this._mode; }
+  set mode(v: number) { this._mode = v; this.changed = ++changeClock; }
+  /** names this file or link has (hard links); unused for directories */
+  get nlink() { return this._nlink; }
+  set nlink(v: number) { this._nlink = v; this.changed = ++changeClock; }
 }
-class Dir extends Node { readonly children = new Map<string, Node>(); }
-class LinkNode extends Node { target = ''; }
+/** A directory's names; adding, removing or replacing one marks the directory's list changed. */
+class Names extends Map<string, Node> {
+  constructor(private readonly owner: Dir) { super(); }
+  override set(name: string, node: Node) { super.set(name, node); this.owner.listed = ++changeClock; return this; }
+  override delete(name: string) { const had = super.delete(name); if (had) this.owner.listed = ++changeClock; return had; }
+  override clear() { super.clear(); this.owner.listed = ++changeClock; }
+}
+class Dir extends Node {
+  /** when a name was last added, removed or replaced */
+  listed = ++changeClock;
+  readonly children: Map<string, Node> = new Names(this);
+}
+class LinkNode extends Node {
+  private _target = '';
+  get target() { return this._target; }
+  set target(v: string) { this._target = v; this.changed = ++changeClock; }
+}
 class FileNode extends Node {
   /** Text content (null when `data` holds the bytes, or while `chunks` holds pending appends). */
   private text: string | null = '';
   private chunks: string[] | null = null; // `>>` writes accumulate here, so append loops stay linear
-  data: Uint8Array | null = null; // set for binary files; text is then unused
-  reportedSize: number | null = null; // what `ls -l` shows for a program stub
-  size = 0; // real bytes held, counted against the capacity
+  private _data: Uint8Array | null = null;
+  private _reportedSize: number | null = null;
+  private _size = 0;
+  /** set for binary files; text is then unused */
+  get data() { return this._data; }
+  set data(v: Uint8Array | null) { this._data = v; this.changed = ++changeClock; }
+  /** what `ls -l` shows for a program stub */
+  get reportedSize() { return this._reportedSize; }
+  set reportedSize(v: number | null) { this._reportedSize = v; this.changed = ++changeClock; }
+  /** real bytes held, counted against the capacity */
+  get size() { return this._size; }
+  set size(v: number) { this._size = v; this.changed = ++changeClock; }
 
   get content(): string {
     if (this.text === null) { this.text = this.chunks!.join(''); this.chunks = null; }
     return this.text;
   }
-  set content(v: string) { this.text = v; this.chunks = null; }
+  set content(v: string) { this.text = v; this.chunks = null; this.changed = ++changeClock; }
   get raw(): Uint8Array { return this.data ?? encodeText(this.content); }
 
   store(text: string | null, bytes: Uint8Array | null, append: boolean, reserve: (delta: number) => void) {
@@ -389,16 +427,69 @@ export class VirtualFileSystem {
     const walk = function* (n: Node, path: string): Generator<VfsEntry> {
       let hardLink: string | null = null;
       if (n.nlink > 1) { hardLink = first.get(n) ?? null; if (hardLink === null) first.set(n, path); }
-      const base = { path, mode: n.mode, owner: n.owner, modified: n.modified, hardLink, linkTarget: null, isDirectory: false, text: null, data: null, reportedSize: null };
-      if (n instanceof FileNode) {
-        yield { ...base, text: n.data === null ? n.content : null, data: n.data, reportedSize: n.reportedSize };
-        return;
-      }
-      if (n instanceof LinkNode) { yield { ...base, linkTarget: n.target }; return; }
-      yield { ...base, isDirectory: true };
-      for (const [name, child] of [...(n as Dir).children].sort((a, b) => ordinal(a[0], b[0]))) yield* walk(child, path === '/' ? '/' + name : `${path}/${name}`);
+      yield entryOf(n, path, hardLink);
+      if (n instanceof Dir) for (const [name, child] of sortedChildren(n)) yield* walk(child, childPath(path, name));
     };
     yield* walk(this.root, '/');
+  }
+
+  /**
+   * @internal A function that lists the paths whose entry (as `entries()` gives it) changed since it last ran, sorted: the
+   * same list as comparing two snapshots, without copying the tree. Each run walks the nodes but builds entries only for
+   * nodes changed since, names a directory gained or replaced, and hard-linked files, whose first name can move when
+   * another name changes.
+   */
+  trackChanges(): () => string[] {
+    let seen = Infinity; // the first run sees everything as new
+    const known = new Map<string, { entry: VfsEntry; node: Node }>();
+    const names = new Map<string, [string, Node][]>(); // each directory's names when last looked at
+    const run = (): string[] => {
+      const now = changeClock;
+      const changed: string[] = [];
+      const gone = new Set<string>(); // what was below a removed or replaced name, until seen again
+      const first = new Map<Node, string>();
+      const markGone = (path: string) => {
+        gone.add(path);
+        for (const [name] of names.get(path) ?? []) markGone(childPath(path, name));
+      };
+      const visit = (n: Node, path: string, moved: boolean) => {
+        let hard: string | null = null;
+        if (n.nlink > 1) { hard = first.get(n) ?? null; if (hard === null) first.set(n, path); }
+        if (moved || n.changed > seen || n.nlink > 1) {
+          const e = entryOf(n, path, hard), old = known.get(path);
+          if (!old || !sameEntry(old.entry, e)) changed.push(path);
+          known.set(path, { entry: e, node: n });
+          gone.delete(path);
+        }
+        if (!(n instanceof Dir)) { if (moved) names.delete(path); return; } // it may have been a directory
+        if (!moved && n.listed <= seen) {
+          for (const [name, child] of names.get(path)!) // the same names as last time
+            if (child instanceof Dir || child.changed > seen || child.nlink > 1) visit(child, childPath(path, name), false);
+          return;
+        }
+        // names gained, lost or replaced: merge the sorted lists of before and now
+        const before = names.get(path) ?? [], list = sortedChildren(n);
+        let i = 0;
+        for (const [name, child] of list) {
+          while (i < before.length && ordinal(before[i][0], name) < 0) markGone(childPath(path, before[i++][0]));
+          const had = i < before.length && before[i][0] === name, same = had && before[i][1] === child;
+          if (had) i++;
+          if (!(moved || !same || child instanceof Dir || child.changed > seen || child.nlink > 1)) continue;
+          const p = childPath(path, name);
+          if (had && (moved || !same)) markGone(p); // replaced: what was below it is gone unless seen again
+          visit(child, p, moved || !same);
+        }
+        while (i < before.length) markGone(childPath(path, before[i++][0]));
+        names.set(path, list);
+      };
+      const root = this.root;
+      visit(root, '/', seen === Infinity || known.get('/')!.node !== root);
+      for (const p of gone) { known.delete(p); names.delete(p); changed.push(p); }
+      seen = now;
+      return changed.sort(ordinal);
+    };
+    run();
+    return run;
   }
 
   /** @internal Replaces every file with `entries` (parents first, as `entries()` gives them): a snapshot restore. */
@@ -636,3 +727,26 @@ function unlink(n: Node): number {
   return --n.nlink > 0 || !(n instanceof FileNode) ? 0 : n.size;
 }
 export function ordinal(a: string, b: string) { return a < b ? -1 : a > b ? 1 : 0; }
+
+const sortedChildren = (d: Dir): [string, Node][] => [...d.children].sort((a, b) => ordinal(a[0], b[0]));
+const childPath = (dir: string, name: string) => dir === '/' ? '/' + name : `${dir}/${name}`;
+
+function entryOf(n: Node, path: string, hardLink: string | null): VfsEntry {
+  const base = { path, mode: n.mode, owner: n.owner, modified: n.modified, hardLink, linkTarget: null, isDirectory: false, text: null, data: null, reportedSize: null };
+  if (n instanceof FileNode) return { ...base, text: n.data === null ? n.content : null, data: n.data, reportedSize: n.reportedSize };
+  if (n instanceof LinkNode) return { ...base, linkTarget: n.target };
+  return { ...base, isDirectory: true };
+}
+
+/** @internal Whether two entries are the same (contents by value). */
+export function sameEntry(o: VfsEntry, e: VfsEntry): boolean {
+  return o.isDirectory === e.isDirectory && o.mode === e.mode && o.owner === e.owner && o.modified === e.modified && o.linkTarget === e.linkTarget &&
+    o.hardLink === e.hardLink && o.reportedSize === e.reportedSize && o.text === e.text && sameBytes(o.data, e.data);
+}
+
+function sameBytes(x: Uint8Array | null, y: Uint8Array | null) {
+  if (x === y) return true;
+  if (!x || !y || x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
