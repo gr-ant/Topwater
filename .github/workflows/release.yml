@@ -33,3 +33,52 @@ jobs:
           user: ${{ secrets.NUGET_USER }}   # nuget.org profile name, not the email address
       - name: Publish to nuget.org
         run: dotnet nuget push "out/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --skip-duplicate
+
+  # Standalone topwater binaries (no .NET needed) for the install scripts in install/, attached to the GitHub release.
+  binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        rid: [linux-x64, linux-arm64, osx-x64, osx-arm64, win-x64, win-arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish ${{ matrix.rid }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          prefix="${v%%-*}"; suffix=""; [ "$v" != "$prefix" ] && suffix="${v#*-}"
+          dotnet publish src/Topwater.Cli -c Release -r ${{ matrix.rid }} --self-contained \
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
+            -p:DebugType=None -p:GenerateDocumentationFile=false \
+            -p:VersionPrefix="$prefix" -p:VersionSuffix="$suffix" -o pub
+          mkdir dist
+          case ${{ matrix.rid }} in
+            win-*) mv pub/Topwater.Cli.exe pub/topwater.exe; (cd pub && zip -q ../dist/topwater-${{ matrix.rid }}.zip topwater.exe) ;;
+            *) mv pub/Topwater.Cli pub/topwater; chmod 755 pub/topwater; tar -czf dist/topwater-${{ matrix.rid }}.tar.gz -C pub topwater ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topwater-${{ matrix.rid }}
+          path: dist/*
+
+  github-release:
+    needs: [publish, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # only this job can create the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release with the binaries and their checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum topwater-* > SHA256SUMS && cat SHA256SUMS
+          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes $pre topwater-* SHA256SUMS

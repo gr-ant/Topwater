@@ -149,9 +149,18 @@ TypeScript describes tools with a JSON Schema, so the function appears as a subc
 `topwater mcp` is an MCP server with one sandboxed `bash` tool, for Claude Desktop, Cursor, VS Code or any MCP
 client. `topwater` alone opens a shell on the simulated machine.
 
+A standalone binary, no .NET needed (from `0.1.0-preview.3`):
+
 ```bash
-dotnet tool install -g Topwater.Cli --prerelease
+curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, macOS
 ```
+
+```powershell
+irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows: then topwater works in PowerShell and CMD
+```
+
+Or as a .NET tool: `dotnet tool install -g Topwater.Cli --prerelease`. The scripts check the download against the
+release's `SHA256SUMS`; binaries for every platform are on the [releases page](https://github.com/gr-ant/Topwater/releases).
 
 See [Command line and MCP server](docs/reference.md#command-line-and-mcp-server).
 

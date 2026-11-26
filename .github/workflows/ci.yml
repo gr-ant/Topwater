@@ -54,3 +54,31 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # The standalone topwater binary on each desktop system, and the install scripts' syntax.
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Standalone binary runs
+        shell: bash
+        run: |
+          dotnet publish src/Topwater.Cli -c Release --use-current-runtime --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:GenerateDocumentationFile=false -o standalone
+          out=$(./standalone/Topwater.Cli run 'echo ok; printf "%s\\n" a b | wc -l' | tr -d '\r')
+          echo "$out"; [ "$out" = "$(printf 'ok\n2')" ]
+          mkdir -p "$RUNNER_TEMP/out"
+          ./standalone/Topwater.Cli run --export /tmp/x:"$RUNNER_TEMP/out" 'mkdir -p /tmp/x && echo hi > /tmp/x/f'
+          [ "$(tr -d '\r' < "$RUNNER_TEMP/out/f")" = hi ]
+      - name: install.sh is valid
+        if: runner.os != 'Windows'
+        run: sh -n install/install.sh
+      - name: install.ps1 parses
+        shell: pwsh
+        run: $null = [scriptblock]::Create((Get-Content -Raw install/install.ps1))

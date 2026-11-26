@@ -30,6 +30,7 @@ jobs:
           cache-dependency-path: typescript/package-lock.json
       - run: npm ci
       - run: npm run build:browser   # writes browser/dist: the pages, scripts, samples and brand files
+      - run: cp ../install/install.sh ../install/install.ps1 browser/dist/   # curl .../install.sh | sh, irm .../install.ps1 | iex
       - uses: actions/upload-pages-artifact@v3
         with:
           path: typescript/browser/dist

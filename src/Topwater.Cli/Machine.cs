@@ -167,6 +167,10 @@ sealed class Machine
     /// Copies a virtual file or directory out to the host. Existing host files at the same paths are overwritten, nothing else
     /// is deleted, and nothing is written through a host symlink or outside <paramref name="host"/>.
     /// </summary>
+    // Windows and macOS file systems ignore case by default, so C:\Out and c:\out are the same folder there
+    static readonly StringComparison HostPathComparison =
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     public static void Export(Shell shell, string vfs, string host, TextWriter log)
     {
         var fs = shell.Fs;
@@ -177,7 +181,7 @@ sealed class Machine
         var top = fs.RealPath(vfs, out _) ?? vfs;
         void Copy(string v, string h)
         {
-            if (h != root && (!Path.GetFullPath(h).StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) || IsLink(h))) { log.WriteLine($"topwater: export: skipped {v} (would write outside {root} or through a link)"); return; }
+            if (h != root && (!Path.GetFullPath(h).StartsWith(root + Path.DirectorySeparatorChar, HostPathComparison) || IsLink(h))) { log.WriteLine($"topwater: export: skipped {v} (would write outside {root} or through a link)"); return; }
             // a virtual link is never followed into a directory (it could loop, fan out or reach the whole machine), and
             // goes out as a copy of its file only when that file is inside what is exported; no host link is made
             if (v != vfs && fs.IsSymlink(v) && !(fs.IsFile(v) && fs.RealPath(v, out _) is { } real && real.StartsWith(top + "/", StringComparison.Ordinal)))
