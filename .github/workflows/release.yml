@@ -9,6 +9,7 @@ on:
 # Topwater, workflow release.yml) lets this workflow exchange its GitHub OIDC token for a one-hour NuGet key.
 jobs:
   publish:
+    needs: [binaries]   # the NuGet push cannot be undone: only after every binary built
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -56,7 +56,7 @@ Requires .NET 8 or later.
 dotnet add package Topwater --prerelease
 ```
 
-This installs `0.1.0-preview.2`; [Status](#status) says what `main` has that it does not.
+This installs `0.1.0-preview.3`; [CHANGELOG.md](CHANGELOG.md) says what changed.
 
 ```csharp
 using Topwater;
@@ -151,8 +151,7 @@ any other MCP client. `topwater` alone opens a shell on the simulated machine.
 dotnet tool install -g Topwater.Cli --prerelease                      # needs .NET 8
 ```
 
-From `0.1.0-preview.3` on, each release also carries a standalone binary that needs no .NET. That release is not
-out yet; once it is:
+From `0.1.0-preview.3` on, each release also carries a standalone binary that needs no .NET:
 
 ```bash
 curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, macOS
@@ -298,7 +297,7 @@ Topwater is in preview. APIs may change before 1.0. [CHANGELOG.md](CHANGELOG.md)
 
 | | Where | State |
 |---|---|---|
-| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.2` published. `main` is `0.1.0-preview.3`, not released yet |
+| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.3` published |
 | **Python** | [`python/`](python/README.md) | not on PyPI; install from the repository |
 | **TypeScript** | [`typescript/`](typescript/README.md) | not on npm; build from the repository |
 | **Browser** | [demo](https://gr-ant.github.io/Topwater/), [`typescript/`](typescript/README.md#in-the-browser) | the TypeScript build in a Web Worker |
