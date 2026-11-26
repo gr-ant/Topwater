@@ -12,7 +12,7 @@ import argparse, json, os, re, shutil, subprocess, sys, tempfile
 
 CORPUS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = "ubuntu:24.04"
-TIMEOUT = 120
+TIMEOUT = 60  # AGENTS.md: probes run under a time limit, without container logs
 
 
 def run(script, local, apt, agent=False):
@@ -31,12 +31,12 @@ def run(script, local, apt, agent=False):
         pkgs = " ".join(apt)
         prep = f"apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {pkgs} >/dev/null 2>&1 && "
     net = [] if apt else ["--network", "none"]
-    start = 'mkdir -p /tmp/w && cd /tmp/w && exec bash -c "$1"'
+    start = 'mkdir -p /tmp/w && cd /tmp/w && exec timeout 5 bash -c "$1"'
     if agent:
         # the image's uid-1000 user, renamed to match Topwater's
         start = ("usermod -l agent -d /home/agent -m ubuntu && groupmod -n agent ubuntu && mkdir -p /tmp/w && chown agent: /tmp/w"
-                 ' && cd /tmp/w && exec setpriv --reuid=agent --regid=agent --init-groups env HOME=/home/agent bash -c "$1"')
-    cmd = ["docker", "run", "--rm", "-i", *net, *sum((["-e", f"{k}={v}"] for k, v in env.items()), []), IMAGE,
+                 ' && cd /tmp/w && exec timeout 5 setpriv --reuid=agent --regid=agent --init-groups env HOME=/home/agent bash -c "$1"')
+    cmd = ["docker", "run", "--rm", "--log-driver", "none", "-i", *net, *sum((["-e", f"{k}={v}"] for k, v in env.items()), []), IMAGE,
            "bash", "-c", prep + start, "_", script]
     return subprocess.run(cmd, capture_output=True, timeout=TIMEOUT + (300 if apt else 0))
 
