@@ -129,8 +129,12 @@ needed: the signatures, versions and SHA-1 checksums of both files, that they be
 fanout is monotonic, its names sorted and every offset inside the pack; each object is checked against its id after
 reading. A pack or index file over the string limit, more than 256 packs, a delta chain over 4,096 deep, a cycle of
 reference deltas, an inflated size over the string limit or different from the one the entry states, and a delta that
-copies outside its base all fail with `fatal: ... is corrupt` (exit 128) instead of running away. Inflated objects are
-cached for reuse as delta bases, up to 32 MB per pack.
+copies outside its base all fail with `fatal: ... is corrupt` (exit 128) instead of running away, and so does an index
+naming more objects than its pack can hold (all packs together may name a million). Objects, commits and delta bases
+one command reads are kept for reuse under one 64 MB budget per repository; an object over 16 MB is read again
+rather than kept. An object is looked for in the packs first, then loose: if the first copy found is corrupt, the
+command fails even when another copy is good. `packed-refs` lines whose names leave `refs/` or use characters a ref
+may not have are ignored.
 
 **Differences from real git.** No writing packfiles (and no multi-pack-index, bitmaps or commit-graph use: they are
 ignored), no submodules, hooks, editor, pager or colors; reflogs are written but there
