@@ -1,5 +1,5 @@
 import type { Shell } from '../shell.js';
-import { ShellError, reason, tooLarge, type CommandContext } from '../command.js';
+import { ShellError, reason, specOf, tooLarge, type CommandContext } from '../command.js';
 import { posixToJs } from '../regex.js';
 
 // ---------- values ----------
@@ -65,7 +65,7 @@ function genStr(abs: number, prec: number, upper: boolean, alt: boolean): string
 /** Integral values print as integers however large; others use the %g-style format. */
 function numToStr(v: number, fmt: string): string {
   if (Number.isFinite(v) && v === Math.floor(v)) return Math.abs(v) < 1e15 ? String(v === 0 ? 0 : v) : BigInt(v).toString();
-  if (Number.isNaN(v)) return Object.is(v, NaN) ? 'nan' : '-nan';
+  if (Number.isNaN(v)) return '-nan'; // shortcut: mawk shows x86's default NaN (0/0, x%0, log(-1)) as -nan; a negated one would be nan
   if (!Number.isFinite(v)) return v > 0 ? 'inf' : '-inf';
   if (fmt === '%.6g') return (v < 0 ? '-' : '') + genStr(Math.abs(v), 6, false, false);
   return sprintfNums(fmt, v);
@@ -92,8 +92,8 @@ function formatSpec(fmt: string, args: AV[], str: (v: AV) => string, max: number
     switch (conv) {
       case 'd': case 'i': {
         const n = toNum(arg);
-        if (!Number.isFinite(n)) { sign = signOf(n < 0); body = Number.isNaN(n) ? 'nan' : 'inf'; numeric = false; break; }
-        const t = Math.trunc(n);
+        // shortcut: out-of-range values (inf from x/0) clamp to the long range; mawk prints its own large numbers there
+        const t = Number.isNaN(n) ? 0 : Math.min(Math.max(Math.trunc(n), -9.2e18), 9.2e18);
         sign = signOf(t < 0);
         body = (t < 0 ? -t : t) < 1e21 ? String(Math.abs(t)) : BigInt(Math.abs(t)).toString();
         if (prec !== null) body = body.padStart(prec, '0');
@@ -112,6 +112,7 @@ function formatSpec(fmt: string, args: AV[], str: (v: AV) => string, max: number
         const n = toNum(arg);
         sign = signOf(n < 0 || Object.is(n, -0));
         const a = Math.abs(n);
+        if (Number.isNaN(a) && (conv === 'g' || conv === 'G')) { body = '-nan'; numeric = false; break; } // as AwkFormat.G
         if (!Number.isFinite(a)) { body = Number.isNaN(a) ? 'nan' : 'inf'; if (conv === 'E' || conv === 'G' || conv === 'F') body = body.toUpperCase(); numeric = false; break; }
         const pr = Math.min(prec ?? 6, 100);
         body = conv === 'e' || conv === 'E' ? expStr(a, pr, conv === 'E')
@@ -744,7 +745,7 @@ class Interp {
     for (; i < args.length; i++) {
       const a = args[i];
       if (a === '--') { i++; break; }
-      if (a === '--version' || (a === '-W' && args[i + 1] === 'version')) { this.ctx.stdout.write('GNU Awk 5.2.1, API 3.2, PMA Avon 8-g1, (GNU MPFR 4.2.1, GNU MP 6.3.0)\n'); return 0; }
+      if (a === '--version' || (a === '-W' && args[i + 1] === 'version')) { this.ctx.stdout.write(specOf('awk').version + '\n'); return 0; }
       if (a.length < 2 || a[0] !== '-') break;
       const val = (flag: string) => (a.length > 2 ? a.slice(2) : i + 1 < args.length ? args[++i] : (() => { throw awkErr(`option requires an argument -- ${flag}`); })());
       if (a.startsWith('-F')) fs = val('F');
@@ -1133,8 +1134,8 @@ class Interp {
       case '+': return l + r;
       case '-': return l - r;
       case '*': return l * r;
-      case '/': if (r === 0) throw awkErr('division by zero'); return l / r;
-      case '%': if (r === 0) throw awkErr('division by zero in %'); return l % r;
+      case '/': return l / r; // mawk (Ubuntu's awk): IEEE results, inf or -nan, not an error
+      case '%': return l % r;
       case '^': return l ** r;
       default: throw awkErr(`unknown operator ${op}`);
     }

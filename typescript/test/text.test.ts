@@ -284,6 +284,7 @@ describe('xargs', () => {
     const e = env();
     let handler!: CommandHandler;
     (e.shell as any).register = (n: string, h: CommandHandler) => { if (n === 'xargs') handler = h; };
+    (e.shell as any).locate = (n: string) => '/usr/bin/' + n; // every command exists, so xargs runs it
     registerText(e.shell as any);
     const calls: string[][] = [];
     let err = '';

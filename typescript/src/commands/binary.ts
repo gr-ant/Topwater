@@ -1,5 +1,5 @@
 import type { Shell } from '../shell.js';
-import { Args, specOf, specMessage, ShellError, inputBytes, type CommandContext } from '../command.js';
+import { Args, specOf, specMessage, ShellError, UsageException, inputBytes, type CommandContext } from '../command.js';
 import { decodeBytes, fromBase64, toBase64, toHex } from '../bytes.js';
 import { md5 } from '../md5.js';
 
@@ -47,7 +47,62 @@ function* lines(data: Uint8Array, width: number, squeeze: boolean): Generator<[n
 
 const OD_ESCAPES: Record<number, string> = { 0: '\\0', 7: '\\a', 8: '\\b', 9: '\\t', 10: '\\n', 11: '\\v', 12: '\\f', 13: '\\r' };
 
+/** A byte as cmp -b shows it: printable as itself, control bytes as ^X, high bytes as M- and the low byte's form. */
+function visible(b: number): string {
+  return b >= 128 ? 'M-' + visible(b - 128) : b < 32 ? '^' + String.fromCharCode(b + 64) : b === 127 ? '^?' : String.fromCharCode(b);
+}
+
 export function registerBinary(shell: Shell): void {
+  shell.register('cmp', ctx => {
+    const a = Args.parse(ctx.args, specOf('cmp'));
+    const ops = a.positional;
+    if (ops.length === 0) throw new UsageException(specMessage('cmp', 'missingOperand'));
+    if (ops.length > 4) throw new UsageException(specMessage('cmp', 'extraOperand', { operand: ops[4] }));
+    const number = (s: string | undefined, option: string) => {
+      if (s === undefined) return 0;
+      if (/^\s*[+-]?\d+\s*$/.test(s) && +s >= 0) return +s;
+      throw new UsageException(specMessage('cmp', 'invalidNumber', { option, value: s }));
+    };
+    const i = a.value('i'), skips = (i ?? '').split(':');
+    const skip1 = ops.length > 2 ? number(ops[2], 'ignore-initial') : number(i === undefined ? undefined : skips[0], 'ignore-initial');
+    const skip2 = ops.length > 3 ? number(ops[3], 'ignore-initial') : number(i === undefined ? undefined : skips[skips.length - 1], 'ignore-initial');
+    const limit = a.value('n') !== undefined ? number(a.value('n'), 'bytes') : undefined;
+    const silent = a.has('s'), verbose = a.has('l'), bytes = a.has('b');
+    const names = [ops[0], ops.length > 1 ? ops[1] : '-'];
+    const data = [...inputBytes(ctx, names, () => {}, silent)].map(x => x[1]);
+    if (data.length < 2) return 2;
+    const x = slice(data[0], Math.min(skip1, data[0].length)), y = slice(data[1], Math.min(skip2, data[1].length));
+    const common = Math.min(x.length, y.length), end = limit !== undefined ? Math.min(common, limit) : common;
+    // shortcut: -l pads positions to the digits of the compared length, which matches GNU for ordinary files
+    const longest = Math.max(x.length, y.length);
+    const width = Math.max(1, String(limit !== undefined ? Math.min(longest, limit) : longest).length);
+    const oct = (b: number) => b.toString(8).padStart(3);
+    let line = 1, differ = false;
+    for (let k = 0; k < end; k++) {
+      if (x[k] === y[k]) { if (x[k] === 10) line++; continue; }
+      differ = true;
+      if (silent) return 1;
+      if (!verbose) {
+        const fields = { file1: names[0], file2: names[1], byte: String(k + 1), line: String(line) };
+        ctx.stdout.write((bytes ? specMessage('cmp', 'differBytes', { ...fields, byte1: `${oct(x[k])} ${visible(x[k])}`, byte2: `${oct(y[k])} ${visible(y[k])}` })
+          : specMessage('cmp', 'differ', fields)) + '\n');
+        return 1;
+      }
+      const pos = String(k + 1).padStart(width);
+      ctx.stdout.write((bytes ? `${pos} ${oct(x[k])} ${visible(x[k]).padEnd(4)} ${oct(y[k])} ${visible(y[k])}` : `${pos} ${oct(x[k])} ${oct(y[k])}`) + '\n');
+    }
+    if (x.length === y.length || (limit !== undefined && end >= limit)) return differ ? 1 : 0;
+    if (!silent) {
+      const [file, shorter] = x.length < y.length ? [names[0], x] : [names[1], y];
+      const newlines = shorter.reduce((n, b) => n + (b === 10 ? 1 : 0), 0), byte = String(shorter.length);
+      ctx.stderr.write('cmp: ' + (shorter.length === 0 ? specMessage('cmp', 'eofEmpty', { file })
+        : verbose ? specMessage('cmp', 'eofVerbose', { file, byte })
+          : shorter[shorter.length - 1] === 10 ? specMessage('cmp', 'eof', { file, byte, line: String(newlines) })
+            : specMessage('cmp', 'eofInLine', { file, byte, line: String(newlines + 1) })) + '\n');
+    }
+    return 1;
+  });
+
   shell.register('xxd', ctx => {
     const a = Args.parse(ctx.args, specOf('xxd'));
     let code = 0;
@@ -88,8 +143,9 @@ export function registerBinary(shell: Shell): void {
 
   shell.register('od', ctx => {
     const a = Args.parse(ctx.args, specOf('od'));
-    let code = 0;
-    const data = slice(readAll(ctx, a.positional, () => code = 1), num(a.value('j') ?? '0'), a.value('N') !== undefined ? num(a.value('N')!) : undefined);
+    let code = 0, failed = 0;
+    const data = slice(readAll(ctx, a.positional, () => { code = 1; failed++; }), num(a.value('j') ?? '0'), a.value('N') !== undefined ? num(a.value('N')!) : undefined);
+    if (failed > 0 && failed === a.positional.length) return 1; // no input could be read: GNU od prints no offset either
     let fmt = a.value('t') ?? (a.has('c') ? 'c' : a.has('x') ? 'x2' : 'o2');
     if (fmt === 'x') fmt = 'x4'; else if (fmt === 'o') fmt = 'o4';
     let cells: (c: Uint8Array) => string;

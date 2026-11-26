@@ -252,14 +252,14 @@ export function* inputs(ctx: CommandContext, files: readonly string[], onError: 
 }
 
 /** Like inputs, but the exact bytes (stdin's too). */
-export function* inputBytes(ctx: CommandContext, files: readonly string[], onError: () => void): Generator<[name: string, data: Uint8Array]> {
+export function* inputBytes(ctx: CommandContext, files: readonly string[], onError: () => void, quiet = false): Generator<[name: string, data: Uint8Array]> {
   if (files.length === 0) { yield ['(standard input)', encodeText(ctx.stdinText)]; return; }
   for (const f of files) {
     if (f === '-') { yield ['(standard input)', encodeText(ctx.stdinText)]; continue; }
     let data: Uint8Array;
     try { data = ctx.fs.readBytes(ctx.resolvePath(f)); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      ctx.stderr.write(`${ctx.name}: ${cannotRead(ctx.name, f, reason(e))}\n`);
+      if (!quiet) ctx.stderr.write(`${ctx.name}: ${cannotRead(ctx.name, f, reason(e))}\n`);
       onError();
       continue;
     }

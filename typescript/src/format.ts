@@ -269,7 +269,12 @@ export function strftime(ms: number, fmt: string): string {
       case 's': v = String(Math.floor(ms / 1000)); break;
       case 'Z': v = 'UTC'; break;
       case 'z': v = '+0000'; break;
-      case ':': if (fmt[i + 1] === 'z') { i++; v = '+00:00'; } else v = '%:'; break;
+      case ':': { // %:z +hh:mm, %::z +hh:mm:ss, %:::z +hh (the clock is UTC)
+        let k = 1;
+        while (fmt[i + k] === ':') k++;
+        if (k <= 3 && fmt[i + k] === 'z') { i += k; v = k === 1 ? '+00:00' : k === 2 ? '+00:00:00' : '+00'; } else v = '%:';
+        break;
+      }
       case 'F': v = `${Y}-${p2(m + 1)}-${p2(day)}`; break;
       case 'T': v = `${p2(H)}:${p2(M)}:${p2(S)}`; break;
       case 'R': v = `${p2(H)}:${p2(M)}`; break;

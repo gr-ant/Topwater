@@ -182,6 +182,8 @@ class Find {
 
   async run(): Promise<number> {
     const ctx = this.ctx, fs = ctx.fs;
+    // -version (or --version) anywhere in the expression: print the version, run nothing
+    if (ctx.args.some(x => x === '-version' || x === '--version')) { ctx.stdout.write(specOf('find').version + '\n'); return 0; }
     // -P (the default) never follows symbolic links, -H only those named as starting points, -L all of them
     const options: string[] = [];
     while (options.length < ctx.args.length && ['-P', '-H', '-L'].includes(ctx.args[options.length])) options.push(ctx.args[options.length]);
@@ -656,9 +658,36 @@ export function registerFiles(shell: Shell) {
     return code;
   });
 
+  // FILE~ (simple), FILE.~N~ one past the highest (numbered), or numbered only when FILE already has numbered backups (existing)
+  // shortcut: files inside a directory that cp -r merges into are overwritten without a backup
+  const backupName = (fs: VirtualFileSystem, target: string, mode: string, suffix: string) => {
+    const name = VirtualFileSystem.getName(target), prefix = name + '.~';
+    const numbers = fs.list(VirtualFileSystem.getParent(target)).map(n => {
+      const k = n.startsWith(prefix) && n.endsWith('~') && /^\d+$/.test(n.slice(prefix.length, -1)) ? parseInt(n.slice(prefix.length, -1), 10) : 0;
+      return k > 0 ? k : 0;
+    });
+    const highest = Math.max(0, ...numbers);
+    return mode === 'simple' || (mode === 'existing' && highest === 0) ? target + suffix : `${target}.~${highest + 1}~`;
+  };
+
   const copyOrMove: CommandHandler = ctx => {
     const move = ctx.name === 'mv';
-    const a = Args.parse(ctx.args, specOf(ctx.name));
+    // cp --backup[=CONTROL] takes an optional value, so it is read here, before the shared parser
+    let control: string | undefined;
+    const args = ctx.args.filter(x => {
+      if (move || !(x === '--backup' || x.startsWith('--backup='))) return true;
+      control = x.slice(9);
+      return false;
+    });
+    const a = Args.parse(args, specOf(ctx.name));
+    if (a.has('b')) control ??= '';
+    if (control === '') control = ctx.shell.environment.get('VERSION_CONTROL') ?? 'existing';
+    const backup = control === undefined || control === 'none' || control === 'off' ? null
+      : control === 'simple' || control === 'never' ? 'simple'
+      : control === 'existing' || control === 'nil' ? 'existing'
+      : control === 'numbered' || control === 't' ? 'numbered'
+      : (() => { throw new UsageException(specMessage('cp', 'invalidBackupType', { value: control })); })();
+    const suffix = a.value('S') ?? ctx.shell.environment.get('SIMPLE_BACKUP_SUFFIX') ?? '~';
     const fs = ctx.fs;
     // cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
     const followTop = !move && !(a.has('P') || a.has('d') || a.has('a')) && (a.has('L') || a.has('H') || !(a.has('r') || a.has('R')));
@@ -711,6 +740,7 @@ export function registerFiles(shell: Shell) {
         continue;
       }
       if (a.has('n') && fs.exists(target)) continue;
+      if (backup !== null && fs.isFile(target, false)) fs.move(target, backupName(fs, target, backup, suffix));
       if (move && srcDir && fs.isDirectory(target)) fs.delete(target); // an empty directory is replaced
       const broken = (abs: string, why: string) => {
         const p = typed(new Error(abs + ': '), s, src)[0];

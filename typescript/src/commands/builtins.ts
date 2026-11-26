@@ -11,7 +11,10 @@ const ioOf = (ctx: CommandContext): Io => ({ stdin: ctx.stdin, out: ctx.stdout, 
 const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
 
 /** Why `name` can't be run as a program by env or timeout ([errno, exit status]), or null if it can. */
-function cannotRun(ctx: CommandContext, name: string): [string, number] | null {
+const ISO_UNITS = ['hours', 'minutes', 'date', 'seconds', 'ns'];
+const ISO_FORMATS = ['%Y-%m-%dT%H%:z', '%Y-%m-%dT%H:%M%:z', '%Y-%m-%d', '%Y-%m-%dT%H:%M:%S%:z', '%Y-%m-%dT%H:%M:%S,%N%:z'];
+
+export function cannotRun(ctx: CommandContext, name: string): [string, number] | null {
   if (!name.includes('/')) return ctx.shell.locate(name) !== null ? null : [ERRNO.ENOENT, 127]; // a shell builtin is no program
   const abs = ctx.resolvePath(name);
   if (!ctx.fs.exists(abs)) { const why = ctx.fs.whyMissing(abs); return [why, why === ERRNO.EACCES ? 126 : 127]; }
@@ -623,16 +626,17 @@ export function registerBuiltins(shell: Shell) {
     let args = [...ctx.args];
     const sh = ctx.shell;
     const isBash = ctx.name === 'bash' || ctx.name === 'sh';
-    let command = false;
+    let command = false, login = false;
     // bash's own options: -c, and -e -u -x -o pipefail ... which the new shell starts with
     const options: [string, boolean][] = [];
     let i = 0;
     for (; isBash && i < args.length && args[i].length > 1 && (args[i][0] === '-' || args[i][0] === '+'); i++) {
       const f = args[i];
       if (f === '--') { i++; break; }
-      if (f.startsWith('--')) continue; // --norc, --noprofile, --login
+      if (f.startsWith('--')) { login ||= f === '--login'; continue; } // --norc, --noprofile
       for (const c of f.slice(1)) {
         if (c === 'c') command = true;
+        else if (c === 'l' && f[0] === '-') login = true;
         else if (c === 'o' && i + 1 < args.length) options.push([args[++i], f[0] === '-']);
         else if ('eufxC'.includes(c)) options.push([({ e: 'errexit', u: 'nounset', f: 'noglob', x: 'xtrace', C: 'noclobber' } as Record<string, string>)[c], f[0] === '-']);
       }
@@ -641,11 +645,11 @@ export function registerBuiltins(shell: Shell) {
     const setup = () => { for (const [name, on] of options) sh.setOption(name, on); };
     if (command) {
       if (args.length === 0) throw new ShellError(specMessage(ctx.name, 'cOptionArgument'), 2);
-      return sh.runScriptText(args[0], io, true, args.slice(2), { arg0: args[1] ?? ctx.name, setup });
+      return sh.runScriptText(args[0], io, true, args.slice(2), { arg0: args[1] ?? ctx.name, setup, login });
     }
     if (args.length === 0) {
       if (!isBash) throw new ShellError(specMessage(ctx.name, 'filenameRequired'), 2);
-      return sh.runScriptText(ctx.stdinText, { ...io, stdin: new StdinBuffer('') }, true, [], { arg0: ctx.name, setup });
+      return sh.runScriptText(ctx.stdinText, { ...io, stdin: new StdinBuffer('') }, true, [], { arg0: ctx.name, setup, login });
     }
     let text: string;
     try { text = ctx.fs.readText(ctx.resolvePath(args[0])); } catch (e) {
@@ -654,7 +658,7 @@ export function registerBuiltins(shell: Shell) {
       ctx.stderr.write(`${isBash ? 'bash: ' : ctx.shell.errPrefix}${args[0]}: ${e.message.slice(e.message.lastIndexOf(': ') + 2)}\n`);
       return isBash ? 127 : 1;
     }
-    if (isBash) return sh.runScriptText(text, io, true, args.slice(1), { arg0: args[0], file: args[0], setup });
+    if (isBash) return sh.runScriptText(text, io, true, args.slice(1), { arg0: args[0], file: args[0], setup, login });
     sh.sourceDepth++;
     try { return await sh.runScriptText(text, io, false, args.length > 1 ? args.slice(1) : undefined, undefined, args[0]); } catch (e) {
       if (e instanceof ReturnSignal) return e.code; // `return` ends the sourced file only
@@ -1256,7 +1260,17 @@ export function registerBuiltins(shell: Shell) {
 
   reg('date', ctx => {
     // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
-    const a = Args.parse(ctx.args, specOf('date'));
+    // -I[UNIT] / --iso-8601[=UNIT] take an optional value, so they are read here, before the shared parser
+    let iso: string | undefined;
+    const args = ctx.args.filter(x => {
+      const unit = x === '--iso-8601' ? '' : x.startsWith('--iso-8601=') ? x.slice(11) : x.startsWith('-I') ? x.slice(2) : undefined;
+      if (unit === undefined) return true;
+      const found = unit === '' ? 'date' : ISO_UNITS.find(u => u.startsWith(unit));
+      if (found === undefined) throw new UsageException(specMessage('date', 'invalidIso', { value: unit }));
+      iso = found;
+      return false;
+    });
+    const a = Args.parse(args, specOf('date'));
     let now = ctx.shell.now();
     const d = a.value('d'), r = a.value('r');
     if (d !== undefined) now = parseDate(d, now);
@@ -1264,7 +1278,7 @@ export function registerBuiltins(shell: Shell) {
     const fmt = a.positional.find(p => p.startsWith('+'));
     const extra = a.positional.find(p => !p.startsWith('+'));
     if (extra !== undefined) throw new ShellError(specMessage('date', 'invalidDate', { value: extra }));
-    line(ctx, strftime(now, a.has('I') ? '%Y-%m-%d' : a.has('R') ? '%a, %d %b %Y %H:%M:%S +0000' : fmt !== undefined ? fmt.slice(1) : '%a %b %e %H:%M:%S %Z %Y'));
+    line(ctx, strftime(now, iso !== undefined ? ISO_FORMATS[ISO_UNITS.indexOf(iso)] : a.has('R') ? '%a, %d %b %Y %H:%M:%S +0000' : fmt !== undefined ? fmt.slice(1) : '%a %b %e %H:%M:%S %Z %Y'));
   });
 
   reg('ps', ctx => ctx.stdout.write('    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n'));
@@ -1286,9 +1300,16 @@ export function registerBuiltins(shell: Shell) {
     if (ctx.args.length === 1 && (ctx.args[0] === '-V' || ctx.args[0] === '--version')) { line(ctx, 'Sudo version 1.9.15p5'); return 0; }
     if (ctx.args.length === 0) { ctx.stderr.write(specMessage('sudo', 'usage') + '\n'); return 1; }
     if (ctx.args[0] === '-l' || ctx.args[0] === '--list') { ctx.stderr.write(specMessage('sudo', 'listDenied', { user: user, host: ctx.shell.options.hostname }) + '\n'); return 1; }
+    // `sudo apt install x`: the package manager's own answer (nothing can be installed) says more than a refusal
+    const k = ctx.args.findIndex(a => !a.startsWith('-'));
+    if (k >= 0 && ['apt', 'apt-get', 'apt-cache', 'dpkg'].includes(ctx.args[k])) return ctx.invoke(ctx.args.slice(k));
     ctx.stderr.write(specMessage('sudo', 'notSudoer', { user: user }) + '\n');
     return 1;
   });
+
+  // no package sources and no network: package managers say so, with their usual failure status
+  for (const name of ['apt', 'apt-get', 'apt-cache']) reg(name, ctx => { ctx.stderr.write(specMessage(name, 'unavailable') + '\n'); return 100; });
+  reg('dpkg', ctx => { ctx.stderr.write('dpkg: ' + specMessage('dpkg', 'unavailable') + '\n'); return 2; });
   reg('su', ctx => { ctx.stderr.write(specMessage('su', 'authenticationFailure') + '\n'); return 1; });
 }
 

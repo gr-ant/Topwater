@@ -6,6 +6,7 @@ import { escapeRegex, posixRegexError, posixToJs } from '../regex.js';
 import { globRegex } from '../glob.js';
 import { printfFormat, unescape } from '../format.js';
 import { VirtualFileSystem } from '../vfs.js';
+import { cannotRun } from './builtins.js';
 
 const checkEvery = (ctx: CommandContext, i: number) => { if ((i & 7) === 0) ctx.checkTime(); };
 const lines2text = (lines: string[]) => (lines.length ? lines.join('\n') + '\n' : '');
@@ -668,6 +669,8 @@ async function xargs(ctx: CommandContext): Promise<number> {
     ctx.checkTime();
     const argv = replace !== undefined ? command.map(c => c.split(replace).join(group[0])) : [...command, ...group];
     if (a.has('t')) ctx.stderr.write(argv.join(' ') + '\n');
+    const bad = cannotRun(ctx, argv[0]);
+    if (bad) { ctx.stderr.write('xargs: ' + specMessage('xargs', 'cannotRun', { command: argv[0], errno: bad[0] }) + '\n'); return bad[1]; }
     const rc = await ctx.invoke(argv);
     if (rc === 127) return 127;
     if (rc === 255) { ctx.stderr.write('xargs: ' + specMessage('xargs', 'exitedWith255', { command: argv[0] }) + '\n'); return 124; }
@@ -863,41 +866,71 @@ function diff(ctx: CommandContext): number {
     else if (a.has('b')) l = l.replace(/\s+$/, '').replace(/\s+/g, ' ');
     return a.has('i') ? l.toLowerCase() : l;
   };
+  const fs = ctx.fs;
   const read = (p: string): string => {
     if (p === '-') return ctx.stdinText;
     const abs = ctx.resolvePath(p);
-    if (!ctx.fs.exists(abs)) throw new ShellError(specMessage('diff', 'fileNotFound', { file: p }), 2);
-    if (ctx.fs.isDirectory(abs)) throw new ShellError(`${p}: Is a directory`, 2);
-    return ctx.fs.readPipeText(abs);
+    if (!fs.exists(abs)) {
+      if (a.has('N')) return '';
+      throw new ShellError(specMessage('diff', 'fileNotFound', { file: p }), 2);
+    }
+    if (fs.isDirectory(abs)) throw new ShellError(`${p}: Is a directory`, 2);
+    return fs.readPipeText(abs);
   };
   const context = a.value('U') !== undefined ? parseInt(a.value('U')!, 10) : 3;
-  let differ = false;
   const out = buffered(ctx);
-  const files = (an: string, bn: string, header: boolean) => {
+  const join = (dir: string, name: string) => dir.endsWith('/') ? dir + name : dir + '/' + name;
+  // the line GNU diff prints before each differing pair in a directory: the options as typed, then both names
+  const header = (x: string, y: string) => {
+    const options = [...ctx.args];
+    for (const operand of a.positional) { const k = options.indexOf(operand); if (k >= 0) options.splice(k, 1); }
+    return ['diff', ...options, x, y].join(' ');
+  };
+  const files = (an: string, bn: string, head: string | null): number => {
     const x = splitLines(read(an)), y = splitLines(read(bn));
     const ops = diffOps(ctx, x.map(key), y.map(key));
-    if (ops.every(o => o.t === 'eq')) { if (a.has('s')) out.w(`Files ${an} and ${bn} are identical\n`); return; }
-    differ = true;
-    if (a.has('q')) { out.w(`Files ${an} and ${bn} differ\n`); return; }
-    if (header) out.w(`diff ${a.has('u') ? '-ru' : '-r'} ${an} ${bn}\n`.replace('-ru', '-r -u'));
+    if (ops.every(o => o.t === 'eq')) { if (a.has('s')) out.w(`Files ${an} and ${bn} are identical\n`); return 0; }
+    if (a.has('q')) { out.w(`Files ${an} and ${bn} differ\n`); return 1; }
+    if (head !== null) out.w(head + '\n');
     out.w(a.has('u') || a.value('U') !== undefined ? diffUnified(ops, x, y, an, bn, context) : diffNormal(ops, x, y));
+    return 1;
   };
-  const dirs = (an: string, bn: string) => {
-    const names = new Set([...ctx.fs.list(ctx.resolvePath(an)), ...ctx.fs.list(ctx.resolvePath(bn))]);
-    for (const name of [...names].sort()) {
-      const pa = `${an.replace(/\/+$/, '')}/${name}`, pb = `${bn.replace(/\/+$/, '')}/${name}`;
-      const ea = ctx.fs.exists(ctx.resolvePath(pa)), eb = ctx.fs.exists(ctx.resolvePath(pb));
-      if (!ea || !eb) { differ = true; out.w(`Only in ${ea ? an : bn}: ${name}\n`); continue; }
-      if (ctx.fs.isDirectory(ctx.resolvePath(pa)) && ctx.fs.isDirectory(ctx.resolvePath(pb))) dirs(pa, pb);
-      else files(pa, pb, true);
+  // two directories: entries only one side has, then each common one in name order (subdirectories with -r)
+  const dirs = (an: string, bn: string, depth: number): number => {
+    if (depth > 64) throw new ShellError(specMessage('diff', 'tooLarge', {}), 2); // shortcut: a symlink loop ends here, not with GNU's loop message
+    const pa = ctx.resolvePath(an), pb = ctx.resolvePath(bn);
+    const left = new Set(fs.list(pa)), right = new Set(fs.list(pb));
+    let code = 0;
+    for (const name of [...new Set([...left, ...right])].sort()) {
+      const x = join(an, name), y = join(bn, name);
+      const inA = left.has(name), inB = right.has(name);
+      const dirA = inA && fs.isDirectory(join(pa, name)), dirB = inB && fs.isDirectory(join(pb, name));
+      let rc: number;
+      if (!inA || !inB) {
+        if (a.has('N') && !(dirA || dirB)) rc = files(x, y, header(x, y));
+        else { out.w(`Only in ${inA ? an : bn}: ${name}\n`); rc = 1; }
+      } else if (dirA && dirB) {
+        if (a.has('r')) rc = dirs(x, y, depth + 1);
+        else { out.w(`Common subdirectories: ${x} and ${y}\n`); rc = 0; }
+      } else if (dirA || dirB) {
+        out.w(`File ${x} is a ${dirA ? 'directory' : 'regular file'} while file ${y} is a ${dirB ? 'directory' : 'regular file'}\n`);
+        rc = 1;
+      } else rc = files(x, y, header(x, y));
+      code = Math.max(code, rc);
     }
+    return code;
   };
   try {
-    const [an, bn] = a.positional;
-    if (a.has('r') && an !== '-' && bn !== '-' && ctx.fs.isDirectory(ctx.resolvePath(an)) && ctx.fs.isDirectory(ctx.resolvePath(bn))) dirs(an, bn);
-    else files(an, bn, false);
+    let [an, bn] = a.positional;
+    for (const p of [an, bn])
+      if (p !== '-' && !a.has('N') && !fs.exists(ctx.resolvePath(p))) throw new ShellError(specMessage('diff', 'fileNotFound', { file: p }), 2);
+    const isDir = (p: string) => p !== '-' && fs.isDirectory(ctx.resolvePath(p));
+    if (isDir(an) && isDir(bn)) return dirs(an, bn, 0);
+    // a directory and a file: compare the file with the one of the same name in the directory
+    if (isDir(an)) an = join(an, VirtualFileSystem.getName(bn));
+    else if (isDir(bn)) bn = join(bn, VirtualFileSystem.getName(an));
+    return files(an, bn, null);
   } finally { out.flush(); }
-  return differ ? 1 : 0;
 }
 
 // ---------- registration ----------

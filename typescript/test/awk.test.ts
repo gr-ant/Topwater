@@ -197,11 +197,10 @@ describe('awk errors and limits', () => {
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toMatch(/^awk: syntax error/);
   });
-  test('division by zero', async () => {
+  test('division by zero is inf or -nan, as in mawk', async () => {
     const { run } = env();
-    const r = await run(['awk', 'BEGIN{print 1/0}']);
-    expect(r.exitCode).toBe(2);
-    expect(r.stderr).toBe('awk: division by zero\n');
+    const r = await run(['awk', 'BEGIN{print 1/0, -1/0, 5%0; printf "%d %g\\n", 1/0, 0/0}']);
+    expect([r.exitCode, r.stdout, r.stderr]).toEqual([0, 'inf -inf -nan\n9200000000000000000 -nan\n', '']);
   });
   test('usage', async () => {
     const { run } = env();

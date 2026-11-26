@@ -57,6 +57,25 @@ export const DEFAULTS: ShellOptions = {
 };
 
 /** What one call returned. */
+const SYSTEM_DIRS = [
+  '/boot', '/lib', '/lib64', '/media', '/mnt', '/proc/4242', '/proc/tty/driver', '/run/lock', '/sbin', '/srv', '/sys',
+  '/etc/profile.d', '/etc/skel', '/usr/games', '/usr/include', '/usr/lib64', '/usr/libexec', '/usr/sbin', '/usr/src',
+  '/usr/local/etc', '/usr/local/games', '/usr/local/include', '/usr/local/lib', '/usr/local/man', '/usr/local/sbin', '/usr/local/share', '/usr/local/src',
+  '/usr/share/base-files', '/usr/share/bash-completion', '/usr/share/common-licenses', '/usr/share/doc', '/usr/share/info', '/usr/share/locale',
+  '/usr/share/man', '/usr/share/misc', '/usr/share/terminfo',
+  '/var/backups', '/var/cache/apt/archives/partial', '/var/cache/debconf', '/var/cache/ldconfig', '/var/lib/apt', '/var/lib/dpkg', '/var/lib/misc', '/var/lib/pam', '/var/lib/systemd',
+  '/var/local', '/var/mail', '/var/opt', '/var/spool',
+];
+
+// Ubuntu's files, rewritten in our own words with the same effect: a login shell reads /etc/profile, which runs
+// /etc/profile.d/*.sh; an interactive one reads ~/.bashrc; a non-interactive one (every tool call) reads neither
+const OS_RELEASE = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.1 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n";
+const ETC_PROFILE = "# Read by every login shell (bash -l, sh -l).\n\n# interactive bash: the shared settings in /etc/bash.bashrc\nif [ \"${PS1-}\" ] && [ \"${BASH-}\" ] && [ -f /etc/bash.bashrc ]; then\n  . /etc/bash.bashrc\nfi\n\n# then each script in /etc/profile.d\nif [ -d /etc/profile.d ]; then\n  for i in /etc/profile.d/*.sh; do\n    [ -r \"$i\" ] && . \"$i\"\n  done\n  unset i\nfi\n";
+const ETC_BASHRC = "# Shared settings for interactive bash shells.\n\n# nothing to do for scripts and bash -c\n[ -z \"${PS1-}\" ] && return\n\nshopt -s checkwinsize\nPS1='\\u@\\h:\\w\\$ '\n";
+const DOT_PROFILE = "# Read by login shells, unless ~/.bash_profile or ~/.bash_login exists.\n\n# bash: also read ~/.bashrc\nif [ -n \"$BASH_VERSION\" ] && [ -f \"$HOME/.bashrc\" ]; then\n    . \"$HOME/.bashrc\"\nfi\n\n# your own programs, when you have them\nfor d in \"$HOME/bin\" \"$HOME/.local/bin\"; do\n    [ -d \"$d\" ] && PATH=\"$d:$PATH\"\ndone\nunset d\n";
+const DOT_BASH_LOGOUT = "# Run when a login shell exits.\n";
+const DOT_BASHRC = "# Settings for interactive bash shells.\n\n# scripts and bash -c stop here\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\n# history: skip duplicates and lines that start with a space\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\nshopt -s histappend checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\n# colour and shorthands\nalias ls='ls --color=auto'\nalias grep='grep --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n\n[ -f ~/.bash_aliases ] && . ~/.bash_aliases\n";
+
 export class ShellResult {
   constructor(
     public readonly stdout: string,
@@ -187,7 +206,8 @@ interface SavedState {
   hashed: Map<string, [string, number]>; umask: number;
 }
 
-interface NewProcess { arg0: string; file?: string; setup?: () => void }
+/** login: bash -l reads /etc/profile and the first of ~/.bash_profile, ~/.bash_login and ~/.profile first. */
+interface NewProcess { arg0: string; file?: string; setup?: () => void; login?: boolean }
 
 const BASH_VERSINFO = ['5', '2', '21', '1', 'release', 'x86_64-pc-linux-gnu'];
 const SCRATCH = '__topwater_element';
@@ -312,6 +332,11 @@ export class Shell implements ArithHost {
     this.installedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - 142 * DAY + (9 * 60 + 13) * 60_000;
     {
       for (const dir of [home, '/tmp', '/var/tmp', '/usr/bin', '/bin', '/usr/local/bin', '/opt', '/etc', '/dev/fd', '/var/log']) fs.mkdir(dir, true);
+      if (!fs.exists('/etc/os-release')) {
+        fs.mkdir('/usr/lib', true);
+        fs.writeText('/usr/lib/os-release', OS_RELEASE);
+        fs.createSymlink('/etc/os-release', '../usr/lib/os-release');
+      }
       this.seedSystemFiles(user, home);
       fs.mkdir('/root', true);
       fs.chmod('/root', 0o700);
@@ -327,8 +352,9 @@ export class Shell implements ArithHost {
     registerAll(this);
     this.builtinNames = new Set(this.commands.keys());
     // the system was "installed" months ago; only the agent's home and the temp directories are fresh
-    for (const dir of ['/bin', '/usr', '/etc', '/dev', '/opt', '/root', '/var/log', '/var/lib', '/var/cache', '/boot', '/lib', '/lib64', '/media', '/mnt', '/sbin', '/srv'])
+    for (const dir of ['/bin', '/usr', '/etc', '/dev', '/opt', '/root', '/var/log', '/var/lib', '/var/cache', '/var/backups', '/var/local', '/var/mail', '/var/opt', '/var/spool', '/run', '/boot', '/lib', '/lib64', '/media', '/mnt', '/sbin', '/srv'])
       fs.setModified(dir, this.installedAt, true);
+    for (const link of ['/var/run', '/var/lock']) if (fs.isSymlink(link)) fs.setModifiedTime(link, this.installedAt, false);
     for (const p of ['/', '/home', '/var', home + '/.bashrc', home + '/.profile', home + '/.bash_logout']) fs.setModified(p, this.installedAt);
   }
 
@@ -338,17 +364,27 @@ export class Shell implements ArithHost {
    */
   private seedSystemFiles(user: string, home: string) {
     const fs = this.fs, host = this.options.hostname;
-    for (const dir of ['/boot', '/lib', '/lib64', '/media', '/mnt', '/proc', '/run', '/sbin', '/srv', '/sys', '/usr/lib', '/usr/share', '/usr/sbin', '/var/lib', '/var/cache'])
-      fs.mkdir(dir, true);
+    for (const dir of SYSTEM_DIRS) fs.mkdir(dir, true);
+    // what an ordinary user can't read, so `find /` reports "Permission denied" and exits 1 as on Ubuntu
+    for (const dir of ['/var/cache/ldconfig', '/var/cache/apt/archives/partial', '/proc/tty/driver']) fs.chmod(dir, 0o700);
+    fs.chmod('/run/lock', 0o1777);
     const seed = (path: string, content: string) => { if (!fs.exists(path)) fs.writeText(path, content); };
-    seed('/etc/os-release', 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.1 LTS (Noble Numbat)"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL="https://www.ubuntu.com/"\n');
+    const link = (path: string, target: string) => { if (!fs.exists(path) && !fs.isSymlink(path)) fs.createSymlink(path, target); };
+    link('/var/run', '/run');
+    link('/var/lock', '/run/lock');
     fs.writeText('/etc/hostname', host + '\n');
     seed('/etc/issue', 'Ubuntu 24.04.1 LTS \\n \\l\n\n');
+    seed('/etc/issue.net', 'Ubuntu 24.04.1 LTS\n');
     seed('/etc/passwd', `root:x:0:0:root:/root:/bin/bash\n${user}:x:1000:1000:${user}:${home}:/bin/bash\n`);
     fs.writeText('/dev/null', '');
     seed('/etc/hosts', `127.0.0.1\tlocalhost\n127.0.1.1\t${host}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\nff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n`);
     seed('/etc/group', `root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n${user}:x:1000:\n`);
-    seed('/etc/shells', '# /etc/shells: valid login shells\n/bin/sh\n/bin/bash\n/usr/bin/bash\n/usr/bin/sh\n');
+    seed('/etc/shells', '# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n');
+    seed('/etc/debian_version', 'trixie/sid\n');
+    seed('/var/lib/shells.state', '');
+    seed('/etc/profile', ETC_PROFILE);
+    seed('/etc/bash.bashrc', ETC_BASHRC);
+    seed('/etc/profile.d/01-locale-fix.sh', '# Use the C.UTF-8 locale when none is set.\nexport LANG="${LANG:-C.UTF-8}"\n');
     seed('/etc/timezone', 'Etc/UTC\n');
     seed('/etc/resolv.conf', 'nameserver 127.0.0.53\noptions edns0 trust-ad\n');
     seed('/etc/lsb-release', 'DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=24.04\nDISTRIB_CODENAME=noble\nDISTRIB_DESCRIPTION="Ubuntu 24.04.1 LTS"\n');
@@ -361,9 +397,18 @@ export class Shell implements ArithHost {
     seed('/proc/mounts', '/dev/sda1 / ext4 rw,relatime 0 0\nproc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\ntmpfs /dev/shm tmpfs rw,nosuid,nodev 0 0\n');
     seed('/proc/uptime', '274320.42 1082431.77\n');
     seed('/proc/loadavg', '0.08 0.03 0.01 1/142 4242\n');
-    seed(home + '/.profile', '# ~/.profile: executed by the command interpreter for login shells.\n\nif [ -n "$BASH_VERSION" ]; then\n    if [ -f "$HOME/.bashrc" ]; then\n\t. "$HOME/.bashrc"\n    fi\nfi\n\nif [ -d "$HOME/bin" ] ; then\n    PATH="$HOME/bin:$PATH"\nfi\n');
-    seed(home + '/.bash_logout', '# ~/.bash_logout: executed by bash(1) when login shell exits.\n\nif [ "$SHLVL" = 1 ]; then\n    [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q\nfi\n');
-    seed(home + '/.bashrc', "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n# If not running interactively, don't do anything\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\n\nshopt -s checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\nalias ls='ls --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n");
+    // the shell's own process: /proc/self points at it ($$ is 4242)
+    const uid = user === 'root' ? 0 : 1000;
+    seed('/proc/4242/comm', 'bash\n');
+    seed('/proc/4242/cmdline', 'bash\0');
+    seed('/proc/4242/status', `Name:\tbash\nState:\tS (sleeping)\nPid:\t4242\nPPid:\t1\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\nGid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
+    link('/proc/self', '4242');
+
+    for (const dir of ['/etc/skel', home]) {
+      seed(dir + '/.profile', DOT_PROFILE);
+      seed(dir + '/.bash_logout', DOT_BASH_LOGOUT);
+      seed(dir + '/.bashrc', DOT_BASHRC);
+    }
   }
 
   get cwd(): string { return this.cwdPath; }
@@ -508,7 +553,8 @@ export class Shell implements ArithHost {
     const callDeadline: Deadline = { at: Date.now() + this.options.maxCallDurationMs };
     this.deadline = callDeadline;
     const tee = (w: Writer, stream: 'stdout' | 'stderr'): Writer => onOutput ? { write(t) { w.write(t); onOutput(printable(t), stream); } } : w;
-    const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(tee(stdout, 'stdout')), err: new SwitchWriter(tee(stderr, 'stderr')) };
+    const callStderr = this.callStderr = tee(stderr, 'stderr');
+    const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(tee(stdout, 'stdout')), err: new SwitchWriter(callStderr) };
     const raw = (s: string) => { stderr.clear; (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
       // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
@@ -651,6 +697,7 @@ export class Shell implements ArithHost {
       if (process) { this.becomeNewProcess(process); this.subshell = 0; }
       if (positional) this.positional = positional;
       try {
+        if (process?.login) await this.sourceLoginFiles(io);
         try { return await this.execTopLevel(script, io); } finally { await this.runExitTrap(io); }
       } catch (e) {
         if (e instanceof ExitSignal) return e.code;
@@ -666,6 +713,18 @@ export class Shell implements ArithHost {
     }
   }
 
+  private async sourceLoginFiles(io: Io) {
+    const home = this.environment.get('HOME') ?? '', fs = this.agentFs;
+    const personal = ['/.bash_profile', '/.bash_login', '/.profile'].map(f => home + f).find(f => fs.isFile(f) && fs.canRead(f));
+    for (const file of ['/etc/profile', personal]) {
+      if (file === undefined || !fs.isFile(file) || !fs.canRead(file)) continue;
+      this.sourceDepth++;
+      try { await this.runScriptText(fs.readText(file), io, false, undefined, undefined, file); } catch (e) {
+        if (!(e instanceof ReturnSignal)) throw e;
+      } finally { this.sourceDepth--; }
+    }
+  }
+
   /** What a child bash inherits: exported variables (not their other attributes) and exported functions. */
   private becomeNewProcess(process: NewProcess) {
     this.environment = new Map([...this.environment].filter(([k]) => this.isExported(k)));
@@ -676,6 +735,7 @@ export class Shell implements ArithHost {
     this.errexit = this.pipefail = this.nounset = this.xtrace = this.noglob = this.noclobber = false;
     this.hashed = new Map();
     this.arg0 = process.arg0;
+    if (process.login) this.shopts.add('login_shell'); else this.shopts.delete('login_shell');
     process.setup?.();
   }
 
@@ -1223,6 +1283,20 @@ export class Shell implements ArithHost {
     return argv;
   }
 
+  /** bash's own "command not found" line. The first time in a session that it goes straight to the tool output
+   * (stderr not redirected or captured), a one-line hint about `help` follows, so that output a script captures stays bash's. */
+  private reportNotFound(io: Io, name: string) {
+    io.err.write(this.errPrefix + diagnostic('commandNotFound', { command: name }) + '\n');
+    let err = io.err;
+    while (err instanceof SwitchWriter) err = err.target;
+    if (this.notFoundHinted || err !== this.callStderr) return;
+    this.notFoundHinted = true;
+    io.err.write(DIAGNOSTICS.commandNotFoundHint + '\n');
+  }
+
+  private notFoundHinted = false;
+  private callStderr: Writer | undefined;
+
   /** @internal Runs argv: a function, a script file, or a registered command. `skipFunctions`: `command ls` / `builtin cd`. */
   async invoke(argv: string[], io: Io, skipFunctions = false): Promise<number> {
     let name = argv[0];
@@ -1239,8 +1313,8 @@ export class Shell implements ArithHost {
       if (found === null) {
         found = this.searchPath(name);
         if (found === null) {
-          io.err.write(!this.environment.get('PATH') ? `${this.errPrefix}${name}: No such file or directory\n`
-            : diagnostic('commandNotFound', { command: argv[0] }) + '\n');
+          if (!this.environment.get('PATH')) io.err.write(`${this.errPrefix}${name}: No such file or directory\n`);
+          else this.reportNotFound(io, name);
           return 127;
         }
         if (found.includes('/')) this.hashed.set(name, [found, 1]); // with PATH= bash remembers nothing
@@ -1251,7 +1325,7 @@ export class Shell implements ArithHost {
     }
     const cmd = this.commands.get(name);
     if (!cmd) {
-      io.err.write(diagnostic('commandNotFound', { command: argv[0] }) + '\n');
+      this.reportNotFound(io, argv[0]);
       return 127;
     }
     const ctx = this.makeContext(name, argv.slice(1), io);

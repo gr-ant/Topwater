@@ -37,7 +37,7 @@ describe('snapshots in the C# format', () => {
     expect(names).toContain('manifest.json');
     expect(names.some(n => /^blobs\/[0-9a-f]{64}$/.test(n))).toBe(true);
     const manifest = JSON.parse(new TextDecoder().decode(inflateRaw(readZip(bytes).find(e => e.name === 'manifest.json')!.data)));
-    expect(manifest).toMatchObject({ format: 'topwater-snapshot', version: 1, user: 'agent', cwd: '/home/agent/proj' });
+    expect(manifest).toMatchObject({ format: 'topwater-snapshot', version: 2, user: 'agent', cwd: '/home/agent/proj' }); // the machine has symbolic links (/etc/os-release, /proc/self)
     expect(manifest.functions[0]).toMatchObject({ name: 'greet' });
     expect(manifest.files.find((f: any) => f.path === '/home/agent/blob.bin')).toMatchObject({ binary: true, size: 8, mode: '0644' });
 

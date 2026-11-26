@@ -243,7 +243,7 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
         break;
       }
       case 'a': case 'i': case 'c': c.text = readText(); break;
-      case 'r': case 'w':
+      case 'r': case 'R': case 'w': // the file name is the rest of the line, as in GNU sed
         c.text = readToEol();
         if (!c.text) throw err(specMessage('sed', 'missingFilename'), i);
         break;
@@ -374,7 +374,9 @@ function listLine(ps: string): string {
 interface Sink { write(s: string): void }
 
 /** Runs a parsed script over text. Returns the q/Q exit code if the script quit, else null. */
-function execute(ctx: CommandContext, cmds: Cmd[], text: string, out: Sink, quiet: boolean): number | null {
+/** @param readFile a file's text for r and R, or null when it can't be read (sed then adds nothing) */
+function execute(ctx: CommandContext, cmds: Cmd[], text: string, out: Sink, quiet: boolean, readFile: (f: string) => string | null): number | null {
+  const rLines = new Map<string, string[]>(); // R: each file's lines not yet used
   const maxString = ctx.shell.options.maxStringBytes;
   const lines = splitLines(text);
   const trailing = text.endsWith('\n');
@@ -390,10 +392,12 @@ function execute(ctx: CommandContext, cmds: Cmd[], text: string, out: Sink, quie
     if (fromInput && idx >= lines.length && !trailing) pendingNewline = true; else out.write('\n');
   };
   const sinkFor = (file: string): Sink => file === '/dev/stdout' ? out : file === '/dev/stderr' ? ctx.stderr : { write: s => ctx.fs.appendText(ctx.resolvePath(file), s) };
+  // a and R add a line; r adds a file as it is
   const flushAppends = (appends: [string, boolean][]) => {
-    for (const [t, isFile] of appends) {
-      if (!isFile) { write(t); continue; }
-      try { const f = ctx.fs.readPipeText(ctx.resolvePath(t)); if (f) { write(f.endsWith('\n') ? f.slice(0, -1) : f); } } catch (e) { if (!(e instanceof ShellError)) throw e; }
+    for (const [t, raw] of appends) {
+      if (!raw) { write(t); continue; }
+      if (pendingNewline) { out.write('\n'); pendingNewline = false; }
+      out.write(t);
     }
     appends.length = 0;
   };
@@ -462,7 +466,13 @@ function execute(ctx: CommandContext, cmds: Cmd[], text: string, out: Sink, quie
         case '=': write(String(n)); break;
         case 'l': write(listLine(ps)); break;
         case 'a': appends.push([c.text, false]); break;
-        case 'r': appends.push([c.text, true]); break;
+        case 'r': { const content = readFile(c.text); if (content) appends.push([content, true]); break; }
+        case 'R': {
+          let queue = rLines.get(c.text);
+          if (!queue) { const all = readFile(c.text); rLines.set(c.text, queue = all === null ? [] : splitLines(all)); }
+          if (queue.length) appends.push([queue.shift()!, false]);
+          break;
+        }
         case 'w': sinkFor(c.text).write(ps + '\n'); break;
         case 'i': write(c.text); break;
         case 'c':
@@ -558,6 +568,15 @@ function run(ctx: CommandContext): number {
     if (w && w !== '/dev/stdout' && w !== '/dev/stderr') ctx.fs.writeText(ctx.resolvePath(w), '');
   }
 
+  let stdinRead = false;
+  const readFile = (f: string): string | null => {
+    if (f === '/dev/stdin') { if (stdinRead) return ''; stdinRead = true; return ctx.stdinText; } // stdin is read once
+    try { const path = ctx.resolvePath(f); return ctx.fs.isFile(path) ? ctx.fs.readText(path) : null; } catch (e) {
+      if (e instanceof ShellError) return null;
+      throw e;
+    }
+  };
+
   if (inPlace) {
     if (files.length === 0) throw fail(specMessage('sed', 'noInputFiles'));
     let code = 0;
@@ -572,7 +591,7 @@ function run(ctx: CommandContext): number {
         continue;
       }
       let result = '';
-      const q = execute(ctx, cmds, original, { write: s => { result += s; } }, quiet);
+      const q = execute(ctx, cmds, original, { write: s => { result += s; } }, quiet, readFile);
       if (suffix) ctx.fs.writeText(ctx.resolvePath(suffix.includes('*') ? suffix.replaceAll('*', f.slice(f.lastIndexOf('/') + 1)) : f + suffix), original);
       if (ctx.fs.isSymlink(path)) ctx.fs.delete(path); // like GNU sed -i, the edited text replaces the link; its target stays as it was
       ctx.fs.writeText(path, result);
@@ -593,7 +612,7 @@ function run(ctx: CommandContext): number {
   }
   const inputs = separate ? texts : [texts.map((t, k) => (t.endsWith('\n') || k === texts.length - 1 ? t : t + '\n')).join('')];
   const q = bufferedRun(ctx.stdout, out => {
-    for (const t of inputs) { const r = execute(ctx, cmds, t, out, quiet); if (r !== null) return r; }
+    for (const t of inputs) { const r = execute(ctx, cmds, t, out, quiet, readFile); if (r !== null) return r; }
     return null;
   });
   return q ?? (files.some(f => f !== '-' && ctx.fs.isDirectory(ctx.resolvePath(f))) ? 4 : error ? 2 : 0); // 4: a read error (a directory)

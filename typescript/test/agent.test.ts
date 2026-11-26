@@ -126,7 +126,7 @@ describe('agent features', () => {
     expect(await out(sh, 'cat /etc/os-release')).toContain('ID=ubuntu');
     expect(await out(sh, 'ls /usr/bin')).toContain('grep\n');
     expect((await sh.run('timeout 0.05 sleep 5')).exitCode).toBe(124);
-    expect(await out(sh, 'awk --version')).toMatch(/^GNU Awk/);
+    expect(await out(sh, 'awk --version')).toMatch(/^mawk/);
   });
 
   it('closes the gaps found by a real model', async () => {
@@ -188,7 +188,8 @@ describe('agent features', () => {
     expect(await out(sh, "stat -c '%A %U' /tmp")).toBe('drwxrwxrwt root\n');
     expect(await out(sh, 'echo x > /tmp/f && cat /tmp/f')).toBe('x\n');
     r = await sh.run('find / -name shadow');
-    expect([r.exitCode, r.stderr]).toEqual([1, "find: \u2018/root\u2019: Permission denied\n"]);
+    expect([r.exitCode, r.stderr]).toEqual([1, 'find: \u2018/proc/tty/driver\u2019: Permission denied\nfind: \u2018/root\u2019: Permission denied\n' +
+      'find: \u2018/var/cache/apt/archives/partial\u2019: Permission denied\nfind: \u2018/var/cache/ldconfig\u2019: Permission denied\n']);
     sh.fs.writeText('/etc/app.conf', 'mode=prod');
     sh.fs.writeText('/home/agent/notes.txt', 'hi');
     expect(await out(sh, 'stat -c %U /etc/app.conf ~/notes.txt')).toBe('root\nagent\n');
