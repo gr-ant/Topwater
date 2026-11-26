@@ -51,7 +51,7 @@ public sealed class Recording
     public TimeSpan MaxCallDuration { get; set; }
     public long MaxFileSystemBytes { get; set; }
     public long MaxStringBytes { get; set; }
-    /// <summary>The web access the shell had (<see cref="Shell.AllowWeb"/>), without its credentials or handler; null: none.
+    /// <summary>The web access the shell had (<see cref="Shell.AllowWeb(WebPolicy)"/>), without its credentials or handler; null: none.
     /// A replay serves the recorded responses under it and never touches the network.</summary>
     public WebPolicy? Web { get; set; }
 
@@ -90,7 +90,10 @@ public sealed class Recording
     /// The machine as it was after call <paramref name="index"/> (-1: before the first): restored from the nearest snapshot at or
     /// before it, then the calls after that run again. Exact for a deterministic recording on the same Topwater.
     /// </summary>
-    public async Task<Shell> ShellAtAsync(int index, Action<Shell>? configure = null, CancellationToken cancellationToken = default)
+    public Task<Shell> ShellAtAsync(int index, Action<Shell>? configure = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => ShellAtCoreAsync(index, configure, cancellationToken));
+
+    async Task<Shell> ShellAtCoreAsync(int index, Action<Shell>? configure, CancellationToken cancellationToken)
     {
         if (index < -1 || index >= Calls.Count) throw new ArgumentOutOfRangeException(nameof(index));
         int from = index;
@@ -101,7 +104,10 @@ public sealed class Recording
     }
 
     /// <summary>Runs every call against <paramref name="target"/> and compares what it returned with the recording.</summary>
-    public async Task<ReplayReport> ReplayAsync(IReplayTarget target, ReplayOptions? options = null, CancellationToken cancellationToken = default)
+    public Task<ReplayReport> ReplayAsync(IReplayTarget target, ReplayOptions? options = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => ReplayCoreAsync(target, options, cancellationToken));
+
+    async Task<ReplayReport> ReplayCoreAsync(IReplayTarget target, ReplayOptions? options, CancellationToken cancellationToken)
     {
         options ??= new ReplayOptions();
         var results = new List<ReplayedCall>();
@@ -120,12 +126,13 @@ public sealed class Recording
         return new ReplayReport(target.Name, Calls.Count, results, warnings) { Normalize = options.Normalize };
     }
 
-    /// <summary>Replays on a fresh Topwater shell at the recording's start (see <see cref="CreateShell"/>).</summary>
-    public async Task<ReplayReport> ReplayAsync(ReplayOptions? options = null, Action<Shell>? configure = null, CancellationToken cancellationToken = default)
-    {
-        await using var target = new ShellTarget(CreateShell(configure));
-        return await ReplayAsync(target, options, cancellationToken);
-    }
+    /// <summary>Replays on a fresh Topwater shell at the recording's start (see <see cref="CreateShell(Action{Shell}, ShellSnapshot)"/>).</summary>
+    public Task<ReplayReport> ReplayAsync(ReplayOptions? options = null, Action<Shell>? configure = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(async () =>
+        {
+            await using var target = new ShellTarget(CreateShell(configure));
+            return await ReplayCoreAsync(target, options, cancellationToken);
+        });
 
     static List<ReplayDifference> Compare(RecordedCall expected, ShellResult actual, ReplayOptions o)
     {
@@ -147,7 +154,10 @@ public sealed class Recording
     /// metadata and start are kept; on a <see cref="ShellTarget"/> a call that had a snapshot (and the last) gets a fresh one, and
     /// each call its time and changed files.
     /// </summary>
-    public async Task<Recording> RerecordAsync(IReplayTarget target, CancellationToken cancellationToken = default)
+    public Task<Recording> RerecordAsync(IReplayTarget target, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => RerecordCoreAsync(target, cancellationToken));
+
+    async Task<Recording> RerecordCoreAsync(IReplayTarget target, CancellationToken cancellationToken)
     {
         var copy = new Recording(Start, CreateOptions()) { Created = DateTimeOffset.UtcNow, Metadata = new(Metadata, StringComparer.Ordinal), AppCommands = [.. AppCommands], Web = Web };
         var shell = (target as ShellTarget)?.Shell;
@@ -771,7 +781,7 @@ public interface IReplayTarget : IAsyncDisposable
     Task<ShellResult> RunAsync(string command, CancellationToken cancellationToken = default);
 }
 
-/// <summary>Replays on a Topwater shell (this version). Build one with <see cref="Recording.CreateShell"/> for the recording's start, or from any shell.</summary>
+/// <summary>Replays on a Topwater shell (this version). Build one with <see cref="Recording.CreateShell(Action{Shell}, ShellSnapshot)"/> for the recording's start, or from any shell.</summary>
 public sealed class ShellTarget(Shell shell, string? name = null) : IReplayTarget
 {
     public Shell Shell { get; } = shell;

@@ -8,7 +8,7 @@ using System.Text;
 namespace Topwater;
 
 /// <summary>
-/// The web access a shell's <c>curl</c> and <c>wget</c> get through <see cref="Shell.AllowWeb"/>. Without one the machine has
+/// The web access a shell's <c>curl</c> and <c>wget</c> get through <see cref="Shell.AllowWeb(WebPolicy)"/>. Without one the machine has
 /// no network: every host fails to resolve. See docs/web.md.
 /// </summary>
 public sealed class WebPolicy
@@ -52,7 +52,7 @@ public sealed record WebExchange(string Method, string Url, int Status, string R
 
 public sealed partial class Shell
 {
-    /// <summary>The web access in force (<see cref="AllowWeb"/>), or null: no network.</summary>
+    /// <summary>The web access in force (<see cref="AllowWeb(WebPolicy)"/>), or null: no network.</summary>
     internal WebSession? Web { get; private set; }
 
     /// <summary>

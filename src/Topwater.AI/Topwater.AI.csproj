@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Topwater\Topwater.csproj" />
+    <Compile Include="..\Topwater\OffContext.cs" Link="OffContext.cs" />
   </ItemGroup>
 
 </Project>

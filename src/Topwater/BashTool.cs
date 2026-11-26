@@ -16,7 +16,7 @@ public static class BashTool
     const string NoNetwork = "Python, network access and package installation are not. ";
 
     /// <summary>
-    /// <see cref="Description"/> for this shell: with web access (<see cref="Shell.AllowWeb"/>) it names the sites and methods
+    /// <see cref="Description"/> for this shell: with web access (<see cref="Shell.AllowWeb(WebPolicy)"/>) it names the sites and methods
     /// <c>curl</c> and <c>wget</c> can reach (the first 20 sites) instead of saying there is no network.
     /// </summary>
     public static string DescriptionFor(Shell shell)
@@ -38,6 +38,6 @@ public static class BashTool
         """;
 
     /// <summary>Runs the model's command and returns the text to send back as the tool result.</summary>
-    public static async Task<string> ExecuteAsync(Shell shell, string command, CancellationToken cancellationToken = default) =>
-        (await shell.RunAsync(command, cancellationToken)).ToToolOutput();
+    public static Task<string> ExecuteAsync(Shell shell, string command, CancellationToken cancellationToken = default) =>
+        OffContext.Run(async () => (await shell.RunAsync(command, cancellationToken)).ToToolOutput());
 }

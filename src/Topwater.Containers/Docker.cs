@@ -10,7 +10,10 @@ public static class Docker
     public static string Executable { get; set; } = "docker";
 
     /// <summary>True when the docker CLI runs and reaches a daemon (within 10 seconds).</summary>
-    public static async Task<bool> IsAvailableAsync()
+    public static Task<bool> IsAvailableAsync() =>
+        OffContext.Run(() => IsAvailableCoreAsync());
+
+    static async Task<bool> IsAvailableCoreAsync()
     {
         try
         {

@@ -41,7 +41,10 @@ public sealed class DockerTarget : IReplayTarget
     public string Name { get; }
 
     /// <summary>Starts a container holding <paramref name="start"/>'s machine. Throws when docker isn't usable.</summary>
-    public static async Task<DockerTarget> StartAsync(ShellSnapshot start, DockerTargetOptions? options = null, CancellationToken ct = default)
+    public static Task<DockerTarget> StartAsync(ShellSnapshot start, DockerTargetOptions? options = null, CancellationToken ct = default) =>
+        OffContext.Run(() => StartCoreAsync(start, options, ct));
+
+    static async Task<DockerTarget> StartCoreAsync(ShellSnapshot start, DockerTargetOptions? options, CancellationToken ct)
     {
         var o = options ?? new DockerTargetOptions();
         var image = await EnsureImageAsync(o, ct);
@@ -96,7 +99,10 @@ public sealed class DockerTarget : IReplayTarget
     }
 
     /// <summary>Runs <c>docker version</c>: true when a daemon answers, so tests can skip without docker.</summary>
-    public static async Task<bool> IsAvailableAsync(string docker = "docker")
+    public static Task<bool> IsAvailableAsync(string docker = "docker") =>
+        OffContext.Run(() => IsAvailableCoreAsync(docker));
+
+    static async Task<bool> IsAvailableCoreAsync(string docker)
     {
         try { return (await RunDockerAsync(new DockerTargetOptions { Docker = docker }, ["version", "--format", "{{.Server.Version}}"], null, default)).Code == 0; }
         catch (System.ComponentModel.Win32Exception) { return false; }
@@ -126,7 +132,10 @@ public sealed class DockerTarget : IReplayTarget
         eval "$1"
         """;
 
-    public async Task<ShellResult> RunAsync(string command, CancellationToken cancellationToken = default)
+    public Task<ShellResult> RunAsync(string command, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => RunCoreAsync(command, cancellationToken));
+
+    async Task<ShellResult> RunCoreAsync(string command, CancellationToken cancellationToken)
     {
         var flags = new List<string> { "-u", _user, "-w", "/" };
         foreach (var e in _env) flags.AddRange(["-e", e]);

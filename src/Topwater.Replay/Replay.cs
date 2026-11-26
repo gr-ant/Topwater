@@ -21,7 +21,10 @@ public static class Replay
     /// <see cref="ReplayNormalizers.Volatile"/> unless <paramref name="options"/> says otherwise. Register your app's commands in
     /// <paramref name="configure"/>. With TOPWATER_RERECORD=1 the file is rewritten with what this Topwater returns instead.
     /// </summary>
-    public static async Task AssertMatches(string path, Action<Shell>? configure = null, ReplayOptions? options = null, [CallerFilePath] string callerFile = "")
+    public static Task AssertMatches(string path, Action<Shell>? configure = null, ReplayOptions? options = null, [CallerFilePath] string callerFile = "") =>
+        OffContext.Run(() => AssertMatchesCoreAsync(path, configure, options, callerFile));
+
+    static async Task AssertMatchesCoreAsync(string path, Action<Shell>? configure, ReplayOptions? options, string callerFile)
     {
         if (!Path.IsPathRooted(path) && callerFile.Length > 0) path = Path.Combine(Path.GetDirectoryName(callerFile)!, path);
         var recording = Recording.Load(path);

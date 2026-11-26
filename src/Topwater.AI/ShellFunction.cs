@@ -27,7 +27,10 @@ sealed class ShellFunction(Shell shell, SemaphoreSlim gate, string description) 
     public override string Description => description;
     public override JsonElement JsonSchema => Schema;
 
-    protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
+    protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+        new(OffContext.Run(() => InvokeOffContextAsync(arguments, cancellationToken)));
+
+    async Task<object?> InvokeOffContextAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
         var command = arguments.TryGetValue("command", out var value) ? value switch
         {

@@ -38,7 +38,10 @@ public static class ContainerImport
     /// are layered onto a fresh Topwater machine, so the simulated programs still work. User, environment and working
     /// directory come from <c>docker inspect</c>.
     /// </summary>
-    public static async Task<ContainerImportResult> FromContainerAsync(string container, ContainerImportOptions? options = null, CancellationToken cancellationToken = default)
+    public static Task<ContainerImportResult> FromContainerAsync(string container, ContainerImportOptions? options = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => FromContainerCoreAsync(container, options, cancellationToken));
+
+    static async Task<ContainerImportResult> FromContainerCoreAsync(string container, ContainerImportOptions? options, CancellationToken cancellationToken)
     {
         using var doc = JsonDocument.Parse(await Docker.RunAsync(["container", "inspect", container], cancellationToken: cancellationToken));
         var c = doc.RootElement[0].GetProperty("Config");
@@ -55,7 +58,10 @@ public static class ContainerImport
     }
 
     /// <summary>Imports an image: a container is created from it (never started), imported with <see cref="FromContainerAsync"/>, and removed.</summary>
-    public static async Task<ContainerImportResult> FromImageAsync(string image, ContainerImportOptions? options = null, CancellationToken cancellationToken = default)
+    public static Task<ContainerImportResult> FromImageAsync(string image, ContainerImportOptions? options = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => FromImageCoreAsync(image, options, cancellationToken));
+
+    static async Task<ContainerImportResult> FromImageCoreAsync(string image, ContainerImportOptions? options, CancellationToken cancellationToken)
     {
         var id = (await Docker.RunAsync(["create", image, "true"], cancellationToken: cancellationToken)).Trim();
         try { return await FromContainerAsync(id, options, cancellationToken); }
@@ -70,8 +76,11 @@ public static class ContainerImport
     /// and its changes as <c>docker diff</c> prints them ("A /path", "C /path", "D /path"). Only changed paths and
     /// <see cref="ContainerImportOptions.Paths"/> are imported. Throws <see cref="InvalidDataException"/> for a malformed archive or one over a limit.
     /// </summary>
-    public static async Task<ContainerImportResult> FromTarAsync(Stream rootfs, ContainerConfig config, IEnumerable<string>? changes = null,
-        ContainerImportOptions? options = null, CancellationToken cancellationToken = default)
+    public static Task<ContainerImportResult> FromTarAsync(Stream rootfs, ContainerConfig config, IEnumerable<string>? changes = null,
+        ContainerImportOptions? options = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => FromTarCoreAsync(rootfs, config, changes, options, cancellationToken));
+
+    static async Task<ContainerImportResult> FromTarCoreAsync(Stream rootfs, ContainerConfig config, IEnumerable<string>? changes, ContainerImportOptions? options, CancellationToken cancellationToken)
     {
         var importer = new Importer(config, changes ?? [], options ?? new());
         await importer.ReadAsync(rootfs, cancellationToken);

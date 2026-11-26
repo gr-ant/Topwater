@@ -66,7 +66,10 @@ public static class ContainerExport
     /// Builds an image tagged <paramref name="tag"/> with <c>docker build</c> from <see cref="ToBuildContext"/>, and returns the context,
     /// whose <see cref="BuildContext.Report"/> says what didn't carry over. <c>docker run -it tag</c> then lands in the machine.
     /// </summary>
-    public static async Task<BuildContext> BuildImageAsync(this ShellSnapshot snapshot, string tag, string baseImage = DefaultBaseImage, CancellationToken cancellationToken = default)
+    public static Task<BuildContext> BuildImageAsync(this ShellSnapshot snapshot, string tag, string baseImage = DefaultBaseImage, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => BuildImageCoreAsync(snapshot, tag, baseImage, cancellationToken));
+
+    static async Task<BuildContext> BuildImageCoreAsync(ShellSnapshot snapshot, string tag, string baseImage, CancellationToken cancellationToken)
     {
         var context = snapshot.ToBuildContext(baseImage);
         await Docker.RunAsync(["build", "-q", "-t", tag, "-"], stdin: s => { context.WriteTar(s); return Task.CompletedTask; }, cancellationToken: cancellationToken);

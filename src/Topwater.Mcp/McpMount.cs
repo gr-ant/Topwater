@@ -38,11 +38,14 @@ public static class McpExtensions
     /// it discovers them the way it would discover any command-line program.
     /// The tool list is read once, when mounting. The calls are real: they reach the server.
     /// </summary>
-    public static async Task<McpMount> MountMcpAsync(this Shell shell, string program, McpClient client, McpMountOptions? options = null, CancellationToken cancellationToken = default)
-        => await Mount(shell, program, client, options, ownsClient: false, cancellationToken);
+    public static Task<McpMount> MountMcpAsync(this Shell shell, string program, McpClient client, McpMountOptions? options = null, CancellationToken cancellationToken = default)
+        => OffContext.Run(() => Mount(shell, program, client, options, ownsClient: false, cancellationToken));
 
     /// <summary>Starts a local MCP server (stdio) and mounts it, e.g. <c>MountMcpAsync("fs", "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/data"])</c>.</summary>
-    public static async Task<McpMount> MountMcpAsync(this Shell shell, string program, string command, IEnumerable<string>? arguments = null, McpMountOptions? options = null, CancellationToken cancellationToken = default)
+    public static Task<McpMount> MountMcpAsync(this Shell shell, string program, string command, IEnumerable<string>? arguments = null, McpMountOptions? options = null, CancellationToken cancellationToken = default)
+        => OffContext.Run(() => StartAndMount(shell, program, command, arguments, options, cancellationToken));
+
+    static async Task<McpMount> StartAndMount(Shell shell, string program, string command, IEnumerable<string>? arguments, McpMountOptions? options, CancellationToken cancellationToken)
     {
         var transport = new StdioClientTransport(new StdioClientTransportOptions { Name = program, Command = command, Arguments = arguments?.ToList() });
         var client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);

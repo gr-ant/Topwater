@@ -510,7 +510,10 @@ public sealed partial class Shell
 
     // ---------- execution ----------
 
-    public async Task<ShellResult> RunAsync(string commandLine, CancellationToken cancellationToken = default)
+    public Task<ShellResult> RunAsync(string commandLine, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => RunRecordedAsync(commandLine, cancellationToken));
+
+    async Task<ShellResult> RunRecordedAsync(string commandLine, CancellationToken cancellationToken)
     {
         if (Recorder is not { } recorder) return await RunCallAsync(commandLine, cancellationToken);
         var started = NowUtc;

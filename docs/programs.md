@@ -33,6 +33,13 @@ lists collect the remaining arguments. `--help` is generated. Return a string (p
 nothing, or any other value (printed as JSON). Errors you raise become `command: message` on stderr with a
 non-zero exit code; they never crash the agent loop.
 
+**Which thread your command runs on (.NET).** Called from a thread with a synchronization context (a WinForms, WPF,
+MAUI or Avalonia UI thread), every Topwater async method moves its work to the thread pool, so a host that blocks on
+it (`.Result`, `.Wait()`) does not deadlock and the interpreter does not freeze the window. Your commands
+(`Register`, `[Command]`, `RegisterTools`, `RegisterApi`, MCP mounts) then run on a pool thread, not the UI thread:
+a handler that touches UI objects marshals the call itself (`Dispatcher.Invoke`, `Control.Invoke`). `AsyncLocal`
+values still flow into them. Without a synchronization context (console apps, ASP.NET Core, workers) nothing moves.
+
 ## MCP servers
 
 `Topwater.Mcp` mounts an MCP server as one program with a subcommand per tool. It uses the official

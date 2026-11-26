@@ -24,6 +24,11 @@ Everything on `main` since `0.1.0-preview.2`.
   `tool_description(shell)`, `BashTool.descriptionFor(shell)`) unless you pass your own.
 - **`curl` and `wget` exist.** Without a web policy they fail as on an offline machine (`Could not resolve host`,
   exit 6 and 4) where they used to be `command not found` (127).
+- **On a UI thread, .NET calls run on the thread pool.** Called from a thread with a synchronization context
+  (WinForms, WPF, MAUI, Avalonia), the public async methods (`RunAsync`, `BashTool.ExecuteAsync`, the `AIFunction`,
+  replay, MCP and container methods) move their work to the thread pool, so blocking on them no longer deadlocks.
+  Host commands then run on a pool thread, not the UI thread; a handler that touches UI objects must marshal itself.
+  Console apps and ASP.NET Core are unchanged. See [docs/programs.md](docs/programs.md#your-own-commands).
 - **TypeScript needs Node 22.3 or later** (was 22).
 - **The CLI refuses a recording as `--state`,** because the state file is rewritten as the machine alone. Use
   `--from`, or `topwater import`.
