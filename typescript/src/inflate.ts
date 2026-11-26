@@ -7,7 +7,8 @@ export class InflateError extends Error {
 }
 /** The output would exceed the caller's cap. */
 export class OutputLimitError extends Error {
-  constructor() { super('output limit exceeded'); }
+  /** `partial`: what was decoded before the limit (only from inflateRaw and gunzip). */
+  constructor(readonly partial?: Uint8Array) { super('output limit exceeded'); }
 }
 
 const LEN_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
@@ -68,7 +69,7 @@ function run(data: Uint8Array, start: number, out: Out, maxOut: number, base: nu
   };
   const ensure = (extra: number) => {
     const need = out.len + extra;
-    if (need > maxOut) throw new OutputLimitError();
+    if (need > maxOut) throw new OutputLimitError(out.buf.subarray(0, out.len));
     if (need > out.buf.length) {
       const nb = new Uint8Array(Math.min(maxOut, Math.max(need, out.buf.length * 2, 1024)));
       nb.set(out.buf.subarray(0, out.len));

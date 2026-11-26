@@ -63,7 +63,7 @@ export class Timelines {
   async run(b: number, command: string): Promise<{ call: RecordedCall; result: ShellResult }> {
     if (b <= 0 || !this.branches[b]) throw new RangeError(`no branch ${b}`);
     const last = this.length(b) - 1, before = await this.stateAt(b, last);
-    const shell = this.live.get(b) ?? this.recording.createShell(undefined, before, this.recording.calls.length); // no web: nothing recorded to serve
+    const shell = this.live.get(b) ?? this.recording.createShell(undefined, before, this.recording.calls.length); // nothing recorded to serve: no network
     this.live.delete(b); // until the call is done: if it throws, the next one starts again from the snapshot
     const time = shell.now(), t0 = performance.now();
     const result = await shell.run(command);

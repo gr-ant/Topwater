@@ -5,6 +5,7 @@
 import { DeadlineExceeded, ShellError, type CommandContext } from './command.js';
 import { encodeText, concatBytes } from './bytes.js';
 import type { Shell } from './shell.js';
+import { decompress } from './web.js';
 
 export interface ApiEndpoint {
   baseUrl: string;
@@ -243,8 +244,15 @@ export function registerApi(shell: Shell, program: string, endpoints: Record<str
         total += take.length;
       }
       void reader?.cancel().catch(() => undefined);
+      let raw = concatBytes(chunks);
+      // fetch decodes the body itself; bytes still compressed (a fetchImpl that does not) are decoded so the scrub sees them
+      const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
+      if ((encoding === 'gzip' || encoding === 'x-gzip') && raw[0] === 0x1f && raw[1] === 0x8b
+        || encoding === 'deflate' && raw.length > 1 && (raw[0] & 0x0f) === 8 && (raw[0] * 256 + raw[1]) % 31 === 0)
+        raw = decompress(raw, encoding !== 'deflate', limit + 1);
+      total = raw.length;
       truncated = total > maxBytes;
-      text = scrub(new TextDecoder().decode(concatBytes(chunks)));
+      text = scrub(new TextDecoder().decode(raw));
       if (truncated && text.length > maxBytes) text = text.slice(0, maxBytes);
     } catch (e) {
       if (controller.signal.aborted) {

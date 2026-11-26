@@ -3,10 +3,9 @@ import type { Shell } from '../shell.js';
 import { ShellError, reason, specMessage, specOf, type CommandContext } from '../command.js';
 import { concatBytes, decodeBytes, encodeText, toBase64 } from '../bytes.js';
 import { strftime } from '../format.js';
-import { OutputLimitError, gunzip, inflateRaw } from '../inflate.js';
-import { WebFailure, WebSession, WebUrl, header, type WebResponse } from '../web.js';
+import { WebFailure, WebSession, WebUrl, decompress, header, type WebResponse } from '../web.js';
 
-const NO_NETWORK = new WebSession({});
+const NO_NETWORK = new WebSession({ explainBlocked: false });
 const utf8 = new TextEncoder();
 
 export function registerWeb(shell: Shell) {
@@ -181,7 +180,7 @@ async function curl(ctx: CommandContext): Promise<number> {
       let data = r.body;
       const encoding = header(r, 'Content-Encoding')?.trim().toLowerCase();
       if (compressed && !r.truncated && (encoding === 'gzip' || encoding === 'x-gzip' || encoding === 'deflate') && data.length > 0)
-        data = decompress(data, encoding !== 'deflate', web.policy.maxResponseBytes);
+        data = decode(data, encoding !== 'deflate', web.policy.maxResponseBytes);
       if ((fail || failWithBody) && r.status >= 400) {
         if (failWithBody) buffer.push(data);
         code = 22;
@@ -249,14 +248,11 @@ function urlEncodeData(s: string) {
 }
 
 /** gzip or zlib-wrapped deflate, at most `max` bytes out. Throws WebFailure: tooLarge, or recv when the data is corrupt. */
-function decompress(data: Uint8Array, gzip: boolean, max: number): Uint8Array {
-  try {
-    if (gzip) return gunzip(data, max);
-    if (data.length < 2 || (data[0] & 0x0f) !== 8 || (data[0] * 256 + data[1]) % 31 !== 0 || data[1] & 0x20) throw new Error('not zlib');
-    return inflateRaw(data.subarray(2), max);
-  } catch (e) {
-    throw new WebFailure(e instanceof OutputLimitError ? 'tooLarge' : 'recv');
-  }
+function decode(data: Uint8Array, gzip: boolean, max: number): Uint8Array {
+  let out: Uint8Array;
+  try { out = decompress(data, gzip, max + 1); } catch { throw new WebFailure('recv'); }
+  if (out.length > max) throw new WebFailure('tooLarge');
+  return out;
 }
 
 function writeOut(ctx: CommandContext, format: string, r: WebResponse | null, redirects: number, code: number, method: string, forced: string | null): string {
@@ -421,7 +417,7 @@ async function wget(ctx: CommandContext): Promise<number> {
         code = 8;
       } else {
         const length = header(r, 'Content-Length'), type = header(r, 'Content-Type');
-        say(M('length', { length: (length ?? 'unspecified') + (type !== undefined ? ` [${type}]` : '') }));
+        say(M('length', { length: (length ?? M('lengthUnspecified')) + (type !== undefined ? ` [${type}]` : '') }));
         let file = document;
         if (file === null) {
           const name = remoteName(url);
@@ -455,7 +451,7 @@ async function wget(ctx: CommandContext): Promise<number> {
       if (!(e instanceof WebFailure)) throw e;
       const [c, message] = wgetError(e, web.policy.explainBlocked);
       code = c;
-      if (message.length > 0 && (!quiet || e.kind === 'policy' || e.kind === 'replay' || e.kind === 'badHeader')) ctx.stderr.write(message + '\n');
+      if (message.length > 0 && (!quiet || e.blocked !== null && web.policy.explainBlocked || e.kind === 'policy' || e.kind === 'replay' || e.kind === 'badHeader')) ctx.stderr.write(message + '\n');
     }
     if (code !== 0) exit = code;
   }

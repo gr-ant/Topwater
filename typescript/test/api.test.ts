@@ -156,6 +156,23 @@ describe('api command', () => {
     expect(r.stderr).toContain('HTTP 401');
   });
 
+  it('scrubs a credential echoed in a body that is still compressed', async () => {
+    const { gzipSync, deflateSync } = await import('node:zlib');
+    const { sh, stub } = make();
+    for (const [encoding, pack] of [['gzip', gzipSync], ['deflate', deflateSync]] as const) {
+      stub.respond = () => new Response(new Uint8Array(pack(`{"you_sent":"Bearer ${TOKEN}"}`)), { status: 200, headers: { 'Content-Encoding': encoding } });
+      const r = await sh.run('api get jira /issue/1');
+      expect(r.stdout, encoding).toBe('{"you_sent":"[REDACTED]"}\n');
+    }
+    // a body fetch already decoded keeps its Content-Encoding header and is read as it is
+    stub.respond = () => new Response(`plain ${TOKEN}`, { status: 200, headers: { 'Content-Encoding': 'gzip' } });
+    expect((await sh.run('api get jira /issue/1')).stdout).toBe('plain [REDACTED]\n');
+    stub.respond = () => new Response(Uint8Array.of(0x1f, 0x8b, 8, 0, 1, 2), { status: 200, headers: { 'Content-Encoding': 'gzip' } });
+    const r = await sh.run('api get jira /issue/1');
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/^api: GET jira \/issue\/1 failed: /);
+  });
+
   it('does not scrub values under 8 characters', async () => {
     const { sh, stub } = make(e => { e.short = { baseUrl: 'https://s.example', auth: () => 'abc' }; });
     stub.respond = () => new Response('abc abc', { status: 200 });

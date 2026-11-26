@@ -7,7 +7,7 @@ export function bashTool(shell: Shell = new Shell(), options: { description?: st
   const run = serialRunner(shell);
   return tool({
     name: BashTool.name,
-    description: options.description ?? BashTool.description,
+    description: options.description ?? BashTool.descriptionFor(shell),
     parameters: { ...BashTool.inputSchema, required: ['command'], additionalProperties: false } as any,
     strict: true,
     execute: ({ command }: { command: string }) => run(command),

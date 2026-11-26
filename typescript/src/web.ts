@@ -1,12 +1,14 @@
 // Web access for curl and wget (Shell.allowWeb): the policy, the URL parser, the address checks and the session that
 // sends each request (or serves a recording's). Without a policy the machine has no network: every host fails to resolve.
-import { DeadlineExceeded, type CommandContext } from './command.js';
+import { DeadlineExceeded, specMessage, type CommandContext } from './command.js';
 import { concatBytes } from './bytes.js';
 import { REASONS, secretsOf } from './api.js';
+import { OutputLimitError, gunzip, inflateRaw } from './inflate.js';
 
 /** The web access a shell's `curl` and `wget` get through `shell.allowWeb`. */
 export interface WebPolicy {
-  /** Host names the agent may reach: `api.github.com` exactly, or `*.wikipedia.org` for its subdomains (not the name itself). */
+  /** Host names the agent may reach: `api.github.com` exactly, or `*.wikipedia.org` for its subdomains (not the name itself),
+   * on the scheme's default port; `name:8443` (or `*.name:8443`) allows that port instead. */
   domains?: string[];
   /** HTTP methods the agent may use (default GET); GET also allows HEAD. */
   methods?: string[];
@@ -22,10 +24,11 @@ export interface WebPolicy {
   timeoutMs?: number;
   /** The most redirects one command follows; each is checked against this policy like the first URL. Default 10. */
   maxRedirects?: number;
-  /** The Authorization header for a host (exact name, one of `domains`), called in host code for every request to it. The
-   * agent never sees it, cannot replace it, and it is scrubbed from what comes back. */
+  /** The Authorization header for a host (`host` on the scheme's default port, or `host:port`; the host an exact name in
+   * `domains`), called in host code for every request to it. The agent never sees it, cannot replace it, and it is scrubbed
+   * from what comes back (gzip and deflate bodies are decoded first). */
   credentials?: Record<string, () => string | Promise<string>>;
-  /** Say "blocked by the web policy" instead of failing like an unknown host (or an unreachable address). */
+  /** Say "blocked by the web policy" and why (default), or false: fail like an unknown host (or an unreachable address). */
   explainBlocked?: boolean;
   /** Sends the requests instead of the network (tests, proxies). It must not follow redirects. The private-address check
    * happens where the name is resolved, so a transport that connects somewhere itself must do it. */
@@ -182,21 +185,26 @@ export function parseIPv6(s: string): Uint8Array | null {
 }
 
 /** @internal Loopback, private, link-local (169.254.169.254, the cloud metadata service), CGNAT, multicast, reserved,
- * unspecified, documentation and benchmarking ranges; for IPv6 also ULA, site-local, Teredo, and any IPv4 it embeds. */
+ * unspecified, documentation and benchmarking ranges, Azure's host endpoint and 6to4 relays; for IPv6 also ULA,
+ * site-local, Teredo, discard, ORCHIDv2, SRv6, IPv4-translated, and any IPv4 it embeds. */
 export function isBlocked(a: Uint8Array): boolean {
   if (a.length === 4) {
     const [x, y] = a;
     return x === 0 || x === 10 || x === 127 || x >= 224 || x === 100 && (y & 0xC0) === 64 || x === 169 && y === 254 || x === 172 && (y & 0xF0) === 16
       || x === 192 && y === 168 || x === 192 && y === 0 && (a[2] === 0 || a[2] === 2) || x === 198 && (y & 0xFE) === 18 || x === 198 && y === 51 && a[2] === 100
-      || x === 203 && y === 0 && a[2] === 113;
+      || x === 203 && y === 0 && a[2] === 113 || x === 168 && y === 63 && a[2] === 129 && a[3] === 16 || x === 192 && y === 88 && a[2] === 99;
   }
   if (a.length !== 16) return true;
   const zero = (from: number, to: number) => a.subarray(from, to).every(b => b === 0);
   if (zero(0, 10) && a[10] === 0xff && a[11] === 0xff) return isBlocked(a.subarray(12));          // ::ffff:a.b.c.d
   if (zero(0, 12)) return true;                                                                    // ::, ::1, ::a.b.c.d
+  if (zero(0, 8) && a[8] === 0xff && a[9] === 0xff && zero(10, 12)) return true;                   // ::ffff:0:a.b.c.d, IPv4-translated
+  if (a[0] === 0x01 && zero(1, 8)) return true;                                                    // 100::/64 discard
   if (a[0] === 0 && a[1] === 0x64 && a[2] === 0xff && a[3] === 0x9b) return isBlocked(a.subarray(12)); // 64:ff9b::/96 NAT64
   if (a[0] === 0x20 && a[1] === 0x02) return isBlocked(a.subarray(2, 6));                          // 2002::/16 6to4
   if (a[0] === 0x20 && a[1] === 0x01 && (a[2] === 0 && a[3] === 0 || a[2] === 0x0d && a[3] === 0xb8)) return true; // Teredo, documentation
+  if (a[0] === 0x20 && a[1] === 0x01 && a[2] === 0 && (a[3] & 0xF0) === 0x20) return true;         // 2001:20::/28 ORCHIDv2
+  if (a[0] === 0x3f && a[1] === 0xff && (a[2] & 0xF0) === 0 || a[0] === 0x5f && a[1] === 0) return true; // 3fff::/20 documentation, 5f00::/16 SRv6
   return (a[0] & 0xFE) === 0xFC || a[0] === 0xFE && ((a[1] & 0xC0) === 0x80 || (a[1] & 0xC0) === 0xC0) || a[0] === 0xFF; // ULA, link/site-local, multicast
 }
 
@@ -218,10 +226,9 @@ type Policy = Required<Omit<WebPolicy, 'transport'>> & { transport?: WebTranspor
  * the recorded exchanges a replay serves instead of the network. */
 export class WebSession {
   readonly policy: Policy;
-  private readonly exact = new Set<string>();
-  private readonly suffixes: string[] = [];
+  private readonly sites: { host: string; wild: boolean; port: number | null }[] = [];
   private readonly methods = new Set<string>();
-  private readonly credentials = new Map<string, () => string | Promise<string>>();
+  private readonly credentials: { host: string; port: number | null; auth: () => string | Promise<string> }[] = [];
   private log: WebExchange[] = [];
   private replayAt = 0;
   private total = 0;
@@ -231,25 +238,25 @@ export class WebSession {
     this.policy = {
       domains: policy.domains ?? [], methods: policy.methods ?? ['GET'], allowHttp: policy.allowHttp ?? false, maxResponseBytes: policy.maxResponseBytes ?? 10_000_000,
       maxRequestsPerCall: policy.maxRequestsPerCall ?? 20, maxRequests: policy.maxRequests ?? 500, timeoutMs: policy.timeoutMs ?? 30_000,
-      maxRedirects: policy.maxRedirects ?? 10, credentials: policy.credentials ?? {}, explainBlocked: policy.explainBlocked ?? false, transport: policy.transport,
+      maxRedirects: policy.maxRedirects ?? 10, credentials: policy.credentials ?? {}, explainBlocked: policy.explainBlocked ?? true, transport: policy.transport,
     };
     const p = this.policy;
     for (const d of p.domains) {
-      const name = d.trim().replace(/\.+$/, '').toLowerCase();
-      const wild = name.startsWith('*.');
-      const bare = wild ? name.slice(2) : name;
-      if (bare.length === 0 || !hostChars(bare)) throw new Error(`${d}: a domain is a host name, or *.name for its subdomains`);
-      if (wild) this.suffixes.push('.' + bare); else this.exact.add(bare);
+      const site = hostPort(d);
+      const wild = site?.host.startsWith('*.') ?? false;
+      const bare = wild ? site!.host.slice(2) : site?.host ?? '';
+      if (bare.length === 0 || !hostChars(bare)) throw new Error(`${d}: a domain is a host name or *.name (its subdomains), optionally with :port`);
+      this.sites.push({ host: bare, wild, port: site!.port });
     }
     for (const m of p.methods) {
       if (!/^[A-Za-z]+$/.test(m)) throw new Error(`${m}: not an HTTP method`);
       this.methods.add(m.toUpperCase());
     }
     if (this.methods.has('GET')) this.methods.add('HEAD');
-    for (const [host, auth] of Object.entries(p.credentials)) {
-      const h = host.trim().replace(/\.+$/, '').toLowerCase();
-      if (!this.exact.has(h)) throw new Error(`${host}: credentials need the exact host name in domains`);
-      this.credentials.set(h, auth);
+    for (const [key, auth] of Object.entries(p.credentials)) {
+      const site = hostPort(key);
+      if (!site || !this.sites.some(s => !s.wild && s.host === site.host)) throw new Error(`${key}: credentials need an exact host name in domains (host or host:port)`);
+      this.credentials.push({ ...site, auth });
     }
     for (const k of ['maxRedirects', 'maxRequests', 'maxRequestsPerCall', 'maxResponseBytes', 'timeoutMs'] as const)
       if (!(typeof p[k] === 'number' && p[k] >= 0 && !Number.isNaN(p[k]))) throw new Error('limits cannot be negative');
@@ -259,42 +266,54 @@ export class WebSession {
   beginCall() { this.thisCall = 0; this.log = []; }
   takeLog(): WebExchange[] { const l = this.log; this.log = []; return l; }
 
-  hostAllowed(host: string) { return this.exact.has(host) || this.suffixes.some(s => host.endsWith(s)); }
+  /** A replay of a recording: what it serves was recorded, the policy only describes it. */
+  get isReplay() { return this.replay !== undefined; }
+
+  private matches(s: { host: string; wild?: boolean; port: number | null }, url: WebUrl, anyPort = false) {
+    return (s.wild ? !url.ip && url.host.endsWith('.' + s.host) : url.host === s.host) && (anyPort || (s.port === null ? url.defaultPort : url.port === s.port));
+  }
+
+  /** "{host} is not an allowed host (allowed: ...)", the host as in the URL (with a port that is not the scheme's). */
+  private notAllowed(url: WebUrl) {
+    const d = this.policy.domains.map(s => s.trim());
+    const allowed = d.length === 0 ? 'none' : d.slice(0, 10).join(', ') + (d.length > 10 ? `, and ${d.length - 10} more` : '');
+    return reason('reasonHost', { host: url.hostForUrl + (url.defaultPort ? '' : ':' + url.port), allowed });
+  }
 
   /** Checks the URL against the policy, then sends one request (no redirects). Throws WebFailure. */
   async send(url: WebUrl, method: string, headers: [string, string][], body: Uint8Array | null, timeoutMs: number, ctx: CommandContext): Promise<WebResponse> {
     const p = this.policy;
     const explain = (why: string) => p.explainBlocked ? why : null;
-    if (url.ip) {
-      if (isBlocked(url.ip)) throw new WebFailure('connect', url.host, url.port, explain(`${url.host} is a private or reserved address`));
-      if (!this.exact.has(url.host)) throw new WebFailure('connect', url.host, url.port, explain(`${url.host} is not an allowed host`));
-    } else if (!this.hostAllowed(url.host)) throw new WebFailure('resolve', url.host, url.port, explain(`${url.host} is not an allowed host`));
-    if (url.scheme === 'http' && !p.allowHttp) throw new WebFailure('protocol', 'http', 0, explain('only https:// URLs are allowed'));
-    if (!this.methods.has(method)) throw new WebFailure('policy', '', 0, `${method} requests are not allowed`);
-    if (body && body.length > MAX_REQUEST_BYTES) throw new WebFailure('policy', '', 0, `the request body is larger than ${MAX_REQUEST_BYTES} bytes`);
+    if (url.ip && isBlocked(url.ip)) throw new WebFailure('connect', url.host, url.port, explain(reason('reasonPrivate', { host: url.host })));
+    if (!this.sites.some(s => this.matches(s, url))) // a name not listed at all does not resolve; a listed one on another port does not connect
+      throw new WebFailure(!url.ip && !this.sites.some(s => this.matches(s, url, true)) ? 'resolve' : 'connect', url.host, url.port, explain(this.notAllowed(url)));
+    if (url.scheme === 'http' && !p.allowHttp) throw new WebFailure('protocol', 'http', 0, explain(reason('reasonHttps')));
+    if (!this.methods.has(method)) throw new WebFailure('policy', '', 0, reason('reasonMethod', { method }));
+    if (body && body.length > MAX_REQUEST_BYTES) throw new WebFailure('policy', '', 0, reason('reasonBody', { limit: String(MAX_REQUEST_BYTES) }));
     if (headers.some(([k, v]) => !/^[\x21-\x39\x3b-\x7e]+$/.test(k) || /[\r\n\0]/.test(v)) || headers.reduce((n, [k, v]) => n + k.length + v.length + 4, 0) > 16 * 1024)
       throw new WebFailure('badHeader');
-    if (this.thisCall >= p.maxRequestsPerCall) throw new WebFailure('policy', '', 0, `the limit of ${p.maxRequestsPerCall} requests in one call was reached`);
-    if (this.total >= p.maxRequests) throw new WebFailure('policy', '', 0, `the limit of ${p.maxRequests} requests for this session was reached`);
+    if (this.thisCall >= p.maxRequestsPerCall) throw new WebFailure('policy', '', 0, reason('reasonCallLimit', { limit: String(p.maxRequestsPerCall) }));
+    if (this.total >= p.maxRequests) throw new WebFailure('policy', '', 0, reason('reasonSessionLimit', { limit: String(p.maxRequests) }));
     this.thisCall++; this.total++;
 
     let sent = headers.filter(([k]) => !DROPPED.has(k.toLowerCase()) && !k.toLowerCase().startsWith('proxy-'));
     let secrets: string[] = [];
-    const auth = this.credentials.get(url.host);
+    const auth = (this.credentials.find(c => c.port !== null && this.matches(c, url)) ?? this.credentials.find(c => this.matches(c, url)))?.auth;
     if (auth) {
-      sent = sent.filter(([k]) => k.toLowerCase() !== 'authorization'); // the agent cannot replace it
+      // the agent cannot replace it, nor fetch the body in pieces that each slip past the scrub
+      sent = sent.filter(([k]) => !['authorization', 'range', 'if-range'].includes(k.toLowerCase()));
       let credential: string;
-      try { credential = (await auth()) ?? ''; } catch { throw new WebFailure('policy', '', 0, `the credentials for ${url.host} are not available`); } // the message may describe the secret
-      if (/[\x00-\x1f\x7f-\x9f]/.test(credential)) throw new WebFailure('policy', '', 0, `the credentials for ${url.host} are not a valid header value`);
+      try { credential = (await auth()) ?? ''; } catch { throw new WebFailure('policy', '', 0, reason('reasonNoCredential', { host: url.host })); } // the message may describe the secret
+      if (/[\x00-\x1f\x7f-\x9f]/.test(credential)) throw new WebFailure('policy', '', 0, reason('reasonBadCredential', { host: url.host }));
       if (credential.length > 0) sent.push(['Authorization', credential]);
       secrets = secretsOf(credential);
     }
 
-    const exchange = this.replay ? this.nextRecorded(method, url.toString()) : await this.exchange(url, method, sent, body, timeoutMs, secrets, ctx);
+    const exchange = this.replay ? this.nextRecorded(method, url.toString()) : await this.exchange(url, method, sent, body, timeoutMs, auth ? secrets : null, ctx);
     this.log.push(exchange);
     if (exchange.error) {
       const kind: WebError = exchange.error === 'blocked' ? 'resolve' : exchange.error;
-      throw new WebFailure(kind, url.host, url.port, exchange.error === 'blocked' ? explain(`${url.host} resolves to a private or reserved address`) : null,
+      throw new WebFailure(kind, url.host, url.port, exchange.error === 'blocked' ? explain(reason('reasonResolvesPrivate', { host: url.host })) : null,
         kind === 'timeout' ? String(Math.floor(timeoutMs)) : '');
     }
     const truncated = exchange.body.length > p.maxResponseBytes;
@@ -307,20 +326,33 @@ export class WebSession {
     throw new WebFailure('replay', '', 0, null, `${method} ${url}`);
   }
 
-  private async exchange(url: WebUrl, method: string, headers: [string, string][], body: Uint8Array | null, timeoutMs: number, secrets: string[], ctx: CommandContext): Promise<WebExchange> {
+  /** `secrets` is null for a host without a credential; with one, a gzip or deflate body is decoded before the scrub. */
+  private async exchange(url: WebUrl, method: string, headers: [string, string][], body: Uint8Array | null, timeoutMs: number, secrets: string[] | null, ctx: CommandContext): Promise<WebExchange> {
     const failed = (error: WebErrorKind): WebExchange => ({ method, url: url.toString(), status: 0, reason: '', headers: [], body: new Uint8Array(0), error });
     const controller = new AbortController();
     const limit = Math.min(timeoutMs, ctx.remainingMs());
     const timer = setTimeout(() => controller.abort(), Math.max(0, limit));
     // past the cap by the longest secret, so a credential cut in half at the cap is still scrubbed
-    const maxBytes = this.policy.maxResponseBytes + (secrets[0]?.length ?? 0);
+    const maxBytes = this.policy.maxResponseBytes + (secrets?.[0]?.length ?? 0);
     try {
       const transport = this.policy.transport ?? defaultTransport();
       const r = await transport({ method, url: url.toString(), headers, body: body ?? undefined, timeoutMs: limit, maxBytes, signal: controller.signal });
       if (r.headers.reduce((n, [k, v]) => n + k.length + v.length + 4, 0) > MAX_HEADER_BYTES) return failed('recv');
-      const data = method === 'HEAD' ? new Uint8Array(0) : r.body.length > maxBytes + 1 ? r.body.subarray(0, maxBytes + 1) : r.body;
-      const scrub = (s: string) => secrets.reduce((t, secret) => t.split(secret).join('[REDACTED]'), s);
-      return { method, url: url.toString(), status: r.status, reason: r.reason || REASONS[r.status] || '', headers: r.headers.map(([k, v]) => [k, scrub(v)]), body: scrubBytes(data, secrets) };
+      let data = method === 'HEAD' ? new Uint8Array(0) : r.body.length > maxBytes + 1 ? r.body.subarray(0, maxBytes + 1) : r.body;
+      let responseHeaders = r.headers;
+      if (secrets) {
+        // the scrub must see the bytes the agent will read, not a compressed form of them
+        const encoding = header(r, 'Content-Encoding')?.trim().toLowerCase();
+        if (encoding !== undefined && encoding !== '' && encoding !== 'identity') {
+          if (encoding !== 'gzip' && encoding !== 'x-gzip' && encoding !== 'deflate') return failed('recv');
+          if (data.length > 0) {
+            try { data = decompress(data, encoding !== 'deflate', maxBytes + 1); } catch { return failed('recv'); }
+          }
+          responseHeaders = responseHeaders.filter(([k]) => !['content-encoding', 'content-length'].includes(k.toLowerCase()));
+        }
+      }
+      const scrub = (s: string) => (secrets ?? []).reduce((t, secret) => t.split(secret).join('[REDACTED]'), s);
+      return { method, url: url.toString(), status: r.status, reason: r.reason || REASONS[r.status] || '', headers: responseHeaders.map(([k, v]) => [k, scrub(v)]), body: scrubBytes(data, secrets ?? []) };
     } catch (e) {
       if (e instanceof DeadlineExceeded) throw e;
       if (controller.signal.aborted) { ctx.checkTime(); return failed('timeout'); } // the call's own deadline ends the whole call
@@ -336,9 +368,10 @@ export class WebSession {
   async fetch(url: WebUrl, method: string, forced: string | null, headers: [string, string][], body: Uint8Array | null, follow: boolean,
     maxRedirects: number, timeoutMs: number, onHop: ((r: WebResponse) => void) | null, ctx: CommandContext): Promise<{ response: WebResponse; redirects: number }> {
     const limit = maxRedirects < 0 ? this.policy.maxRedirects : Math.min(maxRedirects, this.policy.maxRedirects);
-    const firstHost = url.host;
+    const first = url;
     for (let redirects = 0; ; redirects++) {
-      const hopHeaders = url.host === firstHost ? headers : headers.filter(([k]) => k.toLowerCase() !== 'authorization' && k.toLowerCase() !== 'cookie');
+      const sameOrigin = url.scheme === first.scheme && url.host === first.host && url.port === first.port;
+      const hopHeaders = sameOrigin ? headers : headers.filter(([k]) => k.toLowerCase() !== 'authorization' && k.toLowerCase() !== 'cookie');
       const response = await this.send(url, forced ?? method, hopHeaders, body, timeoutMs, ctx);
       onHop?.(response);
       const location = header(response, 'Location');
@@ -351,6 +384,30 @@ export class WebSession {
         headers = headers.filter(([k]) => k.toLowerCase() !== 'content-type');
       }
     }
+  }
+}
+
+const reason = (key: string, values: Record<string, string> = {}) => specMessage('curl', key, values);
+
+/** "name" or "name:port" (trimmed, lower-case, trailing dots dropped), or null when the port is not 1 to 65535. */
+function hostPort(text: string): { host: string; port: number | null } | null {
+  const t = text.trim().toLowerCase(), colon = t.indexOf(':');
+  const host = (colon < 0 ? t : t.slice(0, colon)).replace(/\.+$/, ''), port = colon < 0 ? '' : t.slice(colon + 1);
+  if (colon < 0) return { host, port: null };
+  return /^[0-9]{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535 ? { host, port: Number(port) } : null;
+}
+
+/** @internal gzip or zlib-wrapped deflate, cut at `max` bytes out (an output past `max` keeps its first `max` bytes).
+ * Throws on a corrupt stream. */
+export function decompress(data: Uint8Array, gzip: boolean, max: number): Uint8Array {
+  const room = max + 65_536; // more than one block or match adds, so a stream stopped at the limit has decoded `max` bytes
+  try {
+    if (gzip) return gunzip(data, room).subarray(0, max);
+    if (data.length < 2 || (data[0] & 0x0f) !== 8 || (data[0] * 256 + data[1]) % 31 !== 0 || data[1] & 0x20) throw new Error('not zlib');
+    return inflateRaw(data.subarray(2), room).subarray(0, max);
+  } catch (e) {
+    if (e instanceof OutputLimitError && e.partial) return e.partial.subarray(0, max);
+    throw e;
   }
 }
 
@@ -379,8 +436,14 @@ const fail = (kind: WebErrorKind, message = kind) => Object.assign(new Error(mes
 // Node modules looked up at run time, so bundles for browsers carry no Node import.
 const builtin = (id: string): any => (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule?.(id);
 
-/** @internal The network: node:http(s) with pinned addresses in Node, fetch in a browser. */
-export function defaultTransport(): WebTransport { return builtin('node:https') ? nodeTransport : fetchTransport; }
+/** @internal The network: node:http(s) with pinned addresses in Node, fetch in a browser. Throws in a Node without
+ * process.getBuiltinModule: fetch there would resolve names itself, past the private-address check. */
+export function defaultTransport(): WebTransport {
+  if (!(globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node) return fetchTransport;
+  if (!['node:https', 'node:http', 'node:dns'].every(id => builtin(id)))
+    throw new Error('allowWeb needs process.getBuiltinModule (Node 22.3 or later) to check and pin addresses; or give the policy a transport');
+  return nodeTransport;
+}
 
 /** The addresses `host` resolves to, once; refused when any of them is internal. */
 async function resolvePinned(host: string, ip: Uint8Array | null): Promise<{ address: string; family: number }[]> {

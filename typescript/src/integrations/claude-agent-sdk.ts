@@ -15,7 +15,7 @@ export function bashMcpServer(shell: Shell = new Shell(), options: { description
   instance.registerTool(
     BashTool.name,
     {
-      description: options.description ?? BashTool.description,
+      description: options.description ?? BashTool.descriptionFor(shell),
       inputSchema: { command: z.string().describe(BashTool.inputSchema.properties.command.description) },
     },
     async ({ command }) => ({ content: [{ type: 'text' as const, text: await run(command) }] }),

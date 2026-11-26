@@ -66,9 +66,11 @@ export class Recording {
   createShell(configure?: (shell: Shell) => void, start: ShellSnapshot = this.start, firstCall = 0): Shell {
     const shell = new Shell({ ...this.options, user: start.user, hostname: start.hostname });
     configure?.(shell);
-    if (this.web) // the recorded responses, never the network, and no credential is looked up
-      shell.web = new WebSession({ ...this.web, transport: undefined, credentials: Object.fromEntries(Object.keys(this.web.credentials ?? {}).map(h => [h, () => ''])) },
-        this.calls.slice(firstCall).flatMap(c => c.web ?? []));
+    // the recorded responses, never the network (even when configure allowed it), and no credential is looked up
+    shell.web = this.web
+      ? new WebSession({ ...this.web, transport: undefined, credentials: Object.fromEntries(Object.keys(this.web.credentials ?? {}).map(h => [h, () => ''])) },
+        this.calls.slice(firstCall).flatMap(c => c.web ?? []))
+      : new WebSession({ explainBlocked: false }, []);
     start.restore(shell);
     return shell;
   }

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
-import { gzipSync } from 'node:zlib';
+import { deflateSync, gzipSync } from 'node:zlib';
 import { Shell, Recording, startRecording, type WebPolicy, type WebTransport } from '../src/index.js';
 import { isBlocked, parseIPv4, parseIPv6, webTestHooks } from '../src/web.js';
 
@@ -46,7 +46,8 @@ function fixture() {
   return f;
 }
 
-const fixturePolicy = (transport: WebTransport): WebPolicy => ({ domains: ['api.test'], allowHttp: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], transport });
+// hidden, as real curl and wget fail for a host they cannot reach
+const fixturePolicy = (transport: WebTransport): WebPolicy => ({ domains: ['api.test'], allowHttp: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], explainBlocked: false, transport });
 
 async function make(policy?: (t: WebTransport) => WebPolicy) {
   const f = fixture();
@@ -72,12 +73,12 @@ describe('web policy', () => {
     expect(r.stderr).toBe('curl: (6) Could not resolve host: example.com\n');
   });
 
-  it('blocked hosts can be explained', async () => {
+  it('blocked hosts are explained by default', async () => {
     const { sh, f } = await make();
-    const explain = new Shell().allowWeb({ domains: ['api.test'], explainBlocked: true, transport: fixture().transport });
+    const explain = new Shell().allowWeb({ domains: ['api.test'], transport: fixture().transport });
     let r = await explain.run('curl -sS https://evil.test/; curl -sS http://api.test/; curl -sS https://127.0.0.1/; curl -sS -X POST https://api.test/');
     expect(r.stderr).toBe(
-      'curl: (6) Blocked by the web policy: evil.test is not an allowed host\n' +
+      'curl: (6) Blocked by the web policy: evil.test is not an allowed host (allowed: api.test)\n' +
       'curl: (1) Blocked by the web policy: only https:// URLs are allowed\n' +
       'curl: (7) Blocked by the web policy: 127.0.0.1 is a private or reserved address\n' +
       'curl: (1) Blocked by the web policy: POST requests are not allowed\n');
@@ -88,7 +89,7 @@ describe('web policy', () => {
   });
 
   it('is https only by default', async () => {
-    const sh = new Shell().allowWeb({ domains: ['api.test'], transport: fixture().transport });
+    const sh = new Shell().allowWeb({ domains: ['api.test'], explainBlocked: false, transport: fixture().transport });
     const r = await sh.run('curl -sS http://api.test/hello; echo $?; curl -s https://api.test/hello');
     expect(r.stdout).toBe('1\nhello\n');
     expect(r.stderr).toBe('curl: (1) Protocol "http" not supported or disabled in libcurl\n');
@@ -107,8 +108,10 @@ describe('web policy', () => {
   it('knows the address ranges', () => {
     const ip = (a: string) => a.includes(':') ? parseIPv6(a)! : Uint8Array.from(a.split('.').map(Number));
     const blocked = ['0.0.0.0', '10.1.2.3', '100.64.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '172.31.255.255', '192.168.1.1', '224.0.0.1', '255.255.255.255',
-      '::', '::1', '::ffff:10.0.0.1', '::7f00:1', '64:ff9b::a9fe:a9fe', '2002:7f00:1::', 'fc00::1', 'fe80::1', 'fec0::1', 'ff02::1', '2001::1', '2001:db8::1'];
-    const open = ['8.8.8.8', '1.1.1.1', '172.32.0.1', '100.128.0.1', '2606:4700::1111', '2002:808:808::'];
+      '::', '::1', '::ffff:10.0.0.1', '::7f00:1', '64:ff9b::a9fe:a9fe', '2002:7f00:1::', 'fc00::1', 'fe80::1', 'fec0::1', 'ff02::1', '2001::1', '2001:db8::1',
+      '168.63.129.16', '192.88.99.1', '::ffff:0:8.8.8.8', '100::1', '100::ffff:ffff:ffff:ffff', '2001:20::1', '2001:2f::1', '3fff::1', '3fff:fff::1', '5f00::1', '5f00:ffff::1'];
+    const open = ['8.8.8.8', '1.1.1.1', '172.32.0.1', '100.128.0.1', '2606:4700::1111', '2002:808:808::', '168.63.129.17', '192.88.98.1', '100:0:0:1::1',
+      '2001:30::1', '3fff:1000::1', '5f01::1'];
     for (const a of blocked) expect(isBlocked(ip(a)), a).toBe(true);
     for (const a of open) expect(isBlocked(ip(a)), a).toBe(false);
     expect([...parseIPv4('2130706433')!]).toEqual([127, 0, 0, 1]);
@@ -210,6 +213,180 @@ describe('web policy', () => {
   });
 });
 
+describe('board 030', () => {
+  const SECRET = 'SUPERSECRETTOKEN123';
+  /** A host with a credential whose /echo shows the Authorization header it got, gzipped (or deflated) when asked, and honours Range. */
+  function credentialHost(policy?: (t: WebTransport) => WebPolicy) {
+    const f = fixture();
+    f.override = req => {
+      const h = Object.fromEntries(req.headers.map(([k, v]) => [k.toLowerCase(), v]));
+      let text = enc.encode(`Authorization: ${h.authorization}\n`);
+      const range = /^bytes=(\d+)-(\d+)$/.exec(h.range ?? '');
+      if (range) text = text.slice(Number(range[1]), Number(range[2]) + 1);
+      const encoding = /gzip/.test(h['accept-encoding'] ?? '') ? 'gzip' : /deflate/.test(h['accept-encoding'] ?? '') ? 'deflate' : null;
+      if (encoding) text = new Uint8Array(encoding === 'gzip' ? gzipSync(text) : deflateSync(text));
+      return { status: 200, reason: 'OK', headers: [...(encoding ? [['Content-Encoding', encoding]] as [string, string][] : []), ['Content-Length', String(text.length)]], body: text };
+    };
+    const sh = new Shell().allowWeb(policy?.(f.transport) ?? { domains: ['cred.test'], transport: f.transport, credentials: { 'cred.test': () => 'Bearer ' + SECRET } });
+    return { sh, f };
+  }
+
+  for (const script of [
+    'curl -sS --compressed https://cred.test/echo',
+    "curl -sS -H 'Accept-Encoding: gzip' https://cred.test/echo | gunzip",
+    "curl -sS -H 'Accept-Encoding: deflate' https://cred.test/echo",
+    "curl -sS -H 'Accept-Encoding: gzip' -o p.gz https://cred.test/echo; zcat p.gz",
+    "wget -q -O - --header 'Accept-Encoding: gzip' https://cred.test/echo | gunzip",
+    `a=$(curl -s -H 'Range: bytes=0-20' https://cred.test/echo); b=$(curl -s -H 'Range: bytes=21-60' https://cred.test/echo); echo "$a$b"`,
+  ]) it(`the credential does not leak: ${script}`, async () => {
+    const { sh, f } = credentialHost();
+    const r = await sh.run(script);
+    expect(r.stdout + r.stderr).not.toContain(SECRET);
+    expect(f.requests.length).toBeGreaterThan(0);
+    for (const h of f.seen) expect(h.range).toBeUndefined();
+  });
+
+  it('a compressed response is decoded, recorded decoded and scrubbed', async () => {
+    const { sh } = credentialHost();
+    const rec = startRecording(sh);
+    let r = await sh.run('curl -sS --compressed https://cred.test/echo');
+    expect(r.stdout).toBe('Authorization: [REDACTED]\n');
+    r = await sh.run("curl -sSi -H 'Accept-Encoding: gzip' https://cred.test/echo");
+    expect(r.stdout).toBe('HTTP/1.1 200 OK\r\n\r\nAuthorization: [REDACTED]\n'); // no Content-Encoding or Content-Length left
+    rec.stop();
+    const file = await rec.recording.save();
+    const loaded = await Recording.load(file);
+    for (const x of loaded.calls.flatMap(c => c.web ?? [])) {
+      const text = new TextDecoder('latin1').decode(x.body);
+      expect(text).toBe('Authorization: [REDACTED]\n');
+    }
+    expect(new TextDecoder('latin1').decode(file)).not.toContain(SECRET);
+  });
+
+  it('an unknown or corrupt encoding from a credentialed host fails', async () => {
+    const { sh, f } = credentialHost();
+    f.override = () => ({ status: 200, reason: 'OK', headers: [['Content-Encoding', 'br']], body: enc.encode(SECRET) });
+    let r = await sh.run('curl -sS https://cred.test/echo; echo $?');
+    expect(r.stdout).toBe('56\n');
+    expect(r.stderr).toBe('curl: (56) Failure when receiving data from the peer\n');
+    f.override = () => ({ status: 200, reason: 'OK', headers: [['Content-Encoding', 'gzip']], body: Uint8Array.of(0x1f, 0x8b, 8, 0, 1, 2, 3) });
+    r = await sh.run('curl -sS https://cred.test/echo; echo $?');
+    expect(r.stdout).toBe('56\n');
+    // a bomb stops at the cap
+    f.override = () => ({ status: 200, reason: 'OK', headers: [['Content-Encoding', 'gzip']], body: new Uint8Array(gzipSync(new Uint8Array(1_000_000))) });
+    const capped = credentialHost(t => ({ domains: ['cred.test'], maxResponseBytes: 10_000, transport: t, credentials: { 'cred.test': () => 'Bearer ' + SECRET } }));
+    capped.f.override = f.override;
+    r = await capped.sh.run('curl -s https://cred.test/echo | wc -c; echo ${PIPESTATUS[0]}');
+    expect(r.stdout).toBe('10000\n63\n');
+  });
+
+  it('a blocked host names the allowed sites', async () => {
+    const sh = new Shell().allowWeb({ domains: Array.from({ length: 12 }, (_, i) => `s${i + 1}.test`), transport: fixture().transport });
+    let r = await sh.run('curl -sS https://evil.test/; wget -q https://evil.test/; echo $?');
+    const allowed = 's1.test, s2.test, s3.test, s4.test, s5.test, s6.test, s7.test, s8.test, s9.test, s10.test, and 2 more';
+    expect(r.stderr).toBe(`curl: (6) Blocked by the web policy: evil.test is not an allowed host (allowed: ${allowed})\n` +
+      `wget: blocked by the web policy: evil.test is not an allowed host (allowed: ${allowed})\n`);
+    expect(r.stdout).toBe('4\n');
+    r = await new Shell().allowWeb({ transport: fixture().transport }).run('curl -sS https://evil.test/');
+    expect(r.stderr).toBe('curl: (6) Blocked by the web policy: evil.test is not an allowed host (allowed: none)\n');
+    r = await new Shell().run('curl -sS https://evil.test/'); // no policy: an offline machine
+    expect(r.stderr).toBe('curl: (6) Could not resolve host: evil.test\n');
+  });
+
+  it('a listed host allows only its default port unless a port is listed', async () => {
+    const f = fixture();
+    const sh = new Shell().allowWeb({ domains: ['api.test', 'other.test:8443'], allowHttp: true, transport: f.transport });
+    let r = await sh.run('curl -sS https://api.test:22/; echo $?; curl -s https://api.test:443/hello; curl -s http://api.test/hello; ' +
+      'curl -s https://other.test:8443/hello; curl -sS https://other.test/; echo $?');
+    expect(r.stdout).toBe('7\nhello\nhello\nhello\n7\n');
+    expect(r.stderr).toBe('curl: (7) Blocked by the web policy: api.test:22 is not an allowed host (allowed: api.test, other.test:8443)\n' +
+      'curl: (7) Blocked by the web policy: other.test is not an allowed host (allowed: api.test, other.test:8443)\n');
+    expect(f.requests).toHaveLength(3);
+    const hidden = new Shell().allowWeb({ domains: ['api.test'], transport: f.transport, explainBlocked: false });
+    r = await hidden.run('curl -sS https://api.test:22/; wget https://api.test:22/; echo $?');
+    expect(r.stderr).toContain('curl: (7) Failed to connect to api.test port 22 after 0 ms: Couldn\'t connect to server\n');
+    expect(r.stdout).toBe('4\n');
+    // wget -q still says why when it explains
+    r = await sh.run('wget -q https://api.test:22/');
+    expect(r.stderr).toBe('wget: blocked by the web policy: api.test:22 is not an allowed host (allowed: api.test, other.test:8443)\n');
+  });
+
+  it('a credential goes only to its port', async () => {
+    const f = fixture();
+    const sh = new Shell().allowWeb({
+      domains: ['api.test', 'api.test:8443'], transport: f.transport,
+      credentials: { 'api.test': () => 'Bearer one-secret-value', 'api.test:8443': () => 'Bearer two-secret-value' },
+    });
+    await sh.run('curl -s https://api.test/echo; curl -s https://api.test:8443/echo');
+    expect(f.seen[0].authorization).toBe('Bearer one-secret-value');
+    expect(f.seen[1].authorization).toBe('Bearer two-secret-value');
+    const one = new Shell().allowWeb({ domains: ['api.test', 'api.test:8443'], transport: f.transport, credentials: { 'api.test': () => 'Bearer one-secret-value' } });
+    await one.run('curl -s https://api.test:8443/echo');
+    expect(f.seen[2].authorization).toBeUndefined();
+    expect(() => new Shell().allowWeb({ domains: ['*.api.test'], credentials: { 'x.api.test': () => 'x' }, transport: f.transport })).toThrow();
+    expect(() => new Shell().allowWeb({ domains: ['api.test:0'], transport: f.transport })).toThrow();
+  });
+
+  it("the agent's Authorization and Cookie stay with their origin", async () => {
+    const f = fixture();
+    f.override = req => req.url.startsWith('https://api.test/')
+      ? { status: 302, reason: 'Found', headers: [['Location', 'https://api.test:8443/x']], body: new Uint8Array(0) }
+      : { status: 200, reason: 'OK', headers: [], body: enc.encode('ok\n') };
+    const sh = new Shell().allowWeb({ domains: ['api.test', 'api.test:8443'], transport: f.transport });
+    const r = await sh.run("curl -sL -H 'Authorization: Bearer mine' -H 'Cookie: a=b' https://api.test/go");
+    expect(r.stdout).toBe('ok\n');
+    expect(f.seen[0].authorization).toBe('Bearer mine');
+    expect(f.seen[1].authorization).toBeUndefined();
+    expect(f.seen[1].cookie).toBeUndefined();
+  });
+
+  it('a replay never goes live, even when configure allows the web', async () => {
+    const sh = new Shell();
+    const rec = startRecording(sh);
+    await sh.run('curl -sS https://api.test/hello; echo $?');
+    rec.stop();
+    const loaded = await Recording.load(await rec.recording.save());
+    expect(loaded.web).toBeUndefined();
+    const f = fixture();
+    const shell = loaded.createShell(s => { s.allowWeb({ domains: ['api.test'], transport: f.transport }); });
+    const r = await shell.run('curl -sS https://api.test/hello');
+    expect(r.stderr).toBe('curl: (6) Could not resolve host: api.test\n');
+    expect((await loaded.replay(loaded.createShell(s => { s.allowWeb({ domains: ['api.test'], transport: f.transport }); }))).differences).toEqual([]);
+    expect(f.requests).toHaveLength(0);
+  });
+
+  it('the tool description follows the policy', async () => {
+    const { BashTool } = await import('../src/index.js');
+    const sh = new Shell();
+    expect(BashTool.descriptionFor(sh)).toBe(BashTool.description);
+    sh.allowWeb({ domains: ['api.github.com', '*.wikipedia.org'], methods: ['get', 'POST'], transport: fixture().transport });
+    const expected = BashTool.description.replace('Python, network access and package installation are not. ',
+      'Python and package installation are not; `curl` and `wget` reach only these sites (methods: GET, POST): api.github.com, *.wikipedia.org. ');
+    expect(expected).not.toBe(BashTool.description);
+    expect(BashTool.descriptionFor(sh)).toBe(expected);
+    const { bashTool } = await import('../src/integrations/ai-sdk.js');
+    expect(bashTool(sh).description).toBe(expected);
+    expect(bashTool(sh, { description: 'Mine.' }).description).toBe('Mine.');
+    sh.allowWeb({ domains: Array.from({ length: 23 }, (_, i) => `s${i + 1}.test`), transport: fixture().transport });
+    expect(BashTool.descriptionFor(sh)).toContain('s20.test, and 3 more. Read Word');
+    // a replay shell keeps the plain text
+    const rec = startRecording(sh);
+    await sh.run('true');
+    rec.stop();
+    expect(BashTool.descriptionFor(rec.recording.createShell())).toBe(BashTool.description);
+  });
+
+  it('refuses to fall back to fetch in Node without getBuiltinModule', () => {
+    const proc = process as { getBuiltinModule?: unknown };
+    const saved = proc.getBuiltinModule;
+    proc.getBuiltinModule = undefined;
+    try {
+      expect(() => new Shell().allowWeb({ domains: ['api.test'] })).toThrow(/getBuiltinModule/);
+      expect(() => new Shell().allowWeb({ domains: ['api.test'], transport: fixture().transport })).not.toThrow();
+    } finally { proc.getBuiltinModule = saved; }
+  });
+});
+
 describe('recorded web exchanges', () => {
   it('replay without the network', async () => {
     const { sh, f } = await make();
@@ -300,7 +477,7 @@ describe('the pinned connection', () => {
       process.env.http_proxy = 'http://127.0.0.1:1'; // the host's proxy settings are never used
       webTestHooks.resolve = name => { lookups++; return name === 'pinned.test' ? ['127.0.0.1'] : ['169.254.169.254']; };
       webTestHooks.allowLoopback = true;
-      let sh = new Shell().allowWeb({ domains: ['pinned.test', 'meta.test'], allowHttp: true });
+      let sh = new Shell().allowWeb({ domains: [`pinned.test:${port}`, 'meta.test'], allowHttp: true, explainBlocked: false });
       let r = await sh.run(`curl -sS http://pinned.test:${port}/`);
       expect(r.stderr).toBe('');
       expect(r.stdout).toBe('ok\n');
@@ -312,9 +489,9 @@ describe('the pinned connection', () => {
       expect(r.stderr).toBe('curl: (6) Could not resolve host: meta.test\n');
 
       webTestHooks.allowLoopback = false; // without the hook, loopback is refused like any internal address
-      r = await sh.run(`curl -sS http://pinned.test:${port + 1}/`);
+      r = await sh.run(`curl -sS http://pinned.test:${port}/`);
       expect(r.stderr).toBe('curl: (6) Could not resolve host: pinned.test\n');
-      sh = new Shell().allowWeb({ domains: ['meta.test'], allowHttp: true, explainBlocked: true });
+      sh = new Shell().allowWeb({ domains: ['meta.test'], allowHttp: true });
       r = await sh.run('curl -sS http://meta.test/');
       expect(r.stderr).toBe('curl: (6) Blocked by the web policy: meta.test resolves to a private or reserved address\n');
     } finally {

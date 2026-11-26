@@ -6,7 +6,7 @@ import { serialRunner } from './run.js';
 export function bashTool(shell: Shell = new Shell(), options: { description?: string } = {}) {
   const run = serialRunner(shell);
   return tool({
-    description: options.description ?? BashTool.description,
+    description: options.description ?? BashTool.descriptionFor(shell),
     inputSchema: jsonSchema<{ command: string }>(BashTool.inputSchema as any),
     execute: ({ command }) => run(command),
   });

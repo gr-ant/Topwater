@@ -15,7 +15,7 @@ import { posixToJs } from './regex.js';
 import { COMMANDS, DIAGNOSTICS, ERRNO, diagnostic } from './spec.generated.js';
 import { registerAll } from './commands/index.js';
 import { registerApi, type ApiEndpoint } from './api.js';
-import { WebSession, type WebPolicy } from './web.js';
+import { WebSession, defaultTransport, type WebPolicy } from './web.js';
 import { registerTools, mountMcp, type ToolSpec, type ToolInvoker, type McpClientLike, type McpMountOptions } from './tools.js';
 import { testUnary, testNewer, attributeFlags } from './commands/builtins.js';
 import { SNAPSHOT_SET_OPTIONS, type ShellStateData } from './snapshot.js';
@@ -542,6 +542,7 @@ export class Shell implements ArithHost {
    * are refused, and the connection goes to the address that was checked.
    */
   allowWeb(policy: WebPolicy): this {
+    if (!policy.transport) defaultTransport(); // throws where the checked connection cannot be made
     this.web = new WebSession(policy);
     return this;
   }
