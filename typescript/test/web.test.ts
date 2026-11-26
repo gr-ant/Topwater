@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { deflateSync, gzipSync } from 'node:zlib';
 import { Shell, Recording, startRecording, type WebPolicy, type WebTransport } from '../src/index.js';
-import { isBlocked, parseIPv4, parseIPv6, webTestHooks } from '../src/web.js';
+import { isBlocked, parseIPv4, parseIPv6, pinnedTransport } from '../src/web.js';
 
 const root = new URL('../../', import.meta.url).pathname;
 const routes = JSON.parse(readFileSync(root + 'tests/web/routes.json', 'utf8')).routes as Record<string, any>;
@@ -471,8 +471,6 @@ describe('recorded web exchanges', () => {
 describe('the pinned connection', () => {
   const proxy = process.env.http_proxy;
   afterEach(() => {
-    webTestHooks.resolve = undefined;
-    webTestHooks.allowLoopback = false;
     if (proxy === undefined) delete process.env.http_proxy; else process.env.http_proxy = proxy;
   });
 
@@ -492,9 +490,9 @@ describe('the pinned connection', () => {
     try {
       let lookups = 0;
       process.env.http_proxy = 'http://127.0.0.1:1'; // the host's proxy settings are never used
-      webTestHooks.resolve = name => { lookups++; return name === 'pinned.test' ? ['127.0.0.1'] : ['169.254.169.254']; };
-      webTestHooks.allowLoopback = true;
-      let sh = new Shell().allowWeb({ domains: [`pinned.test:${port}`, 'meta.test'], allowHttp: true, explainBlocked: false });
+      const resolve = (name: string) => { lookups++; return name === 'pinned.test' ? ['127.0.0.1'] : ['169.254.169.254']; };
+      const domains = [`pinned.test:${port}`, 'meta.test'];
+      let sh = new Shell().allowWeb({ domains, allowHttp: true, explainBlocked: false, transport: pinnedTransport({ resolve, allowLoopback: true }) });
       let r = await sh.run(`curl -sS http://pinned.test:${port}/`);
       expect(r.stderr).toBe('');
       expect(r.stdout).toBe('ok\n');
@@ -505,10 +503,11 @@ describe('the pinned connection', () => {
       expect(r.stdout).toBe('6\n4\n');
       expect(r.stderr).toBe('curl: (6) Could not resolve host: meta.test\n');
 
-      webTestHooks.allowLoopback = false; // without the hook, loopback is refused like any internal address
+      // without allowLoopback, loopback is refused like any internal address
+      sh = new Shell().allowWeb({ domains, allowHttp: true, explainBlocked: false, transport: pinnedTransport({ resolve }) });
       r = await sh.run(`curl -sS http://pinned.test:${port}/`);
       expect(r.stderr).toBe('curl: (6) Could not resolve host: pinned.test\n');
-      sh = new Shell().allowWeb({ domains: ['meta.test'], allowHttp: true });
+      sh = new Shell().allowWeb({ domains: ['meta.test'], allowHttp: true, transport: pinnedTransport({ resolve }) });
       r = await sh.run('curl -sS http://meta.test/');
       expect(r.stderr).toBe('curl: (6) Blocked by the web policy: meta.test resolves to a private or reserved address\n');
     } finally {

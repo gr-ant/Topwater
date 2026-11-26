@@ -249,12 +249,6 @@ def is_blocked(a: bytes) -> bool:
         return True  # discard-only 100::/64, documentation 3fff::/20, SRv6 5f00::/16
     return (a[0] & 0xFE) == 0xFC or a[0] == 0xFE and (a[1] & 0xC0) in (0x80, 0xC0) or a[0] == 0xFF  # ULA, link/site-local, multicast
 
-
-# test-only: let a test reach a loopback server through the real resolver and connection path. Not on WebPolicy, so no
-# application setting can switch the address check off. _resolve_for_tests(name) returns IP address strings.
-_resolve_for_tests: Callable[[str], list] | None = None
-_allow_loopback_for_tests = False
-
 MAX_HEADER_BYTES = 64 * 1024
 MAX_REQUEST_BYTES = 1_000_000  # shortcut: fixed upload cap like register_api's; make it a policy option when a host needs more
 _DROPPED = {h.lower() for h in ("Host", "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive", "Upgrade", "TE", "Trailer",
@@ -514,11 +508,14 @@ def blob_name(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def pinned_transport(method, url, headers, body, timeout, limit):
+def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Callable[[str], list] | None = None, allow_loopback: bool = False):
     """The network: resolves the name once, refuses it if any address is internal, and connects to an address it checked.
     The TLS handshake and Host header still use the name, and nothing resolves it a second time (DNS rebinding). No
     proxies (the environment's proxy settings are never read), no cookies, no redirects. timeout is for the whole request:
-    when it passes the socket is shut, so a server that drips bytes cannot hold the thread."""
+    when it passes the socket is shut, so a server that drips bytes cannot hold the thread.
+    Tests only: functools.partial(pinned_transport, resolve=..., allow_loopback=True) as a policy's transport resolves
+    names with resolve (IP address strings) and SKIPS the check for loopback addresses. It is that one policy's choice;
+    nothing switches the check off for any other shell."""
     deadline = time.monotonic() + timeout
 
     def left() -> float:
@@ -528,7 +525,7 @@ def pinned_transport(method, url, headers, body, timeout, limit):
         return t
     u = WebUrl.parse(url)
     try:
-        found = _resolve_for_tests(u.host) if _resolve_for_tests else [ai[4][0] for ai in socket.getaddrinfo(u.host, u.port, type=socket.SOCK_STREAM)]
+        found = resolve(u.host) if resolve else [ai[4][0] for ai in socket.getaddrinfo(u.host, u.port, type=socket.SOCK_STREAM)]
         addresses = [ipaddress.ip_address(str(a).split("%")[0]) for a in found]
     except (OSError, UnicodeError, ValueError):
         raise TransportError("resolve") from None
@@ -536,7 +533,7 @@ def pinned_transport(method, url, headers, body, timeout, limit):
         raise TransportError("resolve")
     for a in addresses:
         plain = a.ipv4_mapped or a if a.version == 6 else a
-        if is_blocked(plain.packed) and not (_allow_loopback_for_tests and plain.is_loopback):
+        if is_blocked(plain.packed) and not (allow_loopback and plain.is_loopback):
             raise TransportError("blocked")
     sock = None
     for a in addresses:

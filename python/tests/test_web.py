@@ -1,6 +1,7 @@
 """curl and wget against tests/web/cases.jsonl (recorded from real curl 8.5.0 and wget 1.21.4; the C# and TypeScript ports run
 the same cases), then what the web policy guarantees: SSRF, caps, credentials, recordings, and the real connection path."""
 import base64
+import functools
 import gzip
 import io
 import json
@@ -17,8 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from topwater import Recording, Shell, WebPolicy  # noqa: E402
-from topwater import webaccess  # noqa: E402
-from topwater.webaccess import is_blocked, parse_ipv4  # noqa: E402
+from topwater.webaccess import is_blocked, parse_ipv4, pinned_transport  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WEB = ROOT / "tests" / "web"
@@ -424,19 +424,17 @@ def test_bad_policies_are_refused():
 
 
 @pytest.fixture
-def hooks():
+def restore_proxy():
     proxy = os.environ.get("http_proxy")
     yield
-    webaccess._resolve_for_tests = None
-    webaccess._allow_loopback_for_tests = False
     if proxy is None:
         os.environ.pop("http_proxy", None)
     else:
         os.environ["http_proxy"] = proxy
 
 
-def test_names_resolve_once_and_connect_to_the_checked_address(hooks):
-    """The real connection path (no transport), against a loopback server the test-only hooks let through."""
+def test_names_resolve_once_and_connect_to_the_checked_address(restore_proxy):
+    """The real connection path, against a loopback server a test-only transport lets through."""
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen()
@@ -460,10 +458,9 @@ def test_names_resolve_once_and_connect_to_the_checked_address(hooks):
         return ["127.0.0.1"] if name == "pinned.test" else ["169.254.169.254"]
     try:
         os.environ["http_proxy"] = "http://127.0.0.1:1"  # the host's proxy settings are never used
-        webaccess._resolve_for_tests = resolve
-        webaccess._allow_loopback_for_tests = True
-        sh = Shell().allow_web(WebPolicy(domains=[f"pinned.test:{port}", f"pinned.test:{port + 1}", "meta.test"], allow_http=True,
-                                         explain_blocked=False))
+        domains = [f"pinned.test:{port}", f"pinned.test:{port + 1}", "meta.test"]
+        sh = Shell().allow_web(WebPolicy(domains=domains, allow_http=True, explain_blocked=False,
+                                         transport=functools.partial(pinned_transport, resolve=resolve, allow_loopback=True)))
         r = sh.run(f"curl -sS http://pinned.test:{port}/")
         assert (r.stdout, r.stderr) == ("ok\n", "")
         assert seen["host"] == f"pinned.test:{port}"
@@ -473,9 +470,11 @@ def test_names_resolve_once_and_connect_to_the_checked_address(hooks):
         assert r.stdout == "6\n4\n"
         assert r.stderr == "curl: (6) Could not resolve host: meta.test\n"
 
-        webaccess._allow_loopback_for_tests = False  # without the hook, loopback is refused like any internal address
+        # without allow_loopback, loopback is refused like any internal address
+        sh = Shell().allow_web(WebPolicy(domains=domains, allow_http=True, explain_blocked=False,
+                                         transport=functools.partial(pinned_transport, resolve=resolve)))
         assert sh.run(f"curl -sS http://pinned.test:{port + 1}/").stderr == "curl: (6) Could not resolve host: pinned.test\n"
-        sh = Shell().allow_web(WebPolicy(domains=["meta.test"], allow_http=True))
+        sh = Shell().allow_web(WebPolicy(domains=["meta.test"], allow_http=True, transport=functools.partial(pinned_transport, resolve=resolve)))
         assert sh.run("curl -sS http://meta.test/").stderr == \
             "curl: (6) Blocked by the web policy: meta.test resolves to a private or reserved address\n"
     finally:
@@ -567,7 +566,7 @@ def test_the_tool_description_names_the_sites():
     assert bash_tool(sh, description="custom").description == "custom"
 
 
-def test_a_dripping_server_is_stopped_at_the_timeout(hooks):
+def test_a_dripping_server_is_stopped_at_the_timeout(restore_proxy):
     """The real connection path: a server that sends one byte every 0.1 s inside each read's timeout is cut off at the
     request's timeout, and no thread is left reading."""
     listener = socket.socket()
@@ -596,9 +595,8 @@ def test_a_dripping_server_is_stopped_at_the_timeout(hooks):
     server = threading.Thread(target=serve, daemon=True)
     server.start()
     try:
-        webaccess._resolve_for_tests = lambda name: ["127.0.0.1"]
-        webaccess._allow_loopback_for_tests = True
-        sh = Shell().allow_web(WebPolicy(domains=[f"drip.test:{port}"], allow_http=True, timeout=1.0))
+        sh = Shell().allow_web(WebPolicy(domains=[f"drip.test:{port}"], allow_http=True, timeout=1.0,
+                                         transport=functools.partial(pinned_transport, resolve=lambda name: ["127.0.0.1"], allow_loopback=True)))
         threads = threading.active_count()
         started = time.monotonic()
         r = sh.run(f"curl -sS http://drip.test:{port}/; echo $?")

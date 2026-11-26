@@ -93,8 +93,9 @@ Even against a hostile agent:
   unique-local, site-local, discard or ORCHID, or one of these IPv4 ranges inside IPv6 (`::ffff:`, NAT64, 6to4), the
   request is refused. Otherwise the connection goes to the
   address that was checked, while TLS and `Host` use the name, so DNS rebinding cannot swap it. IP literals are
-  refused the same way, even when listed in `Domains`. No policy setting turns this off; only test hooks inside the
-  library can.
+  refused the same way, even when listed in `Domains`. No policy setting turns this off, and there is no global
+  switch: the tests reach a loopback server through a test-only handler (transport) that their own shell is given. A
+  `Handler` (`transport`) of yours replaces the connection, and the check with it.
 - **Nothing of yours leaks.** No proxy settings, cookies or default headers of your process are used. The agent's
   `Host`, `Content-Length`, `Transfer-Encoding`, `Connection` and `Proxy-*` headers are dropped, header values cannot
   hold line breaks, and its `Authorization` (and `-u`) for a host with a credential is replaced by yours. Its own

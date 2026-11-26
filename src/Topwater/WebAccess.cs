@@ -207,11 +207,6 @@ internal static class WebAddresses
         if (a[0] == 0x20 && a[1] == 0x01 && (a[2] == 0 && a[3] == 0 || a[2] == 0x0d && a[3] == 0xb8)) return true; // Teredo, documentation
         return (a[0] & 0xFE) == 0xFC || a[0] == 0xFE && (a[1] & 0xC0) is 0x80 or 0xC0 || a[0] == 0xFF; // ULA, link/site-local, multicast
     }
-
-    // test-only: let a test reach a loopback server through the real resolver and connection path. Not on WebPolicy, so
-    // no application setting can switch the address check off.
-    internal static Func<string, IPAddress[]>? ResolveForTests;
-    internal static bool AllowLoopbackForTests;
 }
 
 internal sealed record WebResponse(WebUrl Url, string Method, int Status, string Reason, List<KeyValuePair<string, string>> Headers, byte[] Body, bool Truncated)
@@ -228,10 +223,17 @@ internal sealed class WebSession
     static readonly HashSet<string> DroppedHeaders = new(StringComparer.OrdinalIgnoreCase)
         { "Host", "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive", "Upgrade", "TE", "Trailer", "Proxy-Authorization", "Proxy-Connection" };
 
-    internal static readonly SocketsHttpHandler DefaultHandler = new()
+    internal static readonly SocketsHttpHandler DefaultHandler = PinnedHandler();
+
+    /// <summary>The network handler: no redirects, cookies, proxy or decompression, and every connection pinned to a checked
+    /// address. Tests pass their own (through <see cref="WebPolicy.Handler"/>) with <paramref name="resolve"/> instead of DNS
+    /// and <paramref name="allowLoopback"/>, which SKIPS the check for loopback addresses: never for an agent's shell. A
+    /// per-handler choice, so nothing switches the check off for any other shell.</summary>
+    internal static SocketsHttpHandler PinnedHandler(Func<string, IPAddress[]>? resolve = null, bool allowLoopback = false) => new()
     {
         AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
-        MaxResponseHeadersLength = MaxHeaderBytes / 1024, PooledConnectionLifetime = TimeSpan.FromMinutes(1), ConnectCallback = ConnectPinnedAsync,
+        MaxResponseHeadersLength = MaxHeaderBytes / 1024, PooledConnectionLifetime = TimeSpan.FromMinutes(1),
+        ConnectCallback = (context, ct) => ConnectPinnedAsync(context, resolve, allowLoopback, ct),
     };
     static readonly HttpClient DefaultClient = new(DefaultHandler) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
@@ -484,17 +486,17 @@ internal sealed class WebSession
 
     /// <summary>Resolves the name once, refuses it if any address is internal, and connects to an address it checked: the
     /// TLS handshake and Host header still use the name, and nothing resolves it a second time (DNS rebinding).</summary>
-    static async ValueTask<Stream> ConnectPinnedAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+    static async ValueTask<Stream> ConnectPinnedAsync(SocketsHttpConnectionContext context, Func<string, IPAddress[]>? resolve, bool allowLoopback, CancellationToken ct)
     {
         var host = context.DnsEndPoint.Host;
         IPAddress[] addresses;
-        try { addresses = WebAddresses.ResolveForTests?.Invoke(host) ?? await Dns.GetHostAddressesAsync(host, ct); }
+        try { addresses = resolve?.Invoke(host) ?? await Dns.GetHostAddressesAsync(host, ct); }
         catch (SocketException) { throw new WebFailure(WebError.Resolve, host); }
         if (addresses.Length == 0) throw new WebFailure(WebError.Resolve, host);
         foreach (var a in addresses)
         {
             var bytes = (a.IsIPv4MappedToIPv6 ? a.MapToIPv4() : a).GetAddressBytes();
-            if (WebAddresses.IsBlocked(bytes) && !(WebAddresses.AllowLoopbackForTests && IPAddress.IsLoopback(a)))
+            if (WebAddresses.IsBlocked(bytes) && !(allowLoopback && IPAddress.IsLoopback(a)))
                 throw new WebFailure(WebError.Resolve, host, blocked: "private");
         }
         foreach (var a in addresses)

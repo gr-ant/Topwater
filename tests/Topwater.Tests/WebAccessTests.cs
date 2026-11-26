@@ -584,8 +584,7 @@ public class WebAccessTests
     }
 }
 
-/// <summary>The real connection path (no handler), against a loopback server the test-only hooks let through.</summary>
-[Collection("web hooks")]
+/// <summary>The real connection path, against a loopback server a test-only handler lets through.</summary>
 public class WebPinningTests
 {
     [Fact]
@@ -609,9 +608,9 @@ public class WebPinningTests
         {
             Assert.False(WebSession.DefaultHandler.UseProxy); // the host's proxy settings are never used (not set in the
             Assert.False(WebSession.DefaultHandler.UseCookies); // environment here: other tests run beside this one)
-            WebAddresses.ResolveForTests = name => { lookups++; return name == "pinned.test" ? [IPAddress.Loopback] : [IPAddress.Parse("169.254.169.254")]; };
-            WebAddresses.AllowLoopbackForTests = true;
-            var sh = new Shell().AllowWeb(new WebPolicy { Domains = [$"pinned.test:{port}", $"pinned.test:{port + 1}", "meta.test"], AllowHttp = true, ExplainBlocked = false });
+            IPAddress[] Resolve(string name) { lookups++; return name == "pinned.test" ? [IPAddress.Loopback] : [IPAddress.Parse("169.254.169.254")]; }
+            var domains = new[] { $"pinned.test:{port}", $"pinned.test:{port + 1}", "meta.test" };
+            var sh = new Shell().AllowWeb(new WebPolicy { Domains = domains, AllowHttp = true, ExplainBlocked = false, Handler = WebSession.PinnedHandler(Resolve, allowLoopback: true) });
             var r = await sh.RunAsync($"curl -sS http://pinned.test:{port}/");
             Assert.Equal("ok\n", r.Stdout);
             Assert.Equal($"pinned.test:{port}", host);
@@ -621,17 +620,16 @@ public class WebPinningTests
             Assert.Equal("6\n4\n", r.Stdout);
             Assert.Equal("curl: (6) Could not resolve host: meta.test\n", r.Stderr);
 
-            WebAddresses.AllowLoopbackForTests = false; // without the hook, loopback is refused like any internal address
+            // without allowLoopback, loopback is refused like any internal address
+            sh = new Shell().AllowWeb(new WebPolicy { Domains = domains, AllowHttp = true, ExplainBlocked = false, Handler = WebSession.PinnedHandler(Resolve) });
             r = await sh.RunAsync($"curl -sS http://pinned.test:{port + 1}/");
             Assert.Equal($"curl: (6) Could not resolve host: pinned.test\n", r.Stderr);
-            sh = new Shell().AllowWeb(new WebPolicy { Domains = ["meta.test"], AllowHttp = true, ExplainBlocked = true });
+            sh = new Shell().AllowWeb(new WebPolicy { Domains = ["meta.test"], AllowHttp = true, ExplainBlocked = true, Handler = WebSession.PinnedHandler(Resolve) });
             r = await sh.RunAsync("curl -sS http://meta.test/");
             Assert.Equal("curl: (6) Blocked by the web policy: meta.test resolves to a private or reserved address\n", r.Stderr);
         }
         finally
         {
-            WebAddresses.ResolveForTests = null;
-            WebAddresses.AllowLoopbackForTests = false;
             listener.Stop();
         }
         await serve;

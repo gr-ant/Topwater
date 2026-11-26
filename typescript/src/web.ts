@@ -208,10 +208,6 @@ export function isBlocked(a: Uint8Array): boolean {
   return (a[0] & 0xFE) === 0xFC || a[0] === 0xFE && ((a[1] & 0xC0) === 0x80 || (a[1] & 0xC0) === 0xC0) || a[0] === 0xFF; // ULA, link/site-local, multicast
 }
 
-/** @internal Test-only: let a test reach a loopback server through the real resolver and connection path. Not on
- * WebPolicy and not exported from the package, so no application setting can switch the address check off. */
-export const webTestHooks: { resolve?: (name: string) => string[]; allowLoopback: boolean } = { allowLoopback: false };
-
 /** @internal */
 export interface WebResponse { url: WebUrl; method: string; status: number; reason: string; headers: [string, string][]; body: Uint8Array; truncated: boolean }
 export const header = (r: { headers: [string, string][] }, name: string) => r.headers.find(h => h[0].toLowerCase() === name.toLowerCase())?.[1];
@@ -446,10 +442,10 @@ export function defaultTransport(): WebTransport {
 }
 
 /** The addresses `host` resolves to, once; refused when any of them is internal. */
-async function resolvePinned(host: string, ip: Uint8Array | null): Promise<{ address: string; family: number }[]> {
+async function resolvePinned(host: string, ip: Uint8Array | null, test: PinnedTestOptions): Promise<{ address: string; family: number }[]> {
   let addresses: { address: string; family: number }[];
   if (ip) addresses = [{ address: ip.length === 4 ? ip.join('.') : host, family: ip.length === 4 ? 4 : 6 }];
-  else if (webTestHooks.resolve) addresses = webTestHooks.resolve(host).map(a => ({ address: a, family: a.includes(':') ? 6 : 4 }));
+  else if (test.resolve) addresses = test.resolve(host).map(a => ({ address: a, family: a.includes(':') ? 6 : 4 }));
   else {
     try { addresses = await builtin('node:dns').promises.lookup(host, { all: true, verbatim: true }); } catch { throw fail('resolve'); }
   }
@@ -458,19 +454,23 @@ async function resolvePinned(host: string, ip: Uint8Array | null): Promise<{ add
     const bytes = a.family === 6 ? parseIPv6(a.address) : parseIPv4(a.address);
     const mapped = bytes && bytes.length === 16 && bytes.subarray(0, 10).every(b => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff ? bytes.subarray(12) : bytes;
     const loopback = !!mapped && (mapped.length === 4 ? mapped[0] === 127 : mapped.every((b, i) => b === (i === 15 ? 1 : 0)));
-    if ((!mapped || isBlocked(mapped)) && !(webTestHooks.allowLoopback && loopback)) throw fail('blocked');
+    if ((!mapped || isBlocked(mapped)) && !(test.allowLoopback && loopback)) throw fail('blocked');
   }
   return addresses;
 }
 
 const TLS = /^(ERR_TLS|ERR_SSL|CERT_|UNABLE_TO_|DEPTH_ZERO|SELF_SIGNED|HOSTNAME_MISMATCH|ERR_CERT)/;
 
-/** Resolves the name once, refuses it if any address is internal, and connects to an address it checked: the TLS handshake
- * and Host header still use the name, and nothing resolves it a second time (DNS rebinding). No agent (so no pooling and no
- * proxy from the environment), no cookies. */
-const nodeTransport: WebTransport = async req => {
+/** Tests only: `resolve` (IP address strings) instead of DNS, and `allowLoopback`, which SKIPS the check for loopback
+ * addresses. Passed to {@link pinnedTransport} for one policy's transport, so nothing switches the check off elsewhere. */
+interface PinnedTestOptions { resolve?: (name: string) => string[]; allowLoopback?: boolean }
+
+/** @internal Resolves the name once, refuses it if any address is internal, and connects to an address it checked: the TLS
+ * handshake and Host header still use the name, and nothing resolves it a second time (DNS rebinding). No agent (so no
+ * pooling and no proxy from the environment), no cookies. Not exported from the package. */
+export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => async req => {
   const url = WebUrl.parse(req.url);
-  const addresses = await resolvePinned(url.host, url.ip);
+  const addresses = await resolvePinned(url.host, url.ip, test);
   if (req.signal.aborted) throw fail('timeout');
   const lib = builtin(url.scheme === 'https' ? 'node:https' : 'node:http');
   const headers: [string, string][] = [['Host', url.hostForUrl + (url.defaultPort ? '' : ':' + url.port)], ...req.headers];
@@ -505,6 +505,8 @@ const nodeTransport: WebTransport = async req => {
     r.end();
   });
 };
+
+const nodeTransport = pinnedTransport();
 
 function classify(e: any, signal: AbortSignal) {
   const code = String(e?.code ?? '');
