@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.IO.Compression;
 using System.Text;
 
 namespace Topwater;
@@ -7,7 +6,7 @@ namespace Topwater;
 /// <summary>curl and wget over the shell's <see cref="WebSession"/>; without one every host fails to resolve.</summary>
 internal static partial class Builtins
 {
-    static readonly WebSession NoNetwork = new(new WebPolicy());
+    static readonly WebSession NoNetwork = new(WebSession.NoNetwork);
 
     static void RegisterWebCommands(Shell shell)
     {
@@ -201,7 +200,10 @@ internal static partial class Builtins
                 (last, redirects) = await web.FetchAsync(url, method, forced, sent, body, follow, maxRedirs, timeout, OnHop, ctx.CancellationToken);
                 var data = last.Body;
                 if (compressed && !last.Truncated && last.Header("Content-Encoding")?.Trim().ToLowerInvariant() is "gzip" or "x-gzip" or "deflate" && data.Length > 0)
-                    data = Decompress(data, last.Header("Content-Encoding")!.Trim().ToLowerInvariant() != "deflate", web.Policy.MaxResponseBytes, out var tooLarge) ?? throw new WebFailure(WebError.Recv);
+                {
+                    data = WebSession.Inflate(data, last.Header("Content-Encoding")!.Trim().ToLowerInvariant() != "deflate", web.Policy.MaxResponseBytes + 1) ?? throw new WebFailure(WebError.Recv);
+                    if (data.Length > web.Policy.MaxResponseBytes) throw new WebFailure(WebError.TooLarge);
+                }
                 if ((fail || failWithBody) && last.Status >= 400)
                 {
                     if (failWithBody) buffer.Write(data);
@@ -274,26 +276,6 @@ internal static partial class Builtins
         string Enc(string v) => string.Concat(Encoding.UTF8.GetBytes(v).Select(b =>
             char.IsAsciiLetterOrDigit((char)b) || b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~' ? ((char)b).ToString() : b == ' ' ? "+" : $"%{b:X2}"));
         return eq < 0 ? Enc(s) : eq == 0 ? Enc(s[1..]) : s[..eq] + "=" + Enc(s[(eq + 1)..]);
-    }
-
-    /// <summary>gzip or zlib-wrapped deflate, at most <paramref name="max"/> bytes out; null when the data is corrupt.</summary>
-    static byte[]? Decompress(byte[] data, bool gzip, long max, out bool tooLarge)
-    {
-        tooLarge = false;
-        try
-        {
-            using var input = new MemoryStream(data);
-            using Stream z = gzip ? new GZipStream(input, CompressionMode.Decompress) : new ZLibStream(input, CompressionMode.Decompress);
-            var output = new MemoryStream();
-            var chunk = new byte[16384];
-            for (int n; (n = z.Read(chunk)) > 0;)
-            {
-                if (output.Length + n > max) throw new WebFailure(WebError.TooLarge);
-                output.Write(chunk, 0, n);
-            }
-            return output.ToArray();
-        }
-        catch (InvalidDataException) { return null; }
     }
 
     static string WriteOut(CommandContext ctx, string format, WebResponse? r, int redirects, int code, string method, string? forced)
@@ -473,7 +455,7 @@ internal static partial class Builtins
                 {
                     var length = r.Header("Content-Length");
                     var type = r.Header("Content-Type");
-                    Say(M("length", ("length", (length ?? "unspecified") + (type != null ? $" [{type}]" : ""))));
+                    Say(M("length", ("length", (length ?? M("lengthUnspecified")) + (type != null ? $" [{type}]" : ""))));
                     string? file = document;
                     if (file == null)
                     {
@@ -507,7 +489,7 @@ internal static partial class Builtins
             catch (WebFailure f)
             {
                 (code, var message) = WgetError(f, web.Policy.ExplainBlocked);
-                if (message.Length > 0 && (!quiet || f.Kind is WebError.Policy or WebError.Replay or WebError.BadHeader)) ctx.Stderr.WriteLine(message);
+                if (message.Length > 0 && (!quiet || f.Blocked != null && web.Policy.ExplainBlocked || f.Kind is WebError.Policy or WebError.Replay or WebError.BadHeader)) ctx.Stderr.WriteLine(message);
             }
             if (code != 0) exit = code;
         }

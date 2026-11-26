@@ -403,7 +403,7 @@ network. `AllowWeb` lets them reach the sites you list:
 ```csharp
 shell.AllowWeb(new WebPolicy
 {
-    Domains = ["api.github.com", "*.wikipedia.org"],   // *.x matches subdomains of x, not x itself
+    Domains = ["api.github.com", "*.wikipedia.org"],   // *.x matches subdomains of x, not x itself; name:8443 for another port
     Methods = ["GET"],                                  // the default; GET also allows HEAD
     Credentials = { ["api.github.com"] = () => $"Bearer {secrets.Get("github")}" },
 });
@@ -420,16 +420,16 @@ shell.allowWeb({ domains: ['api.github.com', '*.wikipedia.org'], credentials: { 
 
 | Option | Default | |
 |---|---|---|
-| `Domains` | none | host names, exact or `*.name` |
+| `Domains` | none | host names, exact or `*.name`, on port 443 (80 for http); `name:port` allows that port instead |
 | `Methods` | `GET` | |
 | `AllowHttp` | false | https only unless set |
 | `MaxResponseBytes` | 10,000,000 | read as it streams; the command stops there (`curl` exit 63) |
 | `MaxRequestsPerCall`, `MaxRequests` | 20, 500 | per tool call and per shell; every redirect counts |
 | `Timeout` | 30 s | per request; the call's own limit still applies |
 | `MaxRedirects` | 10 | `curl --max-redirs` and `wget --max-redirect` can only lower it |
-| `Credentials` | none | the `Authorization` header for an exact host, added in your code |
-| `ExplainBlocked` | false | say "Blocked by the web policy: ..." instead of failing like an unknown host |
-| `Handler` (`transport` in Python and TypeScript) | the network | send requests your own way (tests, proxies); must not follow redirects |
+| `Credentials` | none | the `Authorization` header for an exact host (`host:port` for another port), added in your code |
+| `ExplainBlocked` | true | false: a refused host fails like an unknown one instead of saying why |
+| `Handler` (`transport` in Python and TypeScript) | the network | send requests your own way (tests, proxies); must not follow redirects or keep cookies (C# refuses `AllowAutoRedirect` and `UseCookies`), and should set `UseProxy` deliberately |
 
 `curl` takes `-s -S -f --fail-with-body -L --max-redirs -i -I -o -O -X -H -d --data-raw --data-binary
 --data-urlencode --json -G -u -A -w -m --compressed -v` (`@file` and `@-` work as in curl; `-w` knows `http_code`,
@@ -441,11 +441,11 @@ no progress meter, a shorter `wget` report (no Resolving/Connecting lines, dots 
 only the request and response headers, and `-k` / `--no-check-certificate` are accepted and ignored: certificates
 are always checked.
 
-A host outside the policy fails exactly like a name that does not resolve (`curl: (6) Could not resolve host`,
-`wget` exit 4), and an IP address like one that refuses connections (`curl: (7)`). That is what the agent would
-see on a machine whose DNS only knows your sites, and it says nothing about the policy. Set `ExplainBlocked` when
-you would rather the agent learn why, so it stops trying. A method the policy does not allow, or a reached request
-limit, always says so (exit 1).
+A host outside the policy says so: `curl: (6) Blocked by the web policy: evil.example is not an allowed host
+(allowed: api.github.com, *.wikipedia.org)` (the first ten sites; wget exit 4), so the agent stops trying instead of
+reporting a broken site. An IP address or a port that is not listed gets exit 7 the same way. A shell with no policy is
+an offline machine: `curl: (6) Could not resolve host`. With `ExplainBlocked = false` a policy's refusals look like that
+too. A method the policy does not allow, or a reached request limit, always says so (exit 1).
 
 What it guarantees, even against a hostile agent:
 
@@ -453,22 +453,30 @@ What it guarantees, even against a hostile agent:
   (`https://allowed.com@evil.com/` is evil.com), IPv4 in any form (`2130706433`, `0x7f.1`, `0177.0.0.1`) is
   normalized first, and every redirect is checked like the first URL.
 - **No internal addresses.** A name is resolved once; if any address is loopback, private, link-local (169.254.169.254,
-  the cloud metadata service), CGNAT, multicast, reserved, unspecified, IPv6 unique-local or site-local, or an IPv4
-  one of these inside IPv6 (`::ffff:`, NAT64, 6to4), the request is refused. Otherwise the connection goes to the
+  the cloud metadata service), Azure's 168.63.129.16, CGNAT, multicast, reserved, unspecified, documentation, IPv6
+  unique-local, site-local, discard or ORCHID, or one of these IPv4 ranges inside IPv6 (`::ffff:`, NAT64, 6to4), the
+  request is refused. Otherwise the connection goes to the
   address that was checked, while TLS and `Host` use the name, so DNS rebinding cannot swap it. IP literals are
-  refused the same way, even when listed in `Domains`. No setting turns this off; only the tests can.
+  refused the same way, even when listed in `Domains`. No policy setting turns this off; only test hooks inside the
+  library can.
 - **Nothing of yours leaks.** No proxy settings, cookies or default headers of your process are used. The agent's
   `Host`, `Content-Length`, `Transfer-Encoding`, `Connection` and `Proxy-*` headers are dropped, header values cannot
-  hold line breaks, and its `Authorization` (and `-u`) for a host with a credential is replaced by yours. Neither
-  goes to another host after a redirect.
+  hold line breaks, and its `Authorization` (and `-u`) for a host with a credential is replaced by yours. Its own
+  `Authorization` and `Cookie` do not follow a redirect to another scheme, host or port.
 - **The credential stays hidden,** as with `RegisterApi`: not in `-v`, scrubbed from response headers and bodies,
-  and never stored in a recording.
+  and never stored in a recording. A host's credential goes only to the port it was given for. For such a host a
+  gzip or deflate body is decoded before the scrub (another encoding fails the request), and the agent's `Range`
+  and `If-Range` are dropped, so it cannot fetch the credential compressed or in pieces. The scrub finds the
+  credential as written, not a transformed copy (base64, reversed, split across JSON strings): do not give a
+  credential to a host that returns it in another form.
 - **Bounded.** Response bytes, response headers (64 KB), request bodies (1,000,000 bytes), requests, redirects and
   time are capped. Bodies reach the virtual filesystem only through normal output and `-o`.
 
 What it does not guarantee: the agent can read anything on the sites you allow and send what it read elsewhere to
-any allowed site with an allowed method. Keep `Methods` to `GET` unless writes are the point, list exact hosts, and
-mention the sites in your tool description (the default one says the network is not available). A `Handler` that
+any allowed site with an allowed method. Keep `Methods` to `GET` unless writes are the point, and list exact hosts.
+The default tool description follows the policy: `BashTool.DescriptionFor(shell)` (`tool_description(shell)`,
+`BashTool.descriptionFor(shell)`), which every integration uses unless you pass your own, names the sites (the first
+20) and methods in place of "network access is not available". A `Handler` that
 connects somewhere itself skips the address check, which happens where names are resolved. `Fork()` does not
 inherit web access.
 

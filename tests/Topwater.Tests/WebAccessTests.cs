@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Topwater;
+using Topwater.AI;
 
 namespace Topwater.Tests;
 
@@ -62,6 +63,7 @@ public class WebAccessTests
     internal static WebPolicy FixturePolicy(HttpMessageHandler handler) => new()
     {
         Domains = ["api.test"], AllowHttp = true, Methods = ["GET", "POST", "PUT", "DELETE", "PATCH"], Handler = handler,
+        ExplainBlocked = false, // the shared cases match real curl and wget, which only know that a name does not resolve
     };
 
     static async Task<(Shell Shell, FixtureHandler Handler)> Make(Func<FixtureHandler, WebPolicy>? policy = null)
@@ -94,13 +96,13 @@ public class WebAccessTests
     }
 
     [Fact]
-    public async Task BlockedHostsCanBeExplained()
+    public async Task BlockedHostsExplainThemselvesWhenAPolicyIsSet()
     {
         var (sh, handler) = await Make(h => FixturePolicy(h));
-        var explain = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test"], ExplainBlocked = true, Handler = new FixtureHandler() });
+        var explain = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test"], Handler = new FixtureHandler() }); // explaining is the default
         var r = await explain.RunAsync("curl -sS https://evil.test/; curl -sS http://api.test/; curl -sS https://127.0.0.1/; curl -sS -X POST https://api.test/");
         Assert.Equal(
-            "curl: (6) Blocked by the web policy: evil.test is not an allowed host\n" +
+            "curl: (6) Blocked by the web policy: evil.test is not an allowed host (allowed: api.test)\n" +
             "curl: (1) Blocked by the web policy: only https:// URLs are allowed\n" +
             "curl: (7) Blocked by the web policy: 127.0.0.1 is a private or reserved address\n" +
             "curl: (1) Blocked by the web policy: POST requests are not allowed\n", r.Stderr);
@@ -113,7 +115,7 @@ public class WebAccessTests
     [Fact]
     public async Task HttpsOnlyByDefault()
     {
-        var sh = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test"], Handler = new FixtureHandler() });
+        var sh = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test"], Handler = new FixtureHandler(), ExplainBlocked = false });
         var r = await sh.RunAsync("curl -sS http://api.test/hello; echo $?; curl -s https://api.test/hello");
         Assert.Equal("1\nhello\n", r.Stdout);
         Assert.Equal("curl: (1) Protocol \"http\" not supported or disabled in libcurl\n", r.Stderr);
@@ -144,6 +146,7 @@ public class WebAccessTests
     {
         string[] blocked = ["0.0.0.0", "10.1.2.3", "100.64.0.1", "127.0.0.1", "169.254.169.254", "172.16.0.1", "172.31.255.255", "192.168.1.1", "224.0.0.1", "255.255.255.255",
             "::", "::1", "::ffff:10.0.0.1", "::7f00:1", "64:ff9b::a9fe:a9fe", "2002:7f00:1::", "fc00::1", "fe80::1", "fec0::1", "ff02::1", "2001::1", "2001:db8::1"];
+        blocked = [.. blocked, "168.63.129.16", "192.88.99.1", "::ffff:0:a00:1", "100::1", "2001:20::1", "2001:2f::1", "3fff::1", "5f00::1"];
         string[] open = ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "2002:808:808::"];
         foreach (var a in blocked) Assert.True(WebAddresses.IsBlocked(IPAddress.Parse(a).GetAddressBytes()), a);
         foreach (var a in open) Assert.False(WebAddresses.IsBlocked(IPAddress.Parse(a).GetAddressBytes()), a);
@@ -232,11 +235,10 @@ public class WebAccessTests
     {
         var (sh, handler) = await Make(h => FixturePolicy(h));
         handler.Override = async (_, ct) => { await Task.Delay(10_000, ct); return new HttpResponseMessage(); };
-        var started = DateTime.UtcNow;
-        var r = await sh.RunAsync("curl -sS -m 0.2 http://api.test/hello; echo $?; wget -q -T 0.2 http://api.test/hello; echo $?");
+        var (r, took) = await TestHost.Timed(() => sh.RunAsync("curl -sS -m 0.2 http://api.test/hello; echo $?; wget -q -T 0.2 http://api.test/hello; echo $?"));
         Assert.Equal("28\n4\n", r.Stdout);
         Assert.StartsWith("curl: (28) Operation timed out after 200 milliseconds with 0 bytes received\n", r.Stderr);
-        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
+        Assert.True(took < TimeSpan.FromSeconds(8), took.ToString()); // two 0.2 s limits, not the handler's 10 s
     }
 
     [Fact]
@@ -346,6 +348,199 @@ public class WebAccessTests
         Assert.True(report.Matches, report.ToString());
     }
 
+    // ---------- board 030 ----------
+
+    const string Secret = "SUPERSECRETTOKEN123";
+
+    /// <summary>A host with a credential whose /echo shows the Authorization header it got, gzipped when asked, and honours Range.</summary>
+    static (Shell Shell, FixtureHandler Handler) CredentialHost(Func<FixtureHandler, WebPolicy>? policy = null)
+    {
+        var handler = new FixtureHandler();
+        handler.Override = (req, _) =>
+        {
+            var text = Encoding.UTF8.GetBytes($"Authorization: {req.Headers.Authorization}\n");
+            if (req.Headers.Range?.Ranges.FirstOrDefault() is { From: { } from, To: { } to }) text = text[(int)from..(int)Math.Min(to + 1, text.Length)];
+            var gzip = req.Headers.AcceptEncoding.Any(e => e.Value == "gzip");
+            if (gzip)
+            {
+                var ms = new MemoryStream();
+                using (var z = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Optimal)) z.Write(text);
+                text = ms.ToArray();
+            }
+            var m = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(text) };
+            if (gzip) m.Content.Headers.ContentEncoding.Add("gzip");
+            return Task.FromResult(m);
+        };
+        var sh = new Shell().AllowWeb(policy?.Invoke(handler) ?? new WebPolicy
+        {
+            Domains = ["cred.test"], Handler = handler, Credentials = { ["cred.test"] = () => "Bearer " + Secret }, // the docs' short form compiles
+        });
+        return (sh, handler);
+    }
+
+    [Theory]
+    [InlineData("curl -sS --compressed https://cred.test/echo")]
+    [InlineData("curl -sS -H 'Accept-Encoding: gzip' https://cred.test/echo | gunzip")]
+    [InlineData("curl -sS -H 'Accept-Encoding: gzip' -o p.gz https://cred.test/echo; zcat p.gz")]
+    [InlineData("wget -q -O - --header 'Accept-Encoding: gzip' https://cred.test/echo | gunzip")]
+    [InlineData("a=$(curl -s -H 'Range: bytes=0-20' https://cred.test/echo); b=$(curl -s -H 'Range: bytes=21-60' https://cred.test/echo); echo \"$a$b\"")]
+    public async Task TheCredentialDoesNotLeakThroughEncodingsOrRanges(string script)
+    {
+        var (sh, handler) = CredentialHost();
+        var r = await sh.RunAsync(script);
+        Assert.DoesNotContain(Secret, r.Stdout + r.Stderr);
+        Assert.True(handler.Requests.Count > 0);
+        Assert.All(handler.Requests, q => Assert.Null(q.Headers.Range));
+    }
+
+    [Fact]
+    public async Task ACompressedResponseIsRecordedDecodedAndScrubbed()
+    {
+        var (sh, _) = CredentialHost();
+        var recorder = sh.StartRecording();
+        var r = await sh.RunAsync("curl -sS --compressed https://cred.test/echo");
+        Assert.Equal("Authorization: [REDACTED]\n", r.Stdout);
+        recorder.Stop();
+        var file = new MemoryStream();
+        recorder.Save(file);
+        file.Position = 0;
+        using var zip = new System.IO.Compression.ZipArchive(file);
+        foreach (var e in zip.Entries)
+        {
+            using var reader = new StreamReader(e.Open(), Encoding.Latin1);
+            var text = reader.ReadToEnd();
+            Assert.DoesNotContain(Secret, text);
+            if (text.Length > 1 && text[0] == '\x1f' && text[1] == '\x8b') Assert.Fail($"{e.FullName} holds a gzip body");
+        }
+    }
+
+    [Fact]
+    public async Task AnUnknownEncodingFromACredentialedHostFails()
+    {
+        var (sh, handler) = CredentialHost();
+        handler.Override = (_, _) =>
+        {
+            var m = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Encoding.UTF8.GetBytes(Secret)) };
+            m.Content.Headers.ContentEncoding.Add("br");
+            return Task.FromResult(m);
+        };
+        var r = await sh.RunAsync("curl -sS https://cred.test/echo; echo $?");
+        Assert.Equal("56\n", r.Stdout);
+        Assert.DoesNotContain(Secret, r.Stderr);
+    }
+
+    [Fact]
+    public async Task RegisterApiDecodesBeforeItScrubs()
+    {
+        var handler = new FixtureHandler();
+        handler.Override = (req, _) =>
+        {
+            var ms = new MemoryStream();
+            using (var z = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Optimal)) z.Write(Encoding.UTF8.GetBytes($"token={req.Headers.Authorization}\n"));
+            var m = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ms.ToArray()) };
+            m.Content.Headers.ContentEncoding.Add("gzip");
+            return Task.FromResult(m);
+        };
+        var sh = new Shell().RegisterApi("api", new Dictionary<string, ApiEndpoint> { ["x"] = new("https://x.test") { Auth = () => "Bearer " + Secret } }, handler);
+        var r = await sh.RunAsync("api get x /a");
+        Assert.Equal("token=[REDACTED]\n", r.Stdout);
+    }
+
+    [Fact]
+    public async Task ABlockedHostNamesTheAllowedSites()
+    {
+        var sh = new Shell().AllowWeb(new WebPolicy { Domains = [.. Enumerable.Range(1, 12).Select(i => $"s{i}.test")], Handler = new FixtureHandler() });
+        var r = await sh.RunAsync("curl -sS https://evil.test/; wget -q https://evil.test/; echo $?");
+        Assert.Equal("curl: (6) Blocked by the web policy: evil.test is not an allowed host (allowed: s1.test, s2.test, s3.test, s4.test, s5.test, " +
+            "s6.test, s7.test, s8.test, s9.test, s10.test, and 2 more)\nwget: blocked by the web policy: evil.test is not an allowed host (allowed: s1.test, " +
+            "s2.test, s3.test, s4.test, s5.test, s6.test, s7.test, s8.test, s9.test, s10.test, and 2 more)\n", r.Stderr);
+        Assert.Equal("4\n", r.Stdout);
+        r = await new Shell().RunAsync("curl -sS https://evil.test/"); // no policy: an offline machine
+        Assert.Equal("curl: (6) Could not resolve host: evil.test\n", r.Stderr);
+    }
+
+    [Fact]
+    public async Task AListedHostAllowsOnlyItsDefaultPortUnlessAPortIsListed()
+    {
+        var handler = new FixtureHandler();
+        var sh = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test", "other.test:8443"], AllowHttp = true, Handler = handler });
+        var r = await sh.RunAsync("curl -sS https://api.test:22/; echo $?; curl -s https://api.test:443/hello; curl -s http://api.test/hello; " +
+            "curl -s https://other.test:8443/hello; curl -sS https://other.test/; echo $?");
+        Assert.Equal("7\nhello\nhello\nhello\n7\n", r.Stdout);
+        Assert.Equal("curl: (7) Blocked by the web policy: api.test:22 is not an allowed host (allowed: api.test, other.test:8443)\n" +
+            "curl: (7) Blocked by the web policy: other.test is not an allowed host (allowed: api.test, other.test:8443)\n", r.Stderr);
+        Assert.Equal(3, handler.Requests.Count);
+        var hidden = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test"], Handler = handler, ExplainBlocked = false });
+        r = await hidden.RunAsync("curl -sS https://api.test:22/");
+        Assert.Equal("curl: (7) Failed to connect to api.test port 22 after 0 ms: Couldn't connect to server\n", r.Stderr);
+    }
+
+    [Fact]
+    public async Task ACredentialGoesOnlyToItsPort()
+    {
+        var handler = new FixtureHandler();
+        var sh = new Shell().AllowWeb(new WebPolicy
+        {
+            Domains = ["api.test", "api.test:8443"], Handler = handler,
+            Credentials = { ["api.test"] = () => "Bearer one-secret-value", ["api.test:8443"] = () => "Bearer two-secret-value" },
+        });
+        await sh.RunAsync("curl -s https://api.test/echo; curl -s https://api.test:8443/echo");
+        Assert.Equal("Bearer one-secret-value", handler.Seen[0]["authorization"]);
+        Assert.Equal("Bearer two-secret-value", handler.Seen[1]["authorization"]);
+        Assert.Throws<ArgumentException>(() => new Shell().AllowWeb(new WebPolicy { Domains = ["*.api.test"], Credentials = { ["x.api.test"] = () => "x" } }));
+    }
+
+    [Fact]
+    public async Task TheAgentsAuthorizationStaysWithItsOrigin()
+    {
+        var handler = new FixtureHandler();
+        handler.Override = (req, _) => Task.FromResult(req.RequestUri!.Port == 443
+            ? new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri("https://api.test:8443/x") } }
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("ok\n") });
+        var sh = new Shell().AllowWeb(new WebPolicy { Domains = ["api.test", "api.test:8443"], Handler = handler });
+        var r = await sh.RunAsync("curl -sL -H 'Authorization: Bearer mine' -H 'Cookie: a=b' https://api.test/go");
+        Assert.Equal("ok\n", r.Stdout);
+        Assert.Equal("Bearer mine", handler.Seen[0]["authorization"]);
+        Assert.False(handler.Seen[1].ContainsKey("authorization"));
+        Assert.False(handler.Seen[1].ContainsKey("cookie"));
+    }
+
+    [Fact]
+    public async Task AReplayNeverGoesLiveEvenWhenConfigureAllowsTheWeb()
+    {
+        var sh = new Shell();
+        var recorder = sh.StartRecording();
+        await sh.RunAsync("curl -sS https://api.test/hello; echo $?");
+        recorder.Stop();
+        Assert.Null(recorder.Recording.Web);
+        var handler = new FixtureHandler();
+        var report = await recorder.Recording.ReplayAsync(configure: s => s.AllowWeb(new WebPolicy { Domains = ["api.test"], Handler = handler }));
+        Assert.True(report.Matches, report.ToString());
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public void HandlersThatKeepCookiesAreRefused() =>
+        Assert.Throws<ArgumentException>(() => new Shell().AllowWeb(new WebPolicy { Handler = new HttpClientHandler { AllowAutoRedirect = false } }));
+
+    [Fact]
+    public void TheToolDescriptionFollowsThePolicy()
+    {
+        var sh = new Shell();
+        Assert.Equal(BashTool.Description, BashTool.DescriptionFor(sh));
+        sh.AllowWeb(new WebPolicy { Domains = ["api.github.com", "*.wikipedia.org"], Methods = ["get", "POST"] });
+        var expected = BashTool.Description.Replace("Python, network access and package installation are not. ",
+            "Python and package installation are not; `curl` and `wget` reach only these sites (methods: GET, POST): api.github.com, *.wikipedia.org. ");
+        Assert.NotEqual(BashTool.Description, expected);
+        Assert.Equal(expected, BashTool.DescriptionFor(sh));
+        Assert.Equal(expected, sh.AsAIFunction().Description);
+        Assert.Equal("Mine.", sh.AsAIFunction("Mine.").Description);
+        sh.AllowWeb(new WebPolicy { Domains = [.. Enumerable.Range(1, 23).Select(i => $"s{i}.test")] });
+        Assert.EndsWith("s20.test, and 3 more. Read Word, Excel, PowerPoint and HTML files with `to-markdown FILE`. " +
+            "Other programs on this machine are live interfaces to this application's systems, so their actions are real: run `help` to list them and `<program> --help` for usage.",
+            BashTool.DescriptionFor(sh));
+    }
+
     [Fact]
     public void BadPoliciesAreRefused()
     {
@@ -376,13 +571,13 @@ public class WebPinningTests
             await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n"u8.ToArray());
         });
         int lookups = 0;
-        var proxy = Environment.GetEnvironmentVariable("http_proxy");
         try
         {
-            Environment.SetEnvironmentVariable("http_proxy", "http://127.0.0.1:1");  // the host's proxy settings are never used
+            Assert.False(WebSession.DefaultHandler.UseProxy); // the host's proxy settings are never used (not set in the
+            Assert.False(WebSession.DefaultHandler.UseCookies); // environment here: other tests run beside this one)
             WebAddresses.ResolveForTests = name => { lookups++; return name == "pinned.test" ? [IPAddress.Loopback] : [IPAddress.Parse("169.254.169.254")]; };
             WebAddresses.AllowLoopbackForTests = true;
-            var sh = new Shell().AllowWeb(new WebPolicy { Domains = ["pinned.test", "meta.test"], AllowHttp = true });
+            var sh = new Shell().AllowWeb(new WebPolicy { Domains = [$"pinned.test:{port}", $"pinned.test:{port + 1}", "meta.test"], AllowHttp = true, ExplainBlocked = false });
             var r = await sh.RunAsync($"curl -sS http://pinned.test:{port}/");
             Assert.Equal("ok\n", r.Stdout);
             Assert.Equal($"pinned.test:{port}", host);
@@ -403,7 +598,6 @@ public class WebPinningTests
         {
             WebAddresses.ResolveForTests = null;
             WebAddresses.AllowLoopbackForTests = false;
-            Environment.SetEnvironmentVariable("http_proxy", proxy);
             listener.Stop();
         }
         await serve;

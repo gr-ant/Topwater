@@ -189,8 +189,14 @@ public static class ApiCommandExtensions
                         for (int n; buffer.Length <= limit && (n = await stream.ReadAsync(chunk, timeout.Token)) > 0;)
                             buffer.Write(chunk, 0, (int)Math.Min(n, limit + 1 - buffer.Length));
                     }
-                    truncated = buffer.Length > ep.MaxResponseBytes;
-                    text = Scrub(Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length));
+                    var bytes = buffer.ToArray();
+                    // a compressed body would hide the credential from the scrub: decode it first (within the same cap)
+                    var encoding = string.Join(",", response.Content.Headers.ContentEncoding).Trim().ToLowerInvariant();
+                    if (encoding is not ("" or "identity"))
+                        bytes = (encoding is "gzip" or "x-gzip" or "deflate" ? WebSession.Inflate(bytes, encoding != "deflate", limit + 1) : null)
+                            ?? throw new HttpRequestException($"unsupported content encoding {encoding}");
+                    truncated = bytes.Length > ep.MaxResponseBytes;
+                    text = Scrub(Encoding.UTF8.GetString(bytes));
                     if (truncated && text.Length > ep.MaxResponseBytes) text = text[..ep.MaxResponseBytes];
                 }
             }

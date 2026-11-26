@@ -13,6 +13,20 @@ public static class BashTool
         "Other programs on this machine are live interfaces to this application's systems, so their actions are real: " +
         "run `help` to list them and `<program> --help` for usage.";
 
+    const string NoNetwork = "Python, network access and package installation are not. ";
+
+    /// <summary>
+    /// <see cref="Description"/> for this shell: with web access (<see cref="Shell.AllowWeb"/>) it names the sites and methods
+    /// <c>curl</c> and <c>wget</c> can reach (the first 20 sites) instead of saying there is no network.
+    /// </summary>
+    public static string DescriptionFor(Shell shell)
+    {
+        if (shell.Web?.Policy is not { } p || ReferenceEquals(p, WebSession.NoNetwork) || p.Domains.Count == 0) return Description;
+        var sites = string.Join(", ", p.Domains.Take(20).Select(d => d.Trim())) + (p.Domains.Count > 20 ? $", and {p.Domains.Count - 20} more" : "");
+        var methods = string.Join(", ", p.Methods.Select(m => m.ToUpperInvariant()));
+        return Description.Replace(NoNetwork, $"Python and package installation are not; `curl` and `wget` reach only these sites (methods: {methods}): {sites}. ");
+    }
+
     public const string InputSchemaJson = """
         {
           "type": "object",

@@ -74,13 +74,14 @@ public sealed class Recording
     {
         var shell = new Shell(CreateOptions());
         configure?.Invoke(shell);
-        if (Web is { } w) // the recorded responses, never the network, and no credential is looked up
-            shell.AllowWeb(new WebSession(new WebPolicy
-            {
-                Domains = w.Domains, Methods = w.Methods, AllowHttp = w.AllowHttp, MaxResponseBytes = w.MaxResponseBytes, MaxRequestsPerCall = w.MaxRequestsPerCall,
-                MaxRequests = w.MaxRequests, Timeout = w.Timeout, MaxRedirects = w.MaxRedirects, ExplainBlocked = w.ExplainBlocked,
-                Credentials = w.Credentials.Keys.ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.Ordinal),
-            }, [.. Calls.Skip(firstCall).SelectMany(c => c.Web ?? [])]));
+        // always after configure, which may have allowed the web: a replay serves what was recorded and never goes live
+        var w = Web ?? WebSession.NoNetwork;
+        shell.AllowWeb(new WebSession(new WebPolicy
+        {
+            Domains = w.Domains, Methods = w.Methods, AllowHttp = w.AllowHttp, MaxResponseBytes = w.MaxResponseBytes, MaxRequestsPerCall = w.MaxRequestsPerCall,
+            MaxRequests = w.MaxRequests, Timeout = w.Timeout, MaxRedirects = w.MaxRedirects, ExplainBlocked = w.ExplainBlocked,
+            Credentials = w.Credentials.Keys.ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.OrdinalIgnoreCase),
+        }, [.. Calls.Skip(firstCall).SelectMany(c => c.Web ?? [])]));
         shell.Restore(start ?? Start);
         return shell;
     }
@@ -578,7 +579,7 @@ public sealed class Recording
                 Domains = Domains ?? [], Methods = Methods ?? ["GET"], AllowHttp = AllowHttp, MaxResponseBytes = MaxResponseBytes,
                 MaxRequestsPerCall = MaxRequestsPerCall, MaxRequests = MaxRequests, Timeout = TimeSpan.FromMilliseconds(Math.Clamp(TimeoutMs, 0, int.MaxValue)),
                 MaxRedirects = MaxRedirects, ExplainBlocked = ExplainBlocked,
-                Credentials = (Credentials ?? []).ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.Ordinal),
+                Credentials = (Credentials ?? []).ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.OrdinalIgnoreCase),
             };
             try { _ = new WebSession(policy); }
             catch (ArgumentException e) { throw Bad("bad web policy: " + e.Message); }

@@ -9,14 +9,14 @@ public static class AIExtensions
     static readonly ConditionalWeakTable<Shell, SemaphoreSlim> Gates = new();
 
     /// <summary>
-    /// The shell as the model's one tool: an <see cref="AIFunction"/> named <c>bash</c> with <see cref="BashTool.Description"/>
+    /// The shell as the model's one tool: an <see cref="AIFunction"/> named <c>bash</c> with <see cref="BashTool.DescriptionFor"/>
     /// (or <paramref name="description"/>) and a single string parameter <c>command</c>. Invoking it runs the command and returns
     /// <see cref="BashTool.ExecuteAsync"/>'s text, e.g. <c>options.Tools = [shell.AsAIFunction()]</c> with a function-invoking chat client.
     /// A <see cref="Shell"/> is not thread-safe and models can ask for several tool calls at once, so calls through any function
     /// made from the same shell run one at a time, in the order they arrive. Calls you make on the shell directly are not serialised.
     /// </summary>
     public static AIFunction AsAIFunction(this Shell shell, string? description = null) =>
-        new ShellFunction(shell, Gates.GetValue(shell, _ => new SemaphoreSlim(1, 1)), description ?? BashTool.Description);
+        new ShellFunction(shell, Gates.GetValue(shell, _ => new SemaphoreSlim(1, 1)), description ?? BashTool.DescriptionFor(shell));
 }
 
 sealed class ShellFunction(Shell shell, SemaphoreSlim gate, string description) : AIFunction

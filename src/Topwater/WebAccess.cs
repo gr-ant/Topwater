@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -11,7 +13,8 @@ namespace Topwater;
 /// </summary>
 public sealed class WebPolicy
 {
-    /// <summary>Host names the agent may reach: <c>api.github.com</c> exactly, or <c>*.wikipedia.org</c> for its subdomains (not the name itself).</summary>
+    /// <summary>Host names the agent may reach: <c>api.github.com</c> exactly, or <c>*.wikipedia.org</c> for its subdomains (not the
+    /// name itself), on the scheme's default port (443, or 80 for http); <c>name:8443</c> allows that port instead.</summary>
     public IReadOnlyList<string> Domains { get; init; } = [];
     /// <summary>HTTP methods the agent may use; GET also allows HEAD.</summary>
     public IReadOnlyList<string> Methods { get; init; } = ["GET"];
@@ -27,13 +30,16 @@ public sealed class WebPolicy
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(30);
     /// <summary>The most redirects one command follows; each is checked against this policy like the first URL.</summary>
     public int MaxRedirects { get; init; } = 10;
-    /// <summary>The Authorization header for a host (exact name, one of <see cref="Domains"/>), called in host code for every
-    /// request to it. The agent never sees it, cannot replace it, and it is scrubbed from what comes back.</summary>
-    public IReadOnlyDictionary<string, Func<string>> Credentials { get; init; } = new Dictionary<string, Func<string>>();
-    /// <summary>Say "blocked by the web policy" instead of failing like an unknown host (or an unreachable address).</summary>
-    public bool ExplainBlocked { get; init; }
-    /// <summary>Sends the requests instead of the network (tests, proxies). It must not follow redirects. The private-address
-    /// check happens where the name is resolved, so a handler that connects somewhere itself must do it.</summary>
+    /// <summary>The Authorization header for a host (an exact name in <see cref="Domains"/>; <c>name:port</c> for another port
+    /// than the default), called in host code for every request to it. The agent never sees it, cannot replace it, and it is
+    /// scrubbed from what comes back.</summary>
+    public Dictionary<string, Func<string>> Credentials { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>A refused host says "Blocked by the web policy: ... (allowed: ...)" (the default). False: it fails like an unknown
+    /// host or an unreachable address, as on a machine with no network.</summary>
+    public bool ExplainBlocked { get; init; } = true;
+    /// <summary>Sends the requests instead of the network (tests, proxies). It must not follow redirects or keep cookies, and
+    /// should not use a proxy you did not choose. The private-address check happens where the name is resolved, so a handler
+    /// that connects somewhere itself must do it.</summary>
     public HttpMessageHandler? Handler { get; init; }
 }
 
@@ -185,12 +191,17 @@ internal static class WebAddresses
             byte x = a[0], y = a[1];
             return x is 0 or 10 or 127 || x >= 224 || x == 100 && (y & 0xC0) == 64 || x == 169 && y == 254 || x == 172 && (y & 0xF0) == 16
                 || x == 192 && y == 168 || x == 192 && y == 0 && a[2] is 0 or 2 || x == 198 && (y & 0xFE) == 18 || x == 198 && y == 51 && a[2] == 100
-                || x == 203 && y == 0 && a[2] == 113;
+                || x == 203 && y == 0 && a[2] == 113 || x == 192 && y == 88 && a[2] == 99 || x == 168 && y == 63 && a[2] == 129 && a[3] == 16; // 6to4 relay, Azure host
         }
         if (a.Length != 16) return true;
         bool Zero(int from, int to) { for (int i = from; i < to; i++) if (a[i] != 0) return false; return true; }
         if (Zero(0, 10) && a[10] == 0xff && a[11] == 0xff) return IsBlocked(a[12..]);               // ::ffff:a.b.c.d
         if (Zero(0, 12)) return true;                                                               // ::, ::1, ::a.b.c.d
+        if (Zero(0, 8) && a[8] == 0xff && a[9] == 0xff && a[10] == 0 && a[11] == 0) return true;    // ::ffff:0:a.b.c.d, IPv4-translated
+        if (a[0] == 0x01 && Zero(1, 8)) return true;                                                // 100::/64 discard
+        if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0 && (a[3] & 0xF0) == 0x20) return true;        // 2001:20::/28 ORCHIDv2
+        if (a[0] == 0x3f && a[1] == 0xff && (a[2] & 0xF0) == 0) return true;                        // 3fff::/20 documentation
+        if (a[0] == 0x5f && a[1] == 0x00) return true;                                              // 5f00::/16 SRv6
         if (a[0] == 0 && a[1] == 0x64 && a[2] == 0xff && a[3] == 0x9b) return IsBlocked(a[12..]);   // 64:ff9b::/96 NAT64
         if (a[0] == 0x20 && a[1] == 0x02) return IsBlocked(a[2..6]);                                // 2002::/16 6to4
         if (a[0] == 0x20 && a[1] == 0x01 && (a[2] == 0 && a[3] == 0 || a[2] == 0x0d && a[3] == 0xb8)) return true; // Teredo, documentation
@@ -217,15 +228,18 @@ internal sealed class WebSession
     static readonly HashSet<string> DroppedHeaders = new(StringComparer.OrdinalIgnoreCase)
         { "Host", "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive", "Upgrade", "TE", "Trailer", "Proxy-Authorization", "Proxy-Connection" };
 
-    static readonly HttpClient DefaultClient = new(new SocketsHttpHandler
+    internal static readonly SocketsHttpHandler DefaultHandler = new()
     {
         AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
         MaxResponseHeadersLength = MaxHeaderBytes / 1024, PooledConnectionLifetime = TimeSpan.FromMinutes(1), ConnectCallback = ConnectPinnedAsync,
-    }) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    };
+    static readonly HttpClient DefaultClient = new(DefaultHandler) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+    /// <summary>A shell with no policy: no host is allowed, and each fails like a name that does not resolve.</summary>
+    internal static readonly WebPolicy NoNetwork = new() { ExplainBlocked = false };
 
     readonly HttpClient _client;
-    readonly HashSet<string> _exact = new(StringComparer.Ordinal);
-    readonly List<string> _suffixes = [];
+    readonly List<(bool Wild, string Name, int? Port)> _domains = [];
     readonly HashSet<string> _methods = new(StringComparer.Ordinal);
     readonly Dictionary<string, Func<string>> _credentials = new(StringComparer.Ordinal);
     readonly List<WebExchange> _log = [];
@@ -239,12 +253,12 @@ internal sealed class WebSession
         Policy = policy;
         foreach (var d in policy.Domains)
         {
-            var name = d.Trim().TrimEnd('.').ToLowerInvariant();
+            var (name, port) = HostPort(d) ?? throw new ArgumentException($"{d}: a domain is a host name or *.name for its subdomains, with an optional :port", nameof(policy));
             bool wild = name.StartsWith("*.");
             var bare = wild ? name[2..] : name;
             if (bare.Length == 0 || !bare.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_') || bare.Contains('*'))
-                throw new ArgumentException($"{d}: a domain is a host name, or *.name for its subdomains", nameof(policy));
-            if (wild) _suffixes.Add("." + bare); else _exact.Add(bare);
+                throw new ArgumentException($"{d}: a domain is a host name or *.name for its subdomains, with an optional :port", nameof(policy));
+            _domains.Add((wild, wild ? "." + bare : bare, port));
         }
         foreach (var m in policy.Methods)
         {
@@ -252,17 +266,21 @@ internal sealed class WebSession
             _methods.Add(m.ToUpperInvariant());
         }
         if (_methods.Contains("GET")) _methods.Add("HEAD");
-        foreach (var (host, auth) in policy.Credentials)
+        foreach (var (key, auth) in policy.Credentials)
         {
-            var h = host.Trim().TrimEnd('.').ToLowerInvariant();
-            if (!_exact.Contains(h)) throw new ArgumentException($"{host}: credentials need the exact host name in Domains", nameof(policy));
-            _credentials[h] = auth;
+            if (HostPort(key) is not var (h, port) || !_domains.Any(d => !d.Wild && d.Name == h))
+                throw new ArgumentException($"{key}: credentials need an exact host name from Domains, with an optional :port", nameof(policy));
+            _credentials[port is { } p ? $"{h}:{p}" : h] = auth;
         }
         if (policy.MaxRedirects < 0 || policy.MaxRequests < 0 || policy.MaxRequestsPerCall < 0 || policy.MaxResponseBytes < 0)
             throw new ArgumentException("limits cannot be negative", nameof(policy));
         for (var h = policy.Handler; h != null; h = (h as DelegatingHandler)?.InnerHandler)
+        {
             if (h is HttpClientHandler { AllowAutoRedirect: true } or SocketsHttpHandler { AllowAutoRedirect: true })
                 throw new ArgumentException("the handler follows redirects, which would skip the policy check of each hop; set AllowAutoRedirect = false", nameof(policy));
+            if (h is HttpClientHandler { UseCookies: true } or SocketsHttpHandler { UseCookies: true })
+                throw new ArgumentException("the handler keeps cookies, which every shell using it would share; set UseCookies = false", nameof(policy));
+        }
         _client = policy.Handler is { } handler ? new HttpClient(handler, disposeHandler: false) { Timeout = System.Threading.Timeout.InfiniteTimeSpan } : DefaultClient;
         _replay = replay;
     }
@@ -270,54 +288,91 @@ internal sealed class WebSession
     /// <summary>A new tool call: its request count starts again, and its exchanges are collected afresh.</summary>
     public void BeginCall() { lock (_log) { _thisCall = 0; _log.Clear(); } }
     public List<WebExchange> TakeLog() { lock (_log) { var l = _log.ToList(); _log.Clear(); return l; } }
-    public bool HasCredential(string host) => _credentials.ContainsKey(host);
 
-    public bool HostAllowed(string host) => _exact.Contains(host) || _suffixes.Any(s => host.EndsWith(s, StringComparison.Ordinal));
+    /// <summary>"name" or "name:port", lower-cased, without a final dot; null when the port is not a number from 1 to 65535.</summary>
+    static (string Name, int? Port)? HostPort(string text)
+    {
+        var t = text.Trim().ToLowerInvariant();
+        int colon = t.LastIndexOf(':');
+        int? port = null;
+        if (colon >= 0)
+        {
+            if (!int.TryParse(t[(colon + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var p) || p is < 1 or > 65535) return null;
+            port = p;
+            t = t[..colon];
+        }
+        return (t.TrimEnd('.'), port);
+    }
+
+    bool NameListed(string host) => _domains.Any(d => d.Wild ? host.EndsWith(d.Name, StringComparison.Ordinal) : host == d.Name);
+    bool Allowed(WebUrl url) => _domains.Any(d => (d.Wild ? url.Host.EndsWith(d.Name, StringComparison.Ordinal) : url.Host == d.Name)
+        && (d.Port is { } p ? p == url.Port : url.DefaultPort));
+
+    /// <summary>The credential for this URL's host and port: "host:port", or "host" on the scheme's default port.</summary>
+    Func<string>? CredentialFor(WebUrl url) =>
+        _credentials.TryGetValue($"{url.Host}:{url.Port}", out var a) ? a : url.DefaultPort && _credentials.TryGetValue(url.Host, out a) ? a : null;
+
+    static string Reason(string key, params (string, string)[] values) => CommandSpec.Message("curl", key, values);
+    string NotAllowed(WebUrl url)
+    {
+        var names = Policy.Domains.Select(d => d.Trim()).ToList();
+        var allowed = names.Count == 0 ? "none" : string.Join(", ", names.Take(10)) + (names.Count > 10 ? $", and {names.Count - 10} more" : "");
+        return Reason("reasonHost", ("host", url.HostForUrl + (url.DefaultPort ? "" : ":" + url.Port)), ("allowed", allowed));
+    }
 
     /// <summary>Checks the URL against the policy, then sends one request (no redirects). Throws <see cref="WebFailure"/>.</summary>
     public async Task<WebResponse> SendAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, CancellationToken ct)
     {
         string Explain(string why) => Policy.ExplainBlocked ? why : null!;
-        if (url.Ip is { } ip)
-        {
-            if (WebAddresses.IsBlocked(ip)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain($"{url.Host} is a private or reserved address"));
-            if (!_exact.Contains(url.Host)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain($"{url.Host} is not an allowed host"));
-        }
-        else if (!HostAllowed(url.Host)) throw new WebFailure(WebError.Resolve, url.Host, url.Port, Explain($"{url.Host} is not an allowed host"));
+        if (url.Ip is { } ip && WebAddresses.IsBlocked(ip)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain(Reason("reasonPrivate", ("host", url.Host))));
+        if (url.Ip == null && !NameListed(url.Host)) throw new WebFailure(WebError.Resolve, url.Host, url.Port, Explain(NotAllowed(url)));
+        if (!Allowed(url)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain(NotAllowed(url))); // an IP, or a port not listed
         if (url.Scheme == "http" && !Policy.AllowHttp)
-            throw new WebFailure(WebError.Protocol, "http") { Blocked = Policy.ExplainBlocked ? "only https:// URLs are allowed" : null };
-        if (!_methods.Contains(method)) throw new WebFailure(WebError.Policy, blocked: $"{method} requests are not allowed");
-        if (body is { Length: > MaxRequestBytes }) throw new WebFailure(WebError.Policy, blocked: $"the request body is larger than {MaxRequestBytes} bytes");
+            throw new WebFailure(WebError.Protocol, "http") { Blocked = Policy.ExplainBlocked ? Reason("reasonHttps") : null };
+        if (!_methods.Contains(method)) throw new WebFailure(WebError.Policy, blocked: Reason("reasonMethod", ("method", method)));
+        if (body is { Length: > MaxRequestBytes }) throw new WebFailure(WebError.Policy, blocked: Reason("reasonBody", ("limit", MaxRequestBytes.ToString(CultureInfo.InvariantCulture))));
         if (headers.Any(h => h.Key.Length == 0 || !h.Key.All(c => c > ' ' && c < 127 && c != ':') || h.Value.Any(c => c is '\r' or '\n' or '\0'))
             || headers.Sum(h => h.Key.Length + h.Value.Length + 4) > 16 * 1024)
             throw new WebFailure(WebError.BadHeader);
         lock (_log)
         {
-            if (_thisCall >= Policy.MaxRequestsPerCall) throw new WebFailure(WebError.Policy, blocked: $"the limit of {Policy.MaxRequestsPerCall} requests in one call was reached");
-            if (_total >= Policy.MaxRequests) throw new WebFailure(WebError.Policy, blocked: $"the limit of {Policy.MaxRequests} requests for this session was reached");
+            if (_thisCall >= Policy.MaxRequestsPerCall) throw new WebFailure(WebError.Policy, blocked: Reason("reasonCallLimit", ("limit", Policy.MaxRequestsPerCall.ToString(CultureInfo.InvariantCulture))));
+            if (_total >= Policy.MaxRequests) throw new WebFailure(WebError.Policy, blocked: Reason("reasonSessionLimit", ("limit", Policy.MaxRequests.ToString(CultureInfo.InvariantCulture))));
             _thisCall++; _total++;
         }
 
         var sent = headers.Where(h => !DroppedHeaders.Contains(h.Key) && !h.Key.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase)).ToList();
         string[] secrets = [];
-        if (_credentials.TryGetValue(url.Host, out var auth))
+        var auth = CredentialFor(url);
+        if (auth != null)
         {
-            sent.RemoveAll(h => h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)); // the agent cannot replace it
+            // the agent cannot replace it, nor ask for pieces of a page that shows it (two ranges that split it pass the scrub)
+            sent.RemoveAll(h => h.Key is var k && (k.Equals("Authorization", StringComparison.OrdinalIgnoreCase) || k.Equals("Range", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("If-Range", StringComparison.OrdinalIgnoreCase)));
             string credential;
             try { credential = auth() ?? ""; }
-            catch (Exception) { throw new WebFailure(WebError.Policy, blocked: $"the credentials for {url.Host} are not available"); } // the message may describe the secret
-            if (credential.Any(char.IsControl)) throw new WebFailure(WebError.Policy, blocked: $"the credentials for {url.Host} are not a valid header value");
+            catch (Exception) { throw new WebFailure(WebError.Policy, blocked: Reason("reasonNoCredential", ("host", url.Host))); } // the message may describe the secret
+            if (credential.Any(char.IsControl)) throw new WebFailure(WebError.Policy, blocked: Reason("reasonBadCredential", ("host", url.Host)));
             if (credential.Length > 0) sent.Add(new("Authorization", credential));
             secrets = ApiCommandExtensions.SecretsOf(credential);
         }
 
         WebExchange exchange;
         if (_replay != null) exchange = NextRecorded(method, url.ToString());
-        else exchange = await ExchangeAsync(url, method, sent, body, timeout, secrets, ct);
+        else
+        {
+            // past the cap by the longest secret, so a credential cut in half at the cap is still scrubbed
+            long cap = Policy.MaxResponseBytes + (secrets.Length > 0 ? secrets[0].Length : 0);
+            exchange = await ExchangeAsync(url, method, sent, body, timeout, cap, ct);
+            // a compressed body would pass the scrub and be decoded later (curl --compressed, gunzip): decode it first
+            if (auth != null && exchange.Error == null) exchange = Decoded(exchange, cap);
+            if (exchange.Error == null && secrets.Length > 0)
+                exchange = exchange with { Headers = [.. exchange.Headers.Select(h => new KeyValuePair<string, string>(h.Key, Scrub(h.Value, secrets)))], Body = ScrubBytes(exchange.Body, secrets) };
+        }
         lock (_log) _log.Add(exchange);
         if (exchange.Error is { } error)
             throw new WebFailure(Enum.Parse<WebError>(error == "blocked" ? "Resolve" : error, ignoreCase: true), url.Host, url.Port,
-                error == "blocked" ? Explain($"{url.Host} resolves to a private or reserved address") : null)
+                error == "blocked" ? Explain(Reason("reasonResolvesPrivate", ("host", url.Host))) : null)
             { Detail = ((long)timeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) };
         bool truncated = exchange.Body.Length > Policy.MaxResponseBytes;
         return new(url, method, exchange.Status, exchange.Reason, [.. exchange.Headers], truncated ? exchange.Body[..(int)Policy.MaxResponseBytes] : exchange.Body, truncated);
@@ -332,7 +387,7 @@ internal sealed class WebSession
         throw new WebFailure(WebError.Replay) { Detail = $"{method} {url}" };
     }
 
-    async Task<WebExchange> ExchangeAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, string[] secrets, CancellationToken ct)
+    async Task<WebExchange> ExchangeAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, long cap, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(new HttpMethod(method), new Uri(url.ToString()));
         if (body != null) request.Content = new ByteArrayContent(body);
@@ -356,15 +411,12 @@ internal sealed class WebSession
             var buffer = new MemoryStream();
             if (method != "HEAD")
             {
-                // past the cap by the longest secret, so a credential cut in half at the cap is still scrubbed
-                long cap = Policy.MaxResponseBytes + (secrets.Length > 0 ? secrets[0].Length : 0);
                 await using var stream = await response.Content.ReadAsStreamAsync(limit.Token);
                 var chunk = new byte[16384];
                 for (int n; buffer.Length <= cap && (n = await stream.ReadAsync(chunk, limit.Token)) > 0;)
                     buffer.Write(chunk, 0, (int)Math.Min(n, cap + 1 - buffer.Length));
             }
-            return new(method, url.ToString(), (int)response.StatusCode, response.ReasonPhrase ?? "",
-                [.. list.Select(h => new KeyValuePair<string, string>(h.Key, Scrub(h.Value, secrets)))], ScrubBytes(buffer.ToArray(), secrets));
+            return new(method, url.ToString(), (int)response.StatusCode, response.ReasonPhrase ?? "", list, buffer.ToArray());
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) { return Failed("timeout"); }
@@ -379,6 +431,36 @@ internal sealed class WebSession
             }
             return Failed("recv");
         }
+    }
+
+    /// <summary>The body with its gzip or deflate Content-Encoding undone (at most <paramref name="cap"/> + 1 bytes, so the cap still
+    /// shows), and that header and Content-Length removed; a "recv" failure for another encoding or corrupt data.</summary>
+    static WebExchange Decoded(WebExchange x, long cap)
+    {
+        var encoding = x.Headers.FirstOrDefault(h => h.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase)).Value?.Trim().ToLowerInvariant();
+        if (encoding is null or "" or "identity") return x;
+        var body = encoding is "gzip" or "x-gzip" or "deflate" ? (x.Body.Length == 0 ? [] : Inflate(x.Body, encoding != "deflate", cap + 1)) : null;
+        if (body == null) return x with { Status = 0, Reason = "", Headers = [], Body = [], Error = "recv" };
+        return x with
+        {
+            Body = body,
+            Headers = [.. x.Headers.Where(h => !h.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase) && !h.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))],
+        };
+    }
+
+    /// <summary>gzip, or zlib-wrapped deflate, decoded to at most <paramref name="max"/> bytes (more is cut); null when corrupt.</summary>
+    internal static byte[]? Inflate(byte[] data, bool gzip, long max)
+    {
+        try
+        {
+            using var input = new MemoryStream(data);
+            using Stream z = gzip ? new GZipStream(input, CompressionMode.Decompress) : new ZLibStream(input, CompressionMode.Decompress);
+            var output = new MemoryStream();
+            var chunk = new byte[16384];
+            for (int n; output.Length < max && (n = z.Read(chunk)) > 0;) output.Write(chunk, 0, (int)Math.Min(n, max - output.Length));
+            return output.ToArray();
+        }
+        catch (InvalidDataException) { return null; }
     }
 
     static string Scrub(string s, string[] secrets) => secrets.Aggregate(s, (t, secret) => t.Replace(secret, "[REDACTED]", StringComparison.Ordinal));
@@ -431,10 +513,11 @@ internal sealed class WebSession
         bool follow, int maxRedirects, TimeSpan timeout, Action<WebResponse>? onHop, CancellationToken ct)
     {
         int limit = maxRedirects < 0 ? Policy.MaxRedirects : Math.Min(maxRedirects, Policy.MaxRedirects);
-        var firstHost = url.Host;
+        var origin = (url.Scheme, url.Host, url.Port);
         for (int redirects = 0; ; redirects++)
         {
-            var hopHeaders = url.Host == firstHost ? headers
+            // the agent's own Authorization and Cookie stay with the origin it gave them for, as curl does
+            var hopHeaders = (url.Scheme, url.Host, url.Port) == origin ? headers
                 : headers.Where(h => !h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) && !h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).ToList();
             var response = await SendAsync(url, forcedMethod ?? method, hopHeaders, body, timeout, ct);
             onHop?.Invoke(response);
