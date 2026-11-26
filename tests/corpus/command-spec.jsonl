@@ -1,0 +1,15 @@
+{"id":"command-spec-001","script":"type mapfile readarray pushd popd dirs builtin ulimit times disown umask","stdout":"mapfile is a shell builtin\nreadarray is a shell builtin\npushd is a shell builtin\npopd is a shell builtin\ndirs is a shell builtin\nbuiltin is a shell builtin\nulimit is a shell builtin\ntimes is a shell builtin\ndisown is a shell builtin\numask is a shell builtin\n","exitCode":0,"quiet":true}
+{"id":"command-spec-002","script":"umask","stdout":"0022\n","exitCode":0,"quiet":true}
+{"id":"command-spec-003","script":"test -e '/usr/bin/[' && echo yes","stdout":"yes\n","exitCode":0,"quiet":true}
+{"id":"command-spec-004","script":"mktemp -t foo.XXXXXX | sed 's/[.][^.]*$/.R/'","stdout":"/tmp/foo.R\n","exitCode":0,"quiet":true}
+{"id":"command-spec-005","script":"uname --kernel-name --machine --operating-system","stdout":"Linux x86_64 GNU/Linux\n","exitCode":0,"quiet":true}
+{"id":"command-spec-006","script":"date --help | tail -n 1 | grep -c .","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"command-spec-007","script":"pushd /nope 2>&1 | sed 's/^bash: line [0-9]*: /bash: /'","stdout":"bash: pushd: /nope: No such file or directory\n","exitCode":0,"quiet":true}
+{"id":"command-spec-008","script":"jq --help | head -n 1","stdout":"jq - commandline JSON processor [version 1.7]\n","exitCode":0,"quiet":true}
+{"id":"command-spec-009","script":"sort -Z </dev/null 2>&1; echo \"rc=$?\"","stdout":"sort: invalid option -- 'Z'\nTry 'sort --help' for more information.\nrc=2\n","exitCode":0,"quiet":true}
+{"id":"command-spec-010","script":"echo a:b | cut -d: -f1 -O x 2>&1; echo \"rc=$?\"; echo a:b | cut -d: -f1,2 --output-delimiter=+","stdout":"cut: invalid option -- 'O'\nTry 'cut --help' for more information.\nrc=1\na+b\n","exitCode":0,"quiet":true}
+{"id":"command-spec-011","script":"realpath -f / 2>&1; echo \"rc=$?\"; realpath -n / 2>&1; echo \"rc=$?\"","stdout":"realpath: invalid option -- 'f'\nTry 'realpath --help' for more information.\nrc=1\nrealpath: invalid option -- 'n'\nTry 'realpath --help' for more information.\nrc=1\n","exitCode":0,"quiet":true}
+{"id":"command-spec-012","script":"ln -s / l; readlink -L l 2>&1; echo \"rc=$?\"; realpath -v / 2>&1; echo \"rc=$?\"; readlink --silent l","stdout":"readlink: invalid option -- 'L'\nTry 'readlink --help' for more information.\nrc=1\nrealpath: invalid option -- 'v'\nTry 'realpath --help' for more information.\nrc=1\n/\n","exitCode":0,"quiet":true}
+{"id":"command-spec-013","script":"grep -e 2>&1; echo \"rc=$?\"","stdout":"grep: option requires an argument -- 'e'\nUsage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\nrc=2\n","exitCode":0,"quiet":true}
+{"id":"command-spec-014","script":"unalias nope 2>&1 | sed 's/^bash: line [0-9]*: /bash: /'; unalias nope 2>/dev/null; echo \"rc=$?\"","stdout":"bash: unalias: nope: not found\nrc=1\n","exitCode":0,"quiet":true}
+{"id":"command-spec-015","script":"x=1; export Y=2; env | grep -c '^x='; env | grep '^Y='; env Z=3 sh -c 'echo $Z $Y'; env -u Y sh -c 'echo [$Y]'; env -i A=1 sh -c 'echo $A [$Y]'; echo \"[$Z]\"","stdout":"0\nY=2\n3 2\n[]\n1 []\n[]\n","exitCode":0,"quiet":true}
