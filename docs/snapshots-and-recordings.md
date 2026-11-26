@@ -163,6 +163,8 @@ The `Topwater.Replay` package (`dotnet add package Topwater.Replay --prerelease`
 It works with any test framework: a mismatch throws `ReplayMismatchException` carrying the report.
 
 ```csharp
+using Topwater.Replay;
+
 [Fact]
 public Task Todo_session_still_behaves() =>
     Replay.AssertMatches("recordings/todo.topwater", configure: s => s.Register(new OrderTools()));

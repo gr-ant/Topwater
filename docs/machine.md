@@ -68,8 +68,8 @@ regex gets GNU's message.
 ## git
 
 `git` is Topwater's own implementation of the common commands of git 2.43, for repositories in the machine. There is no
-network: `clone`, `fetch`, `pull`, `push`, `remote` and `submodule` answer that, and less common local commands
-(`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are not available. `git help` lists what is there and
+network: `clone`, `fetch`, `pull`, `push` and `submodule` answer that, `remote` lists nothing, and less common local
+commands (`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are not available and name a substitute. `git help` lists what is there and
 `git help <command>` describes each one; options are in [`spec/commands/git.json`](../spec/commands/git.json).
 
 | | |

@@ -31,8 +31,8 @@ own description; the wording matters, so measure before you change it.
 
 ## Claude Agent SDK
 
-The Claude Agent SDK is Claude Code as a library, and Claude Code has its own `Bash` tool that runs on the host.
-Adding a Topwater tool next to it would leave that door open. `bash_options(shell)` in Python and
+The Claude Agent SDK comes with Claude Code's own tools, and its `Bash` runs on the host. Adding a Topwater tool
+next to them would leave that door open. `bash_options(shell)` in Python and
 `bashOptions(shell)` in TypeScript return options for `query` that close it:
 
 - the only tool is the shell, served by an in-process MCP server, so Claude sees it as `mcp__topwater__bash`;

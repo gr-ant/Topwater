@@ -8,6 +8,9 @@ dotnet add package Topwater.Replay --prerelease
 ```
 
 ```csharp
+using Topwater;
+using Topwater.Replay;
+
 // a recorded session as a test (any framework: a mismatch throws); TOPWATER_RERECORD=1 updates the file instead
 [Fact]
 public Task Todo_session_still_behaves() => Replay.AssertMatches("recordings/todo.topwater");
