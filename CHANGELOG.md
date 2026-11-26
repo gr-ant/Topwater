@@ -3,7 +3,9 @@
 Topwater is in preview: APIs and file formats may change between previews. The .NET packages are on NuGet; the
 Python and TypeScript packages are not published yet and are used from the repository.
 
-## Unreleased
+## 0.1.0-preview.4 (2026-11-26)
+
+First release on PyPI (`pip install --pre topwater`) and npm (`npm install topwater@next`).
 
 - **PyPI and npm release jobs.** A release tag can also publish the Python package to PyPI and the TypeScript
   package to npm with trusted publishing, once each is switched on. All three ports' tests pass before anything is
