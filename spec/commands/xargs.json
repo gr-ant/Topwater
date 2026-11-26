@@ -25,6 +25,7 @@
   "messages": {
     "unmatchedQuote": "unmatched {kind} quote; by default quotes are special to xargs unless you use the -0 option",
     "invalidValue": "value {value} for -{option} option should be >= 1",
-    "exitedWith255": "{command}: exited with status 255; aborting"
+    "exitedWith255": "{command}: exited with status 255; aborting",
+    "cannotRun": "{command}: {errno}"
   }
 }

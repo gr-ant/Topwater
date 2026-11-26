@@ -49,11 +49,11 @@ State persists between tool calls: working directory, variables, functions, alia
 | Group | Programs |
 |---|---|
 | Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `ln` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `less` `more` |
-| Text | `echo` `printf` `grep` `egrep` `fgrep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `bc` `diff` `nl` `tac` `rev` `paste` `column` `seq` |
+| Text | `echo` `printf` `grep` `egrep` `fgrep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `bc` `diff` `cmp` `nl` `tac` `rev` `paste` `column` `seq` |
 | Documents and binary | `to-markdown` `xxd` `hexdump` `od` `strings` `base64` `md5sum` `sha1sum` `sha256sum` `sha512sum` |
 | Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
 | Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
-| System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `sudo` `su` |
+| System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `sudo` `su` `apt` `apt-get` `apt-cache` `dpkg` (these four only say that nothing can be installed; see below) |
 
 `help` lists everything, including your commands. Standard tools answer `--version` and `--help` the way the
 real ones do. The full list, with each command's options and the ports that support them, is in
@@ -64,7 +64,8 @@ real ones do. The full list, with each command's options and the ports that supp
 Error messages follow bash 5.2 and GNU coreutils, grep and sed on Ubuntu 24.04: bash's own errors start
 `bash: line N:` as under `bash -c` (`./s.sh: line N:` in a script, `environment: line N:` in a function), each call
 counting its lines from 1; a sed script error says where it is (`-e expression #1, char 5:`), and a bad grep or sed
-regex gets GNU's message. `command not found` is worded our own way, with a pointer to `help`.
+regex gets GNU's message. `awk` behaves as Ubuntu's `mawk`: `--version` says so, and dividing by zero gives `inf`,
+`-inf` or `-nan` instead of stopping the program.
 `awk` covers patterns, ranges, `BEGIN`/`END`, fields, arrays, control flow, user-defined functions, `getline`
 from files, `printf`, and the string functions. `jq` is a real parser with about 90 builtins: object
 construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_entries`, `reduce`, `@csv`,
@@ -363,10 +364,17 @@ The agent is a regular user called `agent`, not root:
   agent command is running, too: only that command, and the commands you registered when it calls them, act
   as the agent.
 
-The machine looks like a lived-in Ubuntu 24.04 install: the standard folders, `/etc` files such as `os-release`,
-`passwd`, `hosts` and `group`, a `/proc` whose `cpuinfo` and `meminfo` agree with `nproc` and `free`, the usual
+The machine looks like a lived-in Ubuntu 24.04 install: the standard folders (including the usual empty ones under
+`/usr`, `/usr/local`, `/usr/share` and `/var`), `/etc` files such as `os-release` (a link to `/usr/lib/os-release`, as
+on Ubuntu), `lsb-release`, `issue`, `shells`, `debian_version`, `passwd`, `hosts` and `group`, `/etc/profile`,
+`/etc/bash.bashrc` and `/etc/profile.d`, the skeleton dotfiles in `/etc/skel`, a `/proc` whose `cpuinfo` and `meminfo` agree with `nproc` and `free`, the usual
 dotfiles in the agent's home, and `/bin` and `/usr/bin` listing every program (yours included) with plausible
-sizes and install dates. Shell built-ins such as `cd` and `eval` are not listed as programs, as on a real system.
+sizes and install dates. The dotfiles are our own text with the effect of Ubuntu's: a login shell (`bash -l`,
+`bash --login`) reads `/etc/profile`, which runs `/etc/profile.d/*.sh`, then the first of `~/.bash_profile`,
+`~/.bash_login` and `~/.profile`; `~/.bashrc` sets the prompt and aliases (`ls --color=auto`, `ll`, ...) only in an
+interactive shell, so the agent's calls, like `bash -c`, read none of them. `/proc/self` points at the shell's own
+process (`$$`). As for an ordinary user on Ubuntu, `/root`, `/var/cache/ldconfig`, `/var/cache/apt/archives/partial`
+and `/proc/tty/driver` can't be read, so `find /` prints `Permission denied` for them and exits 1. Shell built-ins such as `cd` and `eval` are not listed as programs, as on a real system.
 
 ## Documents
 
@@ -1057,6 +1065,27 @@ converts an old recording.
 - A command that throws becomes an error message and exit code, not a crash.
 - One shell is one session. Use a separate `Shell` per conversation; a shell is not safe to share between
   threads.
+
+### Programs that are not here
+
+A command the machine doesn't have fails exactly as in bash: `bash: line 1: python3: command not found` on stderr,
+status 127. The first time in a session that this message goes straight to the tool output, one more line follows:
+`(run 'help' to list the available commands; nothing else can be installed on this machine)`. The hint is left out
+when stderr is redirected or captured (`2>&1`, `2>/dev/null`, `out=$(cmd 2>&1)`), so a script that inspects the
+message, or `${out:0:7}`, sees what bash prints; earlier versions appended the hint to every such line, which leaked
+into captured output. Showing it once is enough for an agent to learn that `help` exists without making later output
+differ from bash's.
+
+What each commonly tried program does:
+
+| Program | Here | Why |
+|---|---|---|
+| `python`, `python3`, `pip`, `pip3`, `node`, `npm`, `perl` | command not found (127) | not part of the machine; a fake interpreter would mislead. Ubuntu itself ships `perl`, so this one differs from a real install |
+| `apt`, `apt-get`, `apt-cache` | exist; every subcommand prints `E: Packages cannot be installed on this machine: ...` and exits 100, apt's error status | agents reach for apt when a program is missing; saying plainly that nothing can be installed stops them retrying |
+| `dpkg` | exists; prints `dpkg: error: packages cannot be installed or listed ...` and exits 2 | same, with dpkg's status |
+| `sudo apt ...`, `sudo dpkg ...` | the package manager's own message | more useful than the sudoers refusal every other `sudo` command gets |
+| `snap` | command not found | not in Ubuntu's server or container images either |
+| `git`, `curl`, `wget` | see their own sections when present | |
 
 ## Not supported
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "dpkg",
+  "category": "system",
+  "summary": "Package manager stand-in: says that packages cannot be installed on this machine",
+  "version": "Debian 'dpkg' package management program version 1.22.6 (amd64).",
+  "parser": "custom",
+  "exitCodes": {"2": "always: there are no packages to install or list"},
+  "messages": {
+    "unavailable": "error: packages cannot be installed or listed on this machine: it has no package database. Run 'help' to list the commands it has."
+  }
+}

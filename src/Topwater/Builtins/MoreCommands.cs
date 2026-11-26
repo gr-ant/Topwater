@@ -926,12 +926,20 @@ internal static partial class Builtins
         shell.Register("sudo", ctx =>
         {
             var user = ctx.Shell.Options.User;
-            if (ctx.Args is ["-V"] or ["--version"]) { ctx.Stdout.WriteLine("Sudo version 1.9.15p5"); return 0; }
-            if (ctx.Args.Count == 0) { ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "usage")); return 1; }
-            if (ctx.Args[0] is "-l" or "--list") { ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "listDenied", ("user", user), ("host", ctx.Shell.Options.Hostname))); return 1; }
+            if (ctx.Args is ["-V"] or ["--version"]) { ctx.Stdout.WriteLine("Sudo version 1.9.15p5"); return Task.FromResult(0); }
+            if (ctx.Args.Count == 0) { ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "usage")); return Task.FromResult(1); }
+            if (ctx.Args[0] is "-l" or "--list") { ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "listDenied", ("user", user), ("host", ctx.Shell.Options.Hostname))); return Task.FromResult(1); }
+            // `sudo apt install x`: the package manager's own answer (nothing can be installed) says more than a refusal
+            var target = ctx.Args.SkipWhile(a => a.StartsWith('-')).ToList();
+            if (target is ["apt" or "apt-get" or "apt-cache" or "dpkg", ..]) return ctx.InvokeAsync(target);
             ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "notSudoer", ("user", user)));
-            return 1;
+            return Task.FromResult(1);
         });
+
+        // no package sources and no network: package managers say so, with their usual failure status
+        foreach (var name in new[] { "apt", "apt-get", "apt-cache" })
+            shell.Register(name, ctx => { ctx.Stderr.WriteLine(CommandSpec.Message(name, "unavailable")); return 100; });
+        shell.Register("dpkg", ctx => { ctx.Stderr.WriteLine("dpkg: " + CommandSpec.Message("dpkg", "unavailable")); return 2; });
         shell.Register("su", ctx =>
         {
             ctx.Stderr.WriteLine(CommandSpec.Message("su", "authenticationFailure"));
@@ -1171,15 +1179,76 @@ internal static class Diff
     {
         var a = Args.Parse(ctx.Args, CommandSpec.Of("diff"));
         if (a.Positional.Count != 2) throw new UsageException(a.Positional.Count < 2 ? CommandSpec.Message("diff", "missingOperandAfter", ("operand", a.Positional.LastOrDefault() ?? "diff")) : CommandSpec.Message("diff", "extraOperand", ("operand", a.Positional[2])));
+        var (an, bn) = (a.Positional[0], a.Positional[1]);
+        foreach (var p in new[] { an, bn })
+            if (p != "-" && !a.Has('N') && !ctx.Fs.Exists(ctx.ResolvePath(p))) throw new ShellException(CommandSpec.Message("diff", "fileNotFound", ("file", p)), 2);
+        bool IsDir(string p) => p != "-" && ctx.Fs.IsDirectory(ctx.ResolvePath(p));
+        if (IsDir(an) && IsDir(bn)) return Dirs(ctx, a, an, bn, 0);
+        // a directory and a file: compare the file with the one of the same name in the directory
+        if (IsDir(an)) an = Join(an, VirtualFileSystem.GetName(bn));
+        else if (IsDir(bn)) bn = Join(bn, VirtualFileSystem.GetName(an));
+        return Files(ctx, a, an, bn, null);
+    }
+
+    static string Join(string dir, string name) => dir.EndsWith('/') ? dir + name : dir + "/" + name;
+
+    /// <summary>Two directories: entries only one side has, then each common one in name order (subdirectories with -r).</summary>
+    static int Dirs(CommandContext ctx, Args a, string an, string bn, int depth)
+    {
+        if (depth > 64) throw new ShellException(CommandSpec.Message("diff", "tooLarge"), 2); // shortcut: a symlink loop ends here, not with GNU's loop message
+        var fs = ctx.Fs;
+        string pa = ctx.ResolvePath(an), pb = ctx.ResolvePath(bn);
+        var left = fs.List(pa).ToHashSet();
+        var right = fs.List(pb).ToHashSet();
+        int code = 0;
+        foreach (var name in left.Union(right).Order(StringComparer.Ordinal))
+        {
+            string x = Join(an, name), y = Join(bn, name);
+            bool inA = left.Contains(name), inB = right.Contains(name);
+            bool dirA = inA && fs.IsDirectory(Join(pa, name)), dirB = inB && fs.IsDirectory(Join(pb, name));
+            int rc;
+            if (!inA || !inB)
+            {
+                if (a.Has('N') && !(dirA || dirB)) rc = Files(ctx, a, x, y, Header(ctx, a, x, y));
+                else { ctx.Stdout.WriteLine($"Only in {(inA ? an : bn)}: {name}"); rc = 1; }
+            }
+            else if (dirA && dirB)
+            {
+                if (a.Has('r')) rc = Dirs(ctx, a, x, y, depth + 1);
+                else { ctx.Stdout.WriteLine($"Common subdirectories: {x} and {y}"); rc = 0; }
+            }
+            else if (dirA || dirB)
+            {
+                ctx.Stdout.WriteLine($"File {x} is a {(dirA ? "directory" : "regular file")} while file {y} is a {(dirB ? "directory" : "regular file")}");
+                rc = 1;
+            }
+            else rc = Files(ctx, a, x, y, Header(ctx, a, x, y));
+            code = Math.Max(code, rc);
+        }
+        return code;
+    }
+
+    /// <summary>The line GNU diff prints before each differing pair in a directory: the options as typed, then both names.</summary>
+    static string Header(CommandContext ctx, Args a, string x, string y)
+    {
+        var options = ctx.Args.ToList();
+        foreach (var operand in a.Positional) options.Remove(operand);
+        return string.Join(' ', ["diff", .. options, x, y]);
+    }
+
+    static int Files(CommandContext ctx, Args a, string an, string bn, string? header)
+    {
         string Read(string p)
         {
             if (p == "-") return ctx.StdinText;
             var abs = ctx.ResolvePath(p);
-            if (!ctx.Fs.Exists(abs)) throw new ShellException(CommandSpec.Message("diff", "fileNotFound", ("file", p)), 2);
-            if (ctx.Fs.IsDirectory(abs)) throw new ShellException($"{p}: Is a directory (directory diff is not supported)", 2);
+            if (!ctx.Fs.Exists(abs))
+            {
+                if (a.Has('N')) return "";
+                throw new ShellException(CommandSpec.Message("diff", "fileNotFound", ("file", p)), 2);
+            }
             return ctx.Fs.ReadAllText(abs);
         }
-        var (an, bn) = (a.Positional[0], a.Positional[1]);
         var x = Builtins.SplitLines(Read(an));
         var y = Builtins.SplitLines(Read(bn));
         string Key(string l)
@@ -1195,6 +1264,7 @@ internal static class Diff
             return 0;
         }
         if (a.Has('q')) { ctx.Stdout.WriteLine($"Files {an} and {bn} differ"); return 1; }
+        if (header != null) ctx.Stdout.WriteLine(header);
         if (a.Has('u') || a.Value('U') != null) Unified(ctx.Stdout, ops, x, y, an, bn, int.Parse(a.Value('U') ?? "3"));
         else Normal(ctx.Stdout, ops, x, y);
         return 1;
@@ -1265,7 +1335,8 @@ internal static class Diff
             var hunk = ops.GetRange(start, end - start);
             int aLen = hunk.Count(o => o.Op != Op.Insert), bLen = hunk.Count(o => o.Op != Op.Delete);
             int aStart = hunk.Min(o => o.A) + (aLen > 0 ? 1 : 0), bStart = hunk.Min(o => o.B) + (bLen > 0 ? 1 : 0);
-            w.WriteLine($"@@ -{aStart},{aLen} +{bStart},{bLen} @@");
+            static string Range(int start, int len) => len == 1 ? $"{start}" : $"{start},{len}"; // GNU leaves out a count of 1
+            w.WriteLine($"@@ -{Range(aStart, aLen)} +{Range(bStart, bLen)} @@");
             foreach (var o in hunk)
                 w.WriteLine(o.Op switch { Op.Equal => " " + x[o.A], Op.Delete => "-" + x[o.A], _ => "+" + y[o.B] });
         }

@@ -117,7 +117,7 @@ public class RecordingTests
             var names = zip.Entries.Select(e => e.FullName).Where(n => !n.StartsWith("blobs/")).Order(StringComparer.Ordinal);
             Assert.Equal(["checkpoints/0.json", "checkpoints/2.json", "checkpoints/4.json", "history.jsonl", "manifest.json"], names);
             // blobs are shared: the start's notes.txt is stored once for every checkpoint
-            Assert.Single(zip.Entries, e => e.FullName.StartsWith("blobs/") && e.Length == "alpha\nbeta\n".Length);
+            Assert.Single(zip.Entries, e => e.FullName.StartsWith("blobs/") && new StreamReader(e.Open()).ReadToEnd() == "alpha\nbeta\n");
         }
         var lines = Entry(file, "history.jsonl").TrimEnd('\n').Split('\n');
         Assert.Equal(5, lines.Length); // header + one line per call
@@ -437,7 +437,7 @@ public class RecordingTests
     public async Task A_recording_larger_than_a_snapshot_opens_as_one()
     {
         // checkpoints make a file up to four times a snapshot: Shell.Load reads its machine (manifest.json) all the same
-        var limits = new ShellOptions { MaxFileSystemBytes = 400_000, MaxStringBytes = 4_000, MaxExtractEntries = 400 };
+        var limits = new ShellOptions { MaxFileSystemBytes = 400_000, MaxStringBytes = 4_000, MaxExtractEntries = 500 };
         var sh = new Shell(new ShellOptions { StartTime = Deterministic.StartTime, RandomSeed = 1 });
         using var rec = sh.StartRecording(new RecordingOptions { SnapshotEvery = 1 });
         var random = new Random(7);

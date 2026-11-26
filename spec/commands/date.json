@@ -10,7 +10,9 @@
     "  -d, --date=STRING        show the time described by STRING instead of now",
     "  -r, --reference=FILE     show FILE's last modification time",
     "  -u, --utc, --universal   use UTC (the clock is already UTC)",
-    "  -I, --iso-8601           print the date as YYYY-MM-DD",
+    "  -I[UNIT], --iso-8601[=UNIT]",
+    "                           print in ISO 8601 form, down to UNIT: date (the",
+    "                           default), hours, minutes, seconds or ns",
     "  -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000",
     "",
     "STRING can combine, in any order:",
@@ -22,18 +24,19 @@
     "  relative   3 days ago   +2 hours   next week   last month   1 year",
     "  epoch      @1795168800",
     "",
-    "FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,",
+    "FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %:z %::z %:::z %n %%,",
     "and %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s"
   ],
   "parser": "args",
   "options": [
     {"short": "d", "long": ["date"], "arg": "STRING", "description": "show the time STRING describes instead of now"},
-    {"short": "I", "long": ["iso-8601"], "description": "print the date as YYYY-MM-DD"},
+    {"short": "I", "long": ["iso-8601"], "custom": true, "description": "-I[UNIT], --iso-8601[=UNIT]: print in ISO 8601 form down to UNIT (date, hours, minutes, seconds or ns)"},
     {"short": "R", "long": ["rfc-email"], "description": "print in email (RFC 5322) style"},
     {"short": "r", "long": ["reference"], "arg": "FILE", "description": "show FILE's modification time"},
     {"short": "u", "long": ["universal", "utc"], "description": "use UTC (the clock already is)"}
   ],
   "messages": {
-    "invalidDate": "invalid date {value:locale}"
+    "invalidDate": "invalid date {value:locale}",
+    "invalidIso": "invalid argument {value:locale} for ‘--iso-8601’\nValid arguments are:\n  - ‘hours’\n  - ‘minutes’\n  - ‘date’\n  - ‘seconds’\n  - ‘ns’"
   }
 }

@@ -134,7 +134,7 @@ public class AgentFeatureTests
         Assert.Equal("", await Out(sh, "cat /dev/null; echo hi > /dev/null"));
         Assert.Equal("uid=1000(agent) gid=1000(agent) groups=1000(agent)\n4\n", await Out(sh, "id; nproc"));
         Assert.Equal(124, (await sh.RunAsync("timeout 0.05 sleep 5")).ExitCode);
-        Assert.StartsWith("GNU Awk", await Out(sh, "awk --version"));
+        Assert.StartsWith("mawk", await Out(sh, "awk --version"));
         Assert.Equal("a.txt\nb.txt\n", await Out(sh, "find . -mmin -5 -name '*.txt' | sort | sed 's|./||'"));
         Assert.Equal("", await Out(sh, "grep -rIl ELF /usr/bin; ls -d /var/tmp /opt >/dev/null"));
     }
@@ -205,7 +205,8 @@ public class AgentFeatureTests
         Assert.Equal("drwxrwxrwt root\n", await Out(sh, "stat -c '%A %U' /tmp"));      // shared scratch space
         Assert.Equal("x\n", await Out(sh, "echo x > /tmp/f && cat /tmp/f"));
         r = await sh.RunAsync("find / -name shadow");                                  // unreadable dirs are reported, not fatal
-        Assert.Equal((1, "find: \u2018/root\u2019: Permission denied\n"), (r.ExitCode, r.Stderr));
+        Assert.Equal((1, "find: \u2018/proc/tty/driver\u2019: Permission denied\nfind: \u2018/root\u2019: Permission denied\n" +
+            "find: \u2018/var/cache/apt/archives/partial\u2019: Permission denied\nfind: \u2018/var/cache/ldconfig\u2019: Permission denied\n"), (r.ExitCode, r.Stderr));
 
         // the app itself is unrestricted, and files it creates belong to the directory's owner
         sh.Fs.WriteAllText("/etc/app.conf", "mode=prod");

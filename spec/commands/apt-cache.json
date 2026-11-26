@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "apt-cache",
+  "category": "system",
+  "summary": "Package manager stand-in: says that packages cannot be installed on this machine",
+  "version": "apt 2.8.3 (amd64)",
+  "parser": "custom",
+  "exitCodes": {"100": "always: there are no packages to install"},
+  "notes": "This machine has no package sources and no network, so every subcommand fails the way apt fails (status 100) with a message that says so.",
+  "messages": {
+    "unavailable": "E: Packages cannot be installed on this machine: it has no package sources and no network. Run 'help' to list the commands it has."
+  }
+}

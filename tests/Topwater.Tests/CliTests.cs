@@ -169,7 +169,7 @@ public sealed class CliTests : IDisposable
         File.WriteAllText(P("data/x.csv"), "a,b\n1,2\n");
         Assert.Equal(0, (await Cli("snapshot", "save", P("base.zip"), "--import", P("data") + ":data")).Code);
         var info = (await Cli("snapshot", "info", P("base.zip"))).Out;
-        Assert.Contains("topwater-snapshot version 1", info);
+        Assert.Contains("topwater-snapshot version 2", info); // the machine has symbolic links (/etc/os-release, /proc/self)
         Assert.Contains("agent@topwater, cwd /home/agent", info);
 
         // piped stdin is one script, so multi-line constructs work; the exit code comes back

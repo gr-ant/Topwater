@@ -515,7 +515,7 @@ internal static partial class Builtins
             var io = ctx.Io;
             var args = ctx.Args.ToList();
             var sh = ctx.Shell;
-            bool isBash = ctx.Name is "bash" or "sh", command = false;
+            bool isBash = ctx.Name is "bash" or "sh", command = false, login = false;
             // bash's own options: -c, and -e -u -x -o pipefail ... which the new shell starts with
             var options = new List<(string Name, bool On)>();
             int i = 0;
@@ -523,10 +523,11 @@ internal static partial class Builtins
             {
                 var f = args[i];
                 if (f == "--") { i++; break; }
-                if (f.StartsWith("--")) continue; // --norc, --noprofile, --login
+                if (f.StartsWith("--")) { login |= f == "--login"; continue; } // --norc, --noprofile
                 foreach (var c in f[1..])
                 {
                     if (c == 'c') command = true;
+                    else if (c == 'l' && f[0] == '-') login = true;
                     else if (c == 'o' && i + 1 < args.Count) options.Add((args[++i], f[0] == '-'));
                     else if ("eufxC".Contains(c)) options.Add((c switch { 'e' => "errexit", 'u' => "nounset", 'f' => "noglob", 'x' => "xtrace", _ => "noclobber" }, f[0] == '-'));
                 }
@@ -536,12 +537,12 @@ internal static partial class Builtins
             if (command)
             {
                 if (args.Count == 0) throw new ShellException(CommandSpec.Message(ctx.Name, "cOptionArgument"), 2);
-                return await sh.RunScriptTextAsync(args[0], io, subshell: true, ctx.CancellationToken, args.Skip(2).ToList(), new(args.ElementAtOrDefault(1) ?? ctx.Name, null, Setup));
+                return await sh.RunScriptTextAsync(args[0], io, subshell: true, ctx.CancellationToken, args.Skip(2).ToList(), new(args.ElementAtOrDefault(1) ?? ctx.Name, null, Setup, login));
             }
             if (args.Count == 0)
             {
                 if (!isBash) throw new ShellException(CommandSpec.Message(ctx.Name, "filenameRequired"), 2);
-                return await sh.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken, [], new(ctx.Name, null, Setup));
+                return await sh.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken, [], new(ctx.Name, null, Setup, login));
             }
             string text;
             try { text = ctx.Fs.ReadAllText(ctx.ResolvePath(args[0])); }
@@ -551,7 +552,7 @@ internal static partial class Builtins
                 ctx.Stderr.WriteLine($"{(isBash ? "bash: " : ctx.Shell.ErrPrefix)}{args[0]}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}");
                 return isBash ? 127 : 1;
             }
-            if (isBash) return await sh.RunScriptTextAsync(text, io, subshell: true, ctx.CancellationToken, args.Skip(1).ToList(), new(args[0], args[0], Setup));
+            if (isBash) return await sh.RunScriptTextAsync(text, io, subshell: true, ctx.CancellationToken, args.Skip(1).ToList(), new(args[0], args[0], Setup, login));
             sh.SourceDepth++;
             try { return await sh.RunScriptTextAsync(text, io, subshell: false, ctx.CancellationToken, args.Count > 1 ? args.Skip(1).ToList() : null, sourced: args[0]); }
             catch (ReturnSignal r) { return r.Code; }   // `return` in a sourced file ends that file only
@@ -602,12 +603,22 @@ internal static partial class Builtins
         shell.Register("date", ctx =>
         {
             // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
-            var a = Args.Parse(ctx.Args, CommandSpec.Of("date"));
+            // -I[UNIT] / --iso-8601[=UNIT] take an optional value, so they are read here, before the shared parser
+            string? iso = null;
+            var args = ctx.Args.Where(x =>
+            {
+                string? unit = x == "--iso-8601" ? "" : x.StartsWith("--iso-8601=", StringComparison.Ordinal) ? x[11..] : x.StartsWith("-I", StringComparison.Ordinal) ? x[2..] : null;
+                if (unit == null) return true;
+                iso = unit == "" ? "date" : IsoUnits.FirstOrDefault(u => u.StartsWith(unit, StringComparison.Ordinal))
+                    ?? throw new UsageException(CommandSpec.Message("date", "invalidIso", ("value", unit)));
+                return false;
+            }).ToList();
+            var a = Args.Parse(args, CommandSpec.Of("date"));
             var now = ctx.Shell.Now;
             if (a.Value('d') is { } d) now = ParseDate(d, now);
             else if (a.Value('r') is { } r) now = ctx.Fs.Stat(ctx.ResolvePath(r)).Modified.ToUniversalTime();
             var fmt = a.Positional.FirstOrDefault(p => p.StartsWith('+'));
-            ctx.Stdout.WriteLine(Strftime(now, a.Has('I') ? "%Y-%m-%d" : a.Has('R') ? "%a, %d %b %Y %H:%M:%S +0000" : fmt != null ? fmt[1..] : "%a %b %e %H:%M:%S %Z %Y"));
+            ctx.Stdout.WriteLine(Strftime(now, iso != null ? IsoFormats[Array.IndexOf(IsoUnits, iso)] : a.Has('R') ? "%a, %d %b %Y %H:%M:%S +0000" : fmt != null ? fmt[1..] : "%a %b %e %H:%M:%S %Z %Y"));
             return 0;
         });
 
@@ -617,6 +628,9 @@ internal static partial class Builtins
             return 0;
         });
     }
+
+    static readonly string[] IsoUnits = ["hours", "minutes", "date", "seconds", "ns"];
+    static readonly string[] IsoFormats = ["%Y-%m-%dT%H%:z", "%Y-%m-%dT%H:%M%:z", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%dT%H:%M:%S,%N%:z"];
 
     static readonly string[] DayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     static readonly string[] MonthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -629,6 +643,15 @@ internal static partial class Builtins
         for (int i = 0; i < fmt.Length;)
         {
             if (fmt[i] != '%' || i + 1 >= fmt.Length) { sb.Append(fmt[i++]); continue; }
+            // %:z +hh:mm, %::z +hh:mm:ss, %:::z +hh (the clock is UTC)
+            int colons = 0;
+            while (i + 1 + colons < fmt.Length && fmt[i + 1 + colons] == ':') colons++;
+            if (colons is > 0 and <= 3 && i + 1 + colons < fmt.Length && fmt[i + 1 + colons] == 'z')
+            {
+                sb.Append(colons switch { 1 => "+00:00", 2 => "+00:00:00", _ => "+00" });
+                i += colons + 2;
+                continue;
+            }
             bool noPad = fmt[i + 1] == '-' && i + 2 < fmt.Length;
             char d = noPad ? fmt[i + 2] : fmt[i + 1];
             i += noPad ? 3 : 2;

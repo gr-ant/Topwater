@@ -6,6 +6,8 @@
   "parser": "args",
   "options": [
     {"short": "a", "description": "copy recursively, keeping modes and times"},
+    {"short": "b", "description": "keep a backup of each file that would be overwritten (like --backup)"},
+    {"long": ["backup"], "key": "\u0002", "custom": true, "description": "--backup[=CONTROL]: keep a backup of each overwritten file; CONTROL is none/off, simple/never (FILE~), numbered/t (FILE.~N~) or existing/nil (numbered if FILE already has numbered backups), default existing"},
     {"long": ["archive"], "key": "a", "description": "copy recursively, keeping modes and times", "ports": ["ts"]},
     {"short": "f", "long": ["force"], "description": "overwrite without asking"},
     {"short": "i", "description": "ask before overwriting (no terminal: never overwrite)", "ports": ["ts"]},
@@ -17,6 +19,7 @@
     {"short": "p", "description": "keep modes and times"},
     {"short": "P", "long": ["no-dereference"], "description": "copy symbolic links as links, never following them"},
     {"short": "R", "description": "copy directories recursively"},
+    {"short": "S", "long": ["suffix"], "arg": "SUFFIX", "description": "end simple backups with SUFFIX instead of ~"},
     {"short": "r", "long": ["recursive"], "description": "copy directories recursively"},
     {"short": "T", "long": ["no-target-directory"], "description": "treat the destination as a normal file", "ports": ["ts"]},
     {"short": "t", "long": ["target-directory"], "arg": "DIRECTORY", "description": "copy or move everything into DIRECTORY", "ports": ["ts"]},
@@ -39,6 +42,7 @@
     "cannotAccess": "cannot access '{file}': {errno}",
     "cannotOpen": "cannot open '{file}' for reading: {errno}",
     "cyclicLink": "cannot copy cyclic symbolic link '{file}'",
-    "cannotCreate": "cannot create {kind} '{file}': {errno}"
+    "cannotCreate": "cannot create {kind} '{file}': {errno}",
+    "invalidBackupType": "invalid argument {value:locale} for ‘backup type’\nValid arguments are:\n  - ‘none’, ‘off’\n  - ‘simple’, ‘never’\n  - ‘existing’, ‘nil’\n  - ‘numbered’, ‘t’"
   }
 }

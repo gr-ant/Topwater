@@ -202,9 +202,14 @@ public sealed partial class Shell
         var home = "/home/" + user;
         foreach (var dir in new[] { home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log" }) Fs.CreateDirectory(dir, parents: true);
         if (!Fs.Exists("/etc/os-release"))
-            Fs.WriteAllText("/etc/os-release", "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.1 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\n");
+        {
+            Fs.CreateDirectory("/usr/lib", parents: true);
+            Fs.WriteAllText("/usr/lib/os-release", OsRelease);
+            Fs.CreateSymlink("/etc/os-release", "../usr/lib/os-release");
+        }
         Fs.WriteAllText("/etc/hostname", Options.Hostname + "\n");
         if (!Fs.Exists("/etc/issue")) Fs.WriteAllText("/etc/issue", "Ubuntu 24.04.1 LTS \\n \\l\n\n");
+        if (!Fs.Exists("/etc/issue.net")) Fs.WriteAllText("/etc/issue.net", "Ubuntu 24.04.1 LTS\n");
         if (!Fs.Exists("/etc/passwd"))
             Fs.WriteAllText("/etc/passwd", $"root:x:0:0:root:/root:/bin/bash\n{user}:x:1000:1000:{user}:{home}:/bin/bash\n");
         Fs.WriteAllText("/dev/null", "");
@@ -229,8 +234,9 @@ public sealed partial class Shell
         Builtins.RegisterAll(this);
         _builtinNames = [.. _commands.Keys];
         // the system was "installed" months ago; only the agent's home and the temp directories are fresh
-        foreach (var dir in new[] { "/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log", "/var/lib", "/var/cache", "/boot", "/lib", "/lib64", "/media", "/mnt", "/sbin", "/srv" })
+        foreach (var dir in new[] { "/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log", "/var/lib", "/var/cache", "/var/backups", "/var/local", "/var/mail", "/var/opt", "/var/spool", "/run", "/boot", "/lib", "/lib64", "/media", "/mnt", "/sbin", "/srv" })
             Fs.SetModified(dir, InstalledAt, recursive: true);
+        foreach (var link in new[] { "/var/run", "/var/lock" }) if (Fs.IsSymlink(link)) Fs.SetModifiedTime(link, InstalledAt, follow: false);
         foreach (var path in new[] { "/", "/home", "/var", home + "/.bashrc", home + "/.profile", home + "/.bash_logout" }) Fs.SetModified(path, InstalledAt);
     }
 
@@ -240,13 +246,23 @@ public sealed partial class Shell
     /// </summary>
     void SeedSystemFiles(string user, string home)
     {
-        foreach (var dir in new[] { "/boot", "/lib", "/lib64", "/media", "/mnt", "/proc", "/run", "/sbin", "/srv", "/sys", "/usr/lib", "/usr/share", "/usr/sbin", "/var/lib", "/var/cache" })
-            Fs.CreateDirectory(dir, parents: true);
+        foreach (var dir in SystemDirs) Fs.CreateDirectory(dir, parents: true);
+        // what an ordinary user can't read, so `find /` reports "Permission denied" and exits 1 as on Ubuntu
+        foreach (var dir in new[] { "/var/cache/ldconfig", "/var/cache/apt/archives/partial", "/proc/tty/driver" }) Fs.Chmod(dir, Oct("700"));
+        Fs.Chmod("/run/lock", Oct("1777"));
+        Link("/var/run", "/run");
+        Link("/var/lock", "/run/lock");
 
         void Seed(string path, string content) { if (!Fs.Exists(path)) Fs.WriteAllText(path, content); }
+        void Link(string path, string target) { if (!Fs.Exists(path) && !Fs.IsSymlink(path)) Fs.CreateSymlink(path, target); }
         Seed("/etc/hosts", $"127.0.0.1\tlocalhost\n127.0.1.1\t{Options.Hostname}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\nff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n");
         Seed("/etc/group", $"root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n{user}:x:1000:\n");
-        Seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/bin/bash\n/usr/bin/bash\n/usr/bin/sh\n");
+        Seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n");
+        Seed("/etc/debian_version", "trixie/sid\n");
+        Seed("/var/lib/shells.state", "");
+        Seed("/etc/profile", EtcProfile);
+        Seed("/etc/bash.bashrc", EtcBashrc);
+        Seed("/etc/profile.d/01-locale-fix.sh", "# Use the C.UTF-8 locale when none is set.\nexport LANG=\"${LANG:-C.UTF-8}\"\n");
         Seed("/etc/timezone", "Etc/UTC\n");
         Seed("/etc/resolv.conf", "nameserver 127.0.0.53\noptions edns0 trust-ad\n");
         Seed("/etc/lsb-release", "DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=24.04\nDISTRIB_CODENAME=noble\nDISTRIB_DESCRIPTION=\"Ubuntu 24.04.1 LTS\"\n");
@@ -260,11 +276,40 @@ public sealed partial class Shell
         Seed("/proc/mounts", "/dev/sda1 / ext4 rw,relatime 0 0\nproc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\ntmpfs /dev/shm tmpfs rw,nosuid,nodev 0 0\n");
         Seed("/proc/uptime", "274320.42 1082431.77\n");
         Seed("/proc/loadavg", "0.08 0.03 0.01 1/142 4242\n");
+        // the shell's own process: /proc/self points at it ($$ is 4242)
+        var uid = user == "root" ? 0 : 1000;
+        Seed("/proc/4242/comm", "bash\n");
+        Seed("/proc/4242/cmdline", "bash\0");
+        Seed("/proc/4242/status", $"Name:\tbash\nState:\tS (sleeping)\nPid:\t4242\nPPid:\t1\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t{uid}\t{uid}\t{uid}\t{uid}\n");
+        Link("/proc/self", "4242");
 
-        Seed(home + "/.profile", "# ~/.profile: executed by the command interpreter for login shells.\n\nif [ -n \"$BASH_VERSION\" ]; then\n    if [ -f \"$HOME/.bashrc\" ]; then\n\t. \"$HOME/.bashrc\"\n    fi\nfi\n\nif [ -d \"$HOME/bin\" ] ; then\n    PATH=\"$HOME/bin:$PATH\"\nfi\n");
-        Seed(home + "/.bash_logout", "# ~/.bash_logout: executed by bash(1) when login shell exits.\n\nif [ \"$SHLVL\" = 1 ]; then\n    [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q\nfi\n");
-        Seed(home + "/.bashrc", "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n# If not running interactively, don't do anything\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\n\nshopt -s checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\nalias ls='ls --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n");
+        foreach (var dir in new[] { "/etc/skel", home })
+        {
+            Seed(dir + "/.profile", DotProfile);
+            Seed(dir + "/.bash_logout", DotBashLogout);
+            Seed(dir + "/.bashrc", DotBashrc);
+        }
     }
+
+    static readonly string[] SystemDirs =
+    [
+        "/boot", "/lib", "/lib64", "/media", "/mnt", "/proc/4242", "/proc/tty/driver", "/run/lock", "/sbin", "/srv", "/sys",
+        "/etc/profile.d", "/etc/skel", "/usr/games", "/usr/include", "/usr/lib64", "/usr/libexec", "/usr/sbin", "/usr/src",
+        "/usr/local/etc", "/usr/local/games", "/usr/local/include", "/usr/local/lib", "/usr/local/man", "/usr/local/sbin", "/usr/local/share", "/usr/local/src",
+        "/usr/share/base-files", "/usr/share/bash-completion", "/usr/share/common-licenses", "/usr/share/doc", "/usr/share/info", "/usr/share/locale",
+        "/usr/share/man", "/usr/share/misc", "/usr/share/terminfo",
+        "/var/backups", "/var/cache/apt/archives/partial", "/var/cache/debconf", "/var/cache/ldconfig", "/var/lib/apt", "/var/lib/dpkg", "/var/lib/misc", "/var/lib/pam", "/var/lib/systemd",
+        "/var/local", "/var/mail", "/var/opt", "/var/spool",
+    ];
+
+    // Ubuntu's files, rewritten in our own words with the same effect: a login shell reads /etc/profile, which runs
+    // /etc/profile.d/*.sh; an interactive one reads ~/.bashrc; a non-interactive one (every tool call) reads neither
+    const string OsRelease = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.1 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n";
+    const string EtcProfile = "# Read by every login shell (bash -l, sh -l).\n\n# interactive bash: the shared settings in /etc/bash.bashrc\nif [ \"${PS1-}\" ] && [ \"${BASH-}\" ] && [ -f /etc/bash.bashrc ]; then\n  . /etc/bash.bashrc\nfi\n\n# then each script in /etc/profile.d\nif [ -d /etc/profile.d ]; then\n  for i in /etc/profile.d/*.sh; do\n    [ -r \"$i\" ] && . \"$i\"\n  done\n  unset i\nfi\n";
+    const string EtcBashrc = "# Shared settings for interactive bash shells.\n\n# nothing to do for scripts and bash -c\n[ -z \"${PS1-}\" ] && return\n\nshopt -s checkwinsize\nPS1='\\u@\\h:\\w\\$ '\n";
+    const string DotProfile = "# Read by login shells, unless ~/.bash_profile or ~/.bash_login exists.\n\n# bash: also read ~/.bashrc\nif [ -n \"$BASH_VERSION\" ] && [ -f \"$HOME/.bashrc\" ]; then\n    . \"$HOME/.bashrc\"\nfi\n\n# your own programs, when you have them\nfor d in \"$HOME/bin\" \"$HOME/.local/bin\"; do\n    [ -d \"$d\" ] && PATH=\"$d:$PATH\"\ndone\nunset d\n";
+    const string DotBashLogout = "# Run when a login shell exits.\n";
+    const string DotBashrc = "# Settings for interactive bash shells.\n\n# scripts and bash -c stop here\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\n# history: skip duplicates and lines that start with a space\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\nshopt -s histappend checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\n# colour and shorthands\nalias ls='ls --color=auto'\nalias grep='grep --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n\n[ -f ~/.bash_aliases ] && . ~/.bash_aliases\n";
 
     DateTime InstalledAt => (_virtualNow is null ? DateTime.Today : Options.StartTime!.Value.UtcDateTime.Date).AddDays(-142).AddHours(9).AddMinutes(13);
 
@@ -467,6 +512,7 @@ public sealed partial class Shell
         _history.Add(commandLine);
         var stdout = new CappedWriter(this);
         var stderr = new CappedWriter(this);
+        _callStderr = stderr;
         int code;
         string? trailer = null;
         var previousUser = Fs.RunAs;
@@ -539,7 +585,8 @@ public sealed partial class Shell
     internal static string Seconds(TimeSpan t) => $"{t.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} s";
 
     /// <summary>A new bash process (bash -c, bash file, ./script.sh): $0, the file it runs (if any), and its own options (bash -e).</summary>
-    internal sealed record NewProcess(string Arg0, string? File = null, Action? Setup = null);
+    /// <param name="Login">bash -l: read /etc/profile and the first of ~/.bash_profile, ~/.bash_login and ~/.profile first.</param>
+    internal sealed record NewProcess(string Arg0, string? File = null, Action? Setup = null, bool Login = false);
 
     /// <param name="process">Set for a new bash process: it sees only exported variables and functions.</param>
     /// <param name="sourced">The file `source` is running, for BASH_SOURCE.</param>
@@ -580,6 +627,7 @@ public sealed partial class Shell
             if (process != null) _subshell = 0; // a new bash ends with its own status (127 for set -u), not a subshell's 1
             try
             {
+                if (process?.Login == true) await SourceLoginFilesAsync(io, ct);
                 try { return process != null ? await ExecTopLevelAsync(script, io, ct) : await ExecScriptAsync(script, io, ct); }
                 finally { await RunExitTrapAsync(io, ct); }
             }
@@ -598,6 +646,20 @@ public sealed partial class Shell
     }
 
     /// <summary>What a child bash inherits: exported variables (not their other attributes) and exported functions, no arrays, aliases or options.</summary>
+    async Task SourceLoginFilesAsync(Io io, CancellationToken ct)
+    {
+        var home = Environment.GetValueOrDefault("HOME", "");
+        var personal = new[] { "/.bash_profile", "/.bash_login", "/.profile" }.Select(f => home + f).FirstOrDefault(f => Fs.IsFile(f) && Fs.CanRead(f));
+        foreach (var file in new[] { "/etc/profile", personal })
+        {
+            if (file == null || !Fs.IsFile(file) || !Fs.CanRead(file)) continue;
+            SourceDepth++;
+            try { await RunScriptTextAsync(Fs.ReadAllText(file), io, subshell: false, ct, sourced: file); }
+            catch (ReturnSignal) { }
+            finally { SourceDepth--; }
+        }
+    }
+
     void BecomeNewProcess(NewProcess process)
     {
         Environment = Environment.Where(e => IsExported(e.Key)).ToDictionary(StringComparer.Ordinal);
@@ -608,6 +670,7 @@ public sealed partial class Shell
         Errexit = Pipefail = Nounset = Xtrace = Noglob = Noclobber = false;
         Hashed = new(StringComparer.Ordinal);
         _arg0 = process.Arg0;
+        if (process.Login) Shopts.Add("login_shell"); else Shopts.Remove("login_shell");
         process.Setup?.Invoke();
     }
 
@@ -1277,6 +1340,21 @@ public sealed partial class Shell
         return argv;
     }
 
+    /// <summary>bash's own "command not found" line. The first time in a session that it goes straight to the tool output
+    /// (stderr not redirected or captured), a one-line hint about `help` follows, so that output a script captures stays bash's.</summary>
+    void ReportNotFound(Io io, string name)
+    {
+        io.Err.WriteLine(ErrPrefix + CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", name)));
+        var err = io.Err;
+        while (err is SwitchWriter sw) err = sw.Target;
+        if (_notFoundHinted || !ReferenceEquals(err, _callStderr)) return;
+        _notFoundHinted = true;
+        io.Err.WriteLine(CommandSpec.Diagnostics.CommandNotFoundHint);
+    }
+
+    bool _notFoundHinted;
+    TextWriter? _callStderr;
+
     /// <param name="skipFunctions">`command ls` / `builtin cd`: run the command itself even when a function has its name.</param>
     internal async Task<int> InvokeAsync(IReadOnlyList<string> argv, Io io, CancellationToken ct, bool skipFunctions = false)
     {
@@ -1296,8 +1374,8 @@ public sealed partial class Shell
                 found = SearchPath(name);
                 if (found == null)
                 {
-                    io.Err.WriteLine(Environment.GetValueOrDefault("PATH", "") == "" ? $"{ErrPrefix}{name}: No such file or directory"
-                        : CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", argv[0])));
+                    if (Environment.GetValueOrDefault("PATH", "") == "") io.Err.WriteLine($"{ErrPrefix}{name}: No such file or directory");
+                    else ReportNotFound(io, name);
                     return 127;
                 }
                 if (found.Contains('/')) Hashed[name] = (found, 1); // bash leaves a name found through an empty PATH entry out of the table
@@ -1307,7 +1385,7 @@ public sealed partial class Shell
         }
         if (!_commands.TryGetValue(name, out var cmd))
         {
-            io.Err.WriteLine(CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", argv[0])));
+            ReportNotFound(io, argv[0]);
             return 127;
         }
         var ctx = new CommandContext(this, name, argv.Skip(1).ToList(), io.Stdin, io.Out, io.Err, ct) { Fds = io.Fds };

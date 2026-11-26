@@ -25,7 +25,19 @@ internal static partial class CommandSpec
             ["missingBracket"] = "missing `]'",
         }),
         ["alias"] = new("alias", "Define or list aliases", null, "alias (GNU coreutils) 9.4", false, true, false, "alias", 1, "Try 'alias --help' for more information.\n", null, Empty),
-        ["awk"] = new("awk", "Run an awk program over lines and fields", null, "awk (GNU coreutils) 9.4", false, false, true, "awk", 1, "Try 'awk --help' for more information.\n", null, Empty),
+        ["apt"] = new("apt", "Package manager stand-in: says that packages cannot be installed on this machine", null, "apt 2.8.3 (amd64)", true, false, true, "apt", 1, "Try 'apt --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["unavailable"] = "E: Packages cannot be installed on this machine: it has no package sources and no network. Run 'help' to list the commands it has.",
+        }),
+        ["apt-cache"] = new("apt-cache", "Package manager stand-in: says that packages cannot be installed on this machine", null, "apt 2.8.3 (amd64)", true, false, true, "apt-cache", 1, "Try 'apt-cache --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["unavailable"] = "E: Packages cannot be installed on this machine: it has no package sources and no network. Run 'help' to list the commands it has.",
+        }),
+        ["apt-get"] = new("apt-get", "Package manager stand-in: says that packages cannot be installed on this machine", null, "apt 2.8.3 (amd64)", true, false, true, "apt-get", 1, "Try 'apt-get --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["unavailable"] = "E: Packages cannot be installed on this machine: it has no package sources and no network. Run 'help' to list the commands it has.",
+        }),
+        ["awk"] = new("awk", "Run an awk program over lines and fields", null, "mawk 1.3.4 20240123", false, false, true, "awk", 1, "Try 'awk --help' for more information.\n", null, Empty),
         ["base64"] = new("base64", "Base64 encode/decode", null, "base64 (GNU coreutils) 9.4", true, false, true, "base64", 1, "Try 'base64 --help' for more information.\n", ("di", "w", "decode=d,ignore-garbage=i,wrap=w"), new Dictionary<string, string>
         {
             ["readDirectory"] = "read error: {errno}",
@@ -66,10 +78,22 @@ internal static partial class CommandSpec
             ["cannotAccess"] = "cannot access '{file}': {reason}",
         }),
         ["clear"] = new("clear", "Clear the terminal", null, "clear (GNU coreutils) 9.4", true, false, true, "clear", 1, "Try 'clear --help' for more information.\n", null, Empty),
+        ["cmp"] = new("cmp", "Compare two files byte by byte and report the first difference", null, "cmp (GNU diffutils) 3.10", true, false, true, "cmp", 2, "cmp: Try 'cmp --help' for more information.\n", ("bls", "in", "print-bytes=b,ignore-initial=i,verbose=l,bytes=n,quiet=s,silent=s"), new Dictionary<string, string>
+        {
+            ["differ"] = "{file1} {file2} differ: byte {byte}, line {line}",
+            ["differBytes"] = "{file1} {file2} differ: byte {byte}, line {line} is {byte1} {byte2}",
+            ["eof"] = "EOF on {file} after byte {byte}, line {line}",
+            ["eofInLine"] = "EOF on {file} after byte {byte}, in line {line}",
+            ["eofVerbose"] = "EOF on {file} after byte {byte}",
+            ["eofEmpty"] = "EOF on {file} which is empty",
+            ["missingOperand"] = "missing operand after 'cmp'",
+            ["extraOperand"] = "extra operand '{operand}'",
+            ["invalidNumber"] = "invalid --{option} value '{value}'",
+        }),
         ["column"] = new("column", "Format input into aligned columns (-t)", null, "column from util-linux 2.39.3", true, false, true, "column", 1, "Try 'column --help' for more information.\n", ("nt", "os", "output-separator=o,separator=s,table=t"), Empty),
         ["command"] = new("command", "Run a command, or describe it with -v", null, "command (GNU coreutils) 9.4", false, true, false, "command", 1, "Try 'command --help' for more information.\n", null, Empty),
         ["continue"] = new("continue", "Next loop iteration", null, "continue (GNU coreutils) 9.4", false, true, false, "continue", 1, "Try 'continue --help' for more information.\n", null, Empty),
-        ["cp"] = new("cp", "Make copies of files or whole directory trees", null, "cp (GNU coreutils) 9.4", true, false, true, "cp", 1, "Try 'cp --help' for more information.\n", ("afdHLnpPRrvZ", "", "force=f,dereference=L,no-dereference=P,recursive=r"), new Dictionary<string, string>
+        ["cp"] = new("cp", "Make copies of files or whole directory trees", null, "cp (GNU coreutils) 9.4", true, false, true, "cp", 1, "Try 'cp --help' for more information.\n", ("abfdHLnpPRrvZ", "S", "force=f,dereference=L,no-dereference=P,suffix=S,recursive=r"), new Dictionary<string, string>
         {
             ["missingDestination"] = "missing destination file operand after {file:shell-always}",
             ["cannotStat"] = "cannot stat '{file}': {errno}",
@@ -86,6 +110,7 @@ internal static partial class CommandSpec
             ["cannotOpen"] = "cannot open '{file}' for reading: {errno}",
             ["cyclicLink"] = "cannot copy cyclic symbolic link '{file}'",
             ["cannotCreate"] = "cannot create {kind} '{file}': {errno}",
+            ["invalidBackupType"] = "invalid argument {value:locale} for ‘backup type’\nValid arguments are:\n  - ‘none’, ‘off’\n  - ‘simple’, ‘never’\n  - ‘existing’, ‘nil’\n  - ‘numbered’, ‘t’",
         }),
         ["cut"] = new("cut", "Select fields or characters from lines", null, "cut (GNU coreutils) 9.4", true, false, true, "cut", 1, "Try 'cut --help' for more information.\n", ("nsz", "bcdf\u0002", "bytes=b,characters=c,delimiter=d,fields=f,output-delimiter=\u0002,only-delimited=s,complement=z"), new Dictionary<string, string>
         {
@@ -95,9 +120,10 @@ internal static partial class CommandSpec
             ["invalidFieldValue"] = "invalid field value '{part}'",
             ["invalidDecreasingRange"] = "invalid decreasing range",
         }),
-        ["date"] = new("date", "Print the date and time", "Usage: date [OPTION]... [+FORMAT]\nPrint the current date and time, or the one given with -d, in UTC.\n\n  -d, --date=STRING        show the time described by STRING instead of now\n  -r, --reference=FILE     show FILE's last modification time\n  -u, --utc, --universal   use UTC (the clock is already UTC)\n  -I, --iso-8601           print the date as YYYY-MM-DD\n  -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000\n\nSTRING can combine, in any order:\n  dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120\n  times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)\n  zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)\n  weekdays   Monday, fri   (moves forward to that day)\n  words      now  today  yesterday  tomorrow\n  relative   3 days ago   +2 hours   next week   last month   1 year\n  epoch      @1795168800\n\nFORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,\nand %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s\n", "date (GNU coreutils) 9.4", true, false, true, "date", 1, "Try 'date --help' for more information.\n", ("IRu", "dr", "date=d,iso-8601=I,rfc-email=R,reference=r,universal=u,utc=u"), new Dictionary<string, string>
+        ["date"] = new("date", "Print the date and time", "Usage: date [OPTION]... [+FORMAT]\nPrint the current date and time, or the one given with -d, in UTC.\n\n  -d, --date=STRING        show the time described by STRING instead of now\n  -r, --reference=FILE     show FILE's last modification time\n  -u, --utc, --universal   use UTC (the clock is already UTC)\n  -I[UNIT], --iso-8601[=UNIT]\n                           print in ISO 8601 form, down to UNIT: date (the\n                           default), hours, minutes, seconds or ns\n  -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000\n\nSTRING can combine, in any order:\n  dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120\n  times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)\n  zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)\n  weekdays   Monday, fri   (moves forward to that day)\n  words      now  today  yesterday  tomorrow\n  relative   3 days ago   +2 hours   next week   last month   1 year\n  epoch      @1795168800\n\nFORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %:z %::z %:::z %n %%,\nand %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s\n", "date (GNU coreutils) 9.4", true, false, true, "date", 1, "Try 'date --help' for more information.\n", ("Ru", "dr", "date=d,rfc-email=R,reference=r,universal=u,utc=u"), new Dictionary<string, string>
         {
             ["invalidDate"] = "invalid date {value:locale}",
+            ["invalidIso"] = "invalid argument {value:locale} for ‘--iso-8601’\nValid arguments are:\n  - ‘hours’\n  - ‘minutes’\n  - ‘date’\n  - ‘seconds’\n  - ‘ns’",
         }),
         ["declare"] = new("declare", "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)", null, "declare (GNU coreutils) 9.4", false, true, false, "declare", 1, "Try 'declare --help' for more information.\n", null, Empty),
         ["df"] = new("df", "Report filesystem disk space", null, "df (GNU coreutils) 9.4", true, false, true, "df", 1, "Try 'df --help' for more information.\n", null, Empty),
@@ -111,6 +137,10 @@ internal static partial class CommandSpec
         ["dirname"] = new("dirname", "Strip the last component from a path", null, "dirname (GNU coreutils) 9.4", true, false, true, "dirname", 1, "Try 'dirname --help' for more information.\n", ("z", "", "zero=z"), Empty),
         ["dirs"] = new("dirs", "Show the directory stack", null, "dirs (GNU coreutils) 9.4", true, true, false, "dirs", 1, "Try 'dirs --help' for more information.\n", null, Empty),
         ["disown"] = new("disown", "Forget background jobs", null, "disown (GNU coreutils) 9.4", true, true, false, "disown", 1, "Try 'disown --help' for more information.\n", null, Empty),
+        ["dpkg"] = new("dpkg", "Package manager stand-in: says that packages cannot be installed on this machine", null, "Debian 'dpkg' package management program version 1.22.6 (amd64).", true, false, true, "dpkg", 1, "Try 'dpkg --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["unavailable"] = "error: packages cannot be installed or listed on this machine: it has no package database. Run 'help' to list the commands it has.",
+        }),
         ["du"] = new("du", "Estimate disk usage", null, "du (GNU coreutils) 9.4", true, false, true, "du", 1, "Try 'du --help' for more information.\n", ("achkSs", "d", "all=a,total=c,max-depth=d,human-readable=h,summarize=s"), new Dictionary<string, string>
         {
             ["cannotAccess"] = "cannot access '{file}': {errno}",
@@ -503,6 +533,7 @@ internal static partial class CommandSpec
             ["unmatchedQuote"] = "unmatched {kind} quote; by default quotes are special to xargs unless you use the -0 option",
             ["invalidValue"] = "value {value} for -{option} option should be >= 1",
             ["exitedWith255"] = "{command}: exited with status 255; aborting",
+            ["cannotRun"] = "{command}: {errno}",
         }),
         ["xxd"] = new("xxd", "Make a hex dump (-p plain, -l LEN, -s OFFSET)", null, "xxd (GNU coreutils) 9.4", true, false, true, "xxd", 1, "Try 'xxd --help' for more information.\n", ("p", "cls", "cols=c,len=l,plain=p,seek=s"), new Dictionary<string, string>
         {
@@ -579,7 +610,8 @@ internal static partial class CommandSpec
         internal const string ProcessSubstitution = "process substitution >(...) is not supported by this shell (write to a file, then read it)";
         internal const string Coproc = "'coproc' is not supported by this shell";
         internal const string AmbiguousRedirect = "ambiguous redirect";
-        internal const string CommandNotFound = "{command}: command not found (run 'help' to list available commands)";
+        internal const string CommandNotFound = "{command}: command not found";
+        internal const string CommandNotFoundHint = "(run 'help' to list the available commands; nothing else can be installed on this machine)";
         internal const string EofMatching = "unexpected EOF while looking for matching `{terminator}'";
         internal const string UnexpectedToken = "syntax error near unexpected token `{token}'";
         internal const string SourceLine = "`{line}'";

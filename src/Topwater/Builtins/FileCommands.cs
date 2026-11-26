@@ -327,7 +327,26 @@ internal static partial class Builtins
         CommandHandler copyOrMove = ctx =>
         {
             bool move = ctx.Name == "mv";
-            var a = Args.Parse(ctx.Args, CommandSpec.Of(ctx.Name));
+            // cp --backup[=CONTROL] takes an optional value, so it is read here, before the shared parser
+            string? control = null;
+            var args = ctx.Args.Where(x =>
+            {
+                if (move || !(x == "--backup" || x.StartsWith("--backup=", StringComparison.Ordinal))) return true;
+                control = x.Length > 9 ? x[9..] : "";
+                return false;
+            }).ToList();
+            var a = Args.Parse(args, CommandSpec.Of(ctx.Name));
+            if (a.Has('b')) control ??= "";
+            if (control == "") control = ctx.Shell.Environment.GetValueOrDefault("VERSION_CONTROL", "existing");
+            var backup = control switch
+            {
+                null or "none" or "off" => null,
+                "simple" or "never" => "simple",
+                "existing" or "nil" => "existing",
+                "numbered" or "t" => "numbered",
+                _ => throw new UsageException(CommandSpec.Message("cp", "invalidBackupType", ("value", control))),
+            };
+            var suffix = a.Value('S') ?? ctx.Shell.Environment.GetValueOrDefault("SIMPLE_BACKUP_SUFFIX", "~");
             // cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
             bool followTop = !move && !(a.Has('P') || a.Has('d') || a.Has('a')) && (a.Has('L') || a.Has('H') || !(a.Has('r') || a.Has('R')));
             if (a.Positional.Count < 2) throw new UsageException(a.Positional.Count == 0 ? CommandSpec.Message(ctx.Name, "missingFileOperand") : CommandSpec.Message(ctx.Name, "missingDestination", ("file", a.Positional[0])));
@@ -375,6 +394,7 @@ internal static partial class Builtins
                     if (!move && clashKey == "intoItself") CopyIntoItself(ctx, src, target, []);
                     continue;
                 }
+                if (backup != null && ctx.Fs.IsFile(target, follow: false)) ctx.Fs.Move(target, BackupName(ctx.Fs, target, backup, suffix));
                 if (move && srcDir && ctx.Fs.IsDirectory(target)) ctx.Fs.Delete(target); // an empty directory is replaced
                 try
                 {
@@ -416,6 +436,17 @@ internal static partial class Builtins
             return Task.FromResult(code);
         };
         shell.Register("cp", copyOrMove);
+
+        // FILE~ (simple), FILE.~N~ one past the highest (numbered), or numbered only when FILE already has numbered backups (existing)
+        // shortcut: files inside a directory that cp -r merges into are overwritten without a backup
+        static string BackupName(VirtualFileSystem fs, string target, string mode, string suffix)
+        {
+            var name = VirtualFileSystem.GetName(target);
+            var numbers = fs.List(VirtualFileSystem.GetParent(target))
+                .Select(n => n.StartsWith(name + ".~", StringComparison.Ordinal) && n.EndsWith('~') && int.TryParse(n[(name.Length + 2)..^1], out var k) && k > 0 ? k : 0)
+                .DefaultIfEmpty(0).Max();
+            return mode == "simple" || (mode == "existing" && numbers == 0) ? target + suffix : $"{target}.~{numbers + 1}~";
+        }
 
         // cp -r d d/x copies d into d/x, entry by entry, until it meets a directory this copy created; there it stops.
         // Returns false once stopped. shortcut: entries go in name order, where GNU goes in the directory's own order.

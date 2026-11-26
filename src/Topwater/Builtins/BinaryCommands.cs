@@ -42,10 +42,67 @@ internal static partial class Builtins
         }
     }
 
+    static string Octal(byte b) => Convert.ToString(b, 8);
+
+    /// <summary>A byte as cmp -b shows it: printable as itself, control bytes as ^X, high bytes as M- and the low byte's form.</summary>
+    static string Visible(byte b) => b >= 128 ? "M-" + Visible((byte)(b - 128)) : b < 32 ? "^" + (char)(b + 64) : b == 127 ? "^?" : ((char)b).ToString();
+
     static readonly Dictionary<byte, string> OdEscapes = new() { [0] = "\\0", [7] = "\\a", [8] = "\\b", [9] = "\\t", [10] = "\\n", [11] = "\\v", [12] = "\\f", [13] = "\\r" };
 
     static void RegisterBinaryCommands(Shell shell)
     {
+        shell.Register("cmp", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("cmp"));
+            var ops = a.Positional;
+            if (ops.Count == 0) throw new UsageException(CommandSpec.Message("cmp", "missingOperand"));
+            if (ops.Count > 4) throw new UsageException(CommandSpec.Message("cmp", "extraOperand", ("operand", ops[4])));
+            long Number(string? s, string option) => s == null ? 0
+                : long.TryParse(s, out var n) && n >= 0 ? n : throw new UsageException(CommandSpec.Message("cmp", "invalidNumber", ("option", option), ("value", s)));
+            var skips = (a.Value('i') ?? "").Split(':');
+            long skip1 = ops.Count > 2 ? Number(ops[2], "ignore-initial") : Number(a.Value('i') == null ? null : skips[0], "ignore-initial");
+            long skip2 = ops.Count > 3 ? Number(ops[3], "ignore-initial") : Number(a.Value('i') == null ? null : skips[^1], "ignore-initial");
+            long? limit = a.Value('n') is { } n ? Number(n, "bytes") : null;
+            bool silent = a.Has('s'), verbose = a.Has('l'), bytes = a.Has('b');
+            var names = new[] { ops[0], ops.Count > 1 ? ops[1] : "-" };
+            var data = new List<byte[]>();
+            foreach (var (name, text) in Inputs(ctx, names, () => { }, ctx.Fs.ReadAllBytes, () => ByteText.Encode(ctx.StdinText), silent)) data.Add(text);
+            if (data.Count < 2) return 2;
+            var x = Slice(data[0], (int)Math.Min(skip1, data[0].Length));
+            var y = Slice(data[1], (int)Math.Min(skip2, data[1].Length));
+            long common = Math.Min(x.Length, y.Length), end = limit is { } l ? Math.Min(common, l) : common;
+            // shortcut: -l pads positions to the digits of the compared length, which matches GNU for ordinary files
+            int width = Math.Max(1, (limit is { } m ? Math.Min(Math.Max(x.Length, y.Length), m) : Math.Max(x.Length, y.Length)).ToString().Length);
+            long line = 1;
+            bool differ = false;
+            for (long i = 0; i < end; i++)
+            {
+                if (x[i] == y[i]) { if (x[i] == '\n') line++; continue; }
+                differ = true;
+                if (silent) return 1;
+                if (!verbose)
+                {
+                    ctx.Stdout.WriteLine(bytes
+                        ? CommandSpec.Message("cmp", "differBytes", ("file1", names[0]), ("file2", names[1]), ("byte", (i + 1).ToString()), ("line", line.ToString()), ("byte1", $"{Octal(x[i]),3} {Visible(x[i])}"), ("byte2", $"{Octal(y[i]),3} {Visible(y[i])}"))
+                        : CommandSpec.Message("cmp", "differ", ("file1", names[0]), ("file2", names[1]), ("byte", (i + 1).ToString()), ("line", line.ToString())));
+                    return 1;
+                }
+                var pos = (i + 1).ToString().PadLeft(width);
+                ctx.Stdout.WriteLine(bytes ? $"{pos} {Octal(x[i]),3} {Visible(x[i]),-4} {Octal(y[i]),3} {Visible(y[i])}" : $"{pos} {Octal(x[i]),3} {Octal(y[i]),3}");
+            }
+            if (x.Length == y.Length || (limit is { } lim && end >= lim)) return differ ? 1 : 0;
+            if (!silent)
+            {
+                var (shortName, shorter) = x.Length < y.Length ? (names[0], x) : (names[1], y);
+                var newlines = shorter.Count(b => b == '\n');
+                ctx.Stderr.WriteLine("cmp: " + (shorter.Length == 0 ? CommandSpec.Message("cmp", "eofEmpty", ("file", shortName))
+                    : verbose ? CommandSpec.Message("cmp", "eofVerbose", ("file", shortName), ("byte", shorter.Length.ToString()))
+                    : shorter[^1] == '\n' ? CommandSpec.Message("cmp", "eof", ("file", shortName), ("byte", shorter.Length.ToString()), ("line", newlines.ToString()))
+                    : CommandSpec.Message("cmp", "eofInLine", ("file", shortName), ("byte", shorter.Length.ToString()), ("line", (newlines + 1).ToString()))));
+            }
+            return 1;
+        });
+
         shell.Register("xxd", ctx =>
         {
             var a = Args.Parse(ctx.Args, CommandSpec.Of("xxd"));

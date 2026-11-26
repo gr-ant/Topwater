@@ -64,7 +64,7 @@ internal static class AwkFormat
 
     public static string G(double v, int prec, bool upper, bool alt = false)
     {
-        if (double.IsNaN(v)) return "nan";
+        if (double.IsNaN(v)) return "-nan"; // shortcut: mawk shows x86's default NaN (0/0, x%0, log(-1)) as -nan; a negated one would be nan
         if (double.IsInfinity(v)) return v > 0 ? "inf" : "-inf";
         if (v == 0) return "0";
         int p = prec == 0 ? 1 : prec;
@@ -108,7 +108,8 @@ internal static class AwkFormat
             {
                 case 'd' or 'i':
                     var n = arg.ToNum();
-                    long l = double.IsNaN(n) ? 0 : (long)Math.Truncate(n);
+                    // shortcut: out-of-range values (inf from x/0) clamp to the long range; mawk prints its own large numbers there
+                    long l = double.IsNaN(n) ? 0 : (long)Math.Clamp(Math.Truncate(n), -9.2e18, 9.2e18);
                     sign = l < 0 ? "-" : flags.Contains('+') ? "+" : flags.Contains(' ') ? " " : "";
                     body = Math.Abs(l).ToString(CultureInfo.InvariantCulture);
                     if (prec is { } dp) body = body.PadLeft(dp, '0');
@@ -242,7 +243,7 @@ internal sealed class AwkRunner
             if (a == "--") { i++; break; }
             if (a == "--version" || (a == "-W" && i + 1 < args.Count && args[i + 1] == "version"))
             {
-                _ctx.Stdout.WriteLine("GNU Awk 5.2.1, API 3.2, PMA Avon 8-g1, (GNU MPFR 4.2.1, GNU MP 6.3.0)");
+                _ctx.Stdout.WriteLine(CommandSpec.Of("awk").Version);
                 return 0;
             }
             if (a.Length < 2 || a[0] != '-') break;
@@ -655,8 +656,8 @@ internal sealed class AwkRunner
     double Arith(string op, double l, double r) => op switch
     {
         "+" => l + r, "-" => l - r, "*" => l * r,
-        "/" => r == 0 ? throw Err("division by zero") : l / r,
-        "%" => r == 0 ? throw Err("division by zero in %") : l % r,
+        "/" => l / r, // mawk (Ubuntu's awk): IEEE results, inf or -nan, not an error
+        "%" => r == 0 ? double.NaN : l % r,
         "^" or "**" => Math.Pow(l, r),
         _ => throw Err($"unknown operator {op}"),
     };

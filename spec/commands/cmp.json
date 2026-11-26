@@ -1,0 +1,31 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "cmp",
+  "category": "text",
+  "summary": "Compare two files byte by byte and report the first difference",
+  "version": "cmp (GNU diffutils) 3.10",
+  "usageExitCode": 2,
+  "tryHelp": [
+    "cmp: Try 'cmp --help' for more information."
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "b", "long": ["print-bytes"], "description": "also show the differing bytes, as octal and as characters"},
+    {"short": "i", "long": ["ignore-initial"], "arg": "SKIP", "description": "skip the first SKIP bytes of both inputs (SKIP1:SKIP2: different counts); SKIP1 and SKIP2 may also follow the file names"},
+    {"short": "l", "long": ["verbose"], "description": "list every differing byte: its position and both values in octal"},
+    {"short": "n", "long": ["bytes"], "arg": "LIMIT", "description": "compare at most LIMIT bytes"},
+    {"short": "s", "long": ["quiet", "silent"], "description": "print nothing; only the exit status tells"}
+  ],
+  "exitCodes": {"0": "the inputs are the same", "1": "they differ", "2": "trouble (a missing file, a bad option)"},
+  "messages": {
+    "differ": "{file1} {file2} differ: byte {byte}, line {line}",
+    "differBytes": "{file1} {file2} differ: byte {byte}, line {line} is {byte1} {byte2}",
+    "eof": "EOF on {file} after byte {byte}, line {line}",
+    "eofInLine": "EOF on {file} after byte {byte}, in line {line}",
+    "eofVerbose": "EOF on {file} after byte {byte}",
+    "eofEmpty": "EOF on {file} which is empty",
+    "missingOperand": "missing operand after 'cmp'",
+    "extraOperand": "extra operand '{operand}'",
+    "invalidNumber": "invalid --{option} value '{value}'"
+  }
+}

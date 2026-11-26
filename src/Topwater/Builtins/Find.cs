@@ -24,6 +24,8 @@ internal sealed class Find
 
     async Task<int> Run()
     {
+        // -version (or --version) anywhere in the expression: print the version, run nothing
+        if (_ctx.Args.Any(x => x is "-version" or "--version")) { _ctx.Stdout.WriteLine(CommandSpec.Of("find").Version); return 0; }
         // -P (the default) never follows symbolic links, -H only those named as starting points, -L all of them
         var options = _ctx.Args.TakeWhile(x => x is "-P" or "-H" or "-L").ToList();
         char mode = options.LastOrDefault("-P")[1];

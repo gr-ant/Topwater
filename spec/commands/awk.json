@@ -3,6 +3,8 @@
   "name": "awk",
   "category": "language",
   "summary": "Run an awk program over lines and fields",
+  "notes": "Ubuntu's awk is mawk: --version and -W version report mawk, and division by zero gives inf or -nan instead of an error.",
+  "version": "mawk 1.3.4 20240123",
   "standardOptions": false,
   "parser": "custom"
 }

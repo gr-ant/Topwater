@@ -647,6 +647,11 @@ internal static partial class Builtins
             {
                 var argv = replace != null ? command.Select(c => c.Replace(replace, group[0])).ToList() : [.. command, .. group];
                 if (a.Has('t')) ctx.Stderr.WriteLine(string.Join(' ', argv));
+                if (ExecFailure(ctx, argv[0], out _) is { } error)
+                {
+                    ctx.Stderr.WriteLine("xargs: " + CommandSpec.Message("xargs", "cannotRun", ("command", argv[0]), ("errno", error)));
+                    return error == CommandSpec.Errno.EACCES ? 126 : 127;
+                }
                 var rc = await ctx.InvokeAsync(argv);
                 if (rc == 127) return 127;
                 if (rc == 255) { ctx.Stderr.WriteLine("xargs: " + CommandSpec.Message("xargs", "exitedWith255", ("command", argv[0]))); return 124; }
@@ -931,6 +936,13 @@ internal static class Sed
         }
         if (scripts[0].Text.StartsWith("#n")) quiet = true; // "#n" opening the script means -n
         var cmds = Parse(scripts, extended);
+        bool stdinRead = false;
+        string? ReadFile(string f)
+        {
+            if (f == "/dev/stdin") { if (stdinRead) return ""; stdinRead = true; return ctx.StdinText; } // stdin is read once
+            try { var path = ctx.ResolvePath(f); return ctx.Fs.IsFile(path) ? ctx.Fs.ReadAllText(path) : null; }
+            catch (ShellException) { return null; }
+        }
 
         if (inPlace)
         {
@@ -944,7 +956,7 @@ internal static class Sed
                 catch (ShellException) when (ctx.Fs.IsDirectory(path)) { ctx.Stderr.WriteLine("sed: " + CommandSpec.Message("sed", "notRegularFile", ("file", f))); code = 4; continue; }
                 catch (ShellException e) { ctx.Stderr.WriteLine("sed: " + CommandSpec.Message("sed", "openFailed", ("file", f), ("errno", e.Message[(e.Message.LastIndexOf(':') + 2)..]))); code = 2; continue; }
                 var output = new StringWriter();
-                var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes);
+                var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes, ReadFile);
                 if (suffix.Length > 0)
                     ctx.Fs.WriteAllText(ctx.ResolvePath(suffix.Contains('*') ? suffix.Replace("*", f[(f.LastIndexOf('/') + 1)..]) : f + suffix), original);
                 if (ctx.Fs.IsSymlink(path)) ctx.Fs.Delete(path); // like GNU sed -i, the edited text replaces the link; its target stays as it was
@@ -958,12 +970,12 @@ internal static class Sed
         if (separate)
         {
             foreach (var t in texts)
-                if (Execute(cmds, t, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes) is { } q) return q;
+                if (Execute(cmds, t, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes, ReadFile) is { } q) return q;
         }
         else
         {
             var joined = string.Concat(texts.Select((t, k) => t.EndsWith('\n') || k == texts.Count - 1 ? t : t + "\n"));
-            if (Execute(cmds, joined, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes) is { } q) return q;
+            if (Execute(cmds, joined, ctx.Stdout, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes, ReadFile) is { } q) return q;
         }
         return files.Any(f => f != "-" && ctx.Fs.IsDirectory(ctx.ResolvePath(f))) ? 4 : error ? 2 : 0; // 4: a read error (a directory)
     }
@@ -1208,6 +1220,14 @@ internal static class Sed
                     labels[label] = cmds.Count;
                     break;
                 case 'b' or 't' or 'T': c.Label = ReadLabel(); break;
+                case 'r' or 'R':
+                    // the file name is the rest of the line, as in GNU sed
+                    SkipBlanks();
+                    int nameStart = i;
+                    while (i < n && script[i] != '\n') i++;
+                    c.Text = script[nameStart..i];
+                    if (c.Text.Length == 0) throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
+                    break;
                 case 'v': ReadLabel(); break; // "requires GNU sed VERSION": always met
                 case 'q' or 'Q':
                     SkipBlanks();
@@ -1215,13 +1235,13 @@ internal static class Sed
                     break;
                 default:
                     int at = i;
-                    if (op is 'r' or 'R' or 'w' or 'W' && ReadLabel(blanks: false).Length == 0) throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
+                    if (op is 'w' or 'W' && ReadLabel(blanks: false).Length == 0) throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
                     if (!"=dDgGhHnNpPxz".Contains(op)) throw Fail(CommandSpec.Message("sed", "unknownCommand", ("op", op.ToString())), at);
                     break;
             }
             cmds.Add(c);
             SkipBlanks();
-            if (op is not ('{' or ':' or 'b' or 't' or 'T') && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail(CommandSpec.Message("sed", "extraCharacters"), i + 1);
+            if (op is not ('{' or ':' or 'b' or 't' or 'T' or 'r' or 'R') && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail(CommandSpec.Message("sed", "extraCharacters"), i + 1);
         }
         if (blocks.Count > 0) throw Fail(CommandSpec.Message("sed", "unmatchedBrace"), blocks.Peek().At, charZero: true);
         foreach (var c in cmds.Where(c => c.Op is 'b' or 't' or 'T'))
@@ -1341,8 +1361,10 @@ internal static class Sed
     }
 
     /// <summary>Runs a parsed script over text. Returns the q/Q exit code if the script quit, else null.</summary>
-    static int? Execute(List<Cmd> cmds, string text, TextWriter output, bool quiet, CancellationToken ct, long maxString)
+    /// <param name="readFile">a file's text for r and R, or null when it can't be read (sed then adds nothing)</param>
+    static int? Execute(List<Cmd> cmds, string text, TextWriter output, bool quiet, CancellationToken ct, long maxString, Func<string, string?> readFile)
     {
+        var rLines = new Dictionary<string, Queue<string>>(); // R: each file's lines not yet used
         var lines = Builtins.SplitLines(text);
         bool trailing = text.EndsWith('\n');
         foreach (var c in cmds) c.InRange = false;
@@ -1372,7 +1394,7 @@ internal static class Sed
                 n++;
             }
             reread = true;
-            var appends = new List<string>();
+            var appends = new List<(string Text, bool Raw)>(); // a and R add a line; r adds a file as it is
             bool tflag = false, autoprint = !quiet;
             for (int pc = 0; pc < cmds.Count;)
             {
@@ -1404,8 +1426,7 @@ internal static class Sed
                     case 'n':
                         if (idx >= lines.Count) { stop = true; break; } // no next line: GNU sed ends here, printing the pattern space
                         if (!quiet) Write(ps, true);
-                        foreach (var t in appends) Write(t);
-                        appends.Clear();
+                        WriteAppends(appends);
                         ps = lines[idx++];
                         n++;
                         break;
@@ -1422,7 +1443,12 @@ internal static class Sed
                     case 'z': ps = ""; break;
                     case 'y': ps = string.Concat(ps.Select(ch => c.Table.TryGetValue(ch, out var r) ? r : ch)); break;
                     case '=': Write(n.ToString(CultureInfo.InvariantCulture)); break;
-                    case 'a': appends.Add(c.Text); break;
+                    case 'a': appends.Add((c.Text, false)); break;
+                    case 'r': if (readFile(c.Text) is { Length: > 0 } content) appends.Add((content, true)); break;
+                    case 'R':
+                        if (!rLines.TryGetValue(c.Text, out var queue)) rLines[c.Text] = queue = new(readFile(c.Text) is { } all ? Builtins.SplitLines(all) : []);
+                        if (queue.TryDequeue(out var line)) appends.Add((line, false));
+                        break;
                     case 'i': Write(c.Text); break;
                     case 'c':
                         if (c.A2 == null || !c.InRange || c.Negate) Write(c.Text);
@@ -1438,8 +1464,19 @@ internal static class Sed
                 if (stop) break;
             }
             if (autoprint) Write(ps, true);
-            foreach (var t in appends) Write(t);
+            WriteAppends(appends);
         }
         return exitCode;
+
+        void WriteAppends(List<(string Text, bool Raw)> appends)
+        {
+            foreach (var (t, raw) in appends)
+            {
+                if (!raw) { Write(t); continue; }
+                if (pendingNewline) { output.Write('\n'); pendingNewline = false; }
+                output.Write(t);
+            }
+            appends.Clear();
+        }
     }
 }
