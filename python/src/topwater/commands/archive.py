@@ -477,7 +477,7 @@ def _tar(ctx):
                 budget.charge(len(e.data))
                 fs.mkdir(get_parent(target), parents=True)
                 fs.write_bytes(target, e.data)
-                fs.chmod(target, e.mode & 0o777)
+                fs.chmod(target, e.mode & 0o777 & ~ctx.shell.umask)  # as tar run by an ordinary user, without -p
                 fs.set_modified_time(target, _utc_naive(e.mtime))
             elif e.type == "1":
                 link_parts = [p for p in e.link[len(link_prefix):].split("/") if p]

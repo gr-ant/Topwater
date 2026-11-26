@@ -17,6 +17,7 @@ class ParseError(Exception):
 class Literal:
     text: str
     quoted: bool
+    in_double_quotes: bool = field(default=False, compare=False)  # "..." text, not '...' or \x (for what errors name)
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,7 @@ class AndOr:
     first: Pipeline
     rest: list  # list[tuple[str, Pipeline]]
     background: bool = False  # ended with `&`: runs (to completion, in order) as a background job in a subshell
+    end_line: int = 0  # the line its last token ends on
 
 
 @dataclass
@@ -669,7 +671,7 @@ class Lexer:
 
         def flush():
             if sb:
-                parts.append(Literal("".join(sb), True))
+                parts.append(Literal("".join(sb), True, terminator == '"'))
                 sb.clear()
 
         while self.i < len(s) and s[self.i] != terminator:
@@ -962,7 +964,7 @@ class Parser:
             self.p += 1
             self.skip_newlines()
             rest.append((op, self.parse_pipeline()))
-        return AndOr(first, rest)
+        return AndOr(first, rest, end_line=self.t[self.p - 1].end_line if self.p > 0 else 0)
 
     def parse_pipeline(self) -> Pipeline:
         timed = posix = False

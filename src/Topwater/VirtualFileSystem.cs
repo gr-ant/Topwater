@@ -477,7 +477,11 @@ public sealed class VirtualFileSystem
             if (parents && Find(path) is Dir) return;
             throw new ShellException($"cannot create directory '{path}': {CommandSpec.Errno.EEXIST}");
         }
-        if (parents && !Exists(GetParent(path))) CreateDirectory(GetParent(path), true);
+        if (parents && !Exists(GetParent(path)))
+        {
+            CreateDirectory(GetParent(path), true);
+            if (Find(GetParent(path)) is Dir made) made.Mode |= 0b011_000_000; // mkdir -p: a parent it makes stays writable and searchable by its owner
+        }
         var spot = Place(path);
         Require(spot.Parent!, 2, path);
         spot.Parent!.Children[spot.Name] = new Dir { Owner = RunAs ?? spot.Parent.Owner, Mode = Masked(0b111_111_111), Modified = Clock() };
@@ -574,7 +578,7 @@ public sealed class VirtualFileSystem
             {
                 // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
                 if (RunAs != null && UsedBytes + (cloned += f.Size) > Capacity) throw new ShellException($"{dest}: {NoSpace}");
-                return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = preserve ? f.Mode : Masked(f.Mode), Modified = preserve ? f.Modified : Clock() };
+                return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = preserve ? f.Mode : Masked(f.Mode) & ~0xC00, Modified = preserve ? f.Modified : Clock() };
             }
             var dir = (Dir)n;
             var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = preserve ? n.Mode : Masked(n.Mode), Modified = preserve ? n.Modified : Clock() };
@@ -635,7 +639,7 @@ public sealed class VirtualFileSystem
         long? ReportedSize = null, string? LinkTarget = null, string? HardLink = null);
 
     /// <summary>A detached copy of the tree. Contents (strings and byte arrays, never changed in place) are shared, not copied.</summary>
-    internal VirtualFileSystem Clone() => new() { _root = (Dir)CloneNode(_root, new(ReferenceEqualityComparer.Instance)), UsedBytes = UsedBytes, Capacity = Capacity };
+    internal VirtualFileSystem Clone() => new() { _root = (Dir)CloneNode(_root, new(ReferenceEqualityComparer.Instance)), UsedBytes = UsedBytes, Capacity = Capacity, Umask = Umask };
 
     /// <summary>Replaces this tree with a copy of <paramref name="source"/>'s, keeping <see cref="Capacity"/>.</summary>
     internal void ReplaceWith(VirtualFileSystem source)

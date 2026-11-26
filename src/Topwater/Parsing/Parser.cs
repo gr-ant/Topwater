@@ -12,7 +12,11 @@ public sealed class ParseException(string message) : Exception(message)
 }
 
 internal abstract record WordPart(bool Quoted);
-internal sealed record LiteralPart(string Text, bool Quoted) : WordPart(Quoted);
+internal sealed record LiteralPart(string Text, bool Quoted) : WordPart(Quoted)
+{
+    /// <summary>Quoted outside double quotes ('...', \x, $'...'): not part of a double-quoted string.</summary>
+    public bool Verbatim { get; init; }
+}
 /// <summary>$name or ${expr} (expr may contain operators like :- or %%).</summary>
 internal sealed record VariablePart(string Name, bool Quoted) : WordPart(Quoted);
 internal sealed record CommandSubPart(string Source, bool Quoted) : WordPart(Quoted);
@@ -364,13 +368,13 @@ internal sealed class Lexer(string s, int firstLine = 1)
                 case '\\':
                     if (_i + 1 >= s.Length) { lit.Append('\\'); _i++; break; }
                     if (s[_i + 1] == '\n') { _i += 2; break; }
-                    Flush(); parts.Add(new LiteralPart(s[_i + 1].ToString(), true)); _i += 2;
+                    Flush(); parts.Add(new LiteralPart(s[_i + 1].ToString(), true) { Verbatim = true }); _i += 2;
                     break;
                 case '\'':
                     Flush();
                     int j = s.IndexOf('\'', _i + 1);
                     if (j < 0) throw new ParseException(CommandSpec.Diagnostics.EofSingleQuote);
-                    parts.Add(new LiteralPart(s[(_i + 1)..j], true));
+                    parts.Add(new LiteralPart(s[(_i + 1)..j], true) { Verbatim = true });
                     _i = j + 1;
                     break;
                 case '"':
@@ -378,7 +382,7 @@ internal sealed class Lexer(string s, int firstLine = 1)
                     parts.AddRange(LexQuoted('"'));
                     break;
                 case '$' when Peek(1) == '\'':
-                    Flush(); parts.Add(new LiteralPart(LexAnsiC(), true));
+                    Flush(); parts.Add(new LiteralPart(LexAnsiC(), true) { Verbatim = true });
                     break;
                 case '$' when Peek(1) == '"': // $"..." (locale translation) is just "..."
                     Flush(); _i += 2;

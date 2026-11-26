@@ -12,7 +12,7 @@ const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
 
 /** Why `name` can't be run as a program by env or timeout ([errno, exit status]), or null if it can. */
 function cannotRun(ctx: CommandContext, name: string): [string, number] | null {
-  if (!name.includes('/')) return isShellBuiltin(ctx.shell, name) || ctx.shell.locate(name) !== null ? null : [ERRNO.ENOENT, 127];
+  if (!name.includes('/')) return ctx.shell.locate(name) !== null ? null : [ERRNO.ENOENT, 127]; // a shell builtin is no program
   const abs = ctx.resolvePath(name);
   if (!ctx.fs.exists(abs)) { const why = ctx.fs.whyMissing(abs); return [why, why === ERRNO.EACCES ? 126 : 127]; }
   return ctx.fs.isDirectory(abs) || !ctx.fs.canExecute(abs) ? [ERRNO.EACCES, 126] : null;
@@ -481,11 +481,12 @@ export function registerBuiltins(shell: Shell) {
       else dir = value();
     };
     const LONG: Record<string, string> = { 'ignore-environment': 'i', unset: 'u', chdir: 'C', null: '0' };
+    let options = true; // after --, only NAME=VALUE words
     while (args.length) {
       const a = args[0];
-      if (a === '-') { clear = true; args.shift(); continue; }
-      if (a === '--') { args.shift(); break; }
-      if (a.startsWith('--')) {
+      if (options && a === '-') { clear = true; args.shift(); continue; }
+      if (options && a === '--') { args.shift(); options = false; continue; }
+      if (options && a.startsWith('--')) {
         args.shift();
         const eq = a.indexOf('='), name = eq < 0 ? a.slice(2) : a.slice(2, eq);
         const c = LONG[name];
@@ -493,7 +494,7 @@ export function registerBuiltins(shell: Shell) {
         option(c, () => eq >= 0 ? a.slice(eq + 1) : args.length ? args.shift()! : (() => { throw new UsageException(specFormat(GETOPT.missingLongArgument, { option: name })); })());
         continue;
       }
-      if (a.length > 1 && a[0] === '-') {
+      if (options && a.length > 1 && a[0] === '-') {
         args.shift();
         for (let k = 1; k < a.length; k++) {
           const c = a[k];
@@ -1138,8 +1139,9 @@ export function registerBuiltins(shell: Shell) {
     const mode = ctx.args[i];
     if (mode !== undefined) {
       if (/^\d/.test(mode)) {
-        if (!/^[0-7]+$/.test(mode) || parseInt(mode, 8) > 0o777) throw new ShellError(specMessage('umask', 'octalOutOfRange', { value: mode }));
-        fs.umask = parseInt(mode, 8);
+        // up to 7777 is accepted; only the permission bits are kept (umask 1000 is 0000)
+        if (!/^[0-7]+$/.test(mode) || parseInt(mode, 8) > 0o7777) throw new ShellError(specMessage('umask', 'octalOutOfRange', { value: mode }));
+        fs.umask = parseInt(mode, 8) & 0o777;
       } else fs.umask = 0o777 & ~symbolicMode(mode, 0o777 & ~fs.umask);
       if (!symbolic) return 0;
     }

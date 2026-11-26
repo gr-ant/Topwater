@@ -546,17 +546,18 @@ export class VirtualFileSystem {
     else this.writeText(path, '');
   }
 
-  mkdir(path: string, parents = false) {
+  /** `parents`: make missing parents too, each one also writable and searchable by its owner (mkdir -p). */
+  mkdir(path: string, parents = false, intermediate = false) {
     path = VirtualFileSystem.normalize('/', path);
     if (this.node(path, false)) { // a symbolic link counts, even a dangling one
       if (parents && this.isDirectory(path)) return;
       throw new ShellError(`cannot create directory '${path}': ${ERRNO.EEXIST}`);
     }
     const parent = VirtualFileSystem.getParent(path);
-    if (parents && !this.exists(parent)) this.mkdir(parent, true);
+    if (parents && !this.exists(parent)) this.mkdir(parent, true, true);
     const spot = this.place(path);
     this.require(spot.parent, 2, path);
-    spot.parent.children.set(spot.name, Object.assign(new Dir(), { modified: this.store.clock(), owner: this.runAs ?? spot.parent.owner, mode: 0o777 & ~this.umask }));
+    spot.parent.children.set(spot.name, Object.assign(new Dir(), { modified: this.store.clock(), owner: this.runAs ?? spot.parent.owner, mode: (0o777 & ~this.umask) | (intermediate ? 0o300 : 0) }));
     spot.parent.modified = this.store.clock();
   }
 
@@ -634,12 +635,13 @@ export class VirtualFileSystem {
       if (n instanceof FileNode) {
         // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
         if (this.runAs !== null && this.usedBytes + (cloned += n.size) > this.capacity) throw new ShellError(`${dest}: ${NO_SPACE}`);
-        const f = Object.assign(new FileNode(), { owner, mode: n.mode & ~this.umask, size: n.size, data: n.data, modified: this.store.clock() });
+        // the agent's copy loses setuid/setgid and takes its umask (cp without -p); the host's keeps the mode
+        const f = Object.assign(new FileNode(), { owner, mode: this.runAs === null ? n.mode : n.mode & 0o777 & ~this.umask, size: n.size, data: n.data, modified: this.store.clock() });
         f.content = n.content;
         return f;
       }
       const dir = n as Dir;
-      const copy = Object.assign(new Dir(), { owner, mode: n.mode & ~this.umask, modified: this.store.clock() });
+      const copy = Object.assign(new Dir(), { owner, mode: this.runAs === null ? n.mode : n.mode & ~this.umask, modified: this.store.clock() });
       copying.add(dir);
       for (const [k, v] of dir.children) { const c = clone(v, path + '/' + k); if (c) copy.children.set(k, c); }
       copying.delete(dir);

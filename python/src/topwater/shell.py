@@ -10,6 +10,7 @@ import re
 import signal
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Union
@@ -111,14 +112,21 @@ class _Io:
 
 
 class _BadSubstitution(ShellError):
-    """${...} with an operator bash does not know; the word expanding it turns this into the fatal error."""
+    """${...} bash cannot read; the word expanding it reports it. fatal: a bad @ operator on a set variable, which ends
+    the script with 127; anything else drops the rest of the line (_LineAbort)."""
 
-    def __init__(self, expr: str):
+    def __init__(self, expr: str, fatal: bool = False):
         super().__init__(diagnostic("badSubstitution", text="${" + expr + "}"))
+        self.fatal = fatal
 
 
 class _ControlFlow(Exception):
     pass
+
+
+class _LineAbort(_ControlFlow):
+    """An error after which bash drops the rest of the line it is running (status 1) and reads on; in a subshell it ends
+    the subshell."""
 
 
 class LoopControl(_ControlFlow):
@@ -634,6 +642,7 @@ class Shell:
         fork.commands = {n: c for n, c in self.commands.items() if not isinstance(c.handler, HostCommand)}
         fork._builtin_names = None if self._builtin_names is None else set(self._builtin_names)
         fork.restore(self.snapshot())
+        fork.umask = self.umask  # shortcut: snapshots do not hold the umask yet, so only fork() keeps it
         return fork
 
     def save(self, file) -> None:
@@ -735,22 +744,6 @@ class Shell:
         if self._variable_chars > mx:
             raise self.too_large("variables in total", "keep big data in files and unset variables you no longer need")
 
-    def _arm_alarm(self):
-        """Ticks SIGALRM while the call runs, so a regex that backtracks past the time limit is stopped (see TimedPattern).
-        Returns the handler to put back, or None where that is not possible: off the main thread, without setitimer
-        (Windows), or when the host has a timer of its own running."""
-        if (threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer")
-                or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0)):
-            return None
-
-        def tick(signum, frame):
-            if _matching and time.monotonic() >= self._deadline:
-                raise CallTimeout()
-
-        previous = signal.signal(signal.SIGALRM, tick)
-        signal.setitimer(signal.ITIMER_REAL, 0.1, 0.1)
-        return previous if previous is not None else signal.SIG_DFL
-
     def check_deadline(self) -> None:
         if time.monotonic() >= self._deadline:
             raise CallTimeout()
@@ -783,10 +776,10 @@ class Shell:
             err.seek(0, io.SEEK_END)
             io.StringIO.write(err, msg)  # past the cap on purpose: the note must get through
 
-        alarm = self._arm_alarm()
+        running = _RUNNING.set(self)
         try:
             try:
-                code = await self._exec_script(Parser.parse(command_line), io_)
+                code = await self._exec_script(Parser.parse(command_line), io_, top=True)
             finally:
                 # shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
                 if time.monotonic() < self._deadline:
@@ -813,9 +806,7 @@ class Shell:
             stop_err(f"bash: internal error: {type(e).__name__}: {e}\n")
             code = 1
         finally:
-            if alarm is not None:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                signal.signal(signal.SIGALRM, alarm)
+            _RUNNING.reset(running)
             # shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
             self.errexit = self.pipefail = self.nounset = self.noglob = self.xtrace = self.noclobber = False
             self.fds.clear()
@@ -884,11 +875,13 @@ class Shell:
                 self.positional = positional
             try:
                 try:
-                    return await self._exec_script(script, io_)
+                    return await self._exec_script(script, io_, top=process is not None)
                 finally:
                     await self._run_exit_trap(io_)
             except ExitSignal as e:
                 return e.code
+            except _LineAbort:
+                return 1  # $(...): the subshell ends
             finally:
                 self._restore_state(saved)
         finally:
@@ -918,7 +911,7 @@ class Shell:
             saved_code = self.last_exit_code
             try:
                 await self._run_script_text(action, io_, subshell=False)
-            except (LoopControl, ReturnSignal, ExitSignal):
+            except (LoopControl, ReturnSignal, ExitSignal, _LineAbort):
                 pass
             self.last_exit_code = saved_code
 
@@ -940,9 +933,20 @@ class Shell:
         self._cwd = cwd if self.fs.is_dir(cwd) else "/"
         self.fs.umask = self.umask
 
-    async def _exec_script(self, script: Script, io_: _Io) -> int:
+    async def _exec_script(self, script: Script, io_: _Io, top: bool = False) -> int:
+        """top: the script a bash process reads line by line, where a _LineAbort drops the rest of its line only."""
         code = 0
+        skip_to = 0
         for item in script.items:
+            if item.end_line and item.end_line <= skip_to:
+                continue
+            if top:
+                try:
+                    code = await self._exec_script(Script([item]), io_)
+                except _LineAbort:
+                    code = self.last_exit_code = 1
+                    skip_to = item.end_line
+                continue
             if item.background:
                 code = await self._exec_background(item, io_)
                 continue
@@ -1110,6 +1114,8 @@ class Shell:
             return await self._exec_script(body, replace(io_, out=SwitchWriter(io_.out), err=SwitchWriter(io_.err)))
         except ExitSignal as e:
             return e.code
+        except _LineAbort:
+            return 1
         finally:
             self._restore_state(saved)
 
@@ -1537,6 +1543,21 @@ class Shell:
                     self._script_depth -= 1
         return await self._run_script_text(text, io_, subshell=True, positional=list(argv[1:]), process=_NewProcess(name, name))
 
+    def _interpreter_chain_too_long(self, path: str) -> bool:
+        """Whether the #! lines from the script at path lead through more scripts than Linux follows (four)."""
+        for _ in range(4):
+            try:
+                first = self.fs.read_text(path).split("\n", 1)[0]
+            except ShellError:
+                return False
+            if not first.startswith("#!") or not first[2:].split():
+                return False
+            program = first[2:].split()[0]
+            path = self.resolve(program)
+            if self.stub_command(program) is not None or not (self.fs.is_file(path) and self.fs.can_execute(path)):
+                return False
+        return True
+
     async def _run_interpreter(self, name: str, line: str, argv: list[str], io_: _Io) -> int:
         """A #! line naming another program: like the kernel, run it with its one optional argument, the script and the
         script's arguments, when it is one of the shell's commands."""
@@ -1545,7 +1566,10 @@ class Shell:
         if program is None:
             interpreter = self.resolve(parts[0])
             if self.fs.is_file(interpreter) and self.fs.can_execute(interpreter):
-                # another script as the interpreter, as Linux allows; each hand-off counts toward the nesting limit
+                # another script as the interpreter, as Linux allows for a few levels; a longer chain or a loop fails
+                if self._interpreter_chain_too_long(interpreter):
+                    io_.err.write("bash: " + diagnostic("badInterpreter", name=name, interpreter=parts[0], reason=ERRNO["ELOOP"]) + "\n")
+                    return 126
                 words = [parts[1].strip()] if len(parts) > 1 and parts[1].strip() else []
                 return await self._run_script_file(parts[0], interpreter, [parts[0], *words, name, *argv[1:]], io_)
             io_.err.write(self.err_prefix + diagnostic("requiredFileNotFound", name=name) + "\n")
@@ -2143,8 +2167,12 @@ class Shell:
         if isinstance(part, Variable):
             try:
                 return await self._expand_parameter(part.name, io_, part.quoted)
-            except _BadSubstitution:
-                raise self._fatal(io_, diagnostic("badSubstitution", text=self._bad_substitution_text(part)), 127) from None
+            except _BadSubstitution as e:
+                message = diagnostic("badSubstitution", text=self._bad_substitution_text(part))
+                if e.fatal:
+                    raise self._fatal(io_, message, 127) from None
+                io_.err.write(f"{self.err_prefix}{message}\n")
+                raise _LineAbort() from None
         if isinstance(part, CommandSub):
             return await self._capture(part.source, io_)
         if isinstance(part, ArithSub):
@@ -2189,11 +2217,14 @@ class Shell:
             return "${" + part.name + "}"
         if not part.quoted:
             return str(self._cur_word)
-        # shortcut: a run of quoted parts stands for the "..." string ('a'"b" joins), and $x prints as ${x}
+        # shortcut: adjacent "..." strings join ("a""b"), and $x prints as ${x}
+        def in_dq(p) -> bool:
+            return p.quoted and (not isinstance(p, Literal) or p.in_double_quotes)
+
         lo, hi = at, at + 1
-        while lo > 0 and parts[lo - 1].quoted:
+        while lo > 0 and in_dq(parts[lo - 1]):
             lo -= 1
-        while hi < len(parts) and parts[hi].quoted:
+        while hi < len(parts) and in_dq(parts[hi]):
             hi += 1
         return str(Word(parts[lo:hi]))
 
@@ -2421,7 +2452,7 @@ class Shell:
                 return f"declare -{flags} {name}={quote_value(value)}" if flags else f"{name}={quote_value(value)}"
             if c == "P":
                 return value
-            raise _BadSubstitution(expr)
+            raise _BadSubstitution(expr, fatal=True)
         if rest[0] == ":":
             spec = rest[1:].split(":", 1)
             offset = await self._arith(spec[0], io_)
@@ -2438,6 +2469,10 @@ class Shell:
                 if length < 0:
                     raise ShellError(diagnostic("substringNegative", expression=spec[1].strip()))
             return tail[:length]
+        if rest == "@":  # ${x@}: nothing on an unset variable, the fatal error on a set one
+            if not self._is_set(name):
+                return ""
+            raise _BadSubstitution(expr, fatal=True)
         raise _BadSubstitution(expr)
 
     def _check_set(self, name: str, io_: _Io) -> None:
@@ -3002,12 +3037,15 @@ def _has_unescaped_wildcard(seg: str) -> bool:
     return False
 
 
-_matching = 0  # > 0 while a user's regex runs: only there may the call's time limit interrupt Python code
+_RUNNING: ContextVar["Shell | None"] = ContextVar("topwater_running_shell", default=None)  # whose call is running
 
 
 class TimedPattern:
-    """A compiled regex whose matching the call's time limit can stop: Python's re has no timeout, but it checks for
-    signals while it backtracks, so the alarm _run_call sets raises CallTimeout from inside it (main thread only)."""
+    """A compiled regex whose matching the call's time limit can stop. Python's re has no timeout but checks for signals
+    while it backtracks, so each match runs under a one-shot SIGALRM for the time the call has left; the alarm is set
+    only around the match and the host's handler and timer are put back after it.
+    shortcut: off the main thread, without setitimer (Windows), or when the host uses SIGALRM itself, a match has no
+    limit of its own (only the call's checks between commands); the `regex` module's timeout= would cover those."""
     __slots__ = ("_rx",)
 
     def __init__(self, rx: re.Pattern):
@@ -3017,12 +3055,30 @@ class TimedPattern:
         return getattr(self._rx, name)
 
     def _run(self, fn, *args, **kwargs):
-        global _matching
-        _matching += 1
+        shell = _RUNNING.get()
+        deadline = shell._deadline if shell is not None else float("inf")
+        if (deadline == float("inf") or not hasattr(signal, "setitimer")
+                or threading.current_thread() is not threading.main_thread()
+                or signal.getsignal(signal.SIGALRM) not in (signal.SIG_DFL, None)
+                or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0)):
+            return fn(*args, **kwargs)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise CallTimeout()
+        active = [True]
+
+        def expired(signum, frame):
+            if active[0]:  # not once the match has returned
+                raise CallTimeout()
+
+        previous = signal.signal(signal.SIGALRM, expired)
         try:
+            signal.setitimer(signal.ITIMER_REAL, left)
             return fn(*args, **kwargs)
         finally:
-            _matching -= 1
+            active[0] = False
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous if previous is not None else signal.SIG_DFL)
 
     def search(self, *a, **k):
         return self._run(self._rx.search, *a, **k)

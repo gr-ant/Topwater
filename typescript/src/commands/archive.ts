@@ -377,7 +377,7 @@ async function tar(ctx: CommandContext): Promise<number> {
             budget.charge(e.data.length);
             fs.mkdir(VirtualFileSystem.getParent(target), true);
             fs.writeBytes(target, e.data);
-            fs.chmod(target, e.mode & 0o777);
+            fs.chmod(target, e.mode & 0o777 & ~fs.umask); // without -p, as for a user other than root
             fs.setModifiedTime(target, e.mtime * 1000);
           } else if (e.type === '1') {
             const linkParts = nonEmpty(e.link.slice(linkPrefix.length).split('/'));

@@ -646,11 +646,11 @@ internal static partial class Builtins
             {
                 var mode = ctx.Args[i];
                 char bad = ' ';
-                bool badOperator = false;
-                int? mask = char.IsAsciiDigit(mode[0]) ? OctalMask(mode) : SymbolicMask(mode, ctx.Fs.Umask, out bad, out badOperator);
+                bool badOperator = false, octal = mode.Length > 0 && char.IsAsciiDigit(mode[0]);
+                int? mask = octal ? OctalMask(mode) : SymbolicMask(mode, ctx.Fs.Umask, out bad, out badOperator);
                 if (mask == null)
                 {
-                    ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}umask: " + (char.IsAsciiDigit(mode[0])
+                    ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}umask: " + (octal
                         ? CommandSpec.Message("umask", "octalOutOfRange", ("value", mode))
                         : CommandSpec.Message("umask", badOperator ? "invalidOperator" : "invalidSymbolic", ("char", bad.ToString()))));
                     return 1;
@@ -1297,7 +1297,7 @@ internal static class Chmod
         void Apply(string display, string path)
         {
             var st = ctx.Fs.Stat(path);
-            var mode = Parse(spec, st.Mode, st.IsDirectory);
+            var mode = Parse(spec, st.Mode, st.IsDirectory, ctx.Fs.Umask);
             try { ctx.Fs.Chmod(path, mode); }
             catch (ShellException) { if (!quiet) ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotChangePermissions", ("file", display))); code = 1; return; }
             string Fmt(int m) => $"{Convert.ToString(m, 8).PadLeft(4, '0')} ({VirtualFileSystem.FormatMode(st.IsDirectory, m)[1..]})";
@@ -1321,7 +1321,8 @@ internal static class Chmod
         return Task.FromResult(code);
     }
 
-    public static int Parse(string spec, int mode, bool isDir)
+    /// <param name="umask">With no u, g, o or a, the bits the umask covers are left alone.</param>
+    public static int Parse(string spec, int mode, bool isDir, int umask = 0)
     {
         if (System.Text.RegularExpressions.Regex.IsMatch(spec, "^[0-7]{1,4}$")) return Convert.ToInt32(spec, 8);
         foreach (var clause in spec.Split(','))
@@ -1347,12 +1348,13 @@ internal static class Chmod
                 mask |= bits << shift;
                 clear |= 7 << shift;
             }
+            if (m.Groups[1].Value == "") mask &= ~umask;
             int stickyBit = sticky ? 0x200 : 0;
             mode = m.Groups[2].Value switch
             {
                 "+" => mode | mask | stickyBit,
                 "-" => mode & ~(mask | stickyBit),
-                _ => (mode & ~clear) | mask | stickyBit,
+                _ => (mode & ~(m.Groups[1].Value == "" ? clear & ~umask : clear)) | mask | stickyBit,
             };
         }
         return mode;

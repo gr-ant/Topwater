@@ -1072,8 +1072,9 @@ def _df(ctx):
         f"{avail // 1024:>9} {pct:>3}% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n")
 
 
-def chmod_parse(spec: str, mode: int, is_dir: bool) -> int:
-    """Octal (755) or symbolic (u+x, go-w, a=r, +x, +t) mode."""
+def chmod_parse(spec: str, mode: int, is_dir: bool, umask: int = 0) -> int:
+    """Octal (755) or symbolic (u+x, go-w, a=r, +x, +t) mode; a clause with no who-letter (+w, =rw) leaves alone the bits
+    the umask takes away."""
     if re.fullmatch(r"[0-7]{1,4}", spec):
         return int(spec, 8)
     for clause in spec.split(","):
@@ -1096,6 +1097,8 @@ def chmod_parse(spec: str, mode: int, is_dir: bool) -> int:
             shift = {"u": 6, "g": 3, "o": 0}[w]
             mask |= bits << shift
             clear |= 7 << shift
+        if not m.group(1):
+            mask &= ~umask
         sticky_bit = 0o1000 if sticky else 0
         op = m.group(2)
         mode = mode | mask | sticky_bit if op == "+" else mode & ~(mask | sticky_bit) if op == "-" else (mode & ~clear) | mask | sticky_bit
@@ -1132,7 +1135,7 @@ def _chmod(ctx):
     def apply(display, path):
         nonlocal code
         st = ctx.fs.stat(path)
-        mode = chmod_parse(spec, st.mode, st.is_dir)
+        mode = chmod_parse(spec, st.mode, st.is_dir, ctx.shell.umask)
         try:
             ctx.fs.chmod(path, mode)
         except ShellError:

@@ -57,7 +57,7 @@ public class BashCompatArchives
 
             """, r.Stdout);
         foreach (var f in new[] { "t/d/bin.dat", "z/d/bin.dat", "g" }) Assert.Equal(Bin, sh.Fs.ReadAllBytes("/tmp/w/" + f));
-        Assert.Equal("-rw-rw-r--", VirtualFileSystem.FormatMode(false, sh.Fs.Stat("/tmp/w/t/d/a.txt").Mode));
+        Assert.Equal("-rw-r--r--", VirtualFileSystem.FormatMode(false, sh.Fs.Stat("/tmp/w/t/d/a.txt").Mode)); // 0664 in the archive, less the umask (022), as tar does for a non-root user
         Assert.Equal(new DateTime(2024, 1, 2, 3, 4, 6), sh.Fs.Stat("/tmp/w/z/d/a.txt").Modified); // zip keeps 2-second local times (03:04:05 rounds up)
     }
 

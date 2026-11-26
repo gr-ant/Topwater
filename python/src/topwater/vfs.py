@@ -603,6 +603,9 @@ class VirtualFileSystem:
             raise ShellError(f"cannot create directory '{path}': {ERRNO['EEXIST']}")
         if parents and not self.exists(get_parent(path)):
             self.mkdir(get_parent(path), True)
+            parent = self._find(get_parent(path))
+            if self.run_as is not None and isinstance(parent, _Dir):
+                parent.mode |= 0o300  # like mkdir -p: a directory made on the way stays writable and searchable for its owner
         spot = self._place(path)
         d = spot.parent
         self._require(d, 2, path)
@@ -674,7 +677,10 @@ class VirtualFileSystem:
         cloned = 0
 
         def mode(node) -> int:
-            return node.mode if preserve or self.run_as is None else node.mode & ~self.umask
+            if preserve or self.run_as is None:
+                return node.mode
+            # a new copy loses setuid and setgid, and the umask applies
+            return node.mode & ~self.umask & (0o1777 if isinstance(node, _Dir) else 0o777)
 
         def clone(node, p: str):
             if isinstance(node, _Link):

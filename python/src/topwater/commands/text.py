@@ -180,7 +180,7 @@ def posix_regex_error(p: str, extended: bool, grep: bool) -> str | None:
                     continue
                 if p[j] == "-" and low is not None and j + 1 < n and p[j + 1] != "]":
                     high, after = p[j + 1], j + 2
-                    if p.startswith("[.", j + 1) or p.startswith("[=", j + 1):  # a range may end in a collating element
+                    if p.startswith("[.", j + 1):  # a range may end in a collating symbol (not an equivalence class)
                         close = p.find(p[j + 2] + "]", j + 3)
                         if close < 0:
                             return unmatched
@@ -1183,7 +1183,7 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
                 raise fail(spec_message("sed", "colonLabel"), i)
             labels[label] = len(cmds)
         elif op in "btT":
-            c.label = read_label(";\n} \t")
+            c.label = (read_label().split() or [""])[0]  # `bx p` jumps to x; what follows a blank is not read
         elif op == "v":
             read_label()  # "requires GNU sed VERSION": always met
         elif op in "qQ":

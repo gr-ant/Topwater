@@ -113,9 +113,12 @@ Where Python differs from the reference:
 - `register_api` takes a `transport` function `(method, url, headers, body, timeout, limit) -> (status, reason,
   headers, body)` in place of an `HttpMessageHandler`. The default uses `urllib` with redirects disabled; a transport
   you pass must not follow redirects either (it can't be checked).
-- The standard `re` module cannot time out or interrupt a single match, so one catastrophically backtracking match on
-  one line (`grep -E '(a|aa)+$'` on a long run of `a`s) runs to completion; the time limit is checked between lines,
-  records and steps.
+- The standard `re` module has no timeout, but it checks for signals while it backtracks. On the main thread, a grep,
+  sed, awk or `[[ =~ ]]` match runs under a one-shot `SIGALRM` for the time the call has left, so one catastrophically
+  backtracking match (`grep -E '(a+)+$'` on a long run of `a`s) stops at the call's time limit. The alarm is set only
+  around the match, and only when the host has no `SIGALRM` handler or interval timer of its own; both are left as
+  they were. In a worker thread, on Windows, or when the host uses `SIGALRM`, such a match runs to completion and the
+  time limit is checked between lines, records and steps.
 - Nesting is bounded by Python's recursion limit instead of the .NET stack. Memory use has not been measured; text is
   held as Python strings.
 - `shell.run()` wraps `asyncio.run`; inside an event loop use `await shell.run_async()`.

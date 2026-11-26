@@ -327,7 +327,7 @@ internal static partial class Builtins
                         var bytes = e.DataStream == null ? [] : budget.Read(e.DataStream);
                         fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
                         fs.WriteAllBytes(target, bytes);
-                        fs.Chmod(target, (int)e.Mode & 0x1FF);
+                        fs.Chmod(target, (int)e.Mode & 0x1FF & ~fs.Umask); // shortcut: no -p, so the umask always applies, as for a non-root user
                         fs.SetModifiedTime(target, e.ModificationTime.UtcDateTime);
                         break;
                     case TarEntryType.HardLink:

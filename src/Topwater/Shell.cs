@@ -155,6 +155,8 @@ internal abstract class ControlFlow : Exception;
 internal sealed class LoopControl(bool isBreak, int levels) : ControlFlow { public bool IsBreak { get; } = isBreak; public int Levels { get; } = levels; }
 internal sealed class ReturnSignal(int code) : ControlFlow { public int Code { get; } = code; }
 internal sealed class ExitSignal(int code) : ControlFlow { public int Code { get; } = code; }
+/// <summary>A bad substitution (other than a bad @ operator): bash drops the rest of the line it is on, with status 1.</summary>
+internal sealed class LineAbort : ControlFlow;
 /// <summary>An expansion error that ends a non-interactive bash (an arithmetic error in a subscript, a bad substitution).</summary>
 internal class FatalError(string message, int code) : ShellException(message, code);
 /// <summary>A safety limit was hit; ends the whole tool call so an outer loop or caller can't carry on.</summary>
@@ -477,7 +479,7 @@ public sealed partial class Shell
         try
         {
             // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
-            try { code = await ExecScriptAsync(Parser.Parse(commandLine), io, callToken); }
+            try { code = await ExecTopLevelAsync(Parser.Parse(commandLine), io, callToken); }
             finally { await RunExitTrapAsync(io, callToken); }
         }
         catch (ParseException e) { stderr.GetStringBuilder().AppendLine($"bash: {e.Message}"); code = 2; }
@@ -578,10 +580,11 @@ public sealed partial class Shell
             if (process != null) _subshell = 0; // a new bash ends with its own status (127 for set -u), not a subshell's 1
             try
             {
-                try { return await ExecScriptAsync(script, io, ct); }
+                try { return process != null ? await ExecTopLevelAsync(script, io, ct) : await ExecScriptAsync(script, io, ct); }
                 finally { await RunExitTrapAsync(io, ct); }
             }
             catch (ExitSignal e) { return e.Code; }
+            catch (LineAbort) { return 1; } // $(...) ends with the bad substitution
             finally { _subshell = outerSubshell; RestoreState(saved); }
         }
         finally
@@ -660,6 +663,21 @@ public sealed partial class Shell
         _cwd = Fs.IsDirectory(s.Cwd) ? s.Cwd : "/";
     }
 
+    /// <summary>A script's top level (a call, bash -c, a script file): a bad substitution drops the rest of its line only.</summary>
+    async Task<int> ExecTopLevelAsync(Script script, Io io, CancellationToken ct)
+    {
+        int code = 0, skip = 0;
+        static int LineOf(AndOr item) => item.First.Commands.FirstOrDefault()?.Line ?? 0;
+        foreach (var item in script.Items)
+        {
+            if (skip > 0 && LineOf(item) == skip) continue;
+            skip = 0;
+            try { code = await ExecScriptAsync(new Script([item]), io, ct); }
+            catch (LineAbort) { code = LastExitCode = 1; skip = LineOf(item); }
+        }
+        return code;
+    }
+
     async Task<int> ExecScriptAsync(Script script, Io io, CancellationToken ct)
     {
         int code = 0;
@@ -712,6 +730,7 @@ public sealed partial class Shell
         int code;
         try { code = await ExecScriptAsync(new Script([item]), io with { Stdin = new StdinBuffer("") }, ct); }
         catch (ExitSignal e) { code = e.Code; }
+        catch (LineAbort) { code = 1; }
         finally { RestoreState(saved); }
         _lastBg = ++_nextPid;
         _jobs[_lastBg] = code;
@@ -763,6 +782,7 @@ public sealed partial class Shell
                 // shortcut: the last stage keeps its variables (bash's lastpipe), so `cmd | while read` loops can count; only `exit` is contained
                 try { code = await ExecCommandAsync(p.Commands[k], stage, ct); }
                 catch (ExitSignal e) { code = e.Code; }
+                catch (LineAbort) { code = 1; }
             }
             else
             {
@@ -770,6 +790,7 @@ public sealed partial class Shell
                 var saved = SaveState();
                 try { code = await ExecCommandAsync(p.Commands[k], stage, ct); }
                 catch (ExitSignal e) { code = e.Code; }
+                catch (LineAbort) { code = 1; }
                 finally { RestoreState(saved); }
             }
             if (code != 0) failed = code;
@@ -867,6 +888,7 @@ public sealed partial class Shell
                 _ => throw new InvalidOperationException(cmd.GetType().Name),
             };
         }
+        catch (BadSubstitution e) { throw BadSubstitutionStop(rio, e.Message, e.Ends); }
         catch (FatalError e) { throw Fatal(rio, e.Message, e.ExitCode); }
         catch (ShellException e)
         {
@@ -897,6 +919,7 @@ public sealed partial class Shell
         var saved = SaveState();
         try { return await ExecScriptAsync(body, io with { Out = new SwitchWriter(io.Out), Err = new SwitchWriter(io.Err) }, ct); }
         catch (ExitSignal e) { return e.Code; }
+        catch (LineAbort) { return 1; }
         finally { RestoreState(saved); }
     }
 
@@ -1425,15 +1448,34 @@ public sealed partial class Shell
         return await RunScriptTextAsync(text, io, subshell: true, ct, argv.Skip(1).ToList(), new NewProcess(name, name));
     }
 
+    /// <summary>The script a script file's #! line hands it to (resolved), or null when that is a program or there is none.</summary>
+    string? ScriptInterpreter(string path)
+    {
+        if (!Fs.CanRead(path) || StubCommand(path) != null) return null;
+        var text = Fs.ReadAllText(path);
+        if (!text.StartsWith("#!")) return null;
+        var first = text[2..(text.IndexOf('\n') is var nl and >= 0 ? nl : text.Length)].Trim().Split([' ', '\t'], 2)[0];
+        return first.Length > 0 && ResolvePath(first) is var abs && Fs.IsFile(abs) && Fs.CanExecute(abs) && StubCommand(abs) == null ? abs : null;
+    }
+
     /// <summary>A #! line naming another program: like the kernel, run it with its one optional argument, the script and the
     /// script's arguments, when it is one of the shell's commands.</summary>
     async Task<int> RunInterpreterAsync(string name, string line, IReadOnlyList<string> argv, Io io, CancellationToken ct)
     {
         var parts = line.Split([' ', '\t'], 2);
         var opt = parts.Length > 1 ? parts[1].Trim() : "";
-        // an interpreter that is itself a script runs as one (Linux allows that a few levels deep; the caller counts the levels)
+        // an interpreter that is itself a script runs as one; like Linux, at most four such levels (a loop never ends otherwise)
         if (StubCommand(parts[0]) == null && ResolvePath(parts[0]) is var interp && Fs.IsFile(interp) && Fs.CanExecute(interp))
+        {
+            int levels = 0;
+            for (var next = interp; next != null && ++levels <= 4;) next = ScriptInterpreter(next);
+            if (levels > 4)
+            {
+                io.Err.WriteLine("bash: " + CommandSpec.Format(CommandSpec.Diagnostics.BadInterpreter, ("name", name), ("interpreter", parts[0]), ("reason", CommandSpec.Errno.ELOOP)));
+                return 126;
+            }
             return await RunScriptFileAsync(parts[0], interp, [parts[0], .. opt == "" ? [] : new[] { opt }, name, .. argv.Skip(1)], io, ct);
+        }
         if (StubCommand(parts[0]) is not { } program)
         {
             io.Err.WriteLine(ErrPrefix + CommandSpec.Format(CommandSpec.Diagnostics.RequiredFileNotFound, ("name", name)));
@@ -1947,22 +1989,36 @@ public sealed partial class Shell
 
     /// <summary>An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1).</summary>
     /// <summary>${x@}: the text bash names is the whole word, or the whole double-quoted string the expansion is in.</summary>
-    internal sealed class BadSubstitution(string text) : FatalError(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", text)), 127);
+    /// <param name="ends">A bad @ operator on a set variable ends the script (127); any other drops the rest of the line.</param>
+    internal sealed class BadSubstitution(string text, bool ends = false) : FatalError(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", text)), 127)
+    {
+        public bool Ends { get; } = ends;
+    }
+
+    /// <summary>Reports a bad substitution and unwinds as bash does: the script ends, or the rest of the line is dropped.</summary>
+    Exception BadSubstitutionStop(Io io, string message, bool ends)
+    {
+        if (ends) return Fatal(io, message, 127);
+        io.Err.WriteLine($"{ErrPrefix}{message}");
+        LastExitCode = 1;
+        return new LineAbort();
+    }
 
     /// <summary>Expands parts[i]; a bad substitution there ends the script, naming the word or quoted string around it.</summary>
     async Task<string> ExpandPartInAsync(IReadOnlyList<WordPart> parts, int i, Io io, CancellationToken ct)
     {
         try { return await ExpandPartAsync(parts[i], io, ct); }
-        catch (BadSubstitution)
+        catch (BadSubstitution e)
         {
+            static bool InString(WordPart p) => p.Quoted && p is not LiteralPart { Verbatim: true };
             int a = 0, b = parts.Count - 1;
-            if (parts[i].Quoted)
+            if (InString(parts[i]))
             {
-                for (a = i; a > 0 && parts[a - 1].Quoted; a--) { }
-                for (b = i; b + 1 < parts.Count && parts[b + 1].Quoted; b++) { }
+                for (a = i; a > 0 && InString(parts[a - 1]); a--) { }
+                for (b = i; b + 1 < parts.Count && InString(parts[b + 1]); b++) { }
             }
             // shortcut: rebuilt from the parsed parts, so $x reads ${x} and quotes inside an unquoted word are gone; keep source spans if that matters
-            throw Fatal(io, CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", new Word(parts.Skip(a).Take(b - a + 1).ToList()).ToString())), 127);
+            throw BadSubstitutionStop(io, CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", new Word(parts.Skip(a).Take(b - a + 1).ToList()).ToString())), e.Ends);
         }
     }
 
@@ -2046,7 +2102,7 @@ public sealed partial class Shell
         {
             string? element;
             try { element = GetElement(one.Name, await SubscriptAsync(one.Sub, io, ct)); }
-            catch (ShellException e) { io.Err.WriteLine($"{ErrPrefix}{e.Message}"); element = null; } // like bash: reported, and the expansion is empty
+            catch (ShellException e) when (e is not FatalError) { io.Err.WriteLine($"{ErrPrefix}{e.Message}"); element = null; } // like bash: reported, and the expansion is empty
             return await ElementOpAsync(element, one.Tail, io, ct, quoted);
         }
         if (expr.Length > 1 && expr[0] == '#')
@@ -2146,7 +2202,7 @@ public sealed partial class Shell
                 'u' => value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..],
                 'A' => Builtins.AttributeFlags(this, Resolve(name)) is { Length: > 0 } flags ? $"declare -{flags} {name}={QuoteValue(value)}" : $"{name}={QuoteValue(value)}",
                 'P' => value,
-                _ => throw new BadSubstitution("${" + expr + "}"),
+                _ => throw new BadSubstitution("${" + expr + "}", ends: true),
             };
         }
         if (rest[0] == ':')
@@ -2161,7 +2217,8 @@ public sealed partial class Shell
             if (len < 0 && (len += tail.Length) < 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.SubstringNegative, ("expression", spec[1].Trim())));
             return tail[..(int)Math.Min(len, tail.Length)];
         }
-        throw new BadSubstitution("${" + expr + "}");
+        if (rest == "@" && !IsSet(name)) return ""; // bash looks at the operator only when there is a value
+        throw new BadSubstitution("${" + expr + "}", ends: rest.StartsWith('@'));
     }
 
     /// <summary>set -u: expanding an unset variable is an error that ends the (sub)shell, like bash.</summary>

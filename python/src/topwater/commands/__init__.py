@@ -361,7 +361,9 @@ def _export(ctx):
 def exec_failure(sh, name: str) -> tuple[str, int] | None:
     """Why a program-running command (env, timeout) could not start `name`: (errno text, exit status), or None."""
     if "/" not in name:
-        if is_shell_builtin(sh, name) or sh.is_unfiled(name) or sh.search_path(name) is not None:
+        # an app command with no program file runs; a shell-only builtin (cd, type) is no program at all
+        spec = COMMANDS.get(name)
+        if sh.search_path(name) is not None or sh.is_unfiled(name) and not (spec is not None and not spec.program_file):
             return None
         return ERRNO["ENOENT"], 127
     path = sh.resolve(name)
@@ -382,11 +384,20 @@ async def _env(ctx):
     clear = null = False
     chdir: str | None = None
     longs = {"ignore-environment": "i", "unset": "u", "chdir": "C", "null": "0"}
+    options = True
     while args:
         a = args[0]
+        if not options or not a.startswith("-"):
+            if a.find("=") <= 0:
+                break
+            k, _, v = args.pop(0).partition("=")
+            sets.append((k, v))
+            options = False  # options end at the first operand, as with getopt's "+"
+            continue
         if a == "--":
             args.pop(0)
-            break
+            options = False  # assignments may still follow
+            continue
         if a == "-":
             clear = True
             args.pop(0)
@@ -430,11 +441,6 @@ async def _env(ctx):
                 else:
                     raise UsageException(spec_format(GETOPT["invalidOption"], option=c))
                 k += 1
-        elif a.find("=") > 0:
-            k, _, v = args.pop(0).partition("=")
-            sets.append((k, v))
-        else:
-            break
 
     def show():
         for k in sorted(sh.env):

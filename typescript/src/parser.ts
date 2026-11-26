@@ -63,7 +63,8 @@ export type Command = (
 
 export interface CaseClause { patterns: Word[]; body: Script; terminator: ';;' | ';&' | ';;&' }
 export interface Pipeline { commands: Command[]; negate: boolean; timed: boolean; posixTime: boolean }
-export interface AndOr { first: Pipeline; rest: [op: '&&' | '||', next: Pipeline][]; background: boolean }
+/** line, endLine: where the list starts and ends (a bad substitution drops the rest of its line). */
+export interface AndOr { first: Pipeline; rest: [op: '&&' | '||', next: Pipeline][]; background: boolean; line?: number; endLine?: number }
 export interface Script { items: AndOr[] }
 
 export const isName = (s: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
@@ -243,7 +244,10 @@ class Parser {
       if (c === ')' && closeParen) break;
       if (this.startsWith(';;') || this.startsWith(';&')) break;
       if (c === ')' || c === ';' || c === '&' || c === '|') this.fail();
+      const line = this.line();
       const item = this.parseAndOr();
+      item.line = line;
+      item.endLine = this.line(Math.max(this.pos - 1, 0));
       items.push(item);
       this.skipBlank();
       if (this.startsWith(';;') || this.startsWith(';&')) break;

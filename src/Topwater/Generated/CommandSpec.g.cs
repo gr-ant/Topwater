@@ -596,6 +596,7 @@ internal static partial class CommandSpec
         internal const string Noclobber = "{target}: cannot overwrite existing file";
         internal const string RedirectFailed = "{target}: {reason}";
         internal const string CannotExecuteBinary = "{name}: cannot execute binary file";
+        internal const string BadInterpreter = "{name}: {interpreter}: bad interpreter: {reason}";
         internal const string RequiredFileNotFound = "{name}: cannot execute: required file not found";
         internal const string UnboundVariable = "{name}: unbound variable";
         internal const string DivisionByZero = "{expression}: division by 0 (error token is \"{token}\")";

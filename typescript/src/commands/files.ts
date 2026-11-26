@@ -128,7 +128,8 @@ function showNonprinting(s: string): string {
 }
 
 /** chmod's mode argument: octal, or symbolic clauses like u+x,go-w. */
-export function parseMode(spec: string, mode: number, isDir: boolean): number {
+/** `umask`: bits a clause without u/g/o/a leaves alone (chmod +w under umask 077 adds only u+w). */
+export function parseMode(spec: string, mode: number, isDir: boolean, umask = 0): number {
   if (/^[0-7]{1,4}$/.test(spec)) return parseInt(spec, 8);
   for (const clause of spec.split(',')) {
     const m = /^([ugoa]*)([-+=])([rwxXt]*)$/.exec(clause);
@@ -148,6 +149,7 @@ export function parseMode(spec: string, mode: number, isDir: boolean): number {
       mask |= bits << shift;
       clear |= 7 << shift;
     }
+    if (m[1] === '') mask &= ~umask;
     const st = sticky ? 0o1000 : 0;
     mode = m[2] === '+' ? mode | mask | st : m[2] === '-' ? mode & ~(mask | st) : (mode & ~clear) | mask | st;
   }
@@ -563,8 +565,8 @@ export function registerFiles(shell: Shell) {
         if (!(e instanceof ShellError)) throw e;
         throw new ShellError(specMessage('touch', 'invalidDateFormat', { value: d }));
       }
-      // shortcut: times outside years 0-9999 are refused (GNU takes larger years), since ls and date can't show them
-      if (!(when >= -62167219200000 && when <= 253402300799999)) throw new ShellError(specMessage('touch', 'invalidDateFormat', { value: d }));
+      // shortcut: refused beyond what a JavaScript Date holds (about year 275760; GNU goes further)
+      if (!(Math.abs(when) <= 8.64e15)) throw new ShellError(specMessage('touch', 'invalidDateFormat', { value: d }));
     }
     if (t !== undefined) when = touchStamp(t, ctx.fs.clock()) ?? fail(specMessage('touch', 'invalidDateFormat', { value: t }));
     let code = 0;
@@ -990,7 +992,7 @@ export function registerFiles(shell: Shell) {
     let code = 0;
     const apply = (display: string, path: string) => {
       const st = ctx.fs.stat(path);
-      const mode = parseMode(spec!, st.mode, st.isDirectory);
+      const mode = parseMode(spec!, st.mode, st.isDirectory, ctx.fs.umask);
       try { ctx.fs.chmod(path, mode); } catch {
         if (!quiet) ctx.stderr.write('chmod: ' + specMessage('chmod', 'cannotChangePermissions', { file: display }) + '\n');
         code = 1;

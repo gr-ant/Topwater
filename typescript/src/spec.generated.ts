@@ -210,6 +210,7 @@ export const DIAGNOSTICS = {
   noclobber: "{target}: cannot overwrite existing file",
   redirectFailed: "{target}: {reason}",
   cannotExecuteBinary: "{name}: cannot execute binary file",
+  badInterpreter: "{name}: {interpreter}: bad interpreter: {reason}",
   requiredFileNotFound: "{name}: cannot execute: required file not found",
   unboundVariable: "{name}: unbound variable",
   divisionByZero: "{expression}: division by 0 (error token is \"{token}\")",

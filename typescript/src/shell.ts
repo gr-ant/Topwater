@@ -120,10 +120,13 @@ export class ShellArray {
   }
 }
 
-/** ${...} that is not a valid expansion: ends the script, naming the text it came from. */
-class BadSubstitution extends ShellError {}
+/** ${...} that is not a valid expansion. `ends`: a bad @ operator on a set variable, which ends the script (127);
+ * any other drops the rest of its line with status 1. */
+class BadSubstitution extends ShellError { constructor(message: string, readonly ends = false) { super(message); } }
 
 class ControlFlow extends Error {}
+/** Unwinds to the top level, which skips the rest of the current line (status 1), as bash does after a bad substitution. */
+class LineAbort extends ControlFlow {}
 class LoopControl extends ControlFlow { constructor(readonly isBreak: boolean, readonly levels: number) { super(); } }
 export class ReturnSignal extends ControlFlow { constructor(readonly code: number) { super(); } }
 export class ExitSignal extends ControlFlow { constructor(readonly code: number) { super(); } }
@@ -509,12 +512,13 @@ export class Shell implements ArithHost {
     const raw = (s: string) => { stderr.clear; (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
       // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
-      try { code = await this.execScript(parse(commandLine), io); } finally { await this.runExitTrap(io); }
+      try { code = await this.execTopLevel(parse(commandLine), io); } finally { await this.runExitTrap(io); }
     } catch (e) {
       if (e instanceof ParseError) { raw(`bash: ${e.message}\n`); code = 2; }
       else if (e instanceof ExitSignal) code = e.code;
       else if (e instanceof ReturnSignal) code = e.code;
       else if (e instanceof LoopControl) code = 0;
+      else if (e instanceof LineAbort) code = 1;
       else if (e instanceof LimitExceeded) { raw(`bash: ${e.message}\n`); code = 1; trailer = stopped(e.message); }
       else if (e instanceof DeadlineExceeded) {
         code = 124; // what `timeout` exits with
@@ -647,7 +651,7 @@ export class Shell implements ArithHost {
       if (process) { this.becomeNewProcess(process); this.subshell = 0; }
       if (positional) this.positional = positional;
       try {
-        try { return await this.execScript(script, io); } finally { await this.runExitTrap(io); }
+        try { return await this.execTopLevel(script, io); } finally { await this.runExitTrap(io); }
       } catch (e) {
         if (e instanceof ExitSignal) return e.code;
         throw e;
@@ -712,6 +716,20 @@ export class Shell implements ArithHost {
     this.hashed = s.hashed;
     this.agentFs.umask = s.umask;
     this.cwdPath = this.agentFs.isDirectory(s.cwd) ? s.cwd : '/';
+  }
+
+  /** A shell's own script, list by list: a bad substitution skips the rest of its line and the next line runs. */
+  private async execTopLevel(script: Script, io: Io): Promise<number> {
+    let code = 0;
+    for (let i = 0; i < script.items.length; i++) {
+      try { code = await this.execScript({ items: [script.items[i]] }, io); } catch (e) {
+        if (!(e instanceof LineAbort)) throw e;
+        code = this.lastExitCode = 1;
+        const end = script.items[i].endLine ?? Infinity;
+        while (i + 1 < script.items.length && (script.items[i + 1].line ?? 0) <= end) i++;
+      }
+    }
+    return code;
   }
 
   private async execScript(script: Script, io: Io): Promise<number> {
@@ -1302,7 +1320,20 @@ export class Shell implements ArithHost {
     const program = this.stubCommand(m[1]);
     const interp = this.resolvePath(m[1]);
     if (program === null && this.agentFs.isFile(interp) && this.agentFs.canExecute(interp)) {
-      // another script as the interpreter: it runs with this script's path as its argument (the nesting is counted)
+      // another script as the interpreter: it runs with this script's path as its argument. Like Linux, a chain of
+      // such scripts more than a few deep (or one naming itself) is refused before anything runs.
+      for (let p = interp, depth = 1; ; depth++) {
+        const first = this.agentFs.canRead(p) ? this.agentFs.readText(p).split('\n', 1)[0] : '';
+        const next = /^#!\s*(\S+)/.exec(first)?.[1];
+        if (next === undefined || /(^|\/)(ba)?sh$/.test(next) || this.stubCommand(next) !== null) break;
+        const abs = this.resolvePath(next);
+        if (!this.agentFs.isFile(abs) || !this.agentFs.canExecute(abs)) break;
+        if (depth >= 4) {
+          io.err.write(`bash: ${diagnostic('badInterpreter', { name, interpreter: m[1], reason: ERRNO.ELOOP })}\n`);
+          return 126;
+        }
+        p = abs;
+      }
       const opt = (m[2] ?? '').trim();
       return this.invoke([m[1], ...(opt ? [opt] : []), name, ...argv.slice(1)], io, true);
     }
@@ -1849,7 +1880,12 @@ export class Shell implements ArithHost {
       case 'lit': case 'exp': return part.text;
       case 'var':
         try { return await this.expandParameter(part.expr, io, part.q); } catch (e) {
-          if (e instanceof BadSubstitution) throw this.fatal(io, diagnostic('badSubstitution', { text: part.src ?? '${' + part.expr + '}' }), 127);
+          if (e instanceof BadSubstitution) {
+            const message = diagnostic('badSubstitution', { text: part.src ?? '${' + part.expr + '}' });
+            if (e.ends || this.subshell > 0) throw this.fatal(io, message, 127);
+            io.err.write(`${this.errPrefix}${message}\n`);
+            throw new LineAbort();
+          }
           throw e;
         }
       case 'cmd': return this.capture(part.src, io);
@@ -2038,7 +2074,7 @@ export class Shell implements ArithHost {
       }
       return chars.join('');
     }
-    if (rest.length === 2 && rest[0] === '@') {
+    if (rest[0] === '@' && rest.length <= 2) {
       if (rest[1] === 'a') return attributeFlags(this, this.resolve(name));
       if (!this.isSet(name)) return '';
       switch (rest[1]) {
@@ -2053,7 +2089,7 @@ export class Shell implements ArithHost {
         }
         case 'P': return value;
       }
-      throw new BadSubstitution(diagnostic("badSubstitution", { text: "${" + expr + "}" }));
+      throw new BadSubstitution(diagnostic("badSubstitution", { text: "${" + expr + "}" }), true);
     }
     if (rest[0] === ':') {
       const spec = splitOnce(rest.slice(1), ':');

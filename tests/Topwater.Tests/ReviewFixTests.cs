@@ -29,4 +29,12 @@ public class ReviewFixTests
         shell.Fs.WriteAllText("/tmp/host", "x");
         Assert.Equal(0b110_100_100, shell.Fs.Stat("/tmp/host").Mode);
     }
+
+    [Fact]
+    public async Task ForkKeepsTheUmask()
+    {
+        var shell = new Shell();
+        await shell.RunAsync("umask 027");
+        Assert.Equal("0027\n", (await shell.Fork().RunAsync("umask")).Stdout);
+    }
 }

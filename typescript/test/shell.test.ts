@@ -195,6 +195,15 @@ describe('bug pass', () => {
     expect(r.stdout).toBe('drwxr-x---\n-rw-------\n-rw-r-----\n0027\n');
   });
 
+  it("the host's copy keeps the mode; the agent's copy takes its umask", async () => {
+    const sh = new Shell();
+    sh.fs.writeText('/tmp/a', 'x');
+    sh.fs.chmod('/tmp/a', 0o666);
+    sh.fs.copy('/tmp/a', '/tmp/b');
+    expect(sh.fs.stat('/tmp/b').mode).toBe(0o666);
+    expect((await sh.run('umask 077; cp /tmp/a /tmp/c; ls -l /tmp/c | cut -c1-10')).stdout).toBe('-rw-------\n');
+  });
+
   it('counts lines inside eval and $(...) from the line they are on', async () => {
     const r = await new Shell().run('true\n\neval "true\ncd /nope"\necho $(cd /nope)');
     expect(r.stderr).toBe('bash: line 5: cd: /nope: No such file or directory\nbash: line 5: cd: /nope: No such file or directory\n'); // real bash
