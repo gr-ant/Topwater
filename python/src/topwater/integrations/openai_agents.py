@@ -15,7 +15,14 @@ def bash_tool(shell: Shell | None = None, description: str | None = None) -> Fun
     _, arun = _runners(shell)
 
     async def invoke(ctx: ToolContext, args: str) -> str:
-        return await arun(json.loads(args)["command"])
+        # bad arguments go back to the model as tool text, in the core tool's format; raising here would end the run
+        try:
+            command = json.loads(args)["command"]
+        except (ValueError, TypeError, KeyError):
+            command = None
+        if not isinstance(command, str):
+            return "bash: invalid arguments: expected a JSON object with a string `command`\n[exit code 2]"
+        return await arun(command)
 
     # strict mode (the SDK's default) needs additionalProperties: false
     return FunctionTool(name=TOOL_NAME, description=description or TOOL_DESCRIPTION,

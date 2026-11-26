@@ -130,8 +130,10 @@ pip install "topwater[langchain]"   # or llamaindex, openai-agents, claude-agent
 ```
 
 Every adapter exposes `bash_tool(shell=None, description=None)`: a tool named `bash` with the standard description
-and one `command` argument, as the framework's own tool type. Calls on one tool are serialized, and the shell keeps
-its state between calls. Each module imports only its own framework; `import topwater` imports none.
+and one `command` argument, as the framework's own tool type. Calls on one shell run one at a time, even from two
+tools, and the shell keeps its state between calls. Sync tools work inside a running event loop (a notebook, an
+async handler) too, though the loop waits for the call. Each module imports only its own framework;
+`import topwater` imports none.
 
 ```python
 from langchain.agents import create_agent                  # LangChain, and LangGraph underneath
@@ -157,14 +159,16 @@ agent = Agent(name="assistant", tools=[bash_tool(shell)])
 ```
 
 The Claude Agent SDK takes the tool through an in-process MCP server, so Claude sees it as `mcp__topwater__bash`.
-`tools=[]` leaves out Claude Code's own tools, its real `Bash` among them:
+`bash_options` builds the whole safe setup: `tools=[]` turns off Claude Code's own tools, its real `Bash` among them,
+and `setting_sources=[]` with `strict_mcp_config=True` keeps the developer's own Claude Code settings, allow rules and
+MCP servers out of the agent. Other `ClaudeAgentOptions` arguments pass through:
 
 ```python
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server
-from topwater.integrations.claude_agent_sdk import bash_tool
+from claude_agent_sdk import query
+from topwater.integrations.claude_agent_sdk import bash_options
 
-options = ClaudeAgentOptions(mcp_servers={"topwater": create_sdk_mcp_server("topwater", tools=[bash_tool(shell)])},
-                             tools=[], allowed_tools=["mcp__topwater__bash"])
+async for message in query(prompt="...", options=bash_options(shell, system_prompt="...")):
+    print(message)
 ```
 
 ```python

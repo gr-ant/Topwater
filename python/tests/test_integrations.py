@@ -16,6 +16,37 @@ def test_core_import_does_not_load_frameworks():
     subprocess.run([sys.executable, "-c", code], check=True, env={"PYTHONPATH": str(Path(topwater.__file__).parents[1])})
 
 
+
+def test_one_call_at_a_time_per_shell():
+    import threading
+
+    from topwater.integrations import _runners
+
+    shell = topwater.Shell()
+    runs = [_runners(shell)[0] for _ in range(2)]  # two adapters on one shell
+    threads = [threading.Thread(target=run, args=(f"echo s{i} >> /tmp/log; sleep 0.2; echo e{i} >> /tmp/log",))
+               for i, run in enumerate(runs)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert shell.run("cat /tmp/log").stdout.split() in (["s0", "e0", "s1", "e1"], ["s1", "e1", "s0", "e0"])
+
+
+def test_sync_runner_inside_running_loop():
+    import asyncio
+
+    from topwater.integrations import _runners
+
+    run, arun = _runners(topwater.Shell())
+
+    async def go():  # a notebook cell or an async handler calling a sync tool
+        run("echo hi > /tmp/a")
+        return run("cat /tmp/a") + await arun("cat /tmp/a")
+
+    assert asyncio.run(go()) == "hi\nhi\n"
+
+
 def test_langchain():
     pytest.importorskip("langchain_core")
     from topwater.integrations.langchain import bash_tool
@@ -43,6 +74,11 @@ def test_langchain_async():
 
     assert asyncio.run(go()).startswith("5")
     assert asyncio.run(go()).startswith("5")  # a second event loop works too
+
+    async def sync_in_loop():
+        return tool.invoke({"command": "cat /tmp/x"})
+
+    assert asyncio.run(sync_in_loop()).startswith("5")
 
 
 def test_llamaindex():
@@ -103,6 +139,13 @@ def test_openai_agents():
     assert call("cat a.txt").startswith("hi")
     assert "[exit code 1]" in call("cat /nope")
 
+    def call_raw(args):
+        ctx = ToolContext(context=None, tool_name="bash", tool_call_id="1", tool_arguments=args)
+        return asyncio.run(tool.on_invoke_tool(ctx, args))
+
+    for bad in ["", "not json", "{}", "[]", '{"command": 5}', "null"]:
+        assert call_raw(bad).endswith("[exit code 2]"), bad  # tool text, not an exception that ends the run
+
 
 def test_claude_agent_sdk():
     pytest.importorskip("claude_agent_sdk")
@@ -131,6 +174,29 @@ def test_claude_agent_sdk():
         assert "[exit code 1]" in await call("cat /nope")
 
     asyncio.run(go())
+
+
+def test_claude_agent_sdk_options():
+    pytest.importorskip("claude_agent_sdk")
+    import asyncio
+
+    from claude_agent_sdk import ClaudeAgentOptions
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    from topwater.integrations.claude_agent_sdk import bash_options
+
+    options = bash_options(topwater.Shell(), system_prompt="be brief")
+    assert isinstance(options, ClaudeAgentOptions) and options.system_prompt == "be brief"
+    # only the simulated bash: no built-in tools, none of the developer's settings or MCP servers
+    assert options.tools == [] and options.allowed_tools == ["mcp__topwater__bash"]
+    assert options.setting_sources == [] and options.strict_mcp_config is True
+    assert list(options.mcp_servers) == ["topwater"]
+    with pytest.raises(TypeError):
+        bash_options(tools=["Bash"])
+
+    server = options.mcp_servers["topwater"]["instance"]
+    request = CallToolRequest(method="tools/call", params=CallToolRequestParams(name="bash", arguments={"command": "echo hi"}))
+    assert asyncio.run(server.request_handlers[CallToolRequest](request)).root.content[0].text == "hi\n"
 
 
 def test_pydantic_ai():
@@ -169,6 +235,11 @@ def test_crewai():
     assert tool.run(command="cat a.txt").startswith("hi")
     assert "[exit code 1]" in asyncio.run(tool.arun(command="cat /nope"))
 
+    async def in_loop():
+        return tool.run(command="cat /tmp/a.txt") + await tool.arun(command="cat /tmp/a.txt")
+
+    assert asyncio.run(in_loop()) == "hi\nhi\n"
+
 
 def test_smolagents():
     pytest.importorskip("smolagents")
@@ -181,6 +252,36 @@ def test_smolagents():
     assert tool(command="cat a.txt").startswith("hi")
     assert "[exit code 1]" in tool(command="cat /nope")
     assert bash_tool(description="custom").description == "custom" and tool.description == topwater.TOOL_DESCRIPTION
+
+
+def test_smolagents_agent_inside_running_loop():
+    pytest.importorskip("smolagents")
+    import asyncio
+
+    from smolagents import ToolCallingAgent
+    from smolagents.models import ChatMessage, ChatMessageToolCall, ChatMessageToolCallFunction, Model
+
+    from topwater.integrations.smolagents import bash_tool
+
+    class FakeModel(Model):
+        def __init__(self):
+            super().__init__(model_id="fake")
+            self.calls = iter([("bash", {"command": "echo hi > /tmp/a; cat /tmp/a"}), ("final_answer", {"answer": "done"})])
+
+        def generate(self, messages, stop_sequences=None, response_format=None, tools_to_call_from=None, **kwargs):
+            name, arguments = next(self.calls)
+            call = ChatMessageToolCall(ChatMessageToolCallFunction(arguments, name), id=name, type="function")
+            return ChatMessage(role="assistant", content="", tool_calls=[call])
+
+    shell = topwater.Shell()
+    agent = ToolCallingAgent(tools=[bash_tool(shell)], model=FakeModel(), max_steps=3)
+
+    async def in_loop():  # how a notebook runs it
+        return agent.run("go")
+
+    assert asyncio.run(in_loop()) == "done"
+    observations = [step.observations for step in agent.memory.steps if getattr(step, "observations", None)]
+    assert "hi" in observations[0] and "RuntimeError" not in observations[0]
 
 
 def test_google_adk():
