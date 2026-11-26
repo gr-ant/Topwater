@@ -5,8 +5,8 @@
 //   dotnet run --project tools/ReplayGaps -- from-corpus SESSIONS.jsonl OUT_DIR [SESSIONS_PER_SOURCE] [MAX_CALLS]
 //       normalized public trajectories ({"source","id","commands":[...],"outputs":[...]} per line) -> recordings
 //   dotnet run --project tools/ReplayGaps -- measure REPORT.md DETAILS.jsonl WORKERS RECORDINGS_DIR...
-//       replays every recording on Topwater and on real bash (ubuntu:24.04 in Docker), classifies each differing call
-//       and writes a ranked summary
+//       replays every recording on Topwater and on real bash (ubuntu:24.04 plus git in Docker), classifies each
+//       differing call and writes a ranked summary
 //
 // Commands in third-party recordings are untrusted: they run only inside throwaway containers with no network.
 using System.Collections.Concurrent;
@@ -110,7 +110,8 @@ int FromCorpus(string sessionsPath, string outDir, int perSource, int maxCalls)
 async Task<int> Measure(string reportPath, string detailsPath, int workers, string[] dirs)
 {
     var files = dirs.SelectMany(d => Directory.GetFiles(d, "*", SearchOption.AllDirectories).Where(f => f.EndsWith(".topwater") || f.EndsWith(".jsonl"))).Order().ToList();
-    var opts = new DockerTargetOptions { CallTimeout = TimeSpan.FromSeconds(20) };
+    // git in the image so that recorded git calls meet real git, not "command not found"
+    var opts = new DockerTargetOptions { CallTimeout = TimeSpan.FromSeconds(20), Packages = [.. new DockerTargetOptions().Packages, "git"] };
     // build the image once before the workers start
     await (await DockerTarget.StartAsync(new Shell().Snapshot(), opts)).DisposeAsync();
     var rows = new ConcurrentBag<Row>();
@@ -150,7 +151,7 @@ async Task<int> Measure(string reportPath, string detailsPath, int workers, stri
 
     await using (var details = new StreamWriter(detailsPath))
         foreach (var r in rows.OrderBy(r => r.File).ThenBy(r => r.Index)) details.WriteLine(JsonSerializer.Serialize(r));
-    File.WriteAllText(reportPath, Summarize(rows.ToList(), changed.ToList(), files.Count));
+    File.WriteAllText(reportPath, Summarize(rows.ToList(), changed.ToList(), files.Count, opts.Packages));
     Console.WriteLine($"{rows.Count} calls from {files.Count} recordings -> {reportPath}");
     return 0;
 }
@@ -210,11 +211,11 @@ static string FirstWord(string command)
     return w.Length == 0 ? "(other)" : w.StartsWith("./") ? "./script" : w.Contains('/') && Path.GetFileName(w) is { Length: > 0 } b ? b : w;
 }
 
-static string Summarize(List<Row> rows, List<(string File, int Index, string Command)> changed, int recordings)
+static string Summarize(List<Row> rows, List<(string File, int Index, string Command)> changed, int recordings, IReadOnlyList<string> packages)
 {
     var sb = new System.Text.StringBuilder();
     var bySource = rows.GroupBy(r => r.Source).OrderBy(g => g.Key);
-    sb.AppendLine($"Replayed {rows.Count} calls from {recordings} recordings on Topwater and on real bash (ubuntu:24.04 + {string.Join(' ', new DockerTargetOptions().Packages)}).\n");
+    sb.AppendLine($"Replayed {rows.Count} calls from {recordings} recordings on Topwater and on real bash (ubuntu:24.04 + {string.Join(' ', packages)}).\n");
     sb.AppendLine("| source | calls | match | differ |\n|---|---:|---:|---:|");
     foreach (var g in bySource)
         sb.AppendLine($"| {g.Key} | {g.Count()} | {g.Count(r => r.Kind == "match")} ({100.0 * g.Count(r => r.Kind == "match") / g.Count():0}%) | {g.Count(r => r.Kind != "match")} |");
