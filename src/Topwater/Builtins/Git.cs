@@ -167,6 +167,7 @@ internal static partial class Git
         readonly Dictionary<string, (string, byte[])> _objects = [];
         readonly Dictionary<string, Commit> _commits = [];
         Config? _config;
+        List<GitPack>? _packs;
         readonly Dictionary<string, IgnoreRules?> _ignores = [];
         List<IgnoreRules>? _exclude;
         public string Prefix = "";  // the cwd below the top ("sub/dir/"), for relative paths
@@ -226,13 +227,9 @@ internal static partial class Git
         public (string Kind, byte[] Data) Obj(string sha)
         {
             if (_objects.TryGetValue(sha, out var hit)) return hit;
+            if (Packs().Any(p => p.Offsets.ContainsKey(sha))) return Packed(sha);
             var raw = Sha.IsMatch(sha) ? GRead($"objects/{sha[..2]}/{sha[2..]}") : null;
-            if (raw == null)
-            {
-                if (GExists("objects/pack") && Fs.IsDirectory(GPath("objects/pack")) && Fs.List(GPath("objects/pack")).Any(n => n.EndsWith(".pack")))
-                    throw Fatal("packedObjects", ("object", sha));
-                throw Fatal("missingObject", ("object", sha));
-            }
+            if (raw == null) return Packed(sha);
             byte[] data;
             try
             {
@@ -260,13 +257,46 @@ internal static partial class Git
             return result;
         }
 
-        public bool Has(string sha) => GExists($"objects/{sha[..2]}/{sha[2..]}");
+        /// <summary>The packs under objects/pack that have an index, loaded and verified on first use.</summary>
+        public List<GitPack> Packs()
+        {
+            if (_packs != null) return _packs;
+            var packs = new List<GitPack>();
+            const string d = "objects/pack";
+            var names = Fs.IsDirectory(GPath(d), false)
+                ? Fs.List(GPath(d)).Where(n => n.EndsWith(".idx", StringComparison.Ordinal)).OrderBy(n => n, ByBytes).ToList() : [];
+            if (names.Count > GitPack.MaxPacks) throw Fatal("tooLarge", ("what", GPath(d)));
+            foreach (var name in names)
+            {
+                var pack = GRead($"{d}/{name[..^4]}.pack");
+                if (pack != null)  // like git, an index without its pack is skipped
+                    packs.Add(new GitPack(GPath($"{d}/{name[..^4]}.pack"), GRead($"{d}/{name}") ?? [], pack, Limit, Check));
+            }
+            return _packs = packs;
+        }
+
+        (string, byte[]) Packed(string sha)
+        {
+            foreach (var pack in Packs())
+            {
+                if (!pack.Offsets.ContainsKey(sha)) continue;
+                (string, byte[]) result;
+                try { result = pack.Read(sha); }
+                catch (GitPackCorrupt) { throw Fatal("corruptObject", ("object", sha)); }
+                if (ObjectId(result.Item1, result.Item2) != sha) throw Fatal("corruptObject", ("object", sha));
+                if (_objects.Count < 4096) _objects[sha] = result;
+                return result;
+            }
+            throw Fatal("missingObject", ("object", sha));
+        }
+
+        public bool Has(string sha) => Packs().Any(p => p.Offsets.ContainsKey(sha)) || GExists($"objects/{sha[..2]}/{sha[2..]}");
 
         public string Put(string kind, byte[] data)
         {
             var sha = ObjectId(kind, data);
             var rel = $"objects/{sha[..2]}/{sha[2..]}";
-            if (!GExists(rel))
+            if (!Has(sha))
             {
                 var ms = new MemoryStream();
                 using (var z = new ZLibStream(ms, CompressionLevel.Optimal, leaveOpen: true)) z.Write(Header(kind, data));

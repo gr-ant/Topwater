@@ -93,14 +93,18 @@ internal static partial class Git
     static string SubjectOf(Repo repo, string sha) => $"{Abbrev(sha)} {repo.Commit(sha).Subject}";
 
     static int MoveHead(Cmd g, Repo repo, string? targetRef, string? targetSha, string label, bool force, bool quiet,
-        string? newBranch = null, bool resetBranch = false, bool stay = false)
+        string? newBranch = null, bool resetBranch = false, bool stay = false, string? track = null)
     {
         var old = repo.Head();
         var oldBranch = repo.Branch();
         string M(string key, params (string, string)[] v) => SubMsg("checkout", key, v);
         if (targetRef != null && targetRef == repo.HeadRef() && newBranch == null && !stay)
         {
-            if (!quiet) g.Err(M("alreadyOn", ("branch", label)) + "\n");
+            if (!quiet)
+            {
+                g.Err(M("alreadyOn", ("branch", label)) + "\n");
+                ReportTracking(g, repo);
+            }
             return 0;
         }
         var carried = SwitchTrees(g, repo, old, targetSha, force);
@@ -112,6 +116,7 @@ internal static partial class Git
             return 0;
         }
         if (newBranch != null && !string.IsNullOrEmpty(targetSha)) repo.UpdateRef("refs/heads/" + newBranch, targetSha, $"branch: Created from {label}");
+        if (newBranch != null && track != null) SetTracking(g, repo, newBranch, track, quiet);
         var fromName = oldBranch ?? old ?? "";
         if (targetRef != null) repo.SetHead(targetRef, $"checkout: moving from {fromName} to {newBranch ?? label}");
         else repo.SetHead(targetSha!, $"checkout: moving from {fromName} to {label}", detach: true);
@@ -121,7 +126,44 @@ internal static partial class Git
         else if (newBranch != null) g.Err(M(resetBranch ? "switchedResetBranch" : "switchedNewBranch", ("branch", newBranch)) + "\n");
         else g.Err(M("switchedBranch", ("branch", label)) + "\n");
         foreach (var line in carried) g.Out(line + "\n");
+        if (targetRef != null && newBranch == null) ReportTracking(g, repo);
         return 0;
+    }
+
+    static void ReportTracking(Cmd g, Repo repo)
+    {
+        if (repo.Branch() is { } b && TrackingText(repo, b) is { } t) g.Out(t + "\n");
+    }
+
+    /// <summary>The remote-tracking branch a start point names (origin/x or refs/remotes/origin/x), for setting up tracking.</summary>
+    static string? RemoteStart(Repo repo, string? start)
+    {
+        if (start == null || TryResolve(repo, start) == null) return null;
+        foreach (var r in new[] { start, "refs/" + start, "refs/remotes/" + start })
+            if (r.StartsWith("refs/remotes/", StringComparison.Ordinal) && !r.EndsWith("/HEAD", StringComparison.Ordinal) && repo.ReadRef(r) != null
+                && repo.ReadRef("refs/heads/" + start) == null)
+                return r;
+        return null;
+    }
+
+    /// <summary>Records ref (refs/remotes/&lt;remote&gt;/&lt;name&gt;) as branch's upstream, as git does for a branch started from it.</summary>
+    static void SetTracking(Cmd g, Repo repo, string branch, string @ref, bool quiet)
+    {
+        var rest = @ref[13..];
+        int slash = rest.IndexOf('/');
+        var cfg = repo.Config();
+        cfg.Set($"branch.{branch}.remote", rest[..slash]);
+        cfg.Set($"branch.{branch}.merge", "refs/heads/" + rest[(slash + 1)..]);
+        repo.SaveConfig();
+        if (!quiet) g.Out(SubMsg("checkout", "trackingSetUp", ("branch", branch), ("upstream", rest)) + "\n");
+    }
+
+    /// <summary>refs/remotes/&lt;remote&gt;/&lt;name&gt; when exactly one remote has a branch called name (git checkout &lt;name&gt; then creates it).</summary>
+    static string? GuessRemote(Repo repo, string name)
+    {
+        if (!ValidBranchName(name)) return null;
+        var hits = RemoteBranches(repo).Where(r => r.Sym == null && r.Name.IndexOf('/') is var i && i >= 0 && r.Name[(i + 1)..] == name).ToList();
+        return hits.Count == 1 ? "refs/remotes/" + hits[0].Name : null;
     }
 
     /// <summary>checkout [tree-ish] -- paths / restore: copies paths from a commit (or the index) into the index and/or work tree.</summary>
@@ -195,7 +237,8 @@ internal static partial class Git
                 if (!quiet) g.Err(SubMsg("checkout", "switchedNewBranch", ("branch", @new)) + "\n");
                 return 0;
             }
-            return MoveHead(g, repo, "refs/heads/" + @new, start, target ?? "HEAD", force, quiet, newBranch: @new, resetBranch: exists);
+            return MoveHead(g, repo, "refs/heads/" + @new, start, target ?? "HEAD", force, quiet, newBranch: @new, resetBranch: exists,
+                track: RemoteStart(repo, target));
         }
         if (target == null) return o.Has("\x01") ? MoveHead(g, repo, null, repo.Head(), "HEAD", force, quiet) : 0;
         if (!o.Has("\x01") && target is "HEAD" or "@" && repo.HeadRef() is { } stayRef && o.Args.Count == 1)
@@ -210,6 +253,8 @@ internal static partial class Git
             return MoveHead(g, repo, null, c, target, force, quiet);
         }
         if (o.Has("\x01")) throw Fatal("badRevision", ("rev", target));
+        if (o.Args.Count == 1 && !o.DashDash && GuessRemote(repo, target) is { } guess)
+            return MoveHead(g, repo, "refs/heads/" + target, repo.ReadRef(guess), guess[13..], force, quiet, newBranch: target, track: guess);
         return CheckoutPaths(g, repo, null, o.Args, "checkout", quiet: quiet);
     }
 
@@ -234,13 +279,16 @@ internal static partial class Git
                 if (!quiet) g.Err(SubMsg("checkout", "switchedNewBranch", ("branch", @new)) + "\n");
                 return 0;
             }
-            return MoveHead(g, repo, "refs/heads/" + @new, start, target ?? "HEAD", force, quiet, newBranch: @new, resetBranch: exists);
+            return MoveHead(g, repo, "refs/heads/" + @new, start, target ?? "HEAD", force, quiet, newBranch: @new, resetBranch: exists,
+                track: RemoteStart(repo, target));
         }
         if (o.Has("d")) return MoveHead(g, repo, null, CommitOf(repo, target ?? "HEAD"), target ?? "HEAD", force, quiet);
         if (target == null) throw SubFatal("switch", "missingBranch");
         if (repo.ReadRef("refs/heads/" + target) is { } bsha) return MoveHead(g, repo, "refs/heads/" + target, bsha, target, force, quiet);
         if (target is "HEAD" or "@" && repo.HeadRef() is { } hr) throw SubFatal("switch", "expectedBranchRef", ("rev", hr));
         if (TryResolve(repo, target) != null) throw SubFatal("switch", "expectedBranch", ("rev", target));
+        if (GuessRemote(repo, target) is { } guess)
+            return MoveHead(g, repo, "refs/heads/" + target, repo.ReadRef(guess), guess[13..], force, quiet, newBranch: target, track: guess);
         throw SubFatal("switch", "invalidReference", ("rev", target));
     }
 
@@ -407,20 +455,42 @@ internal static partial class Git
         bool listing = o.Has("\x02") || o.Has("a") || o.Has("r") || o.Has("v") || o.Args.Count == 0;
         if (listing)
         {
-            if (o.Has("r") && !o.Has("a")) return 0;
             var pattern = o.Has("\x02") && o.Args.Count > 0 ? o.Args.Select(NamePattern).ToList() : null;
-            var rows = new List<(string Mark, string Name, string Sha)>();
-            var headRef = repo.HeadRef();
-            if (headRef == null && repo.Head() is { } dh) rows.Add(("*", M("detachedLabel", ("commit", Abbrev(dh))), dh));
-            foreach (var (name, sha) in repo.Refs("refs/heads/"))
+            bool Matches(string n) => pattern == null || pattern.Any(p => p != null && p.IsMatch(n));
+            var rows = new List<(string Mark, string Name, string? Sha, string? Sym, string? Local)>();
+            if (!o.Has("r") || o.Has("a"))
             {
-                var shortName = name[11..];
-                if (pattern != null && !pattern.Any(p => p != null && p.IsMatch(shortName))) continue;
-                rows.Add((name == headRef ? "*" : " ", shortName, sha));
+                var headRef = repo.HeadRef();
+                if (headRef == null && repo.Head() is { } dh && pattern == null)
+                {
+                    var (at, dname) = DetachedName(repo);
+                    rows.Add(("*", M(at ? "detachedLabel" : "detachedFromLabel", ("commit", dname)), dh, null, null));
+                }
+                foreach (var (name, sha) in repo.Refs("refs/heads/"))
+                {
+                    var shortName = name[11..];
+                    if (!Matches(shortName)) continue;
+                    rows.Add((name == headRef ? "*" : " ", shortName, sha, null, shortName));
+                }
+            }
+            if (o.Has("r") || o.Has("a"))
+            {
+                var prefix = o.Has("a") ? "remotes/" : "";
+                foreach (var (shortName, sha, sym) in RemoteBranches(repo))
+                    if (Matches(shortName) || Matches(prefix + shortName)) rows.Add((" ", prefix + shortName, sha, sym, null));
             }
             int width = rows.Count > 0 ? rows.Max(r => r.Name.Length) : 0;
-            foreach (var (mark, name, sha) in rows)
-                g.Out(o.Has("v") ? $"{mark} {Ljust(name, width)} {Abbrev(sha)} {repo.Commit(sha).Subject}\n" : $"{mark} {name}\n");
+            foreach (var (mark, name, sha, sym, local) in rows)
+            {
+                if (sym != null) g.Out(o.Has("v") ? $"{mark} {Ljust(name, width)} -> {sym}\n" : $"{mark} {name} -> {sym}\n");
+                else if (o.Has("v") && sha != null)
+                {
+                    var up = local != null && o.Flags["v"] > 1 ? TrackingBrief(repo, local) : null;
+                    var tracked = up is { } u ? $"[{u.Name}{(u.Brief.Length > 0 ? ": " + u.Brief : "")}] " : "";
+                    g.Out($"{mark} {Ljust(name, width)} {Abbrev(sha)} {tracked}{repo.Commit(sha).Subject}\n");
+                }
+                else g.Out($"{mark} {name}\n");
+            }
             return 0;
         }
         // create
@@ -435,6 +505,7 @@ internal static partial class Git
         s2 = s2 != null ? Peel(repo, s2, "commit") : null;
         if (s2 == null) throw SubFatal("branch", "notValidObject", ("name", start == "HEAD" ? repo.Branch() ?? "HEAD" : start));
         repo.UpdateRef("refs/heads/" + bname, s2, $"branch: Created from {start}");
+        if (RemoteStart(repo, start) is { } track) SetTracking(g, repo, bname, track, false);
         return 0;
     }
 
@@ -1015,13 +1086,20 @@ internal static partial class Git
                     continue;
                 }
                 string? name = null;
-                if (a is "HEAD" or "@")
+                var upOf = Regex.Match(a, @"^(.*)@\{(?:u|upstream)\}\z", RegexOptions.Singleline);
+                if (upOf.Success)
+                {
+                    var up = Upstream(r, upOf.Groups[1].Value.Length > 0 ? upOf.Groups[1].Value : r.Branch() ?? "");
+                    name = up is { } u ? (abbrevRef ? u.Name : u.Ref) : null;
+                }
+                else if (a is "HEAD" or "@")
                 {
                     var hr = r.HeadRef();
                     name = hr != null ? (abbrevRef && hr.StartsWith("refs/heads/") ? hr[11..] : hr) : "HEAD";
                 }
                 else if (r.ReadRef("refs/heads/" + a) != null) name = abbrevRef ? a : "refs/heads/" + a;
                 else if (r.ReadRef("refs/tags/" + a) != null) name = abbrevRef ? (r.ReadRef("refs/heads/" + a) != null ? "tags/" + a : a) : "refs/tags/" + a;
+                else if (r.ReadRef("refs/remotes/" + a) != null) name = abbrevRef ? a : "refs/remotes/" + a;
                 outputs.Add(name ?? (abbrevRef ? a : ""));
                 continue;
             }
@@ -1163,9 +1241,24 @@ internal static partial class Git
     static int GitRemote(Cmd g, List<string> args)
     {
         var o = Parse("remote", args);
-        g.Repo();
+        var repo = g.Repo();
         if (o.Args.Count > 0) throw SubFatal("remote", "noRemotes");
-        return 0;  // there are no remotes to list
+        var remotes = new List<(string Name, Dictionary<string, string> Fields)>();  // the remotes a copied clone names, in config order
+        foreach (var (key, value, _) in repo.Config().Items())
+        {
+            if (!key.StartsWith("remote.", StringComparison.Ordinal) || key.Count(ch => ch == '.') < 2) continue;
+            int dot = key.LastIndexOf('.');
+            var name = key[7..dot];
+            var at = remotes.FindIndex(x => x.Name == name);
+            if (at < 0) { remotes.Add((name, new Dictionary<string, string>(StringComparer.Ordinal))); at = remotes.Count - 1; }
+            remotes[at].Fields.TryAdd(key[(dot + 1)..], value);
+        }
+        foreach (var (name, fields) in remotes)
+        {
+            var url = fields.GetValueOrDefault("url", "");
+            g.Out(o.Has("v") ? $"{name}\t{url} (fetch)\n{name}\t{fields.GetValueOrDefault("pushurl", url)} (push)\n" : name + "\n");
+        }
+        return 0;
     }
 
     // ---------- config ----------

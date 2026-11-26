@@ -89,7 +89,8 @@ internal static partial class Git
     {
         var b = repo.Branch();
         if (b == null) return "HEAD (no branch)";
-        return repo.Head() != null ? b : SubMsg("status", "noCommitsOnBranch", ("branch", b));
+        if (repo.Head() == null) return SubMsg("status", "noCommitsOnBranch", ("branch", b));
+        return TrackingBrief(repo, b) is { } t ? $"{b}...{t.Name}" + (t.Brief.Length > 0 ? $" [{t.Brief}]" : "") : b;
     }
 
     static readonly Dictionary<string, string> UnmergedCodes = new() { ["123"] = "UU", ["23"] = "AA", ["1"] = "DD", ["12"] = "UD", ["13"] = "DU", ["2"] = "AU", ["3"] = "UA" };
@@ -121,7 +122,16 @@ internal static partial class Git
         string M(string key, params (string, string)[] v) => SubMsg("status", key, v);
         var output = new List<string>();
         var b = repo.Branch();
-        output.Add(b == null ? M("detachedAt", ("commit", Abbrev(s.Head ?? ""))) : M("onBranch", ("branch", b)));
+        if (b == null)
+        {
+            var (at, name) = DetachedName(repo);
+            output.Add(M(at ? "detachedAt" : "detachedFrom", ("commit", name)));
+        }
+        else
+        {
+            output.Add(M("onBranch", ("branch", b)));
+            if (s.Head != null && TrackingText(repo, b) is { } t) output.AddRange([t, ""]);
+        }
         bool merging = repo.GExists("MERGE_HEAD");
         if (s.Head == null) output.AddRange(["", committing ? M("initialCommit") : M("noCommitsYet"), ""]);
         if (merging)
@@ -522,12 +532,13 @@ internal static partial class Git
     {
         var output = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var headRef = repo.HeadRef();
-        var refs = repo.Refs("refs/heads/").Concat(repo.Refs("refs/tags/")).OrderByDescending(kv => kv.Name, ByBytes);
+        var refs = repo.Refs("refs/heads/").Concat(repo.Refs("refs/tags/"))
+            .Concat(RemoteBranches(repo).Where(r => r.Sha != null).Select(r => ("refs/remotes/" + r.Name, r.Sha!))).OrderByDescending(kv => kv.Item1, ByBytes);
         foreach (var (name, sha) in refs)
         {
             if (name == headRef) continue;
             var target = name.StartsWith("refs/tags/") ? Peel(repo, sha, "commit") : sha;
-            var label = name.StartsWith("refs/tags/") ? "tag: " + name[10..] : name[11..];
+            var label = name.StartsWith("refs/tags/") ? "tag: " + name[10..] : name.StartsWith("refs/remotes/") ? name[13..] : name[11..];
             var key = target ?? sha;
             if (!output.TryGetValue(key, out var l)) output[key] = l = [];
             l.Add(label);

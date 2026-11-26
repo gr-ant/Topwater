@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Topwater;
 
 namespace Topwater.Tests;
@@ -191,16 +192,121 @@ public class GitTests
         Assert.Contains(r.ExitCode, new[] { 0, 124 });
     }
 
+    public static TheoryData<string> PackCases()
+    {
+        var data = new TheoryData<string>();
+        foreach (var c in JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "git", "packs.json"))).RootElement.EnumerateArray())
+            data.Add(c.GetProperty("name").GetString()!);
+        return data;
+    }
+
+    /// <summary>tests/git/packs.json (made by tests/git/make_packs.py), shared with the other ports.</summary>
+    [Theory]
+    [MemberData(nameof(PackCases))]
+    public async Task PackfilesGoodAndHostile(string name)
+    {
+        var c = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "git", "packs.json"))).RootElement
+            .EnumerateArray().First(x => x.GetProperty("name").GetString() == name);
+        var sh = await Repo(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(10) });
+        sh.Fs.CreateDirectory("/tmp/w/.git/objects/pack", true);
+        foreach (var f in c.GetProperty("files").EnumerateObject())
+        {
+            using var gz = new GZipStream(new MemoryStream(Convert.FromBase64String(f.Value.GetString()!)), CompressionMode.Decompress);
+            var ms = new MemoryStream();
+            gz.CopyTo(ms);
+            sh.Fs.WriteAllBytes($"/tmp/w/.git/objects/pack/{f.Name}", ms.ToArray());
+        }
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var r = await sh.RunAsync(c.GetProperty("script").GetString()!);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        Assert.True(c.GetProperty("exitCode").GetInt32() == r.ExitCode, r.Stderr);
+        if (c.TryGetProperty("stdout", out var stdout)) Assert.Equal(stdout.GetString(), r.Stdout);
+        if (c.TryGetProperty("stderr", out var stderr))
+        {
+            Assert.Contains(stderr.GetString()!, r.Stderr);
+            Assert.StartsWith("fatal: ", r.Stderr);
+        }
+    }
+
+    /// <summary>A pack of whole (undeltified) objects with its v2 index, as git would write it.</summary>
+    static (byte[] Pack, byte[] Idx) BuildPack(List<(string Kind, byte[] Data)> objects)
+    {
+        var types = new Dictionary<string, int> { ["commit"] = 1, ["tree"] = 2, ["blob"] = 3, ["tag"] = 4 };
+        var pack = new List<byte>(Encoding.ASCII.GetBytes("PACK"));
+        pack.AddRange([0, 0, 0, 2, .. BitConverter.GetBytes(objects.Count).Reverse()]);
+        var entries = new List<(string Name, int Offset)>();
+        foreach (var (kind, data) in objects)
+        {
+            entries.Add((Convert.ToHexString(SHA1.HashData([.. Encoding.ASCII.GetBytes($"{kind} {data.Length}\0"), .. data])).ToLowerInvariant(), pack.Count));
+            long size = data.Length;
+            int b = (types[kind] << 4) | (int)(size & 15);
+            size >>= 4;
+            while (size > 0) { pack.Add((byte)(b | 0x80)); b = (int)(size & 0x7F); size >>= 7; }
+            pack.Add((byte)b);
+            pack.AddRange(Zlib(data));
+        }
+        pack.AddRange(SHA1.HashData(pack.ToArray()));
+        entries.Sort((x, y) => string.CompareOrdinal(x.Name, y.Name));
+        var idx = new List<byte> { 0xff, (byte)'t', (byte)'O', (byte)'c', 0, 0, 0, 2 };
+        for (int f = 0; f < 256; f++) idx.AddRange(BitConverter.GetBytes(entries.Count(e => Convert.ToInt32(e.Name[..2], 16) <= f)).Reverse());
+        foreach (var e in entries) idx.AddRange(Convert.FromHexString(e.Name));
+        foreach (var e in entries) idx.AddRange([0, 0, 0, 0]);
+        foreach (var e in entries) idx.AddRange(BitConverter.GetBytes(e.Offset).Reverse());
+        idx.AddRange(pack.Skip(pack.Count - 20));
+        idx.AddRange(SHA1.HashData(idx.ToArray()));
+        return (pack.ToArray(), idx.ToArray());
+    }
+
     [Fact]
-    public async Task PackedRepositoriesGetAClearMessage()
+    public async Task PackedRepositoriesTakeNewLooseObjects()
     {
         var sh = await Repo();
-        await sh.RunAsync("mkdir -p .git/objects/pack && touch .git/objects/pack/pack-1.pack .git/objects/pack/pack-1.idx");
-        Assert.Equal(128, (await sh.RunAsync("git cat-file -p 0123456789012345678901234567890123456789")).ExitCode);
-        await sh.RunAsync("rm -rf .git/objects/$(git rev-parse HEAD | cut -c1-2)");
-        var r = await sh.RunAsync("git log");
+        await sh.RunAsync("echo b > g && git add g && git commit -qm two");
+        // pack everything the way git gc would leave it: objects only in a pack
+        var objects = new List<(string, byte[])>();
+        foreach (var sha in (await sh.RunAsync("find .git/objects -type f | cut -d/ -f3,4 | tr -d /")).Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            using var z = new ZLibStream(new MemoryStream(sh.Fs.ReadAllBytes($"/tmp/w/.git/objects/{sha[..2]}/{sha[2..]}")), CompressionMode.Decompress);
+            var ms = new MemoryStream();
+            z.CopyTo(ms);
+            var raw = ms.ToArray();
+            int sp = Array.IndexOf(raw, (byte)' '), nul = Array.IndexOf(raw, (byte)0);
+            objects.Add((Encoding.ASCII.GetString(raw, 0, sp), raw[(nul + 1)..]));
+        }
+        var (pack, idx) = BuildPack(objects);
+        await sh.RunAsync("rm -rf .git/objects/?? && mkdir -p .git/objects/pack");
+        sh.Fs.WriteAllBytes("/tmp/w/.git/objects/pack/pack-1.pack", pack);
+        sh.Fs.WriteAllBytes("/tmp/w/.git/objects/pack/pack-1.idx", idx);
+        var r = await sh.RunAsync("git log --oneline && git status -s && echo c > h && git add h && git commit -qm three && git log --oneline | wc -l"
+            + " && find .git/objects -type f | grep -vc pack && git rev-parse --short HEAD~2 | wc -c");
+        Assert.True(r.ExitCode == 0, r.Stderr);
+        Assert.EndsWith("3\n3\n8\n", r.Stdout);
+        r = await sh.RunAsync("git gc; git repack");
         Assert.Equal(128, r.ExitCode);
-        Assert.Contains("do not delete .git", r.Stderr);
+        Assert.Contains("not available", r.Stderr);
+    }
+
+    [Fact]
+    public async Task A5000ObjectPackReadsQuickly()
+    {
+        var sh = await Repo();
+        var objects = new List<(string, byte[])>();
+        var text = new StringBuilder();
+        for (int n = 0; n < 5000; n++)
+        {
+            text.Append($"line {n}\n");
+            var all = text.ToString();
+            objects.Add(("blob", Encoding.ASCII.GetBytes(all.Length > 2000 ? all[^2000..] : all)));
+        }
+        var (pack, idx) = BuildPack(objects);
+        sh.Fs.CreateDirectory("/tmp/w/.git/objects/pack", true);
+        sh.Fs.WriteAllBytes("/tmp/w/.git/objects/pack/pack-1.pack", pack);
+        sh.Fs.WriteAllBytes("/tmp/w/.git/objects/pack/pack-1.idx", idx);
+        string Id(byte[] d) => Convert.ToHexString(SHA1.HashData([.. Encoding.ASCII.GetBytes($"blob {d.Length}\0"), .. d])).ToLowerInvariant();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var r = await sh.RunAsync($"git cat-file -s {Id(objects[4999].Item2)}; git cat-file -t {Id(objects[10].Item2)[..8]}");
+        Assert.Equal("2000\nblob\n", r.Stdout);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2));
     }
 
     [Fact]

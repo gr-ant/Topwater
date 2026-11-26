@@ -99,7 +99,13 @@ internal static partial class Git
             var b = int.TryParse(m.Groups[1].Value, out var n) ? PreviousBranch(repo, n) : null;
             return b != null ? repo.ReadRef("refs/heads/" + b) : null;
         }
-        foreach (var r in new[] { name, "refs/" + name, "refs/tags/" + name, "refs/heads/" + name, "refs/remotes/" + name })
+        var up = Regex.Match(name, @"^(.*)@\{(?:u|upstream)\}\z", RegexOptions.Singleline);
+        if (up.Success)
+        {
+            var u = Upstream(repo, up.Groups[1].Value.Length > 0 ? up.Groups[1].Value : repo.Branch() ?? "");
+            return u != null ? repo.ReadRef(u.Value.Ref) : null;
+        }
+        foreach (var r in new[] { name, "refs/" + name, "refs/tags/" + name, "refs/heads/" + name, "refs/remotes/" + name, "refs/remotes/" + name + "/HEAD" })
         {
             if (r == name && !(IsUpper(name) || name.StartsWith("refs/"))) continue;
             if (repo.ReadRef(r) is { } sha) return sha;
@@ -111,10 +117,100 @@ internal static partial class Git
     static string? UniquePrefix(Repo repo, string prefix)
     {
         var d = repo.GPath($"objects/{prefix[..2]}");
-        if (!repo.Fs.IsDirectory(d, false)) return null;
-        var hits = repo.Fs.List(d).Select(n => prefix[..2] + n).Where(x => x.StartsWith(prefix, StringComparison.Ordinal) && x.Length == 40).ToList();
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+        if (repo.Fs.IsDirectory(d, false))
+            found.UnionWith(repo.Fs.List(d).Select(n => prefix[..2] + n).Where(x => x.StartsWith(prefix, StringComparison.Ordinal) && x.Length == 40));
+        foreach (var pack in repo.Packs()) found.UnionWith(pack.WithPrefix(prefix));
+        var hits = found.ToList();
         if (hits.Count > 1) throw Fatal("ambiguousPrefix", ("prefix", prefix));
         return hits.Count > 0 ? hits[0] : null;
+    }
+
+    /// <summary>(HEAD is still there, what to call it) for a detached HEAD: the ref the last checkout named, else the commit
+    /// it went to, from the HEAD reflog; git says 'detached at' while HEAD has not moved since and 'detached from' after.</summary>
+    static (bool At, string Name) DetachedName(Repo repo)
+    {
+        var head = repo.Head() ?? "";
+        var lines = (repo.GText("logs/HEAD") ?? "").Split('\n');
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            var m = Regex.Match(lines[i], @"^[0-9a-f]{40} ([0-9a-f]{40}) [^\t]*\tcheckout: moving from \S+ to (\S+)\z");
+            if (!m.Success) continue;
+            var to = m.Groups[2].Value;
+            foreach (var r in new[] { to, "refs/tags/" + to, "refs/heads/" + to, "refs/remotes/" + to })
+            {
+                var sha = r.StartsWith("refs/", StringComparison.Ordinal) ? repo.ReadRef(r) : null;
+                if (sha != null) return (Peel(repo, sha, "commit") == head, Regex.Replace(r, "^refs/(heads|tags|remotes)/", ""));
+            }
+            return (m.Groups[1].Value == head, Abbrev(m.Groups[1].Value));
+        }
+        return (true, Abbrev(head));
+    }
+
+    /// <summary>(name to show, ref) of a branch's upstream, from branch.&lt;name&gt;.remote and .merge (as git clone sets them).</summary>
+    static (string Name, string Ref)? Upstream(Repo repo, string branch)
+    {
+        var cfg = repo.Config();
+        string? remote = cfg.Get($"branch.{branch}.remote"), merge = cfg.Get($"branch.{branch}.merge");
+        if (string.IsNullOrEmpty(remote) || merge == null || !merge.StartsWith("refs/heads/", StringComparison.Ordinal)) return null;
+        if (remote == ".") return (merge[11..], merge);
+        // shortcut: assumes the default fetch refspec (refs/remotes/<remote>/*) that clone writes; read remote.<name>.fetch if others show up
+        return ($"{remote}/{merge[11..]}", $"refs/remotes/{remote}/{merge[11..]}");
+    }
+
+    /// <summary>(upstream name, commits ahead, commits behind, upstream gone) for a branch with an upstream.</summary>
+    static (string Name, int Ahead, int Behind, bool Gone)? Tracking(Repo repo, string branch)
+    {
+        var up = Upstream(repo, branch);
+        var ours = repo.ReadRef("refs/heads/" + branch);
+        if (up == null || ours == null) return null;
+        var theirs = repo.ReadRef(up.Value.Ref);
+        if (theirs == null) return (up.Value.Name, 0, 0, true);
+        var a = Ancestors(repo, [ours]);
+        var b = Ancestors(repo, [theirs]);
+        return (up.Value.Name, a.Count(x => !b.Contains(x)), b.Count(x => !a.Contains(x)), false);
+    }
+
+    /// <summary>The 'Your branch is ...' lines git status and checkout print.</summary>
+    static string? TrackingText(Repo repo, string branch)
+    {
+        if (Tracking(repo, branch) is not { } t) return null;
+        string M(string key, params (string, string)[] v) => SubMsg("status", key, v);
+        string Count(int n) => n == 1 ? M("oneCommit") : M("commits", ("n", n.ToString()));
+        if (t.Gone) return M("upstreamGone", ("upstream", t.Name));
+        if (t.Ahead > 0 && t.Behind > 0) return M("diverged", ("upstream", t.Name), ("ahead", t.Ahead.ToString()), ("behind", t.Behind.ToString()));
+        if (t.Ahead > 0) return M("ahead", ("upstream", t.Name), ("count", Count(t.Ahead)));
+        if (t.Behind > 0) return M("behind", ("upstream", t.Name), ("count", Count(t.Behind)));
+        return M("upToDate", ("upstream", t.Name));
+    }
+
+    /// <summary>(upstream name, 'ahead 1, behind 2' or 'gone' or '') for status -sb and branch -vv.</summary>
+    static (string Name, string Brief)? TrackingBrief(Repo repo, string branch)
+    {
+        if (Tracking(repo, branch) is not { } t) return null;
+        if (t.Gone) return (t.Name, SubMsg("status", "trackGone"));
+        var parts = new List<string>();
+        if (t.Ahead > 0) parts.Add(SubMsg("status", "trackAhead", ("n", t.Ahead.ToString())));
+        if (t.Behind > 0) parts.Add(SubMsg("status", "trackBehind", ("n", t.Behind.ToString())));
+        return (t.Name, string.Join(", ", parts));
+    }
+
+    /// <summary>[(name below refs/remotes/, commit, symbolic target below refs/remotes/ or null)] sorted by name.</summary>
+    static List<(string Name, string? Sha, string? Sym)> RemoteBranches(Repo repo)
+    {
+        var rows = repo.Refs("refs/remotes/").Select(r => (r.Name[13..], (string?)r.Sha, (string?)null)).ToList();
+        const string b = "refs/remotes";
+        if (repo.Fs.IsDirectory(repo.GPath(b), false))
+            foreach (var remote in repo.Fs.List(repo.GPath(b)))
+            {
+                var rel = $"{b}/{remote}/HEAD";
+                if (repo.Fs.IsDirectory(repo.GPath($"{b}/{remote}"), false) && repo.Fs.IsFile(repo.GPath(rel), false))
+                {
+                    var text = (repo.GText(rel) ?? "").Trim();
+                    if (text.StartsWith("ref: refs/remotes/", StringComparison.Ordinal)) rows.Add(($"{remote}/HEAD", repo.ReadRef(rel), text[18..]));
+                }
+            }
+        return rows.OrderBy(r => r.Item1, ByBytes).ToList();
     }
 
     static string? PreviousBranch(Repo repo, int n)
