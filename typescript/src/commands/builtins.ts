@@ -1289,9 +1289,32 @@ export function registerBuiltins(shell: Shell) {
   });
   reg('uptime', ctx => line(ctx, ctx.args.includes('-p') ? 'up 3 days, 4 hours, 12 minutes'
     : ` ${strftime(ctx.shell.now(), '%H:%M:%S')} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01`));
-  reg('free', ctx => ctx.stdout.write(ctx.args.some(x => x.includes('h'))
-    ? '               total        used        free      shared  buff/cache   available\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nSwap:          2.0Gi          0B       2.0Gi\n'
-    : '               total        used        free      shared  buff/cache   available\nMem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n'));
+  reg('free', ctx => {
+    const a = Args.parse(ctx.args, specOf('free'));
+    const binary = 'bkmg\u0001\u0002', decimal = '_\u0003\u0004\u0005\u0006\u0007'; // option keys by power: --tebi is \u0001, --kilo \u0003
+    const units = [...binary + decimal.slice(1)].filter(c => a.has(c));
+    // shortcut: a repeated flag (-m -m) is counted once, real free rejects it too
+    if (units.length > 1) throw new ShellError(specMessage('free', 'multipleUnits'));
+    const unit = units[0] ?? 'k';
+    const si = a.has('\u000e') || decimal.includes(unit), base = si ? 1000 : 1024, wide = a.has('w');
+    const power = binary.includes(unit) ? binary.indexOf(unit) : decimal.indexOf(unit);
+    const size = (kb: number): string => {
+      const n = kb * 1024;
+      if (!a.has('h')) return String(Math.floor(n / base ** power));
+      if (n < base) return `${n}B`;
+      for (let i = 1; ; i++) {
+        const v = n / base ** i, suffix = 'KMGTPE'[i - 1] + (si ? '' : 'i');
+        if (v < 10) return v.toFixed(1) + suffix;
+        if (v < base || i === 6) return Math.trunc(v) + suffix;
+      }
+    };
+    const row = (label: string, cells: string[]) => label.padEnd(8) + cells.map(c => c.padStart(12)).join('') + '\n';
+    const mem = [8014880, 1992344, 3984512, 12288, 180224, 2020800, 5748660], swap = [2097148, 0, 2097148]; // kB: total used free shared buffers cache available
+    const shown = wide ? mem : [mem[0], mem[1], mem[2], mem[3], mem[4] + mem[5], mem[6]];
+    ctx.stdout.write(row('', wide ? ['total', 'used', 'free', 'shared', 'buffers', 'cache', 'available'] : ['total', 'used', 'free', 'shared', 'buff/cache', 'available'])
+      + row('Mem:', shown.map(size)) + row('Swap:', swap.map(size))
+      + (a.has('t') ? row('Total:', swap.map((s, i) => size(mem[i] + s))) : ''));
+  });
   reg('nproc', ctx => line(ctx, '4'));
 
   // the agent is a regular user: privilege escalation fails the way it does on a real server

@@ -218,7 +218,10 @@ internal static partial class CommandSpec
             ["unknownPredicate"] = "unknown predicate `{predicate}'",
             ["loop"] = "File system loop detected; {dir:locale} is part of the same file system loop as {loop:locale}.",
         }),
-        ["free"] = new("free", "Display memory usage", null, "free from procps-ng 4.0.4", true, false, true, "free", 1, "Try 'free --help' for more information.\n", null, Empty),
+        ["free"] = new("free", "Display memory usage", null, "free from procps-ng 4.0.4", true, false, true, "free", 1, "Try 'free --help' for more information.\n", ("bkmghtwlLv", "sc", "bytes=b,kibi=k,mebi=m,gibi=g,tebi=\u0001,pebi=\u0002,kilo=\u0003,mega=\u0004,giga=\u0005,tera=\u0006,peta=\u0007,human=h,si=\u000e,total=t,wide=w,lohi=l,line=L,committed=v,seconds=s,count=c"), new Dictionary<string, string>
+        {
+            ["multipleUnits"] = "Multiple unit options don't make sense.",
+        }),
         ["getopts"] = new("getopts", "Parse command-line options", null, "getopts (GNU coreutils) 9.4", true, true, false, "getopts", 1, "Try 'getopts --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["usage"] = "usage: getopts optstring name [arg ...]",

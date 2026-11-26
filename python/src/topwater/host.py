@@ -80,9 +80,14 @@ class HostCommand:
         self._private_tmp = Path(tempfile.mkdtemp(prefix=f"topwater-{name}-tmp-"))
         # what each file looked like on both sides when it was last synced, so unchanged files are neither read nor written
         self._synced: dict[str, tuple] = {}
+        self._restore: Callable[[], None] | None = None  # puts back what the name ran before register_host_command
         atexit.register(self.close)
 
     def close(self) -> None:
+        """Removes the mirror directories and puts back what the name ran before (the built-in, or nothing)."""
+        if self._restore is not None:
+            self._restore()
+            self._restore = None
         for d in (self.root, self._private_tmp):
             shutil.rmtree(d, ignore_errors=True)
 
@@ -416,5 +421,5 @@ def register_host_command(shell, name: str, program: str | None = None, *, descr
     (callable(argv, mirror_root) -> argv, e.g. `bubblewrap()`), rewrite_paths, max_output.
     """
     cmd = HostCommand(shell, name, program or name, **options)
-    shell.register_command(name, cmd, description or f"{name} (host program)")
+    cmd._restore = shell._register_replacing(name, cmd, description or f"{name} (host program)")
     return cmd

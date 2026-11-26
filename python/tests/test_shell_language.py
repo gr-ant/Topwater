@@ -105,6 +105,11 @@ def test_uptime_hour_matches_date():
           "ok\n", 0, True)
 
 
+
+def test_free_prints_the_same_memory_in_the_unit_asked_for():
+    check("free -m | sed -n 2p; free -b | sed -n 3p; free -h | sed -n 2p; free -h --si | sed -n 2p; free -g -tw | tail -1; free --kilo | sed -n 3p",
+          "Mem:            7827        1945        3891          12        2149        5613\nSwap:     2147479552           0  2147479552\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nMem:            8.2G        2.0G        4.1G         12M        2.3G        5.9G\nTotal:             9           1           5\nSwap:        2147479           0     2147479\n", 0, True)
+
 # ---------- a machine that looks lived in (AgentFeatureTests: RealismTests, LivedInMachineTests) ----------
 
 def test_shell_builtins_are_not_program_files_and_system_files_are_old():

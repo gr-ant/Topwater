@@ -511,7 +511,7 @@ internal static partial class Git
                     foreach (var n in fresh)
                         if (Similarity(src[r.Old!], dst[n.New!]) is var s and >= 50) scores.Add((s, r, n));
                 var used = new HashSet<Change>(ReferenceEqualityComparer.Instance);
-                foreach (var (s, r, n) in scores.OrderByDescending(x => x.S).ThenBy(x => x.N.New, ByBytes).ThenBy(x => x.R.Old, ByBytes))
+                foreach (var (s, r, n) in scores.OrderByDescending(x => x.S).ThenBy(x => x.N.New!, ByBytes).ThenBy(x => x.R.Old!, ByBytes))
                 {
                     if (used.Contains(r) || used.Contains(n)) continue;
                     used.Add(r);

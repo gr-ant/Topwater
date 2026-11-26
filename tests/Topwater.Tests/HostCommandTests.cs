@@ -50,6 +50,19 @@ public class HostCommandTests
     }
 
     [Fact]
+    public async Task DisposePutsBackWhatTheNameRanBefore()
+    {
+        if (!File.Exists("/bin/echo") && !File.Exists("/usr/bin/echo")) return;
+        var sh = new Shell();
+        var builtin = await Out(sh, "git --version; git --help | head -1");
+        using (sh.RegisterHostCommand("git", "echo")) Assert.Equal("hi\n", await Out(sh, "git hi"));
+        Assert.Equal(builtin, await Out(sh, "git --version; git --help | head -1"));
+        sh.RegisterHostCommand("hostecho", "echo").Dispose();
+        Assert.Equal(127, (await sh.RunAsync("hostecho hi")).ExitCode);
+        Assert.False(sh.Fs.Exists("/usr/bin/hostecho"));
+    }
+
+    [Fact]
     public void MissingProgramFailsAtRegistration() =>
         Assert.Throws<FileNotFoundException>(() => new Shell().RegisterHostCommand("definitely-not-a-real-program-xyz"));
 

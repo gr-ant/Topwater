@@ -44,6 +44,7 @@ public sealed class HostCommand : IDisposable
     readonly List<string> _shared; // every directory mirrored to disk: the workspace first, then the extras
 
     readonly string _privateTmp;
+    internal Action? Restore; // puts back what the name ran before RegisterHostCommand
 
     /// <summary>The mirror of "/" on disk for this program.</summary>
     public string Root { get; }
@@ -64,6 +65,8 @@ public sealed class HostCommand : IDisposable
 
     public void Dispose()
     {
+        Restore?.Invoke();
+        Restore = null;
         foreach (var dir in new[] { Root, _privateTmp })
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
@@ -435,13 +438,13 @@ public static class HostCommandExtensions
 {
     /// <summary>
     /// Exposes a real host program to the agent as <paramref name="name"/>. Read the warning on <see cref="HostCommand"/>
-    /// first: this runs a real program with the agent's arguments. Dispose the result to remove its mirror directory.
+    /// first: this runs a real program with the agent's arguments. Dispose the result to remove its mirror directory and put back what <paramref name="name"/> ran before.
     /// </summary>
     public static HostCommand RegisterHostCommand(this Shell shell, string name, string? program = null, HostCommandOptions? options = null)
     {
         options ??= new HostCommandOptions();
         var cmd = new HostCommand(shell, name, program ?? name, options);
-        shell.Register(name, cmd.RunAsync, options.Description ?? $"{name} (host program)");
+        cmd.Restore = shell.RegisterReplacing(name, cmd.RunAsync, options.Description ?? $"{name} (host program)");
         return cmd;
     }
 }

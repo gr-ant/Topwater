@@ -80,7 +80,7 @@ from topwater import WebPolicy                         # web access: curl and wg
 shell.allow_web(WebPolicy(domains=["api.github.com", "*.wikipedia.org"]))
 
 from topwater.host import bubblewrap, register_host_command   # real host programs
-duckdb = register_host_command(shell, "duckdb", launcher=bubblewrap())   # duckdb.close() removes its folder
+duckdb = register_host_command(shell, "duckdb", launcher=bubblewrap())   # duckdb.close() removes its folder and the command
 ```
 
 All of these do real work when the agent calls them. [Your programs](../docs/programs.md) says what each guarantees.

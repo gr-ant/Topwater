@@ -1154,10 +1154,34 @@ internal static partial class Builtins
         });
         shell.Register("free", ctx =>
         {
-            bool h = ctx.Args.Any(x => x.Contains('h'));
-            ctx.Stdout.Write(h
-                ? "               total        used        free      shared  buff/cache   available\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nSwap:          2.0Gi          0B       2.0Gi\n"
-                : "               total        used        free      shared  buff/cache   available\nMem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("free"));
+            const string binary = "bkmg\u0001\u0002", decimalUnits = "_\u0003\u0004\u0005\u0006\u0007"; // option keys by power: --tebi is \u0001, --kilo \u0003
+            var units = (binary + decimalUnits[1..]).Where(a.Has).ToList();
+            // shortcut: a repeated flag (-m -m) is counted once, real free rejects it too
+            if (units.Count > 1) throw new ShellException(CommandSpec.Message("free", "multipleUnits"));
+            char unit = units.Count > 0 ? units[0] : 'k';
+            bool si = a.Has('\u000e') || decimalUnits.Contains(unit), human = a.Has('h'), wide = a.Has('w');
+            long b = si ? 1000 : 1024;
+            int power = binary.Contains(unit) ? binary.IndexOf(unit) : decimalUnits.IndexOf(unit);
+            string Size(long kb)
+            {
+                long n = kb * 1024;
+                if (!human) return (n / (long)Math.Pow(b, power)).ToString(CultureInfo.InvariantCulture);
+                if (n < b) return n + "B";
+                for (int i = 1; ; i++)
+                {
+                    double v = n / Math.Pow(b, i);
+                    string suffix = "KMGTPE"[i - 1] + (si ? "" : "i");
+                    if (v < 10) return v.ToString("0.0", CultureInfo.InvariantCulture) + suffix;
+                    if (v < b || i == 6) return (long)v + suffix;
+                }
+            }
+            string Row(string label, IEnumerable<string> cells) => label.PadRight(8) + string.Concat(cells.Select(c => c.PadLeft(12))) + "\n";
+            long[] mem = [8014880, 1992344, 3984512, 12288, 180224, 2020800, 5748660], swap = [2097148, 0, 2097148]; // kB: total used free shared buffers cache available
+            long[] shown = wide ? mem : [mem[0], mem[1], mem[2], mem[3], mem[4] + mem[5], mem[6]];
+            ctx.Stdout.Write(Row("", wide ? ["total", "used", "free", "shared", "buffers", "cache", "available"] : ["total", "used", "free", "shared", "buff/cache", "available"])
+                + Row("Mem:", shown.Select(Size)) + Row("Swap:", swap.Select(Size))
+                + (a.Has('t') ? Row("Total:", swap.Select((s, i) => Size(mem[i] + s))) : ""));
             return 0;
         });
         shell.Register("nproc", ctx => { ctx.Stdout.WriteLine("4"); return 0; });

@@ -1605,13 +1605,45 @@ def _uptime(ctx):
               else f" {utc_now():%H:%M:%S} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01")
 
 
+_FREE_MEM = (8014880, 1992344, 3984512, 12288, 180224, 2020800, 5748660)  # kB: total used free shared buffers cache available
+_FREE_SWAP = (2097148, 0, 2097148)
+_FREE_BINARY, _FREE_DECIMAL = "bkmg\x01\x02", "_\x03\x04\x05\x06\x07"  # option keys by power: --tebi is \x01, --kilo \x03
+
+
 def _free(ctx):
-    human = any("h" in x for x in ctx.args)
-    ctx.stdout.write(
-        "               total        used        free      shared  buff/cache   available\n"
-        + ("Mem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nSwap:          2.0Gi          0B       2.0Gi\n"
-           if human else
-           "Mem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n"))
+    a = Args.parse(ctx.args, COMMANDS["free"])
+    units = [c for c in _FREE_BINARY + _FREE_DECIMAL[1:] if a.has(c)]
+    if len(units) > 1:  # shortcut: a repeated flag (-m -m) is counted once, real free rejects it too
+        raise ShellError(spec_message("free", "multipleUnits"))
+    unit = units[0] if units else "k"
+    si = a.has("\x0e") or unit in _FREE_DECIMAL
+    base = 1000 if si else 1024
+    power = _FREE_BINARY.find(unit) if unit in _FREE_BINARY else _FREE_DECIMAL.index(unit)
+
+    def size(kb):
+        n = kb * 1024
+        if not a.has("h"):
+            return str(n // base ** power)
+        if n < base:
+            return f"{n}B"
+        for i, letter in enumerate("KMGTPE", 1):
+            v, suffix = n / base ** i, letter + ("" if si else "i")
+            if v < 10:
+                return f"{v:.1f}{suffix}"
+            if v < base or letter == "E":
+                return f"{int(v)}{suffix}"
+
+    def row(label, cells):
+        return label.ljust(8) + "".join(c.rjust(12) for c in cells) + "\n"
+
+    t, used, free, shared, buffers, cache, avail = _FREE_MEM
+    wide = a.has("w")
+    out = row("", ["total", "used", "free", "shared"] + (["buffers", "cache"] if wide else ["buff/cache"]) + ["available"])
+    out += row("Mem:", [size(x) for x in ((t, used, free, shared, buffers, cache, avail) if wide else (t, used, free, shared, buffers + cache, avail))])
+    out += row("Swap:", [size(x) for x in _FREE_SWAP])
+    if a.has("t"):
+        out += row("Total:", [size(m + s) for m, s in zip(_FREE_MEM, _FREE_SWAP)])
+    ctx.stdout.write(out)
 
 
 def register(shell) -> None:

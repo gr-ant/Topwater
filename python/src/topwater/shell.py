@@ -646,6 +646,25 @@ class Shell:
         register_targets(self, targets)
         return self
 
+    def _register_replacing(self, name: str, handler: Handler, description: str):
+        """Registers handler and returns what puts back the command it replaced (none: unregisters), unless something
+        else has been registered under the name since. HostCommand.close uses it."""
+        previous = self.commands.get(name)
+        builtin = self._builtin_names is not None and name in self._builtin_names
+        self.register_command(name, handler, description)
+
+        def restore() -> None:
+            now = self.commands.get(name)
+            if now is None or now.handler is not handler:
+                return
+            if previous is None:
+                self.unregister(name)
+                return
+            self.commands[name] = previous
+            if builtin:
+                self._builtin_names.add(name)
+        return restore
+
     def unregister(self, name: str) -> bool:
         with self.fs.as_root():
             for d in ("/usr/bin/", "/bin/"):

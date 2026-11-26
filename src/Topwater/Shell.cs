@@ -484,6 +484,22 @@ public sealed partial class Shell
         return this;
     }
 
+    /// <summary>Registers <paramref name="handler"/> and returns what puts back the command it replaced (none: unregisters),
+    /// unless something else has been registered under the name since. HostCommand.Dispose uses it.</summary>
+    internal Action RegisterReplacing(string name, CommandHandler handler, string description)
+    {
+        _commands.TryGetValue(name, out var previous);
+        bool builtin = _builtinNames?.Contains(name) == true;
+        Register(name, handler, description);
+        return () =>
+        {
+            if (!_commands.TryGetValue(name, out var now) || now.Handler != handler) return;
+            if (previous is null) { Unregister(name); return; }
+            _commands[name] = previous;
+            if (builtin) _builtinNames!.Add(name);
+        };
+    }
+
     public bool Unregister(string name)
     {
         using (Fs.AsRoot())

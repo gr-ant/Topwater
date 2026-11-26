@@ -234,4 +234,10 @@ describe('agent features', () => {
     expect((await sh.run('touch f; now=$(date +%s); m=$(date -r f +%s); d=$(( now - m )); if [ $d -ge -2 ] && [ $d -le 2 ]; then echo ok; else echo "skew=$d"; fi')).stdout).toBe('ok\n');
     expect((await sh.run("h1=$(date -u +%H); h2=$(uptime | grep -oE '^ *[0-9]{2}' | tr -d ' '); [ \"$h1\" = \"$h2\" ] && echo ok || echo \"$h1 vs $h2\"")).stdout).toBe('ok\n');
   });
+
+  it('free prints the same memory in the unit asked for', async () => {
+    const sh = new Shell();
+    expect(await out(sh, "free -m | sed -n 2p; free -b | sed -n 3p; free -h | sed -n 2p; free -h --si | sed -n 2p; free -g -tw | tail -1; free --kilo | sed -n 3p"))
+      .toBe('Mem:            7827        1945        3891          12        2149        5613\nSwap:     2147479552           0  2147479552\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nMem:            8.2G        2.0G        4.1G         12M        2.3G        5.9G\nTotal:             9           1           5\nSwap:        2147479           0     2147479\n');
+  });
 });

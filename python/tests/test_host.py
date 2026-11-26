@@ -45,6 +45,19 @@ class HostCommandTests(unittest.TestCase):
         self.assertNotIn(str(git.root), r.stdout + r.stderr)
         self.assertEqual("/home/agent/proj\n", out(sh, "git rev-parse --show-toplevel"))
 
+    @unittest.skipUnless(shutil.which("echo"), "echo not installed")
+    def test_close_puts_back_what_the_name_ran_before(self):
+        sh = Shell()
+        builtin = out(sh, "git --version; git --help | head -1")
+        git = register_host_command(sh, "git", "echo")
+        self.assertEqual("hi\n", out(sh, "git hi"))
+        git.close()
+        self.assertEqual(builtin, out(sh, "git --version; git --help | head -1"))
+        other = register_host_command(sh, "hostecho", "echo")
+        other.close()
+        self.assertEqual(127, sh.run("hostecho hi").exit_code)
+        self.assertFalse(sh.fs.exists("/usr/bin/hostecho"))
+
     def test_missing_program_fails_at_registration(self):
         with self.assertRaises(FileNotFoundError):
             register_host_command(Shell(), "definitely-not-a-real-program-xyz")

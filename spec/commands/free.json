@@ -4,5 +4,30 @@
   "category": "system",
   "summary": "Display memory usage",
   "version": "free from procps-ng 4.0.4",
-  "parser": "custom"
+  "parser": "args",
+  "options": [
+    {"short": "b", "long": ["bytes"], "description": "give sizes in bytes"},
+    {"short": "k", "long": ["kibi"], "description": "give sizes in units of 1024 bytes (the default)"},
+    {"short": "m", "long": ["mebi"], "description": "give sizes in units of 1024^2 bytes"},
+    {"short": "g", "long": ["gibi"], "description": "give sizes in units of 1024^3 bytes"},
+    {"long": ["tebi"], "key": "\u0001", "description": "give sizes in units of 1024^4 bytes"},
+    {"long": ["pebi"], "key": "\u0002", "description": "give sizes in units of 1024^5 bytes"},
+    {"long": ["kilo"], "key": "\u0003", "description": "give sizes in units of 1000 bytes"},
+    {"long": ["mega"], "key": "\u0004", "description": "give sizes in units of 1000^2 bytes"},
+    {"long": ["giga"], "key": "\u0005", "description": "give sizes in units of 1000^3 bytes"},
+    {"long": ["tera"], "key": "\u0006", "description": "give sizes in units of 1000^4 bytes"},
+    {"long": ["peta"], "key": "\u0007", "description": "give sizes in units of 1000^5 bytes"},
+    {"short": "h", "long": ["human"], "description": "pick a readable unit for each size (B, Ki, Mi, Gi, ...)"},
+    {"long": ["si"], "key": "\u000e", "description": "count in powers of 1000 instead of 1024"},
+    {"short": "t", "long": ["total"], "description": "add a line summing memory and swap"},
+    {"short": "w", "long": ["wide"], "description": "show buffers and cache as separate columns"},
+    {"short": "l", "long": ["lohi"], "description": "accepted and ignored", "ignored": true},
+    {"short": "L", "long": ["line"], "description": "accepted and ignored", "ignored": true},
+    {"short": "v", "long": ["committed"], "description": "accepted and ignored", "ignored": true},
+    {"short": "s", "long": ["seconds"], "arg": "N", "description": "accepted and ignored: prints once", "ignored": true},
+    {"short": "c", "long": ["count"], "arg": "N", "description": "accepted and ignored: prints once", "ignored": true}
+  ],
+  "messages": {
+    "multipleUnits": "Multiple unit options don't make sense."
+  }
 }
