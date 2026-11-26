@@ -148,6 +148,12 @@ def spec_message(command: str, key: str, /, **values: str) -> str:
     return spec_format(spec.messages[key] if spec and key in spec.messages else DEFAULT_MESSAGES[key], **values)
 
 
+def spec_sub_message(command: str, sub: str, key: str, /, **values: str) -> str:
+    """A subcommand's message `key` (else the command's, else the shared default), filled in."""
+    s = COMMANDS[command].subcommands.get(sub)
+    return spec_format(s.messages[key], **values) if s and key in s.messages else spec_message(command, key, **values)
+
+
 def quote(s: str) -> str:
     """A file name in a GNU message: as is when plain, else shell-quoted like quote_always."""
     plain = s and s[0] not in "~#" and not any(c < " " or c == "\x7f" or c in " !\"$&'()*;<>?[\\^`|=:" for c in s)
@@ -229,7 +235,7 @@ def unescape(s: str, keep_unknown: bool = False, echo: bool = False) -> str:
 
 
 def register_all(shell) -> None:
-    from . import archive, awk, binary, documents, files, jq, more, text
+    from . import archive, awk, binary, documents, files, git, jq, more, text
 
     files.register(shell)
     text.register(shell)
@@ -241,6 +247,7 @@ def register_all(shell) -> None:
     documents.register(shell)
     binary.register(shell)
     archive.register(shell)
+    git.register(shell)
 
 
 # ---------- shell builtins ----------

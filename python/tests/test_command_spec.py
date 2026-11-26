@@ -87,3 +87,30 @@ def test_options_outside_the_spec_are_rejected(name):
     for arg in sorted((letters | others) - accepted):
         r = sh.run(f"cd /tmp && {_q(name)} {arg} </dev/null")
         assert "invalid option" in r.stderr or "unrecognized option" in r.stderr, (arg, r.stderr)
+
+
+SUBCOMMANDS = sorted((name, sub) for name, c in SPEC.items() for sub, s in c.get("subcommands", {}).items() if "py" in s.get("ports", ["py"]))
+
+
+@pytest.mark.parametrize("name,sub", SUBCOMMANDS)
+def test_subcommands_come_from_the_spec(name, sub):
+    """Summary and help come from the table; every option listed for this port is accepted, others are refused."""
+    from topwater._spec import COMMANDS
+
+    s = SPEC[name]["subcommands"][sub]
+    table = COMMANDS[name].subcommands[sub]
+    assert table.summary == s["summary"]
+    sh = Shell()
+    assert sh.run(f"{name} help {sub}").stdout == table.help
+    assert sh.run(f"{name} {sub} --help").stdout == table.help
+    if s.get("unsupported"):
+        r = sh.run(f"{name} {sub}")
+        assert r.exit_code == 128 and r.stderr.startswith("fatal: ")
+        return
+    for arg, valued in _options(s):
+        r = Shell().run(f"cd /tmp && {name} init -q r && cd r && {name} {sub} {arg}{' 1' if valued else ''} </dev/null")
+        assert "unknown option" not in r.stderr and "unknown switch" not in r.stderr, (sub, arg, r.stderr)
+    if sub in ("help", "version", "rev-parse", "stash"):
+        return  # these read their own arguments
+    r = Shell().run(f"cd /tmp && {name} init -q r && cd r && {name} {sub} --no-such-option </dev/null")
+    assert r.stderr == f"error: unknown option `no-such-option'\n{table.help}" and r.exit_code == 129

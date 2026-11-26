@@ -26,6 +26,9 @@ class HostCommandTests(unittest.TestCase):
         sh = Shell()
         git = register_host_command(sh, "git", env=GIT_ENV)
         self.addCleanup(git.close)
+        # the host program replaces the built-in git, --version included
+        import subprocess
+        self.assertEqual(subprocess.run(["git", "version", "--build-options"], capture_output=True, text=True).stdout, out(sh, "git version --build-options"))
         out(sh, "mkdir proj && cd proj && git init -q -b main && echo hello > a.txt && git add a.txt && git commit -q -m first")
         self.assertEqual(" M a.txt\n", out(sh, "echo world >> a.txt && git status --short"))
         self.assertEqual("2\n", out(sh, "git commit -qam second && git log --oneline | wc -l"))
