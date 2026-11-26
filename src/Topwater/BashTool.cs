@@ -21,7 +21,7 @@ public static class BashTool
     /// </summary>
     public static string DescriptionFor(Shell shell)
     {
-        if (shell.Web?.Policy is not { } p || ReferenceEquals(p, WebSession.NoNetwork) || p.Domains.Count == 0) return Description;
+        if (shell.Web is not { IsReplay: false, Policy: var p } || ReferenceEquals(p, WebSession.NoNetwork) || p.Domains.Count == 0) return Description;
         var sites = string.Join(", ", p.Domains.Take(20).Select(d => d.Trim())) + (p.Domains.Count > 20 ? $", and {p.Domains.Count - 20} more" : "");
         var methods = string.Join(", ", p.Methods.Select(m => m.ToUpperInvariant()));
         return Description.Replace(NoNetwork, $"Python and package installation are not; `curl` and `wget` reach only these sites (methods: {methods}): {sites}. ");

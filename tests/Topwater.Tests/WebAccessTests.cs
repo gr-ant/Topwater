@@ -520,6 +520,15 @@ public class WebAccessTests
     }
 
     [Fact]
+    public async Task AWildcardNeverMatchesAnAddress()
+    {
+        var handler = new FixtureHandler();
+        var r = await new Shell().AllowWeb(new WebPolicy { Domains = ["*.2.3.4"], Handler = handler }).RunAsync("curl -s https://1.2.3.4/; echo $?");
+        Assert.Equal("7\n", r.Stdout);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public void HandlersThatKeepCookiesAreRefused() =>
         Assert.Throws<ArgumentException>(() => new Shell().AllowWeb(new WebPolicy { Handler = new HttpClientHandler { AllowAutoRedirect = false } }));
 
@@ -535,6 +544,9 @@ public class WebAccessTests
         Assert.Equal(expected, BashTool.DescriptionFor(sh));
         Assert.Equal(expected, sh.AsAIFunction().Description);
         Assert.Equal("Mine.", sh.AsAIFunction("Mine.").Description);
+        var rec = sh.StartRecording();
+        rec.Stop();
+        Assert.Equal(BashTool.Description, BashTool.DescriptionFor(rec.Recording.CreateShell())); // a replay reaches no site
         sh.AllowWeb(new WebPolicy { Domains = [.. Enumerable.Range(1, 23).Select(i => $"s{i}.test")] });
         Assert.EndsWith("s20.test, and 3 more. Read Word, Excel, PowerPoint and HTML files with `to-markdown FILE`. " +
             "Other programs on this machine are live interfaces to this application's systems, so their actions are real: run `help` to list them and `<program> --help` for usage.",

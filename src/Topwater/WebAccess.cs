@@ -247,6 +247,8 @@ internal sealed class WebSession
     int _replayAt, _total, _thisCall;
 
     public WebPolicy Policy { get; }
+    /// <summary>Serves a recording's responses instead of the network.</summary>
+    public bool IsReplay => _replay != null;
 
     public WebSession(WebPolicy policy, IReadOnlyList<WebExchange>? replay = null)
     {
@@ -305,7 +307,7 @@ internal sealed class WebSession
     }
 
     bool NameListed(string host) => _domains.Any(d => d.Wild ? host.EndsWith(d.Name, StringComparison.Ordinal) : host == d.Name);
-    bool Allowed(WebUrl url) => _domains.Any(d => (d.Wild ? url.Host.EndsWith(d.Name, StringComparison.Ordinal) : url.Host == d.Name)
+    bool Allowed(WebUrl url) => _domains.Any(d => (d.Wild ? url.Ip == null && url.Host.EndsWith(d.Name, StringComparison.Ordinal) : url.Host == d.Name)
         && (d.Port is { } p ? p == url.Port : url.DefaultPort));
 
     /// <summary>The credential for this URL's host and port: "host:port", or "host" on the scheme's default port.</summary>
