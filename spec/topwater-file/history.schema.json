@@ -40,7 +40,7 @@
         "stderr": { "type": "string" },
         "exitCode": { "type": "integer" },
         "trailer": { "type": "string", "description": "The note a limit added (time limit, output cut), when there was one." },
-        "elapsedMs": { "type": "number", "minimum": 0, "description": "Wall time; informational, never compared." },
+        "elapsedMs": { "type": "number", "minimum": 0, "maximum": 1000000000000, "description": "Wall time; informational, never compared." },
         "time": { "$ref": "manifest.schema.json#/$defs/time", "description": "The shell's clock when the call started (the virtual clock on a deterministic shell)." },
         "files": {
           "type": "array", "items": { "$ref": "manifest.schema.json#/$defs/path" }, "uniqueItems": true,

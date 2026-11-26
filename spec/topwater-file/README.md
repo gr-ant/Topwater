@@ -52,3 +52,17 @@ file; the header's limits can only lower them):
 - `history.jsonl` read line by line as it inflates, at most 2 x MaxStringBytes bytes and MaxExtractEntries + 1 lines
   (header and calls; blank lines count). An old `.jsonl` recording has the same line cap;
 - an old recording's side-car snapshot names: segments of `A-Z a-z 0-9 . _ -` separated by `/`, no segment of only dots.
+- with history, `manifest.json` must be the same machine as the last checkpoint (the same JSON, whatever its key order
+  or spacing), or the file is refused: a reader of either must see one machine;
+- `history.jsonl` has no byte order mark; a call's `index` is a whole number from 0, `elapsedMs` a number from 0 to
+  10^12, `files` a list of paths, times ISO 8601 date and time (`2026-03-04T05:06:07Z`; no zone means UTC).
+
+A reader may check checkpoints after the first against the counts above without building them, and build each when a
+replay first needs it; anything wrong inside one (a blob, a path, the session) is then reported at that point.
+
+## `files`
+
+A call's `files` is informational: the paths whose entry (type, mode, owner, mtime, content or link) differs between
+the machine before and after the call, as that port sees it. It differs by port where machines do: on a shell without
+a virtual clock every write moves mtimes, so parent directories show up; on a deterministic shell the clock stands
+still and a write that leaves content as it was lists nothing. Never compare it across ports.
