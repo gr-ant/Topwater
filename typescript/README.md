@@ -125,8 +125,8 @@ where the ports' commands differ, so does the output.
 | `src/shell.ts` | the interpreter: expansion, redirections, pipelines, functions, traps, limits, the `Shell` API |
 | `src/vfs.ts` | the in-memory filesystem, permissions, the disk cap |
 | `src/arith.ts`, `src/glob.ts`, `src/regex.ts`, `src/format.ts`, `src/bytes.ts` | arithmetic, patterns, POSIX regex, printf/strftime, binary-safe text |
-| `src/commands/*.ts` | built-ins and programs (`builtins`, `files`, `text`, `sed`, `awk`, `jq*`, `binary`, `archive`) |
-| `src/inflate.ts`, `src/compress.ts`, `src/md5.ts` | a synchronous inflate, compression via `CompressionStream`, MD5 (no `node:zlib`/`node:crypto`) |
+| `src/commands/*.ts` | built-ins and programs (`builtins`, `files`, `text`, `sed`, `awk`, `jq*`, `binary`, `archive`, `git`, `gitcore`) |
+| `src/inflate.ts`, `src/compress.ts`, `src/md5.ts`, `src/sha1.ts` | a synchronous inflate, compression via `CompressionStream` and a small synchronous zlib for git, MD5, SHA-1 (no `node:zlib`/`node:crypto`) |
 | `src/tools.ts` | schema-described tools and MCP mounting |
 | `src/snapshot.ts`, `src/recording.ts` | machines and recordings as `.topwater` files (and loading the older recording format) |
 | `browser/` | the Web Worker host (`worker.ts`), the page-side `TopwaterSession` (`session.ts`), the demo pages (`demo/`: the terminal and the recording viewer) and the viewer's worker (`replay-worker.ts`, `diff.ts`) |

@@ -54,6 +54,7 @@ State persists between tool calls: working directory, variables, functions, alia
 | Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
 | Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
 | System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `sudo` `su` `apt` `apt-get` `apt-cache` `dpkg` (these four only say that nothing can be installed; see below) |
+| Version control | `git`: see [git](#git) |
 
 `help` lists everything, including your commands. Standard tools answer `--version` and `--help` the way the
 real ones do. The full list, with each command's options and the ports that support them, is in
@@ -81,6 +82,60 @@ argument reduction (not GNU's `libmath.b`) and are accurate to the requested sca
 of GNU at large scales. One `bc` invocation is stopped after 5 s and any single number is capped at 100000
 digits, so `while(1){}`, `9^9^9` and `scale=100000; sqrt(2)` end with an error instead of hanging; `read()` is
 not supported.
+
+## git
+
+`git` is Topwater's own implementation of git 2.43's common commands, for repositories in the machine. There is no
+network: `clone`, `fetch`, `pull`, `push`, `remote` and `submodule` answer that, and less common local commands
+(`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are not available. `git help` lists what is there and
+`git help <command>` describes each one; options are in [`spec/commands/git.json`](../spec/commands/git.json).
+
+| | |
+|---|---|
+| Work | `init` `status` (`-s`, `-b`, `--porcelain`, `-u`) `add` (`-A`, `-u`, `-f`, `-n`) `rm` (`--cached`, `-r`) `mv` `commit` (`-m`, `-F`, `-a`, `--amend`, `--no-edit`, `--allow-empty`, `--author`, `--date`, paths) `restore` (`--staged`, `--source`) `reset` (`--soft`, `--mixed`, `--hard`, paths) `stash` (`push`, `save`, `list`, `show`, `pop`, `apply`, `drop`, `clear`, `-u`) `clean` (`-n`, `-f`, `-d`, `-x`, `-X`) |
+| History | `log` (`--oneline`, `-n`/`-<n>`, `--stat`, `-p`, `--format`/`--pretty` with `%H %h %s %b %an %ae %ad %d` and more, `--graph` for linear history, `--all`, `--author`, `--grep`, `--since`, `a..b`, `-- paths`) `show` (commits, tags, `rev:path`) `diff` (work tree, `--cached`, commits, `a..b`, `a...b`, `--stat`, `--name-only`, `--name-status`, `--numstat`, `-U<n>`, `--quiet`) |
+| Branches | `branch` (`-d`, `-D`, `-m`, `-v`, `--show-current`) `checkout` (`-b`, `-B`, `--detach`, `-- paths`) `switch` (`-c`, `-C`, `--detach`, `-`) `merge` (fast-forward, three-way with conflict markers, `--no-ff`, `--ff-only`, `--abort`, `--continue`) `tag` (`-a`, `-m`, `-d`, `-l`) |
+| Plumbing | `rev-parse` `rev-list` `ls-files` `cat-file` `config` (`--global`, `--local`, `--get`, `--unset`, `--list`), `git -C dir`, `git -c name=value` |
+
+Revisions: `HEAD`, `@`, branch and tag names, full or short ids, `~n`, `^n`, `^{tree}`, `rev:path`, `@{-1}`.
+`.gitignore` files (with `!`, `dir/`, `**` and anchored patterns) and `.git/info/exclude` apply.
+
+**Format.** The repository is git's own: zlib-compressed loose objects named by their SHA-1, a version 2 index, loose
+refs (packed-refs are read and updated), reflogs for `HEAD` and branches, and stash entries in `refs/stash`'s reflog.
+Real git reads what Topwater writes (`git fsck --strict` is clean) and Topwater reads what real git writes, except
+packfiles: a repository whose objects were packed (by `git gc` or a clone) gets a clear error.
+
+**Identity.** As in real git, a commit needs an email: from `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL`, `user.email`
+(`git config --global` writes `~/.gitconfig`) or `EMAIL`; otherwise `git commit` fails with git's "Please tell me who
+you are" message. The name defaults to the user's name. To preset an identity, the host sets those environment
+variables on the shell or writes `~/.gitconfig` into the machine before the agent starts, which saves the agent a turn:
+
+```csharp
+shell.Fs.WriteAllText("/home/agent/.gitconfig", "[user]\n\tname = Agent\n\temail = agent@example.com\n[init]\n\tdefaultBranch = main\n");
+```
+```python
+shell.fs.write_text("/home/agent/.gitconfig", "[user]\n\tname = Agent\n\temail = agent@example.com\n[init]\n\tdefaultBranch = main\n")
+```
+```ts
+shell.fs.writeText('/home/agent/.gitconfig', '[user]\n\tname = Agent\n\temail = agent@example.com\n[init]\n\tdefaultBranch = main\n');
+```
+
+(or set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the shell's
+environment). Without `init.defaultBranch` the first branch is `master`, as in git 2.43. Commit times come from the
+shell's clock, or `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`. In C# and TypeScript the clock is the virtual one with
+`StartTime`, so recordings replay to the same commit ids; Python has no virtual clock, so its ids repeat only with
+those variables set. Each loose object takes a filesystem block, so `du` shows about 4 KB per object (10,000 small
+commits read as about 120 MB).
+
+**Limits.** Objects larger than the string limit, histories over a million commits, trees nested over 256 deep and
+diffs that would take too long (they fall back to "all lines changed") are bounded, and long walks stop at the call's
+time limit. Everything under `.git` is untrusted: objects are checked against their ids, the index against its
+checksum, no path inside `.git` is followed through a symbolic link, and tree or index entries named `..`, `.git` or
+containing `/` are refused, so a hostile repository cannot write outside its work tree.
+
+**Differences from real git.** No packfiles, submodules, hooks, editor, pager or colors; reflogs are written but
+there is no `reflog` command or `@{n}`; `--graph` draws linear history only; when a change could be placed at several equal
+positions, diffs place it at the lowest one, where real git's indent heuristic sometimes picks another.
 
 ## Your own commands
 
@@ -465,8 +520,8 @@ the private folder and returns the command line to run.
 Give the model one tool: `BashTool.Name`, `BashTool.Description`,
 `BashTool.InputSchemaJson` and `BashTool.ExecuteAsync(shell, command)`.
 
-The default description tells the model the truth: it is in a sandboxed shell, Python, git and the network are
-not available, and your programs are live. In testing this beat both pretending to be an ordinary machine and
+The default description tells the model the truth: it is in a sandboxed shell, git works on local repositories,
+Python and the network are not available, and your programs are live. In testing this beat both pretending to be an ordinary machine and
 announcing "this is a simulation" (see the README).
 
 ## Snapshots

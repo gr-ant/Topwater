@@ -25,6 +25,8 @@ output = await topwater.execute_tool(shell, "orders --status open | jq length")
 - Limits (all on by default): `Shell(max_call_duration=120, max_file_system_bytes=128 << 20, max_string_bytes=32 << 20, ...)`
 - Real programs, HTTP APIs and MCP servers: `topwater.host.register_host_command` (optionally under `bubblewrap()`),
   `topwater.api.register_api`, `topwater.mcp.mount_mcp`, `topwater.tools.register_tools`
+- `git` for local repositories (`commands/git.py`, formats in `commands/gitcore.py`); preset an identity with
+  `shell.fs.write_text("/home/agent/.gitconfig", ...)` or `GIT_AUTHOR_*`/`GIT_COMMITTER_*` in `shell.env`
 - Web terminal: `PYTHONPATH=src python -m topwater.web --demo`, then open http://127.0.0.1:8000
 - Examples with a real model: `examples/`
 - Tests: `python -m pytest`. The shared cases live in `../tests/corpus` (recorded from real bash and GNU tools) and run via `tests/test_corpus.py`; known differences are in `../tests/corpus/skip/python.json`.

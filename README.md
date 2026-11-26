@@ -223,8 +223,11 @@ and write it, and still read the older snapshot zips and `.jsonl` recordings.
 - **More than 100 standard commands,** including `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff` and `tar`.
 - **An in-memory filesystem** laid out like Ubuntu, with a regular user who cannot `sudo`.
 - **`to-markdown`** for reading Word, Excel, PowerPoint and HTML files.
+- **`git`** for local repositories: commit, branch, diff, merge with conflict markers, stash. Its `.git` is the real
+  on-disk format, so a repository carries over to real git through snapshots and container exports, and back for
+  repositories that are not packed.
 
-There is no Python, git or network access unless you add it. A missing command fails with a message that points the
+There is no Python or network access unless you add it (so no `git clone`, `fetch` or `push`). A missing command fails with a message that points the
 model at `help`. Background jobs and job control are not supported; the
 [reference](docs/reference.md#not-supported) has the full list.
 
