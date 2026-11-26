@@ -67,7 +67,9 @@ no progress meter, a shorter `wget` report (no Resolving/Connecting lines, dots 
 only the request and response headers, `-k` / `--no-check-certificate` are accepted and ignored (certificates are
 always checked), and so are the TLS and HTTP version options (`--tlsv1.2`, `--http1.1`, ...), progress options
 (`--no-progress-meter`, `-#`, wget `--show-progress`) and wget `-t`. `curl --retry` waits as curl does (1 second,
-doubling, or longer when the server's `Retry-After` asks for it) and every wait counts toward the call's time limit;
+doubling, or longer when the server's `Retry-After` asks for it) and every wait counts toward the call's time limit
+(Python has no virtual clock yet, so there the waits are real, in a replay too: replaying a recording that retried takes
+as long as the recording did; a clock that skipped only these waits would put `date` and file times out of step);
 each try is a request under the policy's limits, and a request the policy refuses with a reason (`ExplainBlocked`) is
 not sent again. `-w` times come from the shell's clock and are measured around the whole request: `time_namelookup`,
 `time_connect`, `time_appconnect` and `time_pretransfer` read 0, and on a virtual clock (`StartTime`) every time
@@ -140,6 +142,10 @@ built from the recording (`CreateShell`, `ShellAtAsync`, `ReplayAsync`, the view
 and never touches the network; a request that was not recorded fails with `Topwater replay: GET URL is not in the
 recording`, which shows up as a difference.
 The format is in [spec/topwater-file](../spec/topwater-file/README.md#web-exchanges).
+
+Expected difference: a recording made before `curl` and `wget` existed (0.1.0-preview.2 and earlier), where the agent
+tried one, recorded `command not found` (127). It now replays as an offline machine answers, `Could not resolve host`
+(curl 6, wget 4), and shows up as a difference on those calls. Re-record, or accept them.
 
 ## In the browser
 
