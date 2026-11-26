@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from ._spec import DIAGNOSTICS, diagnostic
+from .bytetext import rejoin
 
 
 class ParseError(Exception):
@@ -600,7 +601,7 @@ class Lexer:
         if i >= len(s):
             raise ParseError(DIAGNOSTICS["eofSingleQuote"])
         self.i = i + 1
-        return "".join(out)
+        return rejoin("".join(out))
 
     def _skip_to_quote(self, at: int, out: list) -> int:
         """bash strings cannot hold a NUL: $'a\\0b' is just "a"."""

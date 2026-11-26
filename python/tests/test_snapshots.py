@@ -285,6 +285,26 @@ echo setup done
         self.assertEqual(self.CROSS_EXPECTED, loaded.run(self.CROSS_PROBE).stdout)
         self.assertEqual(self.CROSS_EXPECTED, Shell.load(FIXTURES / "from-python.zip").run(self.CROSS_PROBE).stdout)
 
+    # escaped bytes (no UTF-8) in a variable, an alias, a file name and $_, and valid UTF-8 made from escapes; snapshots/bytes-from-*.zip
+    # are this setup saved by each port (TOPWATER_WRITE_FIXTURES=1 writes this port's again)
+    BYTES_SETUP = r"""x=$(printf 'a\xffb'); OK=$'\xe2\x9c\x93'; alias raw=$'echo \xfe'; touch $'f\xfd.txt' $'caf\xc3\xa9.txt'; echo $'last\xfc'"""
+    BYTES_CHECK = r"""printf %s "$_" | od -An -tx1; printf %s "$x" | od -An -tx1; echo "$OK"; ls *.txt | od -An -tx1; alias raw | od -An -tx1"""
+
+    def test_raw_bytes_in_the_session_survive_every_ports_snapshot(self):
+        import os
+        fresh = Shell()
+        fresh.run(self.BYTES_SETUP)
+        if os.environ.get("TOPWATER_WRITE_FIXTURES"):
+            (FIXTURES / "bytes-from-python.zip").write_bytes(save(fresh))
+        mine = save(fresh)
+        want = fresh.run(self.BYTES_CHECK).stdout
+        for part in (" 6c 61 73 74 fc\n", " 61 ff 62\n", "✓\n", " fd ", " c3 a9 ", " fe "):
+            self.assertIn(part, want)
+        self.assertEqual(want, Shell.load(mine).run(self.BYTES_CHECK).stdout)
+        for port in ("python", "csharp", "typescript"):
+            with self.subTest(port):
+                self.assertEqual(want, Shell.load(FIXTURES / f"bytes-from-{port}.zip").run(self.BYTES_CHECK).stdout)
+
     # ---------- untrusted input ----------
 
     @staticmethod

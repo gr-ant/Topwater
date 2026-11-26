@@ -530,4 +530,45 @@ public class SnapshotTests(ITestOutputHelper output)
         Assert.True(perSnapshot < TimeSpan.FromMilliseconds(250), $"snapshot took {perSnapshot}");
         Assert.True(allocated < sh.Fs.UsedBytes / 4, $"a snapshot allocated {allocated} bytes: contents must be shared, not copied");
     }
+
+    // escaped bytes (no UTF-8) in a variable, an alias, a file name and $_, and valid UTF-8 made from escapes; snapshots/bytes-from-*.zip
+    // are this setup saved by each port (TOPWATER_WRITE_FIXTURES=1 writes this port's again)
+    const string BytesSetup = @"x=$(printf 'a\xffb'); OK=$'\xe2\x9c\x93'; alias raw=$'echo \xfe'; touch $'f\xfd.txt' $'caf\xc3\xa9.txt'; echo $'last\xfc'";
+    const string BytesCheck = @"printf %s ""$_"" | od -An -tx1; printf %s ""$x"" | od -An -tx1; echo ""$OK""; ls *.txt | od -An -tx1; alias raw | od -An -tx1";
+
+    [Theory]
+    [InlineData("bytes-from-csharp.zip")]
+    [InlineData("bytes-from-python.zip")]
+    [InlineData("bytes-from-typescript.zip")]
+    public async Task RawBytesInTheSessionSurviveEveryPortsSnapshot(string file)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "../../../snapshots", file);
+        var fresh = new Shell();
+        await fresh.RunAsync(BytesSetup);
+        if (file == "bytes-from-csharp.zip" && Environment.GetEnvironmentVariable("TOPWATER_WRITE_FIXTURES") != null)
+            using (var f = File.Create(path)) fresh.Save(f);
+        var ms = new MemoryStream();
+        fresh.Save(ms);
+        var want = (await fresh.RunAsync(BytesCheck)).Stdout;
+        foreach (var part in new[] { " 6c 61 73 74 fc\n", " 61 ff 62\n", "✓\n", " fd ", " c3 a9 ", " fe " }) Assert.Contains(part, want);
+        ms.Position = 0;
+        Assert.Equal(want, (await Shell.Load(ms).RunAsync(BytesCheck)).Stdout);
+        using var stream = File.OpenRead(path);
+        Assert.Equal(want, (await Shell.Load(stream).RunAsync(BytesCheck)).Stdout);
+    }
+
+    [Fact]
+    public async Task TextMadeFromEscapesSurvivesACheckpoint()
+    {
+        var sh = new Shell(new ShellOptions { StartTime = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc), RandomSeed = 1 });
+        using var rec = sh.StartRecording(new RecordingOptions { SnapshotEvery = 1 });
+        await sh.RunAsync("OK=$'\\xe2\\x9c\\x93'; touch $'caf\\xc3\\xa9.txt'");
+        await sh.RunAsync("echo \"$OK build\"");
+        var ms = new MemoryStream();
+        rec.Recording.Save(ms);
+        ms.Position = 0;
+        var back = Recording.Load(ms);
+        Assert.Equal("✓ build\n", back.Calls[1].Stdout);
+        Assert.Equal("✓ build\ncafé.txt\n", (await (await back.ShellAtAsync(0)).RunAsync("echo \"$OK build\"; ls")).Stdout);
+    }
 }

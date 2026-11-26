@@ -23,6 +23,11 @@ def encode(text: str) -> bytes:
         return _OTHER_SURROGATES.sub("�", text).encode("utf-8", "surrogateescape")
 
 
+def rejoin(text: str) -> str:
+    """Escaped bytes that together spell valid UTF-8 become those characters (`printf '\\xc3\\xa9'` is é); the rest stay escaped."""
+    return decode(encode(text)) if has_escapes(text) else text
+
+
 def printable(text: str) -> str:
     """For text leaving the shell: escaped bytes show as U+FFFD, as a lossy UTF-8 decode would."""
     return encode(text).decode("utf-8", "replace") if has_escapes(text) else text

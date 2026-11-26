@@ -60,6 +60,13 @@ file; the header's limits can only lower them):
 A reader may check checkpoints after the first against the counts above without building them, and build each when a
 replay first needs it; anything wrong inside one (a blob, a path, the session) is then reported at that point.
 
+## Bytes that are no text
+
+The shell keeps bytes that are not valid UTF-8 (`IFS=$'\xff'`, `x=$(gzip -c f)`, a Latin-1 name from a tar) as the
+lone surrogates U+DC80..U+DCFF, one per byte, as Python's "surrogateescape" does. Any string in the JSON (a variable,
+an alias, a function, `lastArg`, a path, a link target) carries them as the escapes `\udc80`..`\udcff`; a reader keeps
+them as they are, and a writer never replaces them with U+FFFD. File contents are blobs and hold the bytes themselves.
+
 ## Web exchanges
 
 A shell with web access (`AllowWeb`) adds `web` to the header: its policy without the credentials' values

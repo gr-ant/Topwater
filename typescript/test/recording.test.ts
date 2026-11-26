@@ -135,6 +135,32 @@ describe('snapshots in the C# format', () => {
       'cat: ../loop1: Too many levels of symbolic links\n');
   });
 
+  it('carries escaped bytes in the session through every port\'s snapshot', async () => {
+    // escaped bytes (no UTF-8) in a variable, an alias, a file name and $_, and valid UTF-8 made from escapes; snapshots/bytes-from-*.zip
+    // are this setup saved by each port (TOPWATER_WRITE_FIXTURES=1 writes this port's again)
+    const setup = String.raw`x=$(printf 'a\xffb'); OK=$'\xe2\x9c\x93'; alias raw=$'echo \xfe'; touch $'f\xfd.txt' $'caf\xc3\xa9.txt'; echo $'last\xfc'`;
+    const check = String.raw`printf %s "$_" | od -An -tx1; printf %s "$x" | od -An -tx1; echo "$OK"; ls *.txt | od -An -tx1; alias raw | od -An -tx1`;
+    const dir = new URL('../../tests/Topwater.Tests/snapshots/', import.meta.url);
+    const fresh = new Shell();
+    await fresh.run(setup);
+    const mine = await ShellSnapshot.capture(fresh).save();
+    if (process.env.TOPWATER_WRITE_FIXTURES) writeFileSync(new URL('bytes-from-typescript.zip', dir), mine);
+    const want = (await fresh.run(check)).stdout;
+    for (const part of [' 6c 61 73 74 fc\n', ' 61 ff 62\n', '✓\n', ' fd ', ' c3 a9 ', ' fe ']) expect(want).toContain(part);
+    const probe = async (bytes: Uint8Array) => { const sh = new Shell(); (await ShellSnapshot.load(bytes)).restore(sh); return (await sh.run(check)).stdout; };
+    expect(await probe(mine)).toBe(want);
+    for (const port of ['python', 'csharp', 'typescript']) expect(await probe(readFileSync(new URL(`bytes-from-${port}.zip`, dir))), port).toBe(want);
+  });
+
+  it('keeps a leading UTF-8 BOM in a file through reading and a snapshot', async () => {
+    const sh = new Shell();
+    await sh.run(String.raw`printf '\xef\xbb\xbfid,name\n1,a\n' > bom.csv; cat bom.csv > copy`);
+    expect((await sh.run('wc -c < copy; cmp bom.csv copy && echo same')).stdout).toBe('15\nsame\n');
+    const back = new Shell();
+    (await ShellSnapshot.load(await ShellSnapshot.capture(sh).save())).restore(back);
+    expect((await back.run('wc -c < bom.csv; head -c 3 bom.csv | od -An -tx1')).stdout).toBe('15\n ef bb bf\n');
+  });
+
   it('loads the snapshots the other ports saved', async () => {
     // setup: see tests/Topwater.Tests/SnapshotTests.cs, ASnapshotSavedByAnotherPortLoads
     for (const file of ['from-python.zip', 'from-csharp.zip']) {

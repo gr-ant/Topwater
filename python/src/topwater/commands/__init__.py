@@ -236,7 +236,7 @@ def unescape(s: str, keep_unknown: bool = False, echo: bool = False) -> str:
         else:
             out.append(_ESCAPES.get(n, ("\\" + n) if keep_unknown else n))
             i += 2
-    return "".join(out)
+    return bytetext.rejoin("".join(out))
 
 
 def register_all(shell) -> None:

@@ -1,4 +1,5 @@
 // Text formatting shared by the shell and its commands: printf, %q quoting, backslash escapes, strftime.
+import { rejoin } from './bytes.js';
 
 /** Backslash escapes: \n \t ..., \xHH, and octal (\NNN, or \0NNN for echo -e). */
 export function unescape(s: string, keepUnknown = false, echo = false): string {
@@ -30,7 +31,7 @@ export function unescape(s: string, keepUnknown = false, echo = false): string {
       out += known[n] ?? (keepUnknown ? '\\' + n : n);
     }
   }
-  return out;
+  return rejoin(out);
 }
 
 /** A byte value as a character: ASCII as is, 0x80-0xff as the escaped raw byte (see bytes.ts). */

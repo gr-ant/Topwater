@@ -4,8 +4,9 @@
  * Text is unaffected; binary output (gzip -c, tar cf -) survives `|` and `>`, and files store the original bytes.
  */
 const FIRST = 0xdc80, LAST = 0xdcff;
-const strict = new TextDecoder('utf-8', { fatal: true });
-const lossy = new TextDecoder('utf-8');
+// ignoreBOM: a leading U+FEFF is content (a CSV from Excel keeps its three bytes through `cat a > b`)
+const strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+const lossy = new TextDecoder('utf-8', { ignoreBOM: true });
 const encoder = new TextEncoder();
 
 export function decodeBytes(data: Uint8Array): string {
@@ -47,6 +48,9 @@ export function encodeText(text: string): Uint8Array {
   flush(text.length);
   return Uint8Array.from(parts);
 }
+
+/** Escaped bytes that together spell valid UTF-8 become those characters (`printf '\\xc3\\xa9'` is é); the rest stay escaped. */
+export const rejoin = (text: string): string => hasEscapes(text) ? decodeBytes(encodeText(text)) : text;
 
 /** For text leaving the shell: escaped bytes show as U+FFFD, as a lossy UTF-8 decode would. */
 export function printable(text: string): string {

@@ -453,7 +453,7 @@ internal sealed class Lexer(string s, int firstLine = 1)
         }
         if (i >= s.Length) throw new ParseException(CommandSpec.Diagnostics.EofSingleQuote);
         _i = i + 1;
-        return sb.ToString();
+        return ByteText.Rejoin(sb.ToString());
 
         // bash strings cannot hold a NUL: $'a\0b' is just "a"
         void SkipToQuote(ref int at, StringBuilder text)

@@ -203,7 +203,7 @@ internal static partial class Builtins
                 sb.Append(known ?? (keepUnknown ? "\\" + n : n.ToString()));
             }
         }
-        return sb.ToString();
+        return ByteText.Rejoin(sb.ToString());
     }
 
     /// <summary>A byte value as a character: ASCII as is, 0x80-0xff as the escaped raw byte (<see cref="ByteText"/>), so <c>printf '\xd5'</c> writes one byte.</summary>

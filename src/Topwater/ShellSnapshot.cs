@@ -83,6 +83,7 @@ public sealed class ShellSnapshot
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // file data, never embedded in HTML
+        Converters = { new EscapedStringConverter() }, // escaped bytes as \udcXX, as the other ports write them
     };
 
     /// <summary>Writes the snapshot as a .topwater file without history: a zip of manifest.json (format, version, files' metadata,

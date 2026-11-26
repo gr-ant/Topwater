@@ -1,6 +1,7 @@
 // Parser for the shell language: a hand-written recursive-descent parser that reads characters directly (no separate
 // token stream), because how bash splits text into tokens depends on where the parser is ([[ ]], (( )), case, =~).
 
+import { rejoin } from './bytes.js';
 import { DIAGNOSTICS, diagnostic } from './spec.generated.js';
 
 /** `line`: where in the parsed text the error is (eval reports it). */
@@ -965,7 +966,7 @@ export function ansiC(s: string): string {
       let j = i; let v = '';
       while (j < s.length && v.length < 3 && s[j] >= '0' && s[j] <= '7') v += s[j++];
       const code = parseInt(v, 8) & 0xff;
-      if (code === 0) return out; // a NUL ends the string, as in C
+      if (code === 0) return rejoin(out); // a NUL ends the string, as in C
       out += code >= 0x80 ? String.fromCharCode(0xdc00 + code) : String.fromCharCode(code);
       i = j - 1;
       continue;
@@ -975,7 +976,7 @@ export function ansiC(s: string): string {
       const m = new RegExp(`^[0-9a-fA-F]{1,${max}}`).exec(s.slice(i + 1));
       if (!m) { out += '\\' + n; continue; }
       const code = parseInt(m[0], 16);
-      if (code === 0) return out;
+      if (code === 0) return rejoin(out);
       out += n === 'x' && code >= 0x80 ? String.fromCharCode(0xdc00 + code) : String.fromCodePoint(code);
       i += m[0].length;
       continue;
@@ -983,5 +984,5 @@ export function ansiC(s: string): string {
     if (n === 'c' && i + 1 < s.length) { out += String.fromCharCode(s[++i].toUpperCase().charCodeAt(0) & 0x1f); continue; }
     out += '\\' + n;
   }
-  return out;
+  return rejoin(out);
 }

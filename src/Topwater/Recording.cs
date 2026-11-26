@@ -186,6 +186,7 @@ public sealed class Recording
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // command output, never embedded in HTML
+        Converters = { new EscapedStringConverter() }, // escaped bytes as \udcXX, as the other ports write them
     };
 
     /// <summary>

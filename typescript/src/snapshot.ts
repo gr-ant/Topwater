@@ -306,7 +306,7 @@ function readMachine(m: Record<string, any>, name: string, o: Limits, { user, ho
   blobBytes: (entry: string, size: number) => Uint8Array | null, hashes: Map<string, string>): ShellSnapshot {
   const files: VfsEntry[] = [];
   const seen = new Set<string>(), dirs = new Set<string>(['/']);
-  const strict = new TextDecoder('utf-8', { fatal: true });
+  const strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }); // a leading BOM is content
   for (const f of fileList) {
     const path = f?.path;
     if (typeof path !== 'string' || path.length === 0 || path.length > 4096 || path[0] !== '/' || path.includes('\0') || canonical(path) !== path)
