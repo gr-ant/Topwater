@@ -107,3 +107,7 @@ button.small { padding: 3px 8px; font-size: .8rem; }
 .compare select { width: 100%; min-width: 0; max-width: 420px; font: .85rem var(--mono); background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 4px; }
 .compare label { display: flex; gap: 6px; align-items: center; flex: 1 1 240px; min-width: 0; max-width: 480px; }
 #changes[aria-busy="true"] { opacity: .6; }
+.web h4 { font-size: .88rem; margin: 12px 0 6px; }
+.web-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: .85rem; overflow-wrap: anywhere; }
+.web-list code { background: none; padding: 0; }
+.web-list pre.content { max-height: 280px; margin-top: 4px; }

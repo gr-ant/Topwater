@@ -229,6 +229,44 @@ try {
   await settled();
   const meta3 = await viewer.locator('#meta').innerText();
   check(meta3.includes('cross-port fixture') && !meta3.includes('Re-run here') && (await viewer.locator('#turn').innerText()).includes('hi you'), 'viewer: a .topwater file opens, with its turns and metadata');
+  // the Changes list stops at 500 rows; a branch command that hangs can be stopped before the 60 s limit
+  await viewer.locator('body').press('End');
+  await settled();
+  await viewer.getByRole('button', { name: 'Continue from here' }).click();
+  await typeLive('mkdir m && touch m/f{1..600}', 'Turn 4 of 4 · Branch 1');
+  await viewer.waitForFunction(() => document.querySelector('#changes')?.textContent?.includes('more'), null, { timeout: 30_000 });
+  check((await viewer.locator('#changes li.change').count()) === 500 && (await viewer.locator('#changes').innerText()).includes('…and 101 more (showing the first 500'),
+    'viewer: a turn that adds 601 entries lists the first 500 and says how many more');
+  const stopped0 = Date.now();
+  await liveCmd.fill("printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\\n' | grep -E '^(a|aa)+$'");
+  await liveCmd.press('Enter');
+  await viewer.getByRole('button', { name: 'Stop' }).click({ timeout: 10_000 });
+  await viewer.waitForFunction(() => document.querySelector('#live-out')?.textContent?.includes('stopped; the branch is as it was'), null, { timeout: 10_000 });
+  const stopWait = Date.now() - stopped0;
+  check(stopWait < 10_000 && await viewer.locator('#live-stop').isHidden(), `viewer: Stop ends a hung branch command after ${stopWait} ms`);
+  await typeLive('ls m | wc -l', 'Turn 5 of 5 · Branch 1');
+  check((await viewer.locator('#live-out').innerText()).trimEnd().endsWith('600'), 'viewer: after Stop the branch goes on from the machine it had');
+
+  // a recording with web calls (written by the C# port): each turn lists its requests, bodies as text on demand
+  await viewer.locator('#file').setInputFiles(join(root, '../tests/Topwater.Tests/recordings/web-from-csharp.topwater'));
+  await viewer.waitForFunction(() => document.querySelector('#pos')?.textContent === 'Turn 1 of 3', null, { timeout: 30_000 });
+  await settled();
+  const web1 = viewer.locator('#turn .web-list li');
+  check((await web1.count()) === 1 && /GET http:\/\/api\.test\/json\s+→ 200 OK, 26 B/.test(await web1.innerText()), 'viewer: turn 1 lists its request with method, URL, status and size');
+  await web1.locator('summary').click();
+  await viewer.waitForFunction(() => document.querySelector('#turn .web-list pre')?.textContent?.includes('"name":"topwater"'), null, { timeout: 30_000 });
+  check(true, 'viewer: a text response body opens as text');
+  await viewer.getByRole('button', { name: 'Next turn' }).click();
+  await settled();
+  const web2 = await viewer.locator('#turn .web-list').innerText();
+  check((await viewer.locator('#turn .web-list li').count()) === 3 && web2.includes('302 Found, 0 B') && web2.includes('GET http://api.test/gzip') && (await viewer.locator('#turn').innerText()).includes('same output'),
+    'viewer: turn 2 lists its redirect and two downloads, and re-running it here on the recorded answers prints the same');
+  await viewer.locator('#turn .web-list li').nth(2).locator('summary').click();
+  await viewer.waitForFunction(() => document.querySelectorAll('#turn .web-list li')[2]?.textContent?.includes('Binary, 31 B'), null, { timeout: 30_000 });
+  check(!(await viewer.locator('#turn .web-list li').nth(2).locator('pre').count()), 'viewer: a gzip body is called binary, not shown');
+  await viewer.getByRole('button', { name: 'Next turn' }).click();
+  await settled();
+  check(!(await viewer.locator('#turn .web-list').count()), 'viewer: a turn without requests shows no list');
   check(vErrors.length === 0 && fErrors.length === 0, `viewer: no console errors${vErrors.length + fErrors.length ? ': ' + [...vErrors, ...fErrors].join(' | ') : ''}`);
   await viewer.setViewportSize({ width: 375, height: 800 });
   const vOverflow = await viewer.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

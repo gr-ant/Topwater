@@ -4,11 +4,13 @@
 import { Recording } from '../src/index.js';
 import type { VfsEntry } from '../src/vfs.js';
 import { diffLines } from './diff.js';
-import type { CallInfo, DiffView, FileView, Point, ReplayReply, ReplayRequest, TreeEntry, TurnView } from './replay-protocol.js';
+import type { CallInfo, DiffView, FileView, Point, ReplayReply, ReplayRequest, TreeEntry, TurnView, WebBody } from './replay-protocol.js';
 import { Timelines, contentOf } from './timeline.js';
 
 let t: Timelines | null = null;
 const MAX_TEXT = 256 << 10;
+/** how much of a response body the page shows */
+const MAX_WEB_PREVIEW = 16 << 10;
 /** recordings may come from anyone: tighter than the defaults, so one can't exhaust the tab (the page also kills slow answers) */
 const VIEWER_LIMITS = { maxFileSystemBytes: 32 << 20, maxStringBytes: 8 << 20, maxExtractBytes: 16 << 20, maxCallDurationMs: 30_000 };
 
@@ -16,7 +18,18 @@ const post = (m: ReplayReply, transfer: Transferable[] = []) => (self as unknown
 const info = (c: Recording['calls'][number]): CallInfo => ({
   index: c.index, command: c.command, stdout: c.stdout, stderr: c.stderr, exitCode: c.exitCode, trailer: c.trailer, elapsedMs: c.elapsedMs,
   hasSnapshot: !!c.snapshot, time: c.time, files: c.files,
+  web: c.web?.map(x => ({ method: x.method, url: x.url, status: x.status, reason: x.reason, error: x.error, size: x.body.length })),
 });
+
+function webBody(p: Point, n: number): WebBody {
+  const x = p.i >= 0 && Number.isInteger(n) ? t!.call(p.b, p.i)?.web?.[n] : undefined;
+  if (!x) throw new Error('no such web request');
+  const head = x.body.subarray(0, MAX_WEB_PREVIEW);
+  let text: string | null;
+  // stream: a UTF-8 sequence cut at the limit is held back rather than taken for binary
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true }); } catch { text = null; }
+  return { text: text?.includes('\0') ? null : text, size: x.body.length, truncated: x.body.length > head.length };
+}
 
 async function load(data: Uint8Array, sidecars: Record<string, Uint8Array>) {
   t = null;
@@ -94,9 +107,10 @@ self.onmessage = async (ev: MessageEvent<ReplayRequest>) => {
       case 'file': value = view(await entry(m.p, m.path)); break;
       case 'diff': value = await diff(m.a, m.z, m.path); break;
       case 'branch': value = t!.fork(m.parent, m.at); break;
+      case 'web': value = webBody(m.p, m.n); break;
       case 'run': value = info((await t!.run(m.b, m.command)).call); break;
       case 'restore':
-        for (const br of m.branches) t!.branches.push({ parent: br.parent, at: br.at, calls: br.calls.map(c => ({ ...c, snapshot: undefined })) });
+        for (const br of m.branches) t!.branches.push({ parent: br.parent, at: br.at, calls: br.calls.map(c => ({ ...c, snapshot: undefined, web: undefined })) });
         break;
       case 'fork': case 'export': {
         const zip = m.t === 'fork' ? await (await t!.stateAt(m.p.b, m.p.i)).save() : await t!.export(m.b, m.from);

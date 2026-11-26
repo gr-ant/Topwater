@@ -1,13 +1,14 @@
 // Recording viewer: steps through a Topwater recording turn by turn, compares any two moments, and continues from any
 // turn in a terminal whose commands become a branch of the timeline. The recording and its branches live in a Web
 // Worker (replay-worker.ts), which rebuilds the machine as of any turn; this page only renders what it answers.
-import type { CallInfo, Change, DiffView, FileView, LoadedRecording, Point, ReplayReply, ReplayRequest, TreeEntry, TurnView } from '../replay-protocol.js';
+import { FORK_PREFIX, dropStaleForks, forkKey } from '../fork-handoff.js';
+import type { CallInfo, Change, DiffView, FileView, LoadedRecording, Point, ReplayReply, ReplayRequest, TreeEntry, TurnView, WebBody } from '../replay-protocol.js';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $('status'), viewer = $('viewer'), slider = $<HTMLInputElement>('slider'), pos = $('pos');
 const timeline = $('timeline'), turnEl = $('turn'), treeEl = $('tree'), fileEl = $('fileview'), changesEl = $('changes');
 const branchesEl = $('branches'), cmpA = $<HTMLSelectElement>('cmp-a'), cmpZ = $<HTMLSelectElement>('cmp-z');
-const liveEl = $('live'), liveOut = $('live-out'), liveCmd = $<HTMLInputElement>('live-cmd');
+const liveEl = $('live'), liveOut = $('live-out'), liveCmd = $<HTMLInputElement>('live-cmd'), liveStop = $<HTMLButtonElement>('live-stop');
 const REQUEST_TIMEOUT_MS = 60_000;
 
 // ---------- the worker ----------
@@ -33,21 +34,10 @@ let restoring: Promise<unknown> = Promise.resolve();
 function request<T>(msg: Req, transfer: Transferable[] = [], what = 'rebuilding this turn', timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
-    // re-running a recorded command can't be interrupted from inside; a stuck worker is replaced
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       if (!pending.delete(id)) return;
-      worker.terminate();
-      for (const p of pending.values()) p.reject(new Error('cancelled'));
-      pending.clear();
-      startWorker();
+      replaceWorker('cancelled');
       reject(new Error(`${what} took longer than ${timeoutMs / 1000} s, so it was stopped`));
-      if (!loaded) return;
-      const again = loaded;
-      restoring = (async () => {
-        await request({ t: 'load', data: again.data, sidecars: again.sidecars }).catch(() => undefined);
-        // the branches typed so far: the new worker rebuilds their machines by re-running them
-        await request({ t: 'restore', branches: branches.slice(1) }).catch(() => undefined);
-      })();
     }, timeoutMs);
     pending.set(id, {
       resolve: v => { clearTimeout(timer); resolve(v as T); },
@@ -55,6 +45,22 @@ function request<T>(msg: Req, transfer: Transferable[] = [], what = 'rebuilding 
     });
     worker.postMessage({ ...msg, id } as ReplayRequest, transfer);
   });
+}
+
+/** Re-running a recorded command can't be interrupted from inside: a stuck worker (or one the user stopped) is replaced,
+ * every answer it owed fails with `why`, and the new one loads the recording and the branches typed so far. */
+function replaceWorker(why: string) {
+  worker.terminate();
+  for (const p of pending.values()) p.reject(new Error(why));
+  pending.clear();
+  startWorker();
+  if (!loaded) return;
+  const again = loaded;
+  restoring = (async () => {
+    await request({ t: 'load', data: again.data, sidecars: again.sidecars }).catch(() => undefined);
+    // the new worker rebuilds the branches' machines by re-running them
+    await request({ t: 'restore', branches: branches.slice(1) }).catch(() => undefined);
+  })();
 }
 
 // ---------- helpers (output is untrusted: always textContent) ----------
@@ -224,6 +230,7 @@ function renderTurn(index: number, view: TurnView | null) {
   const meta = el('p', { cls: 'note' }, `Took ${c.elapsedMs < 1 ? '<1' : Math.round(c.elapsedMs)} ms when ${mine ? 'typed' : 'recorded'}.`);
   if (view) meta.append(' ', sourceText(view));
   turnEl.append(h, cmd, out, meta);
+  if (c.web?.length) turnEl.append(webList(c, { b: cur.b, i: index }));
   if (view?.source.kind === 'rerun' && !view.source.matches) {
     const s = view.source;
     const d = el('details', { cls: 'rerun' }, el('summary', { textContent: 'What re-running it here printed' }));
@@ -234,6 +241,34 @@ function renderTurn(index: number, view: TurnView | null) {
     d.append(o);
     turnEl.append(d);
   }
+}
+
+// the requests a call made and what came back (recorded, so a re-run gets the same answers); all of it is untrusted text
+function webList(c: CallInfo, p: Point): HTMLElement {
+  const list = el('ul', { cls: 'web-list' });
+  c.web!.forEach((x, n) => {
+    const outcome = x.error ? `failed (${x.error})` : `${x.status}${x.reason ? ' ' + x.reason : ''}, ${fmtSize(x.size)}`;
+    const li = el('li', {}, el('code', { textContent: `${x.method} ${x.url}` }), ' ', el('span', { cls: x.error || x.status >= 400 ? 'note error' : 'note', textContent: `→ ${outcome}` }));
+    if (x.size > 0) {
+      const d = el('details', { cls: 'diff' }, el('summary', { textContent: 'body' }));
+      let filled = false;
+      d.addEventListener('toggle', async () => {
+        if (!d.open || filled) return;
+        filled = true;
+        try {
+          const b = await request<WebBody>({ t: 'web', p, n });
+          if (b.text === null) d.append(el('p', { cls: 'note', textContent: `Binary, ${fmtSize(b.size)}; not shown.` }));
+          else {
+            d.append(el('pre', { cls: 'content', tabIndex: 0, ariaLabel: `Body of ${x.method} ${x.url}`, textContent: b.text || '(empty)' }));
+            if (b.truncated) d.append(el('p', { cls: 'note', textContent: `Showing the start of ${fmtSize(b.size)}.` }));
+          }
+        } catch (e) { d.append(el('p', { cls: 'note error', textContent: (e as Error).message })); }
+      });
+      li.append(d);
+    }
+    list.append(li);
+  });
+  return el('section', { cls: 'web' }, el('h4', { textContent: `Web requests (${c.web!.length})` }), list);
 }
 
 function sourceText(view: TurnView): string {
@@ -431,8 +466,8 @@ async function forkHere() {
     const zip = await request<Uint8Array>({ t: 'fork', p: cur });
     let s = '';
     for (let i = 0; i < zip.length; i += 0x8000) s += String.fromCharCode(...zip.subarray(i, i + 0x8000));
-    const key = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-    try { localStorage.setItem('topwater-fork:' + key, btoa(s)); }
+    const key = forkKey();
+    try { localStorage.setItem(FORK_PREFIX + key, btoa(s)); }
     catch { status('This machine is too large to hand to a new tab (browser storage is full); use "Continue from here" instead.', true); return; }
     const from = loaded.name + (cur.b ? `, ${branchName(cur.b).toLowerCase()}` : '');
     const url = `index.html?fork=${key}&turn=${at < 0 ? -1 : at + 1}&from=${encodeURIComponent(from)}`;
@@ -511,6 +546,7 @@ async function runLive(command: string) {
   liveOut.append(block);
   try {
     await restoring;
+    liveStop.hidden = false;
     let b = live.b;
     if (b === 0 || live.i !== len(b) - 1) {
       b = await request<number>({ t: 'branch', parent: live.b, at: live.i });
@@ -531,6 +567,7 @@ async function runLive(command: string) {
   } catch (e) {
     block.append(el('span', { cls: 'err', textContent: `${(e as Error).message}\n` }));
   } finally {
+    liveStop.hidden = true;
     liveCmd.disabled = false;
     liveOut.scrollTop = liveOut.scrollHeight;
     liveCmd.focus();
@@ -540,6 +577,8 @@ async function runLive(command: string) {
 // ---------- controls ----------
 $('continue').addEventListener('click', continueHere);
 $('live-form').addEventListener('submit', e => { e.preventDefault(); void runLive(liveCmd.value); });
+// the 60 s limit stops a hung command anyway; this lets the user stop it sooner
+liveStop.addEventListener('click', () => replaceWorker('stopped; the branch is as it was before this command'));
 $('live-close').addEventListener('click', () => { liveEl.hidden = true; live = null; $('continue').focus(); });
 for (const sel of [cmpA, cmpZ]) sel.addEventListener('change', () => void compareChosen());
 $('open').addEventListener('click', () => $<HTMLInputElement>('file').click());
@@ -582,4 +621,5 @@ themeBtn.addEventListener('click', () => {
 });
 
 (window as unknown as { topwaterReplay: { go: typeof go; current: () => Point } }).topwaterReplay = { go, current: () => cur };
+try { dropStaleForks(localStorage); } catch { /* storage unavailable: nothing was handed off either */ }
 if (!new URLSearchParams(location.search).has('empty')) void openSample();

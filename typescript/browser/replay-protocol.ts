@@ -18,14 +18,24 @@ export type ReplayRequest =
   /** the branches again, after the page replaced a stuck worker (their machines are rebuilt by re-running) */
   | { t: 'restore'; id: number; branches: { parent: number; at: number; calls: CallInfo[] }[] }
   /** a branch as its own .topwater file */
-  | { t: 'export'; id: number; b: number; from: string };
+  | { t: 'export'; id: number; b: number; from: string }
+  /** the start of the body of web request `n` of call `p`: a WebBody */
+  | { t: 'web'; id: number; p: Point; n: number };
 
 export type ReplayReply = { id: number; ok: true; value: unknown } | { id: number; ok: false; error: string };
 
 export interface CallInfo {
   index: number; command: string; stdout: string; stderr: string; exitCode: number; trailer?: string; elapsedMs: number; hasSnapshot: boolean;
   time?: number; files?: string[];
+  /** the web requests the call made, in order (bodies come one at a time, as a WebBody) */
+  web?: WebInfo[];
 }
+
+/** a recorded request and its answer: `error` for one that failed below the policy (no status then) */
+export interface WebInfo { method: string; url: string; status: number; reason: string; error?: string; size: number }
+
+/** the start of a response body as text; null when it isn't text (not UTF-8, or holds a NUL) */
+export interface WebBody { text: string | null; size: number; truncated: boolean }
 
 export interface LoadedRecording {
   calls: CallInfo[];
