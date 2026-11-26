@@ -10,9 +10,8 @@ public class LimitTests
     /// <summary>Runs a call that must hit the time limit; checks exit 124, the trailer, the bound, and that the next call works.</summary>
     static async Task<ShellResult> HitsTimeLimit(Shell sh, string cmd, double seconds = 1)
     {
-        var sw = Stopwatch.StartNew();
-        var r = await sh.RunAsync(cmd);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(seconds + 8), $"took {sw.Elapsed}");
+        var (r, took) = await TestHost.Timed(() => sh.RunAsync(cmd));
+        Assert.True(took < TimeSpan.FromSeconds(seconds + 8), $"took {took}");
         Assert.Equal(124, r.ExitCode);
         Assert.EndsWith($"[stopped: this call exceeded the {seconds} s time limit; split the work into shorter calls. Running it again will hit the same limit. Files and variables changed before this point are kept.]", r.ToToolOutput());
         Assert.Equal("ok\n", (await sh.RunAsync("echo ok")).Stdout);
@@ -46,9 +45,8 @@ public class LimitTests
     public async Task TimeoutInterruptsABuiltInLoop(string loop)
     {
         var sh = new Shell();
-        var sw = Stopwatch.StartNew();
-        var r = await sh.RunAsync($"timeout 0.1 {loop}; echo $?");
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(6), $"took {sw.Elapsed}");
+        var (r, took) = await TestHost.Timed(() => sh.RunAsync($"timeout 0.1 {loop}; echo $?"));
+        Assert.True(took < TimeSpan.FromSeconds(6), $"took {took}");
         Assert.Equal("124\n", r.Stdout);
     }
 
@@ -132,9 +130,8 @@ public class LimitTests
     /// <summary>Runs a call that must hit the string limit: exit 1, the message on stderr and in the trailer, then a working shell.</summary>
     static async Task<ShellResult> HitsStringLimit(Shell sh, string cmd, string message)
     {
-        var sw = Stopwatch.StartNew();
-        var r = await sh.RunAsync(cmd);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"took {sw.Elapsed}");
+        var (r, took) = await TestHost.Timed(() => sh.RunAsync(cmd));
+        Assert.True(took < TimeSpan.FromSeconds(20), $"took {took}");
         Assert.Equal(1, r.ExitCode);
         Assert.Contains("bash: " + message, r.Stderr);
         var last = r.ToToolOutput().Split('\n')[^1];

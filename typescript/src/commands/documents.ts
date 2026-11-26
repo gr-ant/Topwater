@@ -411,6 +411,7 @@ function html(data: Uint8Array): string {
   let pos = 0;
   // an unterminated quote means no later quote of that kind can close either, so each failure is looked up once
   const noQuoteAfter: Record<string, number> = { '"': Infinity, "'": Infinity };
+  let gt = -1; // the first '>' at or after the tag being scanned (tags start in order, so it is found once per '>')
   /** The end of the tag starting at `<` + a letter, with its name and attribute text; null if it never closes. */
   const scanTag = (start: number): { end: number; name: string; attrs: string; closing: boolean } | null => {
     const m = /^<(\/?)([A-Za-z][A-Za-z0-9:-]*)/.exec(text.slice(start, start + 256));
@@ -418,6 +419,8 @@ function html(data: Uint8Array): string {
     let i = start + m[0].length;
     const attrsFrom = i;
     const limit = Math.min(text.length, start + 16384); // no real tag is longer; keeps a pile of unclosed tags linear
+    if (gt < i) { gt = text.indexOf('>', i); if (gt < 0) gt = Infinity; }
+    if (gt >= limit) return null; // quotes can only skip a '>', never supply one: don't walk 16 KB to learn that
     while (i < limit) {
       const c = text[i];
       if (c === '>') return { end: i + 1, name: m[2], attrs: text.slice(attrsFrom, i), closing: m[1] === '/' };

@@ -271,7 +271,8 @@ class HostileFiles(unittest.TestCase):
     def refused_fast(self, data: bytes, why: str, limits=None) -> None:
         started = time.monotonic()
         self.assertIn(why, self.rejected(data, limits))
-        self.assertLess(time.monotonic() - started, 5)
+        # the slowest case stops after 0.7 s here; reading all 15.7 million lines would take about 110 s
+        self.assertLess(time.monotonic() - started, 20)
 
     @staticmethod
     def with_history(head: bytes, chunk: bytes, size: int) -> bytes:

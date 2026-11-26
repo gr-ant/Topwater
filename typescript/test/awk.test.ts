@@ -214,7 +214,7 @@ describe('awk errors and limits', () => {
   });
   test('loop iteration limit', async () => {
     const { run } = env();
-    const r = await run(['awk', 'BEGIN{while(1) i++}']);
+    const r = await run(['awk', 'BEGIN{while(1) i++}'], '', Infinity); // no call deadline: only the iteration limit can stop it
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toBe('awk: loop iteration limit exceeded\n');
   }, 30_000); // generous: a loaded machine runs slow

@@ -50,9 +50,8 @@ public class DeterminismTests
     public async Task Sleep_moves_the_clock_without_waiting()
     {
         var sh = Make();
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var r = await sh.RunAsync("sleep 3600; date -u +%H:%M:%S; sleep 1d; date +%F");
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        var (r, took) = await TestHost.Timed(() => sh.RunAsync("sleep 3600; date -u +%H:%M:%S; sleep 1d; date +%F"));
+        Assert.True(took < TimeSpan.FromSeconds(5), $"took {took}");
         Assert.Equal("04:04:05\n2026-01-03\n", r.Stdout);
     }
 

@@ -408,13 +408,14 @@ describe('recordings in the C# format', () => {
   });
 
   it('the shell\'s files a call touched: added, changed and removed, with links', async () => {
-    const sh = new Shell();
+    const sh = new Shell({ startTime: Date.UTC(2026, 0, 1) }); // a virtual clock: mtimes move only when sleep moves it
     await sh.run('echo a > a; echo b > b; ln -s a s');
     const { recording, stop } = startRecording(sh);
-    await sh.run('echo b > b');      // same text, new mtime? only when the clock moved; the content is the same
-    await sh.run('chmod 600 a; rm s; ln -s b s; ln a h');
+    await sh.run('echo b > b');      // same text at the same time: nothing changed
+    await sh.run('sleep 1; chmod 600 a; rm s; ln -s b s; ln a h'); // a second later: the directory's mtime moves too
     await sh.run('true');
     stop();
+    expect(recording.calls[0].files).toBeUndefined();
     expect(recording.calls[1].files).toEqual(['/home/agent', '/home/agent/a', '/home/agent/h', '/home/agent/s']);
     expect(recording.calls[2].files).toBeUndefined();
   });
