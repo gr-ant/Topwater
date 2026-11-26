@@ -102,7 +102,7 @@ internal static partial class Git
         var up = Regex.Match(name, @"^(.*)@\{(?:u|upstream)\}\z", RegexOptions.Singleline);
         if (up.Success)
         {
-            var u = Upstream(repo, up.Groups[1].Value.Length > 0 ? up.Groups[1].Value : repo.Branch() ?? "");
+            var u = Upstream(repo, UpstreamBranch(repo, up.Groups[1].Value));
             return u != null ? repo.ReadRef(u.Value.Ref) : null;
         }
         foreach (var r in new[] { name, "refs/" + name, "refs/tags/" + name, "refs/heads/" + name, "refs/remotes/" + name, "refs/remotes/" + name + "/HEAD" })
@@ -156,6 +156,20 @@ internal static partial class Git
         if (remote == ".") return (merge[11..], merge);
         // shortcut: assumes the default fetch refspec (refs/remotes/<remote>/*) that clone writes; read remote.<name>.fetch if others show up
         return ($"{remote}/{merge[11..]}", $"refs/remotes/{remote}/{merge[11..]}");
+    }
+
+    /// <summary>The branch &lt;name&gt;@{u} asks about (HEAD and "" mean the current one); refuses as git does when there is none.</summary>
+    static string UpstreamBranch(Repo repo, string name)
+    {
+        string b;
+        if (name is "" or "HEAD" or "@") b = repo.Branch() ?? throw Fatal("headNotBranch");
+        else
+        {
+            b = name;
+            if (repo.ReadRef("refs/heads/" + b) == null) throw Fatal("noSuchBranch", ("name", b));
+        }
+        if (Upstream(repo, b) == null) throw Fatal("noUpstream", ("branch", b));
+        return b;
     }
 
     /// <summary>(upstream name, commits ahead, commits behind, upstream gone) for a branch with an upstream.</summary>

@@ -5,6 +5,26 @@ using static Topwater.GitCore;
 
 namespace Topwater;
 
+/// <summary>Objects, commits and delta bases one command keeps for reuse, under a single byte budget per repository: an
+/// entry over a quarter of it is not kept, and the whole cache is dropped when the next entry would not fit.</summary>
+internal sealed class GitObjectCache(long budget = GitPack.CacheBytes)
+{
+    readonly Dictionary<string, object> _items = new(StringComparer.Ordinal);
+    long _used;
+    public static long Peak;  // the most any cache has held, for tests
+
+    public object? Get(string key) => _items.TryGetValue(key, out var v) ? v : null;
+
+    public void Put(string key, object value, long size)
+    {
+        if (size > budget / 4) return;
+        if (_used + size > budget) { _items.Clear(); _used = 0; }
+        _items[key] = value;
+        _used += size;
+        if (_used > Peak) Peak = _used;
+    }
+}
+
 /// <summary>A broken pack entry; the caller names the object it was looking for.</summary>
 internal sealed class GitPackCorrupt : Exception;
 
@@ -16,23 +36,26 @@ internal sealed class GitPack
 {
     public const int MaxChain = 4096;  // deltas on top of one base (real git refuses to write deeper than 4095)
     public const int MaxPacks = 256;
-    const long CacheBytes = 32 << 20;  // inflated objects kept for reuse as delta bases
+    public const int MaxNames = 1_000_000;  // objects named by all the packs of one repository
+    public const long CacheBytes = 64 << 20;  // object contents one repository keeps for reuse, all caches together
     static readonly string?[] Kinds = [null, "commit", "tree", "blob", "tag"];
 
     readonly byte[] _pack;
     readonly long _limit;
     readonly Action _check;
-    readonly Dictionary<long, (string, byte[])> _cache = [];
-    long _cached;
+    readonly GitObjectCache _cache;
+    readonly string _path;
     readonly string[] _names;
     public readonly Dictionary<string, long> Offsets = new(StringComparer.Ordinal);
 
     static GitException BadPack(string path, string why, params (string, string)[] values) =>
         Fatal("badPack", ("path", path), ("why", Msg(why, values)));
 
-    public GitPack(string path, byte[] idx, byte[] pack, long limit, Action check)
+    public int Count => _names.Length;
+
+    public GitPack(string path, byte[] idx, byte[] pack, long limit, Action check, GitObjectCache cache)
     {
-        _pack = pack; _limit = limit; _check = check;
+        _pack = pack; _limit = limit; _check = check; _cache = cache; _path = path;
         var ipath = path[..^5] + ".idx";
         if (idx.Length < 1072 || idx[0] != 0xff || idx[1] != (byte)'t' || idx[2] != (byte)'O' || idx[3] != (byte)'c')
             throw BadPack(ipath, "packBadSignature");
@@ -55,6 +78,7 @@ internal sealed class GitPack
             throw BadPack(path, "packBadChecksum");
         if (count != n || !idx.AsSpan(idx.Length - 40, 20).SequenceEqual(pack.AsSpan(pack.Length - 20)))
             throw BadPack(path, "packNoMatch");
+        if (n * 2 > pack.Length - 32L) throw BadPack(ipath, "packTooMany");  // every entry takes at least two bytes
         int count32 = (int)n;
         _names = new string[count32];
         long end = pack.Length - 20, bigCount = large / 8;
@@ -108,7 +132,7 @@ internal sealed class GitPack
         while (true)
         {
             _check();
-            if (_cache.TryGetValue(off, out var hit)) { (kind, data) = hit; break; }
+            if (_cache.Get(_path + "\0" + off) is ValueTuple<string, byte[]> hit) { (kind, data) = hit; break; }
             if (!seen.Add(off) || chain.Count >= MaxChain) throw new GitPackCorrupt();
             long pos = off;
             int c = p[pos++];
@@ -117,9 +141,9 @@ internal sealed class GitPack
             while ((c & 0x80) != 0)
             {
                 c = p[pos++];
-                if (shift > 56) throw new GitPackCorrupt();
                 size |= (long)(c & 0x7F) << shift;
                 shift += 7;
+                if (shift > 70) throw new GitPackCorrupt();
             }
             if (size < 0 || size > _limit) throw new GitPackCorrupt();
             long baseOff;
@@ -183,11 +207,7 @@ internal sealed class GitPack
         return ms.ToArray();
     }
 
-    void Remember(long off, string kind, byte[] data)
-    {
-        if (_cached + data.Length > CacheBytes) { _cache.Clear(); _cached = 0; }
-        if (data.Length <= CacheBytes) { _cache[off] = (kind, data); _cached += data.Length; }
-    }
+    void Remember(long off, string kind, byte[] data) => _cache.Put(_path + "\0" + off, (kind, data), data.Length);
 
     static long Varint(byte[] d, ref int i)
     {
@@ -196,10 +216,10 @@ internal sealed class GitPack
         while (true)
         {
             int c = d[i++];
-            if (shift > 56) throw new GitPackCorrupt();
             v |= (long)(c & 0x7F) << shift;
             shift += 7;
-            if ((c & 0x80) == 0) return v;
+            if ((c & 0x80) == 0) return v < 0 ? throw new GitPackCorrupt() : v;
+            if (shift > 63) throw new GitPackCorrupt();
         }
     }
 

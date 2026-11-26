@@ -207,7 +207,10 @@ public class GitTests
     {
         var c = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "git", "packs.json"))).RootElement
             .EnumerateArray().First(x => x.GetProperty("name").GetString() == name);
-        var sh = await Repo(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(10) });
+        bool bound = c.TryGetProperty("cacheBound", out var cb) && cb.GetBoolean();
+        // the cache case builds twenty 32 MB objects, slow under load
+        double limit = c.TryGetProperty("timeLimit", out var tl) ? tl.GetDouble() : bound ? 60 : 10;
+        var sh = await Repo(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(limit) });
         sh.Fs.CreateDirectory("/tmp/w/.git/objects/pack", true);
         foreach (var f in c.GetProperty("files").EnumerateObject())
         {
@@ -216,16 +219,55 @@ public class GitTests
             gz.CopyTo(ms);
             sh.Fs.WriteAllBytes($"/tmp/w/.git/objects/pack/{f.Name}", ms.ToArray());
         }
+        GitObjectCache.Peak = 0;
+        long baseline = GC.GetTotalMemory(true), peak = 0;
+        using var sampler = bound ? new Timer(_ => { var m = GC.GetTotalMemory(true); if (m > Interlocked.Read(ref peak)) Interlocked.Exchange(ref peak, m); }, null, 0, 50) : null;  // live memory: a forced collection per sample
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var r = await sh.RunAsync(c.GetProperty("script").GetString()!);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(bound ? 30 : (c.TryGetProperty("timeLimit", out _) ? limit : 2) + 3));
         Assert.True(c.GetProperty("exitCode").GetInt32() == r.ExitCode, r.Stderr);
+        if (bound)
+        {
+            // every cache of the repository shares one budget, so twenty 32 MB objects are never all held at once
+            Assert.InRange(GitObjectCache.Peak, 1, GitPack.CacheBytes);
+            Assert.True(Interlocked.Read(ref peak) - baseline < 400L << 20, $"{(Interlocked.Read(ref peak) - baseline) >> 20} MB");
+        }
         if (c.TryGetProperty("stdout", out var stdout)) Assert.Equal(stdout.GetString(), r.Stdout);
         if (c.TryGetProperty("stderr", out var stderr))
         {
             Assert.Contains(stderr.GetString()!, r.Stderr);
             Assert.StartsWith("fatal: ", r.Stderr);
         }
+    }
+
+    [Fact]
+    public async Task PackedRefsNamesThatLeaveRefsAreIgnored()
+    {
+        var sh = await Repo();
+        await sh.RunAsync("s=$(git rev-parse HEAD); printf '%s refs/heads/../../outside\\n%s refs/remotes/../x\\n%s refs/remotes/o/cr\\r\\n"
+            + "%s refs/tags/.hidden\\n%s refs/heads/ok\\n' $s $s $s $s $s > .git/packed-refs");
+        var r = await sh.RunAsync("git branch -a; git log --oneline --decorate -1; git tag");
+        Assert.True(r.ExitCode == 0 && !r.Stdout.Contains("..") && !r.Stdout.Contains("hidden") && !r.Stdout.Contains('\r') && r.Stdout.Contains("ok"), r.Stdout);
+        r = await sh.RunAsync("git checkout x; echo $?; cat .git/config");
+        Assert.StartsWith("1\n", r.Stdout);
+        Assert.DoesNotContain("remote = ..", r.Stdout);
+    }
+
+    [Fact]
+    public async Task UpstreamErrorsAndAmbiguousCheckout()
+    {
+        var sh = await Repo();
+        var r = await sh.RunAsync("git rev-parse @{u}; git rev-parse nosuch@{u}; git checkout -q --detach; git rev-parse HEAD@{upstream}");
+        Assert.Equal("fatal: no upstream configured for branch 'master'\nfatal: no such branch: 'nosuch'\nfatal: HEAD does not point to a branch\n", r.Stderr);
+        await sh.RunAsync("git checkout -q master; for r in origin up; do git config remote.$r.fetch \"+refs/heads/*:refs/remotes/$r/*\"; mkdir -p .git/refs/remotes/$r;"
+            + " git rev-parse HEAD > .git/refs/remotes/$r/b; done");
+        r = await sh.RunAsync("git checkout b");
+        Assert.Equal(128, r.ExitCode);
+        Assert.Equal("fatal: 'b' matched multiple (2) remote tracking branches\n", r.Stderr);
+        await sh.RunAsync("rm -r .git/refs/remotes/up; echo f > b");
+        r = await sh.RunAsync("git checkout b");
+        Assert.Equal(128, r.ExitCode);
+        Assert.Contains("could be both a local file and a tracking branch", r.Stderr);
     }
 
     /// <summary>A pack of whole (undeltified) objects with its v2 index, as git would write it.</summary>

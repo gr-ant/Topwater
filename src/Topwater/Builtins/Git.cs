@@ -164,8 +164,7 @@ internal static partial class Git
         public readonly VirtualFileSystem Fs;
         public readonly string Top, GitDir;
         public readonly long Limit;
-        readonly Dictionary<string, (string, byte[])> _objects = [];
-        readonly Dictionary<string, Commit> _commits = [];
+        readonly GitObjectCache _cache = new();  // objects, commits and pack delta bases, under one byte budget
         Config? _config;
         List<GitPack>? _packs;
         readonly Dictionary<string, IgnoreRules?> _ignores = [];
@@ -226,7 +225,7 @@ internal static partial class Git
         // --- objects ---
         public (string Kind, byte[] Data) Obj(string sha)
         {
-            if (_objects.TryGetValue(sha, out var hit)) return hit;
+            if (_cache.Get(sha) is ValueTuple<string, byte[]> hit) return hit;
             if (Packs().Any(p => p.Offsets.ContainsKey(sha))) return Packed(sha);
             var raw = Sha.IsMatch(sha) ? GRead($"objects/{sha[..2]}/{sha[2..]}") : null;
             if (raw == null) return Packed(sha);
@@ -253,7 +252,7 @@ internal static partial class Git
                 throw Fatal("corruptObject", ("object", sha));
             var result = (head[0], data[(nul + 1)..]);
             if (ObjectId(result.Item1, result.Item2) != sha) throw Fatal("corruptObject", ("object", sha));
-            if (_objects.Count < 4096) _objects[sha] = result;
+            _cache.Put(sha, result, result.Item2.Length);
             return result;
         }
 
@@ -270,7 +269,10 @@ internal static partial class Git
             {
                 var pack = GRead($"{d}/{name[..^4]}.pack");
                 if (pack != null)  // like git, an index without its pack is skipped
-                    packs.Add(new GitPack(GPath($"{d}/{name[..^4]}.pack"), GRead($"{d}/{name}") ?? [], pack, Limit, Check));
+                {
+                    packs.Add(new GitPack(GPath($"{d}/{name[..^4]}.pack"), GRead($"{d}/{name}") ?? [], pack, Limit, Check, _cache));
+                    if (packs.Sum(x => (long)x.Count) > GitPack.MaxNames) throw Fatal("tooLarge", ("what", GPath(d)));
+                }
             }
             return _packs = packs;
         }
@@ -284,7 +286,7 @@ internal static partial class Git
                 try { result = pack.Read(sha); }
                 catch (GitPackCorrupt) { throw Fatal("corruptObject", ("object", sha)); }
                 if (ObjectId(result.Item1, result.Item2) != sha) throw Fatal("corruptObject", ("object", sha));
-                if (_objects.Count < 4096) _objects[sha] = result;
+                _cache.Put(sha, result, result.Item2.Length);
                 return result;
             }
             throw Fatal("missingObject", ("object", sha));
@@ -316,7 +318,7 @@ internal static partial class Git
 
         public Commit Commit(string sha)
         {
-            if (_commits.TryGetValue(sha, out var c)) return c;
+            if (_cache.Get("commit:" + sha) is Commit c) return c;
             var data = ByteText.Decode(Typed(sha, "commit"));
             int k = data.IndexOf("\n\n", StringComparison.Ordinal);
             string head = k >= 0 ? data[..k] : data, message = k >= 0 ? data[(k + 2)..] : "";
@@ -337,7 +339,7 @@ internal static partial class Git
             }
             if (string.IsNullOrEmpty(tree) || !Sha.IsMatch(tree) || parents.Any(p => !Sha.IsMatch(p))) throw Fatal("corruptObject", ("object", sha));
             c = new Commit(sha, tree, parents, author, committer, message);
-            _commits[sha] = c;
+            _cache.Put("commit:" + sha, c, data.Length + 200);
             return c;
         }
 
@@ -408,10 +410,16 @@ internal static partial class Git
             foreach (var line in (GText("packed-refs") ?? "").Split('\n'))
             {
                 var parts = line.Split(' ');
-                if (parts.Length == 2 && Sha.IsMatch(parts[0])) output[parts[1]] = parts[0];
+                if (parts.Length == 2 && Sha.IsMatch(parts[0]) && PackedNameOk(parts[1])) output[parts[1]] = parts[0];
             }
             return output;
         }
+
+        /// <summary>A packed-refs name git could have written: under refs/, the characters loose refs allow, no empty, '.'-led
+        /// or '..' component and no .lock name, so nothing read from the file can name a path outside refs/.</summary>
+        static bool PackedNameOk(string name) =>
+            name.StartsWith("refs/", StringComparison.Ordinal) && Regex.IsMatch(name, @"^[A-Za-z0-9_./-]+\z")
+            && name.Split('/').All(c => c.Length > 0 && c[0] != '.' && !c.EndsWith(".lock", StringComparison.Ordinal));
 
         /// <summary>The branch HEAD names (refs/heads/x), or null when detached.</summary>
         public string? HeadRef()

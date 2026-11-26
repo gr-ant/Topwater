@@ -162,8 +162,20 @@ internal static partial class Git
     static string? GuessRemote(Repo repo, string name)
     {
         if (!ValidBranchName(name)) return null;
-        var hits = RemoteBranches(repo).Where(r => r.Sym == null && r.Name.IndexOf('/') is var i && i >= 0 && r.Name[(i + 1)..] == name).ToList();
+        var configured = repo.Config().Items().Select(x => x.Name).Where(k => k.StartsWith("remote.", StringComparison.Ordinal) && k.EndsWith(".fetch", StringComparison.Ordinal))
+            .Select(k => k[7..k.LastIndexOf('.')]).ToHashSet(StringComparer.Ordinal);
+        var hits = RemoteBranches(repo).Where(r => r.Sym == null && r.Name.IndexOf('/') is var i && i >= 0 && r.Name[(i + 1)..] == name && configured.Contains(r.Name[..i])).ToList();
+        if (hits.Count > 1) throw SubFatal("checkout", "matchedMultiple", ("name", name), ("count", hits.Count.ToString()));
         return hits.Count == 1 ? "refs/remotes/" + hits[0].Name : null;
+    }
+
+    /// <summary>name is a file in the work tree or the index, so 'git checkout name' could mean it.</summary>
+    static bool IsWorkPath(Repo repo, string name)
+    {
+        string rel;
+        try { rel = repo.FromUser(name); }
+        catch (GitException) { return false; }
+        return repo.Stage0().ContainsKey(rel) || repo.Fs.Exists(repo.Wt(rel), false);
     }
 
     /// <summary>checkout [tree-ish] -- paths / restore: copies paths from a commit (or the index) into the index and/or work tree.</summary>
@@ -254,7 +266,10 @@ internal static partial class Git
         }
         if (o.Has("\x01")) throw Fatal("badRevision", ("rev", target));
         if (o.Args.Count == 1 && !o.DashDash && GuessRemote(repo, target) is { } guess)
+        {
+            if (IsWorkPath(repo, target)) throw SubFatal("checkout", "fileOrBranch", ("name", target), ("upstream", guess[13..]));
             return MoveHead(g, repo, "refs/heads/" + target, repo.ReadRef(guess), guess[13..], force, quiet, newBranch: target, track: guess);
+        }
         return CheckoutPaths(g, repo, null, o.Args, "checkout", quiet: quiet);
     }
 
@@ -1089,7 +1104,7 @@ internal static partial class Git
                 var upOf = Regex.Match(a, @"^(.*)@\{(?:u|upstream)\}\z", RegexOptions.Singleline);
                 if (upOf.Success)
                 {
-                    var up = Upstream(r, upOf.Groups[1].Value.Length > 0 ? upOf.Groups[1].Value : r.Branch() ?? "");
+                    var up = Upstream(r, UpstreamBranch(r, upOf.Groups[1].Value));
                     name = up is { } u ? (abbrevRef ? u.Name : u.Ref) : null;
                 }
                 else if (a is "HEAD" or "@")
