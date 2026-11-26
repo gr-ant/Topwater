@@ -483,6 +483,7 @@ class Shell:
         self._deadline = float("inf")
         self._param_words: dict = {}
         self._recorder = None
+        self._web = None  # allow_web(): the web access curl and wget get; None: no network
         home = f"/home/{user}"
         for d in (home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log"):
             self.fs.mkdir(d, parents=True)
@@ -697,6 +698,14 @@ class Shell:
         shell.restore(snap)
         return shell
 
+    def allow_web(self, policy) -> "Shell":
+        """Lets the agent's curl and wget reach the hosts in `policy` (a WebPolicy), over https unless it allows http. Every
+        URL and redirect is checked against it; names are resolved once, private, loopback, link-local and other internal
+        addresses are refused, and the connection goes to the address that was checked. A fork does not inherit it."""
+        from .webaccess import WebSession
+        self._web = WebSession(policy)
+        return self
+
     def start_recording(self, snapshot_every: int = 0, metadata: dict | None = None) -> "ShellRecorder":
         """Records every run()/run_async() call from now until stop(): the machine now is the start. snapshot_every=N keeps a
         checkpoint after every Nth call, so shell_at() jumps there without re-running from the start; the machine after
@@ -792,7 +801,8 @@ class Shell:
         started, clock = utc_now(), time.perf_counter()
         result = await self._run_call(command_line)
         if self._recorder is not None:
-            self._recorder._add(command_line, result, (time.perf_counter() - clock) * 1000, started)
+            self._recorder._add(command_line, result, (time.perf_counter() - clock) * 1000, started,
+                                self._web.take_log() if self._web is not None else None)
         return result
 
     async def _run_call(self, command_line: str) -> ShellResult:
@@ -804,6 +814,8 @@ class Shell:
         self._total_iterations = self._script_depth = self._arith_depth = 0
         self._lineno = self._line_base = 0  # each call is a new bash -c: its lines count from 1
         self._deadline = time.monotonic() + self.max_call_duration
+        if self._web is not None:
+            self._web.begin_call()
         io_ = _Io(StdinBuffer(), SwitchWriter(out), SwitchWriter(err))
 
         def stop_err(msg: str) -> None:

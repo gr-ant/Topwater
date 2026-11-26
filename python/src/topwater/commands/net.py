@@ -1,0 +1,606 @@
+"""curl and wget over the shell's web access (Shell.allow_web); without one every host fails to resolve."""
+from __future__ import annotations
+
+import base64
+import re
+import zlib
+from urllib.parse import unquote
+
+from .. import bytetext
+from .._spec import COMMANDS
+from ..vfs import ShellError, utc_now
+from ..webaccess import WebFailure, WebPolicy, WebSession, WebUrl
+from . import spec_message
+
+_NO_NETWORK = WebSession(WebPolicy())
+_FLOAT = re.compile(r"\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*")
+
+
+def register(shell) -> None:
+    shell.register_command("curl", _curl)
+    shell.register_command("wget", _wget)
+
+
+def _seconds(s: float) -> float:
+    return 86400.0 if s <= 0 or s > 86400 else s
+
+
+def _float(text: str) -> float | None:
+    return float(text) if _FLOAT.fullmatch(text) else None
+
+
+def _int32(text: str, sign: bool) -> int | None:
+    if not re.fullmatch(r"[+-]?\d+" if sign else r"\d+", text):
+        return None
+    v = int(text)
+    return v if -2**31 <= v < 2**31 else None
+
+
+def _set_header(headers: list, name: str, value: str | None) -> list:
+    i = next((n for n, (k, _) in enumerate(headers) if k.lower() == name.lower()), -1)
+    if value is None:
+        if i >= 0:
+            del headers[i]
+    elif i >= 0:
+        headers[i] = (headers[i][0], value)
+    else:
+        headers.append((name, value))
+    return headers
+
+
+def _remote_name(url: WebUrl) -> str:
+    """The last path segment of the URL, as -O and wget name the file (empty for a directory)."""
+    path = url.path_and_query.split("?")[0]
+    return path[path.rfind("/") + 1:]
+
+
+def _errno(e: ShellError) -> str:
+    return str(e).rsplit(": ", 1)[-1]
+
+
+# ---------- curl ----------
+
+_CURL_LONG = {
+    "data": "d", "data-ascii": "d", "data-binary": "\x01", "data-raw": "\x02", "data-urlencode": "\x03", "json": "\x04",
+    "get": "G", "request": "X", "header": "H", "user-agent": "A", "user": "u", "location": "L", "max-redirs": "\x05",
+    "include": "i", "head": "I", "output": "o", "remote-name": "O", "fail": "f", "fail-with-body": "\x06", "silent": "s",
+    "show-error": "S", "write-out": "w", "max-time": "m", "connect-timeout": "\x07", "compressed": "\x08", "verbose": "v",
+    "insecure": "k", "help": "h", "version": "V",
+}
+_CURL_FLAGS = "GLiIOfsSvkhV\x06\x08"
+_CURL_VALUED = "dXHAuowm\x01\x02\x03\x04\x05\x07"
+
+
+async def _curl(ctx):
+    web = ctx.shell._web or _NO_NETWORK
+    spec = COMMANDS["curl"]
+
+    def usage(message: str) -> int:
+        ctx.stderr.write(message + "\n" + spec.try_help)
+        return 2
+
+    opts: list[tuple[str, str | None, str]] = []
+    urls: list[str] = []
+    args = ctx.args
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("--") and len(arg) > 2:
+            key = _CURL_LONG.get(arg[2:])
+            if key is None:
+                return usage(spec_message("curl", "unknownOption", option=arg))
+            if key in _CURL_VALUED:
+                i += 1
+                if i >= len(args):
+                    return usage(spec_message("curl", "needsParameter", option=arg))
+                opts.append((key, args[i], arg))
+            else:
+                opts.append((key, None, arg))
+        elif arg.startswith("-") and len(arg) > 1:
+            for j in range(1, len(arg)):
+                c = arg[j]
+                letter = c.isascii() and c.isalpha()
+                if c in _CURL_VALUED and letter:
+                    if j + 1 < len(arg):
+                        value = arg[j + 1:]
+                    else:
+                        i += 1
+                        value = args[i] if i < len(args) else None
+                    if value is None:
+                        return usage(spec_message("curl", "needsParameter", option="-" + c))
+                    opts.append((c, value, "-" + c))
+                    break
+                if c not in _CURL_FLAGS or not letter:
+                    return usage(spec_message("curl", "unknownOption", option="-" + c))
+                opts.append((c, None, "-" + c))
+        else:
+            urls.append(arg)
+        i += 1
+
+    def has(k: str) -> bool:
+        return any(o[0] == k for o in opts)
+
+    def last(k: str) -> str | None:
+        return next((o[1] for o in reversed(opts) if o[0] == k), None)
+
+    if has("h"):
+        ctx.stdout.write(spec.help)
+        return 0
+    if has("V"):
+        ctx.stdout.write(spec.version + "\n")
+        return 0
+    if not urls:
+        ctx.stderr.write(spec.try_help)
+        return 2
+
+    silent, head, verbose = has("s") and not has("S"), has("I"), has("v")
+    include = has("i") or head
+    fail, fail_with_body, follow, compressed, get = has("f"), has("\x06"), has("L"), has("\x08"), has("G")
+
+    max_time, max_redirs = 0.0, -1
+    for key, value, name in opts:
+        if key == "\x05":
+            n = _int32(value, True)
+            if n is None:
+                return usage(spec_message("curl", "badNumber", option=name))
+            max_redirs = n
+        elif key in ("m", "\x07"):
+            s = _float(value)
+            if s is None or s < 0:
+                return usage(spec_message("curl", "badNumber", option=name))
+            max_time = s if max_time == 0 else min(max_time, s)
+    timeout = _seconds(max_time) if max_time > 0 and _seconds(max_time) < web.policy.timeout else web.policy.timeout
+
+    # the body: -d values joined with &, as curl does
+    parts: list[bytes] = []
+    json_data = any_data = False
+    for key, value, name in opts:
+        if key not in ("d", "\x01", "\x02", "\x03", "\x04"):
+            continue
+        any_data = True
+        json_data |= key == "\x04"
+        try:
+            if key == "\x03":
+                data = _urlencode_data(value).encode()
+            elif key != "\x02" and value.startswith("@"):
+                f = value[1:]
+                data = bytetext.encode(ctx.stdin) if f == "-" else ctx.fs.read_bytes(ctx.resolve(f))
+                if key in ("d", "\x04"):
+                    data = data.replace(b"\r", b"").replace(b"\n", b"")
+            else:
+                data = bytetext.encode(value)
+        except ShellError:
+            ctx.stderr.write(spec_message("curl", "readFile", option=name) + "\n" + spec.try_help)
+            return 26
+        parts.append(data)
+    body = (b"" if json_data else b"&").join(parts) if any_data else None
+    query = body.decode("utf-8", "replace") if get and body is not None else None
+    if get:
+        body = None
+
+    headers = [("User-Agent", "curl/8.5.0"), ("Accept", "*/*")]
+    if body is not None:
+        _set_header(headers, "Content-Type", "application/json" if json_data else "application/x-www-form-urlencoded")
+    if json_data:
+        _set_header(headers, "Accept", "application/json")
+    if compressed:
+        _set_header(headers, "Accept-Encoding", "deflate, gzip")
+    agent = last("A")
+    if agent is not None:
+        _set_header(headers, "User-Agent", agent or None)
+    for key, h, _ in opts:
+        if key != "H":
+            continue
+        colon, semi = h.find(":"), h.find(";")
+        if colon > 0 and (semi < 0 or colon < semi):
+            v = h[colon + 1:].strip()
+            _set_header(headers, h[:colon].strip(), v or None)
+        elif semi > 0 and not h[semi + 1:].strip():
+            _set_header(headers, h[:semi].strip(), "")
+    user = last("u")
+
+    method = "HEAD" if head else "POST" if body is not None else "GET"
+    forced = last("X")
+    outputs = [(k, v) for k, v, _ in opts if k in ("o", "O")]
+    exit_code = 0
+
+    for raw in urls:
+        output = outputs.pop(0) if outputs else ("", None)
+        buffer = bytearray()
+        code = redirects = 0
+        hops: list = [None]  # the last response seen
+        message = ""
+        try:
+            url_text = raw
+            if query is not None:
+                url_text += ("&" if "?" in raw else "?") + query
+            url = WebUrl.parse(url_text)
+            sent = list(headers)
+            user_info = user if user is not None else unquote(url.user_info) if url.user_info is not None else None
+            if user_info is not None and not any(k.lower() == "authorization" for k, _ in sent):
+                sent.append(("Authorization", "Basic " + base64.b64encode((user_info if ":" in user_info else user_info + ":").encode()).decode()))
+            target = _remote_name(url) if output[0] == "O" else output[1]
+            if target == "":
+                raise WebFailure("recv", detail="noRemoteName")
+
+            def on_hop(r, sent=sent):
+                hops[0] = r
+                if verbose:
+                    out = [f"> {r.method} {r.url.path_and_query} HTTP/1.1\r\n> Host: {r.url.host_for_url}{'' if r.url.default_port else ':' + str(r.url.port)}\r\n"]
+                    out += [f"> {k}: {v}\r\n" for k, v in sent]
+                    out.append(f"> \r\n< HTTP/1.1 {r.status} {r.reason}\r\n")
+                    out += [f"< {k}: {v}\r\n" for k, v in r.headers]
+                    ctx.stderr.write("".join(out) + "< \r\n")
+                if include:
+                    buffer.extend(_status_block(r).encode())
+
+            last_r, redirects = await web.fetch(url, method, forced, sent, body, follow, max_redirs, timeout, on_hop, ctx.shell._deadline)
+            hops[0] = last_r
+            data = last_r.body
+            encoding = (last_r.header("Content-Encoding") or "").strip().lower()
+            if compressed and not last_r.truncated and encoding in ("gzip", "x-gzip", "deflate") and data:
+                data = _decompress(data, encoding != "deflate", web.policy.max_response_bytes)
+                if data is None:
+                    raise WebFailure("recv")
+            if (fail or fail_with_body) and last_r.status >= 400:
+                if fail_with_body:
+                    buffer.extend(data)
+                code = 22
+                message = spec_message("curl", "httpError", status=str(last_r.status))
+            else:
+                if not head:
+                    buffer.extend(data)
+                if last_r.truncated:
+                    code, message = 63, spec_message("curl", "tooLarge")
+            if target is not None and target != "-" and (code in (0, 63) or fail_with_body):
+                try:
+                    ctx.fs.write_bytes(ctx.resolve(target), bytes(buffer))
+                except ShellError:
+                    code, message = 23, spec_message("curl", "writeFailed")
+                buffer.clear()
+        except WebFailure as f:
+            code, message = _curl_error(f, web.policy.explain_blocked)
+        if buffer:
+            ctx.stdout.write(bytetext.decode(bytes(buffer)))
+        if code:
+            if not silent:
+                ctx.stderr.write(spec_message("curl", "error", code=str(code), message=message) + "\n")
+            exit_code = code
+        fmt = last("w")
+        if fmt is not None:
+            ctx.stdout.write(_write_out(ctx, fmt, hops[0], redirects, code, method, forced))
+    return exit_code
+
+
+def _curl_error(f: WebFailure, explain: bool) -> tuple[int, str]:
+    if f.blocked is not None and (explain or f.kind == "policy"):
+        return {"resolve": 6, "connect": 7}.get(f.kind, 1), spec_message("curl", "blocked", reason=f.blocked)
+    k = f.kind
+    if k == "bad_url":
+        return 3, spec_message("curl", "badUrl")
+    if k == "bad_hostname":
+        return 3, spec_message("curl", "badHostname")
+    if k == "protocol":
+        return 1, spec_message("curl", "protocol", scheme=f.host)
+    if k == "resolve":
+        return 6, spec_message("curl", "resolve", host=f.host)
+    if k == "connect":
+        return 7, spec_message("curl", "connect", host=f.host, port=str(f.port))
+    if k == "timeout":
+        return 28, spec_message("curl", "timeout", ms=f.detail or "0", bytes="0")
+    if k == "tls":
+        return 60, spec_message("curl", "tls", host=f.host)
+    if k == "redirects":
+        return 47, spec_message("curl", "redirects", max=f.detail)
+    if k == "bad_header":
+        return 43, spec_message("curl", "badHeader")
+    if k == "too_large":
+        return 63, spec_message("curl", "tooLarge")
+    if k == "replay":
+        return 7, spec_message("curl", "replay", request=f.detail)
+    if k == "recv" and f.detail == "noRemoteName":
+        return 23, spec_message("curl", "noRemoteName")
+    return 56, spec_message("curl", "recv")
+
+
+def _status_block(r) -> str:
+    return f"HTTP/1.1 {r.status} {r.reason}\r\n" + "".join(f"{k}: {v}\r\n" for k, v in r.headers) + "\r\n"
+
+
+def _urlencode_data(s: str) -> str:
+    """--data-urlencode: "name=value" encodes the value, "=value" and "value" encode it all; space is +."""
+    def enc(v: str) -> str:
+        return "".join(chr(b) if chr(b).isascii() and chr(b).isalnum() or chr(b) in "-._~" else "+" if b == 32 else f"%{b:02X}"
+                       for b in bytetext.encode(v))
+    eq = s.find("=")
+    return enc(s) if eq < 0 else enc(s[1:]) if eq == 0 else s[:eq] + "=" + enc(s[eq + 1:])
+
+
+def _decompress(data: bytes, gzip: bool, max_bytes: int) -> bytes | None:
+    """gzip or zlib-wrapped deflate, at most max_bytes out; None when the data is corrupt."""
+    try:
+        z = zlib.decompressobj(31 if gzip else 15)
+        out = z.decompress(data, max_bytes + 1)
+        if len(out) > max_bytes:
+            raise WebFailure("too_large")
+        return out
+    except zlib.error:
+        return None
+
+
+def _write_out(ctx, fmt: str, r, redirects: int, code: int, method: str, forced: str | None) -> str:
+    out: list[str] = []
+    i = 0
+    while i < len(fmt):
+        c = fmt[i]
+        if c == "\\" and i + 1 < len(fmt) and fmt[i + 1] in "ntr\\":
+            i += 1
+            out.append({"n": "\n", "t": "\t", "r": "\r"}.get(fmt[i], "\\"))
+        elif c != "%" or i + 1 >= len(fmt):
+            out.append(c)
+        elif fmt[i + 1] == "%":
+            out.append("%")
+            i += 1
+        elif fmt[i + 1] != "{" or fmt.find("}", i) < 0:
+            out.append(c)
+        else:
+            close = fmt.find("}", i)
+            name = fmt[i + 2:close]
+            i = close
+            location = r.header("Location") if r else None
+            if name in ("http_code", "response_code"):
+                out.append(f"{r.status if r else 0:03d}")
+            elif name == "content_type":
+                out.append((r.header("Content-Type") if r else None) or "")
+            elif name == "size_download":
+                out.append(str(len(r.body) if r else 0))
+            elif name == "url_effective":
+                out.append(str(r.url) if r else "")
+            elif name == "redirect_url":
+                if r is not None and 300 <= r.status < 400 and location:
+                    try:
+                        out.append(str(r.url.resolve(location)))
+                    except WebFailure:
+                        out.append(location)
+            elif name == "num_redirects":
+                out.append(str(redirects))
+            elif name == "method":
+                out.append(forced or (r.method if r else method))
+            elif name == "exitcode":
+                out.append(str(code))
+            else:
+                ctx.stderr.write(spec_message("curl", "unknownWriteOut", name=name) + "\n")
+        i += 1
+    return "".join(out)
+
+
+# ---------- wget ----------
+
+_WGET_LONG = {
+    "output-document": "O", "quiet": "q", "server-response": "S", "header": "\x01", "post-data": "\x02", "post-file": "\x03",
+    "user-agent": "U", "timeout": "T", "max-redirect": "\x04", "no-check-certificate": "\x05", "help": "h", "version": "V",
+}
+_WGET_VALUED = "OUT\x01\x02\x03\x04"
+
+
+async def _wget(ctx):
+    web = ctx.shell._web or _NO_NETWORK
+    spec = COMMANDS["wget"]
+
+    def usage(message: str, code: int = 2) -> int:
+        ctx.stderr.write(message + "\n" + spec.try_help)
+        return code
+
+    opts: list[tuple[str, str | None]] = []
+    urls: list[str] = []
+    args = ctx.args
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            urls += args[i + 1:]
+            break
+        if arg.startswith("--"):
+            eq = arg.find("=")
+            name = arg[2:] if eq < 0 else arg[2:eq]
+            key = _WGET_LONG.get(name)
+            if key is None:
+                return usage(spec_message("wget", "unrecognizedOption", option=arg if eq < 0 else arg[:eq]))
+            if key in _WGET_VALUED:
+                if eq >= 0:
+                    value = arg[eq + 1:]
+                else:
+                    i += 1
+                    value = args[i] if i < len(args) else None
+                if value is None:
+                    return usage(spec_message("wget", "longRequiresArgument", option=arg))
+                opts.append((key, value))
+            else:
+                opts.append((key, None))
+        elif arg.startswith("-") and len(arg) > 1:
+            for j in range(1, len(arg)):
+                c = arg[j]
+                if c not in "OqSUThV":
+                    return usage(spec_message("wget", "invalidOption", option=c))
+                if c in _WGET_VALUED:
+                    if j + 1 < len(arg):
+                        value = arg[j + 1:]
+                    else:
+                        i += 1
+                        value = args[i] if i < len(args) else None
+                    if value is None:
+                        return usage(spec_message("wget", "requiresArgument", option=c))
+                    opts.append((c, value))
+                    break
+                opts.append((c, None))
+        else:
+            urls.append(arg)
+        i += 1
+
+    def has(k: str) -> bool:
+        return any(o[0] == k for o in opts)
+
+    def last(k: str) -> str | None:
+        return next((o[1] for o in reversed(opts) if o[0] == k), None)
+
+    if has("h"):
+        ctx.stdout.write(spec.help)
+        return 0
+    if has("V"):
+        ctx.stdout.write(spec.version + "\n")
+        return 0
+    if not urls:
+        return usage(spec_message("wget", "missingUrl"), 1)
+
+    quiet, server = has("q"), has("S")
+    timeout = web.policy.timeout
+    t = last("T")
+    if t is not None:
+        s = _float(t)
+        if s is None or s < 0:
+            return usage(spec_message("wget", "badNumber", option="--timeout", value=t))
+        if s > 0 and _seconds(s) < timeout:
+            timeout = _seconds(s)
+    max_redirect = 20
+    mr = last("\x04")
+    if mr is not None:
+        n = _int32(mr, False)
+        if n is None:
+            return usage(spec_message("wget", "badNumber", option="--max-redirect", value=mr))
+        max_redirect = n
+
+    headers = [("User-Agent", "Wget/1.21.4"), ("Accept", "*/*"), ("Accept-Encoding", "identity")]
+    body = None
+    post = last("\x02")
+    if post is not None:
+        body = bytetext.encode(post)
+    post_file = last("\x03")
+    if post_file is not None:
+        try:
+            body = ctx.fs.read_bytes(ctx.resolve(post_file))
+        except ShellError as e:
+            ctx.stderr.write(spec_message("wget", "readFile", file=post_file, errno=_errno(e)) + "\n")
+            return 3
+    if body is not None:
+        _set_header(headers, "Content-Type", "application/x-www-form-urlencoded")
+    ua = last("U")
+    if ua is not None:
+        _set_header(headers, "User-Agent", ua)
+    for key, h in opts:
+        if key != "\x01":
+            continue
+        colon = h.find(":")
+        if colon <= 0:
+            return usage(spec_message("wget", "invalidHeader", header=h))
+        _set_header(headers, h[:colon].strip(), h[colon + 1:].strip())
+
+    # -O FILE is created before anything is fetched, and every body is appended to it
+    document = last("O")
+    if document is not None and document != "-":
+        try:
+            ctx.fs.write_bytes(ctx.resolve(document), b"")
+        except ShellError as e:
+            ctx.stderr.write(spec_message("wget", "writeFailed", file=document, errno=_errno(e)) + "\n")
+            return 1
+
+    def now() -> str:
+        return utc_now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def say(line: str) -> None:
+        if not quiet:
+            ctx.stderr.write(line + "\n")
+
+    exit_code = 0
+    for raw in urls:
+        code = 0
+        try:
+            url = WebUrl.parse(raw)
+        except WebFailure as f:
+            ctx.stderr.write((spec_message("wget", "scheme", url=raw, scheme=f.host) if f.kind == "protocol"
+                              else spec_message("wget", "badUrl", url=raw)) + "\n")
+            exit_code = 1
+            continue
+        say(spec_message("wget", "start", time=now(), url=str(url)))
+        hop = [0]
+
+        def on_hop(r):
+            if hop[0] > 0:
+                say(spec_message("wget", "start", time=now(), url=str(r.url)))
+            hop[0] += 1
+            say(spec_message("wget", "sent", status="" if server else f"{r.status} {r.reason}"))
+            if server:
+                ctx.stderr.write(f"  HTTP/1.1 {r.status} {r.reason}\n" + "".join(f"  {k}: {v}\n" for k, v in r.headers))
+            loc = r.header("Location")
+            if r.status in (301, 302, 303, 307, 308) and loc:
+                say(spec_message("wget", "following", location=loc))
+
+        try:
+            r, _ = await web.fetch(url, "POST" if body is not None else "GET", None, list(headers), body, True, max_redirect, timeout,
+                                   on_hop, ctx.shell._deadline)
+            if r.status >= 400:
+                say(spec_message("wget", "httpError", time=now(), status=f"{r.status}: {r.reason}"))
+                say("")
+                code = 8
+            else:
+                length, ctype = r.header("Content-Length"), r.header("Content-Type")
+                say(spec_message("wget", "length", length=(length or "unspecified") + (f" [{ctype}]" if ctype is not None else "")))
+                file = document
+                if file is None:
+                    name = _remote_name(url)
+                    file = unquote(name) if name else "index.html"
+                    if ctx.fs.exists(ctx.resolve(file)):
+                        n = 1
+                        while ctx.fs.exists(ctx.resolve(f"{file}.{n}")):
+                            n += 1
+                        file = f"{file}.{n}"
+                say(spec_message("wget", "saving", file="STDOUT" if file == "-" else file))
+                if file == "-":
+                    ctx.stdout.write(bytetext.decode(r.body))
+                else:
+                    try:
+                        path = ctx.resolve(file)
+                        ctx.fs.write_bytes(path, ctx.fs.read_bytes(path) + r.body if document is not None else r.body)
+                    except ShellError as e:
+                        ctx.stderr.write(spec_message("wget", "writeFailed", file=file, errno=_errno(e)) + "\n")
+                        exit_code = 3
+                        continue
+                say("")
+                size = str(len(r.body)) + (f"/{length}" if length is not None else "")
+                say(spec_message("wget", "written", time=now(), size=size) if file == "-"
+                    else spec_message("wget", "saved", time=now(), file=file, size=size))
+                say("")
+                if r.truncated:
+                    ctx.stderr.write(spec_message("wget", "tooLarge", limit=str(web.policy.max_response_bytes)) + "\n")
+                    code = 1
+        except WebFailure as f:
+            code, message = _wget_error(f, web.policy.explain_blocked)
+            if message and (not quiet or f.kind in ("policy", "replay", "bad_header")):
+                ctx.stderr.write(message + "\n")
+        if code:
+            exit_code = code
+    return exit_code
+
+
+def _wget_error(f: WebFailure, explain: bool) -> tuple[int, str]:
+    if f.blocked is not None and (explain or f.kind == "policy"):
+        return 4 if f.kind in ("resolve", "connect") else 1, spec_message("wget", "blocked", reason=f.blocked)
+    k = f.kind
+    if k in ("bad_url", "bad_hostname"):
+        return 1, spec_message("wget", "badUrl", url=f.host)
+    if k == "protocol":
+        return 1, spec_message("wget", "scheme", url=f.host + "://", scheme=f.host)
+    if k == "resolve":
+        return 4, spec_message("wget", "resolve", host=f.host)
+    if k == "connect":
+        return 4, spec_message("wget", "connect", host=f.host, port=str(f.port))
+    if k == "timeout":
+        return 4, spec_message("wget", "timeout")
+    if k == "tls":
+        return 5, spec_message("wget", "tls", host=f.host)
+    if k == "redirects":
+        return 8, spec_message("wget", "redirects", max=f.detail)
+    if k == "bad_header":
+        return 2, spec_message("wget", "invalidHeader", header="")
+    if k == "replay":
+        return 4, spec_message("wget", "replay", request=f.detail)
+    return 4, spec_message("wget", "recv")

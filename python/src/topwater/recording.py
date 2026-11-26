@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import inspect
 import io
 import json
@@ -20,9 +21,10 @@ from datetime import datetime
 
 from .shell import Shell, ShellResult
 from .snapshot import (_HOST, _USER, ShellSnapshot, SnapshotError, SnapshotVersionError, _check_entry_count, _dumps,
-                       _check_header, _is_int, _manifest_bytes, _manifest_json, _max_archive, _open, _open_zip, _put, _read, _read_manifest,
+                       _check_header, _is_int, _manifest_bytes, _manifest_json, _max_archive, _open, _open_zip, _put, _read, _read_capped, _read_manifest, _BLOB,
                        _read_outline, _save_zip, format_time, parse_time)
 from .vfs import utc_now
+from .webaccess import ERROR_KINDS, WebExchange, WebPolicy, WebSession
 
 HISTORY_VERSION = 1
 MAX_CHECKPOINTS = 1000  # the start included
@@ -61,6 +63,7 @@ class RecordedCall:
     time: datetime | None = None
     files: list[str] = field(default_factory=list)
     snapshot: ShellSnapshot | None = None
+    web: list[WebExchange] | None = None  # the web requests the call made and what came back, in order
 
 
 @dataclass(frozen=True)
@@ -96,12 +99,21 @@ class Recording:
         self.metadata: dict[str, str] = {}
         self.app_commands: list[str] = []
         self.calls: list[RecordedCall] = []
+        # the web access the shell had (Shell.allow_web), with the credentials' values and transport left out; a replay
+        # serves the recorded responses under it and never touches the network
+        self.web: WebPolicy | None = None
 
-    def create_shell(self, configure=None, start: ShellSnapshot | None = None) -> Shell:
-        """A fresh shell with the recording's options, then configure(shell) (register your commands), then the start (or `start`)."""
+    def create_shell(self, configure=None, start: ShellSnapshot | None = None, first_call: int = 0) -> Shell:
+        """A fresh shell with the recording's options, then configure(shell) (register your commands), then the start (or
+        `start`). first_call: the call the shell runs first, so its web requests get that call's recorded responses."""
         shell = Shell(**self.options)
         if configure is not None:
             configure(shell)
+        if self.web is not None:  # the recorded responses, never the network, and no credential is looked up
+            w = self.web
+            policy = WebPolicy(w.domains, w.methods, w.allow_http, w.max_response_bytes, w.max_requests_per_call, w.max_requests,
+                               w.timeout, w.max_redirects, {h: (lambda: "") for h in w.credentials}, w.explain_blocked)
+            shell._web = WebSession(policy, [x for c in self.calls[first_call:] for x in (c.web or [])])
         shell.restore(start or self.start)
         return shell
 
@@ -112,7 +124,7 @@ class Recording:
         at = index
         while at >= 0 and self.calls[at].snapshot is None:
             at -= 1
-        shell = self.create_shell(configure, self.calls[at].snapshot if at >= 0 else None)
+        shell = self.create_shell(configure, self.calls[at].snapshot if at >= 0 else None, at + 1)
         for call in self.calls[at + 1:index + 1]:
             shell.run(call.command)
         return shell
@@ -138,12 +150,12 @@ class Recording:
         def write(zf: zipfile.ZipFile) -> None:
             written: set[str] = set()
             checkpoints[-1][1]._write(zf, "manifest.json", written)
-            zf.writestr("history.jsonl", b"".join(_dumps(line) + b"\n" for line in self._history()))
+            zf.writestr("history.jsonl", b"".join(_dumps(line) + b"\n" for line in self._history(zf, written)))
             for n, snap in checkpoints:
                 snap._write(zf, f"checkpoints/{n}.json", written)
         _save_zip(file, write)
 
-    def _history(self):
+    def _history(self, zf: zipfile.ZipFile, written: set):
         o = self.options
         options = {"user": o["user"], "hostname": o["hostname"]}
         _put(options, startTime=self.start_time and format_time(self.start_time), randomSeed=self.random_seed)
@@ -153,12 +165,21 @@ class Recording:
         _put(header, created=self.created and format_time(self.created), topwater=self.topwater)
         header["options"] = options
         _put(header, appCommands=self.app_commands or None, metadata=self.metadata or None)
+        if self.web is not None:
+            p = self.web
+            header["web"] = {
+                "domains": list(p.domains), "methods": list(p.methods), "allowHttp": p.allow_http, "maxResponseBytes": p.max_response_bytes,
+                "maxRequestsPerCall": p.max_requests_per_call, "maxRequests": p.max_requests, "timeoutMs": int(p.timeout * 1000),
+                "maxRedirects": p.max_redirects, "explainBlocked": p.explain_blocked, "credentials": sorted(p.credentials),
+            }
         yield header
         for c in self.calls:
             line = {"index": c.index, "command": c.command, "stdout": c.stdout, "stderr": c.stderr, "exitCode": c.exit_code}
             _put(line, trailer=c.trailer)
             line["elapsedMs"] = round(c.elapsed_ms, 3)
             _put(line, time=c.time and format_time(c.time), files=c.files or None)
+            if c.web:
+                line["web"] = [_exchange_entry(x, zf, written) for x in c.web]
             yield line
 
     @staticmethod
@@ -203,8 +224,10 @@ class ShellRecorder:
         builtins = shell._builtin_names or set()
         self.recording.app_commands = sorted(n for n in shell.commands if n not in builtins)
 
-    def _add(self, command: str, result: ShellResult, elapsed_ms: float, started: datetime) -> None:
+    def _add(self, command: str, result: ShellResult, elapsed_ms: float, started: datetime, web: list | None = None) -> None:
         calls = self.recording.calls
+        if self.recording.web is None and self._shell._web is not None:
+            self.recording.web = self._shell._web.policy
         if calls and not self._marked and not (self._every > 0 and len(calls) % self._every == 0):
             calls[-1].snapshot = None  # it was only kept as the end state, and the end moved on
         self._marked = False
@@ -216,7 +239,7 @@ class ShellRecorder:
         keep = self._every > 0 and (len(calls) + 1) % self._every == 0
         snap = sh.snapshot() if keep else ShellSnapshot._lazy(sh.snapshot, sh.user, sh.hostname, utc_now())
         calls.append(RecordedCall(len(calls), command, result.stdout, result.stderr, result.exit_code, result.trailer,
-                                  elapsed_ms, started, self._changes.changes(), snap))
+                                  elapsed_ms, started, self._changes.changes(), snap, web or None))
 
     def snapshot_now(self) -> None:
         """Keeps a checkpoint of the machine now: after the last call (or as the start, before any)."""
@@ -305,6 +328,8 @@ def _new_recording(h: dict, start: ShellSnapshot, o: dict) -> Recording:
     if not isinstance(apps, list) or not all(isinstance(a, str) for a in apps):
         raise _bad("appCommands is not a list of strings")
     rec.metadata, rec.app_commands = dict(metadata), list(apps)
+    if h.get("web") is not None:
+        rec.web = _web_policy(h["web"])
     return rec
 
 
@@ -331,6 +356,76 @@ def _call(line: str, number: int, index: int) -> tuple[RecordedCall, dict]:
         raise _bad(f"line {number}: files is not a list of paths")
     t = None if e.get("time") is None else parse_time(e["time"], f"line {number}: time")
     return RecordedCall(index, command, stdout, stderr, code, trailer, float(elapsed), t, list(files)), e
+
+
+def _web_policy(w) -> WebPolicy:
+    """The header's policy: everything but the credentials' values and the transport."""
+    if not isinstance(w, dict):
+        raise _bad("bad web policy: not an object")
+
+    def get(name, check, default):
+        v = w.get(name)
+        if v is None:
+            return default
+        if not check(v):
+            raise _bad(f"bad web policy: bad {name}")
+        return v
+    strings = lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v)  # noqa: E731
+    boolean = lambda v: isinstance(v, bool)  # noqa: E731
+    policy = WebPolicy(
+        get("domains", strings, []), get("methods", strings, ["GET"]), get("allowHttp", boolean, False),
+        get("maxResponseBytes", _is_int, 0), get("maxRequestsPerCall", _is_int, 0), get("maxRequests", _is_int, 0),
+        min(max(get("timeoutMs", _is_int, 0), 0), 2**31 - 1) / 1000, get("maxRedirects", _is_int, 0),
+        {h: (lambda: "") for h in get("credentials", strings, [])}, get("explainBlocked", boolean, False))
+    try:
+        WebSession(policy)
+    except ValueError as e:
+        raise _bad(f"bad web policy: {e}") from None
+    return policy
+
+
+def _with_web(c: RecordedCall, web, number: int, blob) -> RecordedCall:
+    """The call with its line's web exchanges; blob(name, size, where) reads a response body (None: not a .topwater file)."""
+    if web is None:
+        return c
+    if not isinstance(web, list):
+        raise _bad(f"line {number}: web is not a list")
+    c.web = []
+    for i, x in enumerate(web):
+        where = f"line {number} web {i}"
+        if not isinstance(x, dict):
+            raise _bad(f"line {number}: null in web" if x is None else f"{where}: not an object")
+        m, u, error = x.get("method"), x.get("url"), x.get("error")
+        if not (isinstance(m, str) and m and isinstance(u, str) and u):
+            raise _bad(f"{where}: method and url are required")
+        if error is not None:
+            if error not in ERROR_KINDS:
+                raise _bad(f"{where}: unknown error {json.dumps(error)}")
+            c.web.append(WebExchange(m, u, error=error))
+            continue
+        status, size, reason, headers = x.get("status", 0), x.get("size", 0), x.get("reason"), x.get("headers")
+        if (not _is_int(status) or not 100 <= status <= 999 or not _is_int(size) or size < 0 or not (reason is None or isinstance(reason, str))
+                or not (headers is None or isinstance(headers, list) and all(isinstance(h, list) and len(h) == 2 and all(isinstance(v, str) for v in h)
+                                                                           for h in headers))):
+            raise _bad(f"{where}: bad response")
+        if blob is None:
+            raise _bad(f"{where}: web responses need a .topwater file")
+        c.web.append(WebExchange(m, u, status, reason or "", [(k, v) for k, v in headers or []], blob(x.get("body"), size, where)))
+    return c
+
+
+def _exchange_entry(x: WebExchange, zf: zipfile.ZipFile, written: set) -> dict:
+    """One request of a call and its response; the body is a blob (written now, so it is in the zip before history.jsonl)."""
+    if x.error is not None:
+        return {"method": x.method, "url": x.url, "error": x.error}
+    entry = {"method": x.method, "url": x.url, "status": x.status, "reason": x.reason, "headers": [[k, v] for k, v in x.headers]}
+    if x.body:
+        blob = entry["body"] = hashlib.sha256(x.body).hexdigest()
+        if blob not in written:
+            written.add(blob)
+            zf.writestr("blobs/" + blob, x.body)
+    entry["size"] = len(x.body)
+    return entry
 
 
 def _lines(f, max_bytes: int, o: dict, what: str):
@@ -378,7 +473,28 @@ def _read_topwater(src, o: dict) -> Recording:
             h = _header(next(lines, (1, ""))[1], "topwater-history", HISTORY_VERSION, "history")
             calls = []
             for n, line in lines:
-                calls.append(_call(line, n, len(calls))[0])
+                c, e = _call(line, n, len(calls))
+                calls.append((n, c, e.get("web")))  # only what is still needed: a capped history can hold 100000 calls
+        web_bytes = 0
+
+        def blob(name, size: int, where: str) -> bytes:
+            nonlocal web_bytes
+            web_bytes += size  # every response body together within one machine's worth of files
+            if web_bytes > o["max_file_system_bytes"]:
+                raise _bad(f"{where}: the recorded responses hold more than {o['max_file_system_bytes']} bytes (MaxFileSystemBytes)")
+            if size == 0:
+                return b""
+            if not (isinstance(name, str) and _BLOB.fullmatch(name)):
+                raise _bad(f"{where}: bad blob {json.dumps(name)}")
+            if "blobs/" + name not in names:
+                raise _bad(f"{where}: blob {name} is missing")
+            with zf.open("blobs/" + name) as st:
+                b = _read_capped(st, size, "blob " + name)
+            if len(b) != size or hashlib.sha256(b).hexdigest() != name:
+                raise _bad(f"{where}: blob {name} doesn't hold the {size} bytes it should")
+            return b
+
+        calls = [_with_web(c, web, n, blob) for n, c, web in calls]
         found = {}
         for name in names:
             if name.startswith("checkpoints/"):
@@ -475,7 +591,8 @@ def _read_jsonl(src, max_bytes: int, o: dict, open_snapshot) -> Recording:
         return s
 
     rec = _new_recording(h, snap(h.get("start"), "the start"), o)
-    for c, e in calls:
+    for n, (c, e) in enumerate(calls):
+        _with_web(c, e.get("web"), n + 2, None)
         c.snapshot = None if e.get("snapshot") is None else snap(e["snapshot"], f"call {c.index}")
         rec.calls.append(c)
     return rec

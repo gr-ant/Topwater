@@ -8,6 +8,7 @@ from .shell import CommandContext, RegisteredCommand, Shell, ShellResult
 from .snapshot import ShellSnapshot
 from .tools import ToolResult, ToolSpec, register_tools
 from .vfs import FileStat, ShellError, VirtualFileSystem
+from .webaccess import WebExchange, WebPolicy
 
 TOOL_NAME = "bash"
 
@@ -35,5 +36,5 @@ async def execute_tool(shell: Shell, command: str) -> str:
 __all__ = [
     "Shell", "ShellResult", "ShellSnapshot", "Recording", "RecordedCall", "RecordingError", "ShellRecorder", "CommandContext", "RegisteredCommand", "command", "ShellError", "ParseError",
     "VirtualFileSystem", "FileStat",
-    "ApiEndpoint", "register_api", "HostCommand", "bubblewrap", "register_host_command", "ToolSpec", "ToolResult", "register_tools", "TOOL_NAME", "TOOL_DESCRIPTION", "TOOL_INPUT_SCHEMA", "execute_tool",
+    "ApiEndpoint", "register_api", "WebPolicy", "WebExchange", "HostCommand", "bubblewrap", "register_host_command", "ToolSpec", "ToolResult", "register_tools", "TOOL_NAME", "TOOL_DESCRIPTION", "TOOL_INPUT_SCHEMA", "execute_tool",
 ]

@@ -20,6 +20,7 @@ from typing import Callable, Mapping, Sequence
 from urllib.parse import quote, unquote, urlsplit
 
 from .vfs import ShellError
+from .webaccess import secrets_of
 
 # headers that cannot carry a credential, change the destination or smuggle a second request
 ALLOWED_HEADERS = ("Accept", "Accept-Language", "Content-Type", "If-Match", "If-None-Match")
@@ -183,9 +184,7 @@ def register_api(shell, program: str, endpoints: Mapping[str, ApiEndpoint], tran
             ctx.stderr.write(f"{program}: the credentials for {alias} are not available\n")
             return 1
         credential = credential or ""
-        sp = credential.find(" ")
-        # a very short "secret" would shred ordinary output
-        secrets = sorted({s for s in (credential, credential[sp + 1:].strip() if sp > 0 else "") if len(s) >= 8}, key=len, reverse=True)
+        secrets = secrets_of(credential)
 
         def scrub(s: str) -> str:
             for secret in secrets:
