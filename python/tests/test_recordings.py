@@ -2,15 +2,19 @@
 the old JSON Lines recordings, and loading treated as hostile."""
 import io
 import json
+import os
 import sys
+import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace as L
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from topwater import Recording, RecordingError, Shell, ShellSnapshot  # noqa: E402
+from topwater import RecordedCall, Recording, RecordingError, Shell, ShellSnapshot  # noqa: E402
 from topwater.snapshot import SnapshotError, SnapshotVersionError  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -247,10 +251,61 @@ class HostileFiles(unittest.TestCase):
         self.assertIn("4 x MaxFileSystemBytes", self.rejected(saved(big), L(max_file_system_bytes=40_000)))
         Recording.load(saved(big), limits=L(max_file_system_bytes=70_000))
 
-    def test_history_is_read_capped(self):
-        rec = recorded("printf '%05000d' 0")
-        limits = L(max_string_bytes=1000, max_extract_entries=1)  # 4 x 1000 + 1024 x 1
-        self.assertIn("history.jsonl is larger than 5024 bytes", self.rejected(saved(rec), limits, SnapshotError))
+    def refused_fast(self, data: bytes, why: str, limits=None) -> None:
+        started = time.monotonic()
+        self.assertIn(why, self.rejected(data, limits))
+        self.assertLess(time.monotonic() - started, 5)
+
+    @staticmethod
+    def with_history(head: bytes, chunk: bytes, size: int) -> bytes:
+        """from-python.topwater with its history.jsonl replaced by `head` and then `chunk` repeated to `size` bytes, deflated
+        at level 9: a few hundred KB that expand a thousandfold."""
+        src = zipfile.ZipFile(RECORDINGS / "from-python.topwater")
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for n in src.namelist():
+                if n != "history.jsonl":
+                    z.writestr(n, src.read(n))
+            with z.open("history.jsonl", "w", force_zip64=True) as h:
+                h.write(head)
+                block = chunk * ((1 << 20) // len(chunk))
+                for _ in range(size // len(block)):
+                    h.write(block)
+        return out.getvalue()
+
+    def test_history_is_read_line_by_line_and_capped(self):
+        header = zipfile.ZipFile(RECORDINGS / "from-python.topwater").read("history.jsonl").split(b"\n")[0] + b"\n"
+        # 236 MB of blank lines, and 15.7 million calls: every line counts, past max_extract_entries + 1 it stops
+        self.refused_fast(self.with_history(header, b"\n", 236 << 20), "more than 100000 calls (MaxExtractEntries)")
+        self.refused_fast(self.with_history(header, b'{"command":""}\n', 236 << 20), "more than 100000 calls (MaxExtractEntries)")
+        # and the bytes: 2 x max_string_bytes
+        limits = L(max_string_bytes=1000)
+        self.refused_fast(saved(recorded("printf '%05000d' 0")), "history.jsonl is larger than 2000 bytes", limits)
+        # at the line cap exactly it loads: the header, 3 calls and blank lines make 100001 lines
+        history = zipfile.ZipFile(RECORDINGS / "from-python.topwater").read("history.jsonl")
+        self.assertEqual(4, history.count(b"\n"))
+        fixture = (RECORDINGS / "from-python.topwater").read_bytes()
+        self.assertEqual(3, len(Recording.load(rezip(fixture, lambda e: e.update({"history.jsonl": history + b"\n" * 99_997}))).calls))
+        self.refused_fast(rezip(fixture, lambda e: e.update({"history.jsonl": history + b"\n" * 99_998})), "more than 100000 calls")
+
+    def test_old_recordings_are_read_line_by_line_with_the_line_cap(self):
+        old = (RECORDINGS / "from-typescript.jsonl").read_bytes()  # a header and 3 calls, each ending in a newline
+        self.assertEqual(3, len(Recording.load(old + b"\n" * 99_997).calls))
+        self.refused_fast(old + b"\n" * 99_998, "more than 100000 calls")
+
+    def test_entries_are_budgeted_across_checkpoints(self):
+        sh = Shell()
+        sh.run("mkdir -p d/{1..7}{0..9}{0..9}")  # about 1000 entries: what max_extract_entries 1000 allows one machine
+        entries = len(sh.snapshot().entries)
+        self.assertLessEqual(entries, 1000)
+        rec = recorded()
+        rec.start = sh.snapshot()
+        limits = L(max_extract_entries=1000)
+        # with the start: one machine past 4 x 1000 entries
+        rec.calls = [RecordedCall(i, "true", "", "", 0, snapshot=rec.start) for i in range(4000 // entries)]
+        self.refused_fast(saved(rec), "the checkpoints hold more than 4000 files and directories together (4 x MaxExtractEntries)", limits)
+        rec.calls = rec.calls[:-1]
+        self.assertEqual(len(rec.calls), len(Recording.load(saved(rec), limits=limits).calls))
 
     def test_the_files_options_lower_limits_but_never_raise_them(self):
         rec = recorded("true")
@@ -332,6 +387,67 @@ class HostileFiles(unittest.TestCase):
             Recording.load(json.dumps({"format": "topwater-recording", "version": 2}).encode())
         self.assertIn("the header is not JSON", self.rejected(b"hello\n"))
         self.assertIn("not a topwater-recording header", self.rejected(b'{"format":"x"}\n'))
+
+
+    def test_two_entries_with_one_name_are_refused(self):
+        data = saved(recorded("echo hi > f"))
+        for name in ("history.jsonl", "manifest.json", "checkpoints/0.json"):
+            with self.subTest(name):
+                out = io.BytesIO()
+                with zipfile.ZipFile(io.BytesIO(data)) as src, zipfile.ZipFile(out, "w") as z:
+                    for n in src.namelist():
+                        z.writestr(n, src.read(n))
+                    with self.assertWarns(UserWarning):  # zipfile warns, then writes it
+                        z.writestr(name, src.read(name))
+                self.assertIn(f"entry {name} appears twice", self.rejected(out.getvalue(), error=SnapshotError))
+                with self.assertRaises(SnapshotError):
+                    ShellSnapshot.load(out.getvalue())
+
+    def test_entry_names_with_nul_are_refused(self):
+        # zipfile cuts a name at NUL, so checkpoints/1.json<NUL>x would read as checkpoint 1
+        data = rezip(saved(recorded("true", every=1)), lambda e: e.update({"checkpoints/1.jsonZx": e.pop("checkpoints/1.json")}))
+        data = data.replace(b"checkpoints/1.jsonZx", b"checkpoints/1.json\0x")
+        self.assertIn("has a NUL in its name", self.rejected(data, error=SnapshotError))
+
+
+class LoadThenSave(unittest.TestCase):
+    def test_a_loaded_recording_saves_back_to_its_own_path(self):
+        sh = Shell()
+        with sh.start_recording(snapshot_every=1) as r:
+            sh.run("echo x > a; ln a b; ln -s a s")
+            sh.run("echo more >> b")
+        with tempfile.TemporaryDirectory() as d:
+            mine = Path(d, "links.topwater")
+            r.save(mine)
+            for path in [mine] + sorted(RECORDINGS.glob("from-*.topwater")):
+                with self.subTest(path.name):
+                    copy = Path(d, "copy-" + path.name)
+                    copy.write_bytes(path.read_bytes())
+                    first = Recording.load(copy)
+                    first.save(copy)
+                    again = Recording.load(copy)
+                    fields = [(c.command, c.stdout, c.stderr, c.exit_code, c.files, c.snapshot is None) for c in first.calls]
+                    self.assertEqual(fields, [(c.command, c.stdout, c.stderr, c.exit_code, c.files, c.snapshot is None) for c in again.calls])
+                    probe = "cd /home/agent; ls -laR --time-style=+ | sort; cat a b 2>&1; stat -c '%h %n' a b 2>&1"
+                    self.assertEqual(Shell.load(path).run(probe).stdout, Shell.load(copy).run(probe).stdout)
+            self.assertEqual("x\nmore\n2 b\n", Shell.load(mine).run("cat a; stat -c '%h %n' b").stdout)
+
+    def test_a_save_that_fails_leaves_the_file_as_it_was(self):
+        rec = recorded("echo hi > f", every=1)
+
+        def broken(self, zf, name, written):
+            zf.writestr("blobs/partial", b"x" * 1000)
+            raise OSError("disk full")
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "r.topwater")
+            rec.save(path)
+            before = path.read_bytes()
+            for save in (rec.save, rec.start.save):
+                with mock.patch.object(ShellSnapshot, "_write", broken), self.assertRaises(OSError):
+                    save(path)
+                self.assertEqual(before, path.read_bytes())
+                self.assertEqual(["r.topwater"], os.listdir(d))  # no temporary file left behind
 
 
 if __name__ == "__main__":

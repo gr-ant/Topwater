@@ -19,13 +19,14 @@ from datetime import datetime
 
 from .shell import Shell, ShellResult
 from .snapshot import (_HOST, _USER, ShellSnapshot, SnapshotError, SnapshotVersionError, _check_entry_count, _dumps,
-                       _is_int, _max_archive, _max_manifest, _open, _read, _read_capped, _read_manifest, _put,
-                       format_time, parse_time)
+                       _is_int, _max_archive, _open, _open_zip, _put, _read, _read_manifest, _save_zip, format_time,
+                       parse_time)
 from .vfs import utc_now
 
 HISTORY_VERSION = 1
 MAX_CHECKPOINTS = 1000  # the start included
-MAX_CHECKPOINTS_FILE_SYSTEMS = 4  # all checkpoints' files together: at most this many times max_file_system_bytes
+MAX_CHECKPOINTS_FILE_SYSTEMS = 4  # all checkpoints' files together: at most this many times max_file_system_bytes,
+# and this many times max_extract_entries entries
 
 # the Shell() arguments a recording keeps, with their names in the file
 _OPTIONS = {"max_loop_iterations": "maxLoopIterations", "max_extract_bytes": "maxExtractBytes",
@@ -133,12 +134,13 @@ class Recording:
     def save(self, file) -> None:
         """Writes the recording to a path or a binary file as a .topwater zip."""
         checkpoints = [(0, self.start)] + [(i + 1, c.snapshot) for i, c in enumerate(self.calls) if c.snapshot is not None]
-        with zipfile.ZipFile(file, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+        def write(zf: zipfile.ZipFile) -> None:
             written: set[str] = set()
             checkpoints[-1][1]._write(zf, "manifest.json", written)
             zf.writestr("history.jsonl", b"".join(_dumps(line) + b"\n" for line in self._history()))
             for n, snap in checkpoints:
                 snap._write(zf, f"checkpoints/{n}.json", written)
+        _save_zip(file, write)
 
     def _history(self):
         o = self.options
@@ -177,7 +179,8 @@ class Recording:
                 head = src.read(2)
                 src.seek(-len(head), os.SEEK_CUR)
                 zipped = head == b"PK"  # zips are told by their signature, not their name
-                return _read_topwater(src, o) if zipped else _read_jsonl(src.read().decode("utf-8"), o, open_snapshot)
+                # an old recording is not compressed: its size, capped above, is what a sender must send
+                return _read_topwater(src, o) if zipped else _read_jsonl(src, 4 * _max_archive(o), o, open_snapshot)
             finally:
                 if src is not file:
                     src.close()
@@ -324,9 +327,39 @@ def _call(line: str, number: int, index: int) -> tuple[RecordedCall, dict]:
     return RecordedCall(index, command, stdout, stderr, code, trailer, float(elapsed), t, list(files)), e
 
 
+def _lines(f, max_bytes: int, o: dict, what: str):
+    """(line number, text) for each line of a binary stream that isn't blank, read one line at a time: a deflated file
+    can expand a thousandfold, so nothing is read past max_bytes or past the last line a recording may have."""
+    max_lines = o["max_extract_entries"] + 1  # the header and the calls; blank lines count too, as they cost reading
+    left, n = max_bytes, 0
+    while line := f.readline(left + 1):
+        left -= len(line)
+        if left < 0:
+            raise _bad(f"{what} is larger than {max_bytes} bytes")
+        n += 1
+        if n > max_lines:
+            raise _bad(f"more than {max_lines - 1} calls (MaxExtractEntries)")
+        line = line.rstrip(b"\n")
+        if line or n == 1:
+            yield n, line.decode("utf-8")
+
+
+def _file_budget(o: dict, what: str):
+    """count_files for every machine of one file: their entries together are capped, counted before any is built."""
+    cap, total = MAX_CHECKPOINTS_FILE_SYSTEMS * o["max_extract_entries"], 0
+
+    def count(n: int) -> None:
+        nonlocal total
+        total += n
+        if total > cap:
+            raise _bad(f"the {what} hold more than {cap} files and directories together "
+                       f"({MAX_CHECKPOINTS_FILE_SYSTEMS} x MaxExtractEntries)")
+    return count
+
+
 def _read_topwater(src, o: dict) -> Recording:
     _check_entry_count(src, o)
-    with zipfile.ZipFile(src) as zf:
+    with _open_zip(src) as zf:
         names = set(zf.namelist())
         if "history.jsonl" not in names:  # a snapshot: a recording without calls
             start = _read_manifest(zf, names, "manifest.json", o)[0]
@@ -334,9 +367,11 @@ def _read_topwater(src, o: dict) -> Recording:
             rec.created, rec.topwater = start.created, None
             return rec
         with zf.open("history.jsonl") as f:
-            lines = _read_capped(f, _max_manifest(o), "history.jsonl").decode("utf-8").split("\n")
-        h = _header(lines[0], "topwater-history", HISTORY_VERSION, "history")
-        calls = [_call(line, n + 2, n)[0] for n, line in enumerate(x for x in lines[1:] if x)]
+            lines = _lines(f, 2 * o["max_string_bytes"], o, "history.jsonl")
+            h = _header(next(lines, (1, ""))[1], "topwater-history", HISTORY_VERSION, "history")
+            calls = []
+            for n, line in lines:
+                calls.append(_call(line, n, len(calls))[0])
         found = {}
         for name in names:
             if name.startswith("checkpoints/"):
@@ -349,9 +384,9 @@ def _read_topwater(src, o: dict) -> Recording:
         if len(found) > MAX_CHECKPOINTS:
             raise _bad(f"more than {MAX_CHECKPOINTS} checkpoints")
         total, cap, cache = 0, MAX_CHECKPOINTS_FILE_SYSTEMS * o["max_file_system_bytes"], {}
-        snaps = {}
+        snaps, count_files = {}, _file_budget(o, "checkpoints")
         for n in sorted(found):
-            snaps[n], size = _read_manifest(zf, names, found[n], o, cache)
+            snaps[n], size = _read_manifest(zf, names, found[n], o, cache, count_files)
             total += size
             if total > cap:
                 raise _bad(f"the checkpoints hold more than {cap} bytes of files together "
@@ -363,14 +398,17 @@ def _read_topwater(src, o: dict) -> Recording:
         return rec
 
 
-def _read_jsonl(text: str, o: dict, open_snapshot) -> Recording:
+def _read_jsonl(src, max_bytes: int, o: dict, open_snapshot) -> Recording:
     """The JSON Lines recording Topwater wrote before the .topwater file: snapshots embedded as base64 zips or in side-car files."""
-    lines = text.split("\n")
-    h = _header(lines[0], "topwater-recording", 1, "recording")
-    calls = [_call(line, n, i) for i, (n, line) in enumerate((n, x) for n, x in enumerate(lines[1:], 2) if x)]
+    lines = _lines(src, max_bytes, o, "the recording")
+    h = _header(next(lines, (1, ""))[1], "topwater-recording", 1, "recording")
+    calls = []
+    for n, line in lines:
+        calls.append(_call(line, n, len(calls)))
     if 1 + sum(e.get("snapshot") is not None for _, e in calls) > MAX_CHECKPOINTS:  # counted before any is read
         raise _bad(f"more than {MAX_CHECKPOINTS} snapshots")
     total, cap = 0, MAX_CHECKPOINTS_FILE_SYSTEMS * o["max_file_system_bytes"]
+    count_files = _file_budget(o, "snapshots")
 
     def snap(ref, what: str) -> ShellSnapshot:
         nonlocal total
@@ -391,7 +429,7 @@ def _read_jsonl(text: str, o: dict, open_snapshot) -> Recording:
             data = open_snapshot(rel)
         else:
             raise _bad(f"{what} has no snapshot")
-        s, size = _read(data, o)
+        s, size = _read(data, o, count_files)
         total += size
         if total > cap:
             raise _bad(f"the snapshots hold more than {cap} bytes of files together ({MAX_CHECKPOINTS_FILE_SYSTEMS} x MaxFileSystemBytes)")

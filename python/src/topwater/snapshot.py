@@ -10,6 +10,7 @@ import json
 import os
 import re
 import struct
+import tempfile
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -59,8 +60,7 @@ class ShellSnapshot:
 
     def save(self, file) -> None:
         """Writes the snapshot to a path or a binary file as a zip: manifest.json and blobs/<sha256> (each content once)."""
-        with zipfile.ZipFile(file, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
-            self._write(zf, "manifest.json", set())
+        _save_zip(file, lambda zf: self._write(zf, "manifest.json", set()))
 
     def _write(self, zf: zipfile.ZipFile, name: str, written: set) -> None:
         """Writes this machine as the manifest `name` and the blobs not in `written` yet (a .topwater file shares them)."""
@@ -71,7 +71,7 @@ class ShellSnapshot:
             entry = {"path": path, "type": kind, "mode": f"{mode:04o}", "owner": owner, "mtime": format_time(modified)}
             _put(entry, target=link_target, link=hard_link)
             links |= link_target is not None or hard_link is not None
-            if kind == "file":
+            if kind == "file" and hard_link is None:  # another name of a file has no content of its own: the first name holds it
                 binary = data is not None
                 if not binary:
                     try:
@@ -250,20 +250,54 @@ def _check_entry_count(src, o: dict) -> None:
     src.seek(pos)
 
 
-def _read(file, o: dict) -> tuple[ShellSnapshot, int]:
+def _save_zip(file, write) -> None:
+    """Writes a zip with write(zf) to a binary file, or to a path through a temporary file renamed over it, so a failure
+    leaves the old file as it was."""
+    if not isinstance(file, (str, os.PathLike)):
+        with zipfile.ZipFile(file, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+            write(zf)
+        return
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(file)), prefix=".topwater-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            with zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+                write(zf)
+        os.chmod(tmp, os.stat(file).st_mode & 0o7777 if os.path.exists(file) else 0o644)  # mkstemp makes it 0600
+        os.replace(tmp, file)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+def _open_zip(src) -> zipfile.ZipFile:
+    zf = zipfile.ZipFile(src)
+    seen = set()
+    for info in zf.infolist():
+        why = (f"entry {json.dumps(info.orig_filename)} has a NUL in its name" if "\0" in info.orig_filename  # zipfile cuts it there
+               else f"entry {info.filename} appears twice" if info.filename in seen  # readers disagree on which one counts
+               else None)
+        if why:
+            zf.close()
+            raise SnapshotError(why)
+        seen.add(info.filename)
+    return zf
+
+
+def _read(file, o: dict, count_files=None) -> tuple[ShellSnapshot, int]:
     src = _open(file, _max_archive(o))
     try:
         _check_entry_count(src, o)
-        with zipfile.ZipFile(src) as zf:
-            return _read_manifest(zf, set(zf.namelist()), "manifest.json", o)
+        with _open_zip(src) as zf:
+            return _read_manifest(zf, set(zf.namelist()), "manifest.json", o, count_files=count_files)
     finally:
         if src is not file:
             src.close()
 
 
-def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: dict | None = None) -> tuple[ShellSnapshot, int]:
+def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: dict | None = None,
+                   count_files=None) -> tuple[ShellSnapshot, int]:
     """Reads and checks the manifest (or checkpoint) `name`; returns the machine and the bytes its files hold. `cache` shares
-    identical contents between the manifests of one file."""
+    identical contents between the manifests of one file; count_files(n) is told how many entries it lists before any is built."""
     if name not in names:
         raise SnapshotError(f"{name} is missing")
     with zf.open(name) as f:
@@ -283,7 +317,10 @@ def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: d
         raise SnapshotError(f"unknown format version {version}")
     user = _check(m.get("user"), _USER, "user")
     hostname = _check(m.get("hostname"), _HOST, "hostname")
-    entries, total = _read_files(zf, names, _list(m.get("files"), "files"), o, {} if cache is None else cache)
+    files = _list(m.get("files"), "files")
+    if count_files is not None:
+        count_files(len(files))
+    entries, total = _read_files(zf, names, files, o, {} if cache is None else cache)
     state = _read_state(m, o)
     return ShellSnapshot(entries, state, user, hostname, parse_time(m.get("created"), "created")), total
 
