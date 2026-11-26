@@ -888,6 +888,11 @@ async def _xargs(ctx):
             argv = command + group
         if a.has("t"):
             ctx.stderr.write(" ".join(argv) + "\n")
+        from . import exec_failure
+        failure = exec_failure(ctx.shell, argv[0])
+        if failure is not None:
+            ctx.error("xargs: " + spec_message("xargs", "cannotRun", command=argv[0], errno=failure[0]))
+            return failure[1]
         rc = await ctx.invoke(argv)
         if rc == 127:
             return 127
@@ -1184,19 +1189,28 @@ def _sed_parse(parts: list[tuple[str, str]], extended: bool) -> list[_SedCmd]:
             labels[label] = len(cmds)
         elif op in "btT":
             c.label = (read_label().split() or [""])[0]  # `bx p` jumps to x; what follows a blank is not read
+        elif op in "rR":
+            # the file name is the rest of the line, as in GNU sed
+            skip_blanks()
+            name_start = i
+            while i < n and script[i] != "\n":
+                i += 1
+            c.text = script[name_start:i]
+            if not c.text:
+                raise fail(spec_message("sed", "missingFilename"), i)
         elif op == "v":
             read_label()  # "requires GNU sed VERSION": always met
         elif op in "qQ":
             skip_blanks()
             c.code = read_number() if i < n and script[i].isdigit() else 0
         else:
-            if op in "rRwW" and not read_label():
+            if op in "wW" and not read_label():
                 raise fail(spec_message("sed", "missingFilename"), i)
             if op not in "=dDgGhHnNpPxz":
                 raise fail(spec_message("sed", "unknownCommand", op=op), at)
         cmds.append(c)
         skip_blanks()
-        if op not in "{:" and i < n and script[i] not in ";\n}#":
+        if op not in "{:rR" and i < n and script[i] not in ";\n}#":
             raise fail(spec_message("sed", "extraCharacters"), i + 1)
     if blocks:
         raise fail(spec_message("sed", "unmatchedBrace"), blocks[-1][1], char_zero=True)
@@ -1333,8 +1347,10 @@ def _sed_matches(c: _SedCmd, ps: str, n: int, last: bool) -> bool:
     return result != c.negate
 
 
-def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> int | None:
-    """Runs a parsed script over text. Returns the q/Q exit code if the script quit, else None."""
+def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None, read_file=lambda f: None) -> int | None:
+    """Runs a parsed script over text. Returns the q/Q exit code if the script quit, else None.
+    read_file: a file's text for r and R, or None when it can't be read (sed then adds nothing)."""
+    r_lines: dict = {}  # R: each file's lines not yet used
     lines = split_lines(text)
     trailing = text.endswith("\n")
     for c in cmds:
@@ -1354,6 +1370,18 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
         else:
             out.write("\n")
 
+    def write_appends(appends):  # a and R add a line; r adds a file as it is
+        nonlocal pending_newline
+        for t, raw in appends:
+            if not raw:
+                write(t)
+                continue
+            if pending_newline:
+                out.write("\n")
+                pending_newline = False
+            out.write(t)
+        appends.clear()
+
     exit_code = None
     ps = ""
     reread = True
@@ -1367,7 +1395,7 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
             idx += 1
             n += 1
         reread = True
-        appends: list[str] = []
+        appends: list[tuple[str, bool]] = []
         tflag = False
         autoprint = not quiet
         pc = 0
@@ -1411,9 +1439,7 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
                     break  # no next line: GNU sed ends here, printing the pattern space
                 if not quiet:
                     write(ps, True)
-                for t in appends:
-                    write(t)
-                appends = []
+                write_appends(appends)
                 ps = lines[idx]
                 idx += 1
                 n += 1
@@ -1440,7 +1466,18 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
             elif op == "=":
                 write(str(n))
             elif op == "a":
-                appends.append(c.text)
+                appends.append((c.text, False))
+            elif op == "r":
+                content = read_file(c.text)
+                if content:
+                    appends.append((content, True))
+            elif op == "R":
+                if c.text not in r_lines:
+                    whole = read_file(c.text)
+                    r_lines[c.text] = iter(split_lines(whole) if whole is not None else [])
+                line = next(r_lines[c.text], None)
+                if line is not None:
+                    appends.append((line, False))
             elif op == "i":
                 write(c.text)
             elif op == "c":
@@ -1468,8 +1505,7 @@ def _sed_execute(cmds: list[_SedCmd], text: str, out, quiet: bool, ctx=None) -> 
                 break
         if autoprint:
             write(ps, True)
-        for t in appends:
-            write(t)
+        write_appends(appends)
     return exit_code
 
 
@@ -1566,6 +1602,21 @@ def _sed(ctx):
     if scripts[0][0].startswith("#n"):  # "#n" opening the script means -n
         quiet = True
     cmds = _sed_parse(scripts, extended)
+    stdin_read = False
+
+    def read_file(f):
+        nonlocal stdin_read
+        if f == "/dev/stdin":  # stdin is read once
+            if stdin_read:
+                return ""
+            stdin_read = True
+            return ctx.stdin
+        try:
+            path = ctx.resolve(f)
+            return ctx.fs.read_text(path) if ctx.fs.is_file(path) else None
+        except ShellError:
+            return None
+
     if in_place:
         if not files:
             raise ShellError(spec_message("sed", "noInputFiles"), 1)
@@ -1583,7 +1634,7 @@ def _sed(ctx):
                     code = 2
                 continue
             buf = io.StringIO()
-            quit_code = _sed_execute(cmds, original, buf, quiet, ctx)
+            quit_code = _sed_execute(cmds, original, buf, quiet, ctx, read_file)
             if suffix:
                 backup = suffix.replace("*", f.rsplit("/", 1)[-1]) if "*" in suffix else f + suffix
                 ctx.fs.write_text(ctx.resolve(backup), original)
@@ -1597,12 +1648,12 @@ def _sed(ctx):
     texts = [t for _, t in inputs(ctx, files, errors)]
     if separate:
         for t in texts:
-            quit_code = _sed_execute(cmds, t, ctx.stdout, quiet, ctx)
+            quit_code = _sed_execute(cmds, t, ctx.stdout, quiet, ctx, read_file)
             if quit_code is not None:
                 return quit_code
     else:
         joined = "".join(t if t.endswith("\n") or k == len(texts) - 1 else t + "\n" for k, t in enumerate(texts))
-        quit_code = _sed_execute(cmds, joined, ctx.stdout, quiet, ctx)
+        quit_code = _sed_execute(cmds, joined, ctx.stdout, quiet, ctx, read_file)
         if quit_code is not None:
             return quit_code
     return 4 if any(f != "-" and ctx.fs.is_dir(ctx.resolve(f)) for f in files) else 2 if errors.hit else 0  # 4: a read error (a directory)

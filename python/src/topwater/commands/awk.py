@@ -11,6 +11,7 @@ import random
 import re
 from dataclasses import dataclass
 
+from .._spec import COMMANDS
 from ..vfs import ShellError
 from . import split_lines, unescape
 
@@ -42,6 +43,8 @@ def to_num(v) -> float:
 def fmt_number(v: float, fmt: str = "%.6g") -> str:
     if math.isfinite(v) and v == math.floor(v):
         return str(int(v))  # like gawk, integral values print as integers however large
+    if math.isnan(v) and fmt[-1:] in "gG":
+        return "-nan"  # shortcut: mawk shows x86's default NaN (0/0, x%0, log(-1)) as -nan; a negated one would be nan
     return fmt % v
 
 
@@ -99,9 +102,13 @@ def sprintf(fmt: str, args: list) -> str:
         v = nxt()
         if conv in "diouxX":
             n = to_num(v)
-            return (spec + ("d" if conv in "iu" else conv)) % (0 if math.isnan(n) else int(n))
+            # shortcut: out-of-range values (inf from x/0) clamp to the long range; mawk prints its own large numbers there
+            return (spec + ("d" if conv in "iu" else conv)) % (0 if math.isnan(n) else int(max(-9.2e18, min(9.2e18, n))))
         if conv in "eEfFgG":
-            return (spec + conv) % to_num(v)
+            n = to_num(v)
+            if conv in "gG" and math.isnan(n):
+                return (spec + "s") % "-nan"
+            return (spec + conv) % n
         if conv == "c":
             ch = chr(int(v)) if isinstance(v, float) else to_str(v)[:1]
             return (spec + "s") % ch
@@ -1153,8 +1160,11 @@ class _Runner:
 
     @staticmethod
     def arith(op: str, l: float, r: float) -> float:
-        if op in ("/", "%") and r == 0:
-            raise AwkError("division by zero" + (" in %" if op == "%" else ""))
+        # mawk (Ubuntu's awk): IEEE results, inf or -nan, not an error
+        if op == "/" and r == 0:
+            return math.nan if l == 0 or math.isnan(l) else math.copysign(math.inf, l) * math.copysign(1, r)
+        if op == "%" and r == 0:
+            return math.nan
         if op == "+":
             return l + r
         if op == "-":
@@ -1343,7 +1353,7 @@ class _Runner:
                 i += 1
                 break
             if a == "--version" or (a == "-W" and i + 1 < len(args) and args[i + 1] == "version"):
-                ctx.print("GNU Awk 5.2.1, API 3.2, PMA Avon 8-g1, (GNU MPFR 4.2.1, GNU MP 6.3.0)")
+                ctx.print(COMMANDS["awk"].version)
                 return 0
             if len(a) < 2 or a[0] != "-":
                 break

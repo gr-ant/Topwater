@@ -235,6 +235,8 @@ class SnapshotTests(unittest.TestCase):
         sh = Shell()
         sh.fs.write_text("/home/agent/a", "same")
         sh.fs.write_text("/home/agent/b", "same")
+        for link in ("/etc/os-release", "/var/run", "/var/lock", "/proc/self"):
+            sh.fs.delete(link)  # the default machine's links
         zf = zipfile.ZipFile(io.BytesIO(save(sh)))
         m = json.loads(zf.read("manifest.json"))
         self.assertEqual(("topwater-snapshot", 1), (m["format"], m["version"]))  # no links: written as version 1, which older Topwater reads

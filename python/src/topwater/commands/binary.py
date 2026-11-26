@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from .._spec import COMMANDS
-from ..vfs import ShellError
+import re
+
+from ..vfs import ShellError, UsageException
 from . import Args, inputs, spec_message
 from .text import _Errors
 
@@ -83,8 +85,10 @@ _OD_ESCAPES = {0: "\\0", 7: "\\a", 8: "\\b", 9: "\\t", 10: "\\n", 11: "\\v", 12:
 
 def _od(ctx):
     a = Args.parse(ctx.args, COMMANDS["od"])
-    errors = _Errors()
-    data = _slice(_read(ctx, a.positional, errors), _num(a.value("j") or "0"), _num(a.value("N")) if a.value("N") is not None else None)
+    failed = []
+    data = _slice(_read(ctx, a.positional, lambda: failed.append(1)), _num(a.value("j") or "0"), _num(a.value("N")) if a.value("N") is not None else None)
+    if failed and len(failed) == len(a.positional):
+        return 1  # no input could be read: GNU od prints no offset either
     fmt = a.value("t") or ("c" if a.has("c") else "x2" if a.has("x") else "o2")
     fmt = {"x": "x4", "o": "o4"}.get(fmt, fmt)
     radix = a.value("A") or "o"
@@ -112,7 +116,78 @@ def _od(ctx):
         ctx.print("*" if chunk is None else addr(i) + cells(chunk))
     if radix != "n":
         ctx.print(addr(len(data)))
-    return 1 if errors.hit else 0
+    return 1 if failed else 0
+
+
+def _visible(b: int) -> str:
+    """A byte as cmp -b shows it: printable as itself, control bytes as ^X, high bytes as M- and the low byte's form."""
+    return "M-" + _visible(b - 128) if b >= 128 else "^" + chr(b + 64) if b < 32 else "^?" if b == 127 else chr(b)
+
+
+def _cmp(ctx):
+    a = Args.parse(ctx.args, COMMANDS["cmp"])
+    ops = a.positional
+    if not ops:
+        raise UsageException(spec_message("cmp", "missingOperand"))
+    if len(ops) > 4:
+        raise UsageException(spec_message("cmp", "extraOperand", operand=ops[4]))
+
+    def number(s, option):
+        if s is None:
+            return 0
+        if re.fullmatch(r"\s*\+?\d+\s*", s) or re.fullmatch(r"\s*-0+\s*", s):
+            return int(s)
+        raise UsageException(spec_message("cmp", "invalidNumber", option=option, value=s))
+
+    i_value = a.value("i")
+    skips = (i_value or "").split(":")
+    skip1 = number(ops[2], "ignore-initial") if len(ops) > 2 else number(None if i_value is None else skips[0], "ignore-initial")
+    skip2 = number(ops[3], "ignore-initial") if len(ops) > 3 else number(None if i_value is None else skips[-1], "ignore-initial")
+    limit = number(a.value("n"), "bytes") if a.value("n") is not None else None
+    silent, verbose, show = a.has("s"), a.has("l"), a.has("b")
+    names = [ops[0], ops[1] if len(ops) > 1 else "-"]
+    data = [d for _, d in inputs(ctx, names, lambda: None, raw=True, quiet=silent)]
+    if len(data) < 2:
+        return 2
+    x, y = data[0][skip1:], data[1][skip2:]
+    common = min(len(x), len(y))
+    end = min(common, limit) if limit is not None else common
+    # shortcut: -l pads positions to the digits of the compared length, which matches GNU for ordinary files
+    longest = max(len(x), len(y))
+    width = max(1, len(str(min(longest, limit) if limit is not None else longest)))
+    line, differ = 1, False
+    for i in range(end):
+        if x[i] == y[i]:
+            if x[i] == 10:
+                line += 1
+            continue
+        differ = True
+        if silent:
+            return 1
+        if not verbose:
+            if show:
+                ctx.print(spec_message("cmp", "differBytes", file1=names[0], file2=names[1], byte=str(i + 1), line=str(line),
+                                       byte1=f"{x[i]:3o} {_visible(x[i])}", byte2=f"{y[i]:3o} {_visible(y[i])}"))
+            else:
+                ctx.print(spec_message("cmp", "differ", file1=names[0], file2=names[1], byte=str(i + 1), line=str(line)))
+            return 1
+        pos = str(i + 1).rjust(width)
+        ctx.print(f"{pos} {x[i]:3o} {_visible(x[i]):<4} {y[i]:3o} {_visible(y[i])}" if show else f"{pos} {x[i]:3o} {y[i]:3o}")
+    if len(x) == len(y) or (limit is not None and end >= limit):
+        return 1 if differ else 0
+    if not silent:
+        short_name, shorter = (names[0], x) if len(x) < len(y) else (names[1], y)
+        newlines = shorter.count(10)
+        if not shorter:
+            message = spec_message("cmp", "eofEmpty", file=short_name)
+        elif verbose:
+            message = spec_message("cmp", "eofVerbose", file=short_name, byte=str(len(shorter)))
+        elif shorter[-1] == 10:
+            message = spec_message("cmp", "eof", file=short_name, byte=str(len(shorter)), line=str(newlines))
+        else:
+            message = spec_message("cmp", "eofInLine", file=short_name, byte=str(len(shorter)), line=str(newlines + 1))
+        ctx.error("cmp: " + message)
+    return 1
 
 
 def _strings(ctx):
@@ -133,6 +208,7 @@ def _strings(ctx):
 
 def register(shell) -> None:
     r = shell.register_command
+    r("cmp", _cmp)
     r("xxd", _xxd)
     r("hexdump", _hexdump)
     r("od", _od)

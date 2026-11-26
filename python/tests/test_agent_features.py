@@ -122,7 +122,7 @@ class AgentFeatureTests(unittest.TestCase):
         self.assertEqual("", out(sh, "cat /dev/null; echo hi > /dev/null"))
         self.assertEqual("uid=1000(agent) gid=1000(agent) groups=1000(agent)\n4\n", out(sh, "id; nproc"))
         self.assertEqual(124, sh.run("timeout 0.05 sleep 5").exit_code)
-        self.assertTrue(out(sh, "awk --version").startswith("GNU Awk"))
+        self.assertTrue(out(sh, "awk --version").startswith("mawk"))
         self.assertEqual("a.txt\nb.txt\n", out(sh, "find . -mmin -5 -name '*.txt' | sort | sed 's|./||'"))
         self.assertEqual("", out(sh, "grep -rIl ELF /usr/bin; ls -d /var/tmp /opt >/dev/null"))
 
@@ -181,7 +181,8 @@ class AgentFeatureTests(unittest.TestCase):
         self.assertEqual("drwxrwxrwt root\n", out(sh, "stat -c '%A %U' /tmp"))
         self.assertEqual("x\n", out(sh, "echo x > /tmp/f && cat /tmp/f"))
         r = sh.run("find / -name shadow")
-        self.assertEqual((1, "find: ‘/root’: Permission denied\n"), (r.exit_code, r.stderr))
+        self.assertEqual((1, "find: ‘/proc/tty/driver’: Permission denied\nfind: ‘/root’: Permission denied\n"
+                             "find: ‘/var/cache/apt/archives/partial’: Permission denied\nfind: ‘/var/cache/ldconfig’: Permission denied\n"), (r.exit_code, r.stderr))
         # the app itself is unrestricted, and files it creates belong to the directory's owner
         sh.fs.write_text("/etc/app.conf", "mode=prod")
         sh.fs.write_text("/home/agent/notes.txt", "hi")

@@ -312,7 +312,7 @@ class HostileFiles(unittest.TestCase):
 
     def test_entries_are_budgeted_across_checkpoints(self):
         sh = Shell()
-        sh.run("mkdir -p d/{1..7}{0..9}{0..9}")  # about 1000 entries: what max_extract_entries 1000 allows one machine
+        sh.run("mkdir -p d/{1..6}{0..9}{0..9}")  # about 900 entries: what max_extract_entries 1000 allows one machine
         entries = len(sh.snapshot().entries)
         self.assertLessEqual(entries, 1000)
         rec = recorded()
@@ -538,8 +538,8 @@ class LazyCheckpointsAndChanges(unittest.TestCase):
                 sh.fs.write_bytes("/home/agent/r", os.urandom(1_500_000))
                 sh.run("true")
         data = saved(r.recording)
-        limits = L(max_file_system_bytes=1_600_000, max_string_bytes=1 << 10, max_extract_entries=300)
-        self.assertGreater(len(data), 2 * 1_600_000 + 4 * 1024 + 1024 * 300)
+        limits = L(max_file_system_bytes=1_600_000, max_string_bytes=1 << 10, max_extract_entries=400)
+        self.assertGreater(len(data), 2 * 1_600_000 + 4 * 1024 + 1024 * 400)
         Recording.load(data, limits=limits)
         self.assertEqual(1_500_000, len({e[0]: e for e in ShellSnapshot.load(data, limits).entries}["/home/agent/r"][6]))
 

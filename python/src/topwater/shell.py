@@ -331,8 +331,9 @@ class SwitchWriter:
 class _NewProcess:
     """A new bash process (bash -c, bash file, ./script.sh): $0, the file it runs (if any), and its own options (bash -e)."""
 
-    def __init__(self, arg0: str, file: str | None = None, setup: Callable[[], None] | None = None):
-        self.arg0, self.file, self.setup = arg0, file, setup
+    def __init__(self, arg0: str, file: str | None = None, setup: Callable[[], None] | None = None, login: bool = False):
+        # login: bash -l reads /etc/profile and the first of ~/.bash_profile, ~/.bash_login and ~/.profile first
+        self.arg0, self.file, self.setup, self.login = arg0, file, setup, login
 
 
 # bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
@@ -399,6 +400,17 @@ def quote_value(s: str) -> str:
         from .commands import shell_quote
         return shell_quote(s)
     return "'" + s.replace("'", "'\\''") + "'"
+
+
+# Ubuntu's base system, rewritten in our own words with the same effect: a login shell reads /etc/profile, which runs
+# /etc/profile.d/*.sh; an interactive one reads ~/.bashrc; a non-interactive one (every tool call) reads neither
+SYSTEM_DIRS = ("/boot", "/lib", "/lib64", "/media", "/mnt", "/proc/4242", "/proc/tty/driver", "/run/lock", "/sbin", "/srv", "/sys", "/etc/profile.d", "/etc/skel", "/usr/games", "/usr/include", "/usr/lib64", "/usr/libexec", "/usr/sbin", "/usr/src", "/usr/local/etc", "/usr/local/games", "/usr/local/include", "/usr/local/lib", "/usr/local/man", "/usr/local/sbin", "/usr/local/share", "/usr/local/src", "/usr/share/base-files", "/usr/share/bash-completion", "/usr/share/common-licenses", "/usr/share/doc", "/usr/share/info", "/usr/share/locale", "/usr/share/man", "/usr/share/misc", "/usr/share/terminfo", "/var/backups", "/var/cache/apt/archives/partial", "/var/cache/debconf", "/var/cache/ldconfig", "/var/lib/apt", "/var/lib/dpkg", "/var/lib/misc", "/var/lib/pam", "/var/lib/systemd", "/var/local", "/var/mail", "/var/opt", "/var/spool")
+OS_RELEASE = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.1 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n"
+ETC_PROFILE = "# Read by every login shell (bash -l, sh -l).\n\n# interactive bash: the shared settings in /etc/bash.bashrc\nif [ \"${PS1-}\" ] && [ \"${BASH-}\" ] && [ -f /etc/bash.bashrc ]; then\n  . /etc/bash.bashrc\nfi\n\n# then each script in /etc/profile.d\nif [ -d /etc/profile.d ]; then\n  for i in /etc/profile.d/*.sh; do\n    [ -r \"$i\" ] && . \"$i\"\n  done\n  unset i\nfi\n"
+ETC_BASHRC = "# Shared settings for interactive bash shells.\n\n# nothing to do for scripts and bash -c\n[ -z \"${PS1-}\" ] && return\n\nshopt -s checkwinsize\nPS1='\\u@\\h:\\w\\$ '\n"
+DOT_PROFILE = "# Read by login shells, unless ~/.bash_profile or ~/.bash_login exists.\n\n# bash: also read ~/.bashrc\nif [ -n \"$BASH_VERSION\" ] && [ -f \"$HOME/.bashrc\" ]; then\n    . \"$HOME/.bashrc\"\nfi\n\n# your own programs, when you have them\nfor d in \"$HOME/bin\" \"$HOME/.local/bin\"; do\n    [ -d \"$d\" ] && PATH=\"$d:$PATH\"\ndone\nunset d\n"
+DOT_BASH_LOGOUT = "# Run when a login shell exits.\n"
+DOT_BASHRC = "# Settings for interactive bash shells.\n\n# scripts and bash -c stop here\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\n# history: skip duplicates and lines that start with a space\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\nshopt -s histappend checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\n# colour and shorthands\nalias ls='ls --color=auto'\nalias grep='grep --color=auto'\nalias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n\n[ -f ~/.bash_aliases ] && . ~/.bash_aliases\n"
 
 
 class Shell:
@@ -471,16 +483,20 @@ class Shell:
         self._deadline = float("inf")
         self._param_words: dict = {}
         self._recorder = None
+        self._not_found_hinted = False
+        self._call_stderr = None
         home = f"/home/{user}"
         for d in (home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log"):
             self.fs.mkdir(d, parents=True)
         if not self.fs.exists("/etc/os-release"):
-            self.fs.write_text("/etc/os-release", 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
-                                                  'VERSION="24.04.1 LTS (Noble Numbat)"\nVERSION_CODENAME=noble\nID=ubuntu\n'
-                                                  'ID_LIKE=debian\nHOME_URL="https://www.ubuntu.com/"\n')
+            self.fs.mkdir("/usr/lib", parents=True)
+            self.fs.write_text("/usr/lib/os-release", OS_RELEASE)
+            self.fs.create_symlink("/etc/os-release", "../usr/lib/os-release")
         self.fs.write_text("/etc/hostname", hostname + "\n")
         if not self.fs.exists("/etc/issue"):
             self.fs.write_text("/etc/issue", "Ubuntu 24.04.1 LTS \\n \\l\n\n")
+        if not self.fs.exists("/etc/issue.net"):
+            self.fs.write_text("/etc/issue.net", "Ubuntu 24.04.1 LTS\n")
         if not self.fs.exists("/etc/passwd"):
             self.fs.write_text("/etc/passwd", f"root:x:0:0:root:/root:/bin/bash\n{user}:x:1000:1000:{user}:{home}:/bin/bash\n")
         self.fs.write_text("/dev/null", "")
@@ -506,9 +522,12 @@ class Shell:
         register_all(self)
         self._builtin_names = set(self.commands)
         # the system was "installed" months ago; only the agent's home and the temp directories are fresh
-        for d in ("/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log", "/var/lib", "/var/cache", "/boot", "/lib",
-                  "/lib64", "/media", "/mnt", "/sbin", "/srv"):
+        for d in ("/bin", "/usr", "/etc", "/dev", "/opt", "/root", "/var/log", "/var/lib", "/var/cache", "/var/backups",
+                  "/var/local", "/var/mail", "/var/opt", "/var/spool", "/run", "/boot", "/lib", "/lib64", "/media", "/mnt", "/sbin", "/srv"):
             self.fs.set_modified(d, self.installed_at, recursive=True)
+        for link in ("/var/run", "/var/lock"):
+            if self.fs.is_symlink(link):
+                self.fs.set_modified_time(link, self.installed_at, follow=False)
         for p in ("/", "/home", "/var", home + "/.bashrc", home + "/.profile", home + "/.bash_logout"):
             self.fs.set_modified(p, self.installed_at)
 
@@ -520,9 +539,19 @@ class Shell:
     def _seed_system_files(self, user: str, home: str) -> None:
         """The ordinary clutter of a Linux install. A model that looks around and finds four files in /etc, no dotfiles
         and no /proc starts wondering what kind of machine it is on, and spends its turns investigating."""
-        for d in ("/boot", "/lib", "/lib64", "/media", "/mnt", "/proc", "/run", "/sbin", "/srv", "/sys", "/usr/lib", "/usr/share",
-                  "/usr/sbin", "/var/lib", "/var/cache"):
+        for d in SYSTEM_DIRS:
             self.fs.mkdir(d, parents=True)
+        # what an ordinary user can't read, so `find /` reports "Permission denied" and exits 1 as on Ubuntu
+        for d in ("/var/cache/ldconfig", "/var/cache/apt/archives/partial", "/proc/tty/driver"):
+            self.fs.chmod(d, 0o700)
+        self.fs.chmod("/run/lock", 0o1777)
+
+        def link(path: str, target: str) -> None:
+            if not self.fs.exists(path) and not self.fs.is_symlink(path):
+                self.fs.create_symlink(path, target)
+
+        link("/var/run", "/run")
+        link("/var/lock", "/run/lock")
 
         def seed(path: str, content: str) -> None:
             if not self.fs.exists(path):
@@ -532,7 +561,12 @@ class Shell:
         seed("/etc/hosts", f"127.0.0.1\tlocalhost\n127.0.1.1\t{h}\n\n::1\tip6-localhost ip6-loopback\nfe00::0\tip6-localnet\n"
                            "ff02::1\tip6-allnodes\nff02::2\tip6-allrouters\n")
         seed("/etc/group", f"root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n{user}:x:1000:\n")
-        seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/bin/bash\n/usr/bin/bash\n/usr/bin/sh\n")
+        seed("/etc/shells", "# /etc/shells: valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n")
+        seed("/etc/debian_version", "trixie/sid\n")
+        seed("/var/lib/shells.state", "")
+        seed("/etc/profile", ETC_PROFILE)
+        seed("/etc/bash.bashrc", ETC_BASHRC)
+        seed("/etc/profile.d/01-locale-fix.sh", '# Use the C.UTF-8 locale when none is set.\nexport LANG="${LANG:-C.UTF-8}"\n')
         seed("/etc/timezone", "Etc/UTC\n")
         seed("/etc/resolv.conf", "nameserver 127.0.0.53\noptions edns0 trust-ad\n")
         seed("/etc/lsb-release", 'DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=24.04\nDISTRIB_CODENAME=noble\nDISTRIB_DESCRIPTION="Ubuntu 24.04.1 LTS"\n')
@@ -550,15 +584,17 @@ class Shell:
                              "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\ntmpfs /dev/shm tmpfs rw,nosuid,nodev 0 0\n")
         seed("/proc/uptime", "274320.42 1082431.77\n")
         seed("/proc/loadavg", "0.08 0.03 0.01 1/142 4242\n")
-        seed(home + "/.profile", '# ~/.profile: executed by the command interpreter for login shells.\n\nif [ -n "$BASH_VERSION" ]; then\n'
-                                 '    if [ -f "$HOME/.bashrc" ]; then\n\t. "$HOME/.bashrc"\n    fi\nfi\n\nif [ -d "$HOME/bin" ] ; then\n'
-                                 '    PATH="$HOME/bin:$PATH"\nfi\n')
-        seed(home + "/.bash_logout", '# ~/.bash_logout: executed by bash(1) when login shell exits.\n\nif [ "$SHLVL" = 1 ]; then\n'
-                                     "    [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q\nfi\n")
-        seed(home + "/.bashrc", "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n# If not running interactively, don't do anything\n"
-                                "case $- in\n    *i*) ;;\n      *) return;;\nesac\n\nHISTCONTROL=ignoreboth\nHISTSIZE=1000\nHISTFILESIZE=2000\n\n"
-                                "shopt -s checkwinsize\n\nPS1='\\u@\\h:\\w\\$ '\n\nalias ls='ls --color=auto'\nalias ll='ls -alF'\n"
-                                "alias la='ls -A'\nalias l='ls -CF'\n")
+        # the shell's own process: /proc/self points at it ($$ is 4242)
+        uid = 0 if user == "root" else 1000
+        seed("/proc/4242/comm", "bash\n")
+        seed("/proc/4242/cmdline", "bash\0")
+        seed("/proc/4242/status", f"Name:\tbash\nState:\tS (sleeping)\nPid:\t4242\nPPid:\t1\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
+                                  f"Gid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        link("/proc/self", "4242")
+        for d in ("/etc/skel", home):
+            seed(d + "/.profile", DOT_PROFILE)
+            seed(d + "/.bash_logout", DOT_BASH_LOGOUT)
+            seed(d + "/.bashrc", DOT_BASHRC)
 
     @property
     def cwd(self) -> str:
@@ -764,6 +800,7 @@ class Shell:
     async def _run_call(self, command_line: str) -> ShellResult:
         self.history.append(command_line)
         out, err = CappedWriter(self), CappedWriter(self)
+        self._call_stderr = err
         trailer = None
         previous_user, self.fs.run_as = self.fs.run_as, self.user  # the agent's commands run as a regular user
         self.fs.umask = self.umask
@@ -874,6 +911,8 @@ class Shell:
             if positional is not None:
                 self.positional = positional
             try:
+                if process is not None and process.login:
+                    await self._source_login_files(io_)
                 try:
                     return await self._exec_script(script, io_, top=process is not None)
                 finally:
@@ -891,6 +930,21 @@ class Shell:
             del self._err_where[where:]
             self._lineno, self._line_base = line, base
 
+    async def _source_login_files(self, io_: _Io) -> None:
+        home = self.env.get("HOME", "")
+        readable = lambda f: self.fs.is_file(f) and self.fs.can_read(f)
+        personal = next((home + f for f in ("/.bash_profile", "/.bash_login", "/.profile") if readable(home + f)), None)
+        for file in ("/etc/profile", personal):
+            if file is None or not readable(file):
+                continue
+            self.source_depth += 1
+            try:
+                await self._run_script_text(self.fs.read_text(file), io_, subshell=False, sourced=file)
+            except ReturnSignal:
+                pass
+            finally:
+                self.source_depth -= 1
+
     def _become_new_process(self, process: _NewProcess) -> None:
         """What a child bash inherits: exported variables (not their other attributes) and exported functions."""
         self.env = {k: v for k, v in self.env.items() if self.is_exported(k)}
@@ -902,6 +956,10 @@ class Shell:
         self.hashed = {}
         self._subshell = 0  # a new bash is no subshell: a fatal error ends it with its own status (127 for set -u)
         self._arg0 = process.arg0
+        if process.login:
+            self.shopts.add("login_shell")
+        else:
+            self.shopts.discard("login_shell")
         if process.setup:
             process.setup()
 
@@ -1450,6 +1508,18 @@ class Shell:
                 argv.extend(await self._expand_words([w], io_))
         return argv
 
+    def _report_not_found(self, io_: _Io, name: str) -> None:
+        """bash's own "command not found" line. The first time in a session that it goes straight to the tool output
+        (stderr not redirected or captured), a one-line hint about `help` follows, so that output a script captures stays bash's."""
+        io_.err.write(self.err_prefix + diagnostic("commandNotFound", command=name) + "\n")
+        err = io_.err
+        while isinstance(err, SwitchWriter):
+            err = err.target
+        if self._not_found_hinted or err is not self._call_stderr:
+            return
+        self._not_found_hinted = True
+        io_.err.write(diagnostic("commandNotFoundHint") + "\n")
+
     async def _invoke(self, argv: list[str], io_: _Io, skip_functions: bool = False) -> int:
         """skip_functions: `command ls` / `builtin cd` run the command itself even when a function has its name."""
         name = argv[0]
@@ -1469,8 +1539,10 @@ class Shell:
                 if found is None:
                     found = self.search_path(name)
                     if found is None:
-                        io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n" if not self.env.get("PATH")
-                                      else diagnostic("commandNotFound", command=argv[0]) + "\n")
+                        if not self.env.get("PATH"):
+                            io_.err.write(f"{self.err_prefix}{name}: No such file or directory\n")
+                        else:
+                            self._report_not_found(io_, name)
                         return 127
                     if "/" in found:  # bash does not remember what an empty PATH found
                         self.hashed[name] = [found, 1]
@@ -1480,7 +1552,7 @@ class Shell:
                 name = registered
         cmd = self.commands.get(name)
         if cmd is None:
-            io_.err.write(diagnostic("commandNotFound", command=argv[0]) + "\n")
+            self._report_not_found(io_, argv[0])
             return 127
         self.check_deadline()
         ctx = CommandContext(self, name, list(argv[1:]), io_.stdin, io_.out, io_.err, io_.fds)

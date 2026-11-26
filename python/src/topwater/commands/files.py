@@ -411,9 +411,38 @@ def _copy_into_itself(ctx, src: str, to: str, created: set[str]) -> bool:
     return True
 
 
+def _backup_name(fs, target: str, mode: str, suffix: str) -> str:
+    """FILE~ (simple), FILE.~N~ one past the highest (numbered), or numbered only when FILE already has numbered backups (existing).
+    shortcut: files inside a directory that cp -r merges into are overwritten without a backup"""
+    name = get_name(target)
+    numbers = 0
+    for n in fs.listdir(get_parent(target)):
+        middle = n[len(name) + 2:-1]
+        if n.startswith(name + ".~") and n.endswith("~") and len(n) > len(name) + 2 and re.fullmatch(r"\d+", middle) and int(middle) > 0:
+            numbers = max(numbers, int(middle))
+    return target + suffix if mode == "simple" or (mode == "existing" and numbers == 0) else f"{target}.~{numbers + 1}~"
+
+
 def _copy_or_move(ctx):
     move = ctx.name == "mv"
-    a = Args.parse(ctx.args, COMMANDS[ctx.name])
+    # cp --backup[=CONTROL] takes an optional value, so it is read here, before the shared parser
+    control = None
+    args = []
+    for x in ctx.args:
+        if move or not (x == "--backup" or x.startswith("--backup=")):
+            args.append(x)
+        else:
+            control = x[9:]
+    a = Args.parse(args, COMMANDS[ctx.name])
+    if a.has("b") and control is None:
+        control = ""
+    if control == "":
+        control = ctx.shell.env.get("VERSION_CONTROL", "existing")
+    backup = {None: None, "none": None, "off": None, "simple": "simple", "never": "simple", "existing": "existing", "nil": "existing",
+              "numbered": "numbered", "t": "numbered"}.get(control, "invalid")
+    if backup == "invalid":
+        raise UsageException(spec_message("cp", "invalidBackupType", value=control))
+    suffix = a.value("S") if a.value("S") is not None else ctx.shell.env.get("SIMPLE_BACKUP_SUFFIX", "~")
     # cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
     follow_top = not move and not (a.has("P") or a.has("d") or a.has("a")) and (a.has("L") or a.has("H") or not (a.has("r") or a.has("R")))
     if len(a.positional) < 2:
@@ -476,6 +505,8 @@ def _copy_or_move(ctx):
             if not move and clash == "intoItself":
                 _copy_into_itself(ctx, src, target, set())
             continue
+        if backup is not None and ctx.fs.is_file(target, follow=False):
+            ctx.fs.move(target, _backup_name(ctx.fs, target, backup, suffix))
         if move and src_dir and ctx.fs.is_dir(target):
             ctx.fs.delete(target)  # an empty directory is replaced
         nonlocal_code = [code]
@@ -612,6 +643,10 @@ class _Find:
     async def run(self) -> int:
         ctx = self.ctx
         args = list(ctx.args)
+        # -version (or --version) anywhere in the expression: print the version, run nothing
+        if "-version" in args or "--version" in args:
+            ctx.print(COMMANDS["find"].version)
+            return 0
         # -P (the default) never follows symbolic links, -H only those named as starting points, -L all of them
         options = []
         while args and args[0] in ("-P", "-H", "-L"):

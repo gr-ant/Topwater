@@ -737,7 +737,7 @@ async def _run_script(ctx):
     sh = ctx.shell
     args = list(ctx.args)
     is_bash = ctx.name in ("bash", "sh")
-    command = False
+    command = login = False
     # bash's own options: -c, and -e -u -x -o pipefail ... which the new shell starts with
     options: list[tuple[str, bool]] = []
     i = 0
@@ -746,10 +746,14 @@ async def _run_script(ctx):
         if f == "--":
             i += 1
             break
-        if not f.startswith("--"):  # --norc, --noprofile, --login are skipped
+        if f.startswith("--"):  # --norc, --noprofile are skipped
+            login |= f == "--login"
+        else:
             for c in f[1:]:
                 if c == "c":
                     command = True
+                elif c == "l" and f[0] == "-":
+                    login = True
                 elif c == "o" and i + 1 < len(args):
                     i += 1
                     options.append((args[i], f[0] == "-"))
@@ -766,12 +770,12 @@ async def _run_script(ctx):
         if not args:
             raise ShellError(spec_message(ctx.name, "cOptionArgument"), 2)
         return await sh._run_script_text(args[0], io_, subshell=True, positional=args[2:],
-                                         process=_NewProcess(args[1] if len(args) > 1 else ctx.name, None, setup))
+                                         process=_NewProcess(args[1] if len(args) > 1 else ctx.name, None, setup, login))
     if not args:
         if not is_bash:
             raise ShellError(spec_message(ctx.name, "filenameRequired"), 2)
         return await sh._run_script_text(ctx.stdin, replace(io_, stdin=StdinBuffer()), subshell=True, positional=[],
-                                         process=_NewProcess(ctx.name, None, setup))
+                                         process=_NewProcess(ctx.name, None, setup, login))
     try:
         text = ctx.fs.read_text(ctx.resolve(args[0]))
     except ShellError as e:
@@ -779,7 +783,7 @@ async def _run_script(ctx):
         ctx.error(f"{'bash: ' if is_bash else ctx.shell.err_prefix}{args[0]}: {str(e).rsplit(': ', 1)[-1]}")
         return 127 if is_bash else 1
     if is_bash:
-        return await sh._run_script_text(text, io_, subshell=True, positional=args[1:], process=_NewProcess(args[0], args[0], setup))
+        return await sh._run_script_text(text, io_, subshell=True, positional=args[1:], process=_NewProcess(args[0], args[0], setup, login))
     sh.source_depth += 1
     try:
         return await sh._run_script_text(text, io_, subshell=False, positional=args[1:] if len(args) > 1 else None, sourced=args[0])
@@ -1017,6 +1021,14 @@ def strftime(t: datetime, fmt: str) -> str:
             out.append(c)
             i += 1
             continue
+        # %:z +hh:mm, %::z +hh:mm:ss, %:::z +hh (the clock is UTC)
+        colons = 0
+        while i + 1 + colons < len(fmt) and fmt[i + 1 + colons] == ":":
+            colons += 1
+        if 0 < colons <= 3 and i + 1 + colons < len(fmt) and fmt[i + 1 + colons] == "z":
+            out.append({1: "+00:00", 2: "+00:00:00"}.get(colons, "+00"))
+            i += colons + 2
+            continue
         no_pad = fmt[i + 1] == "-" and i + 2 < len(fmt)
         d = fmt[i + 2] if no_pad else fmt[i + 1]
         i += 3 if no_pad else 2
@@ -1195,17 +1207,32 @@ def _parse_date(text: str, now: datetime) -> datetime:
     return t
 
 
+_ISO_UNITS = ("hours", "minutes", "date", "seconds", "ns")
+_ISO_FORMATS = ("%Y-%m-%dT%H%:z", "%Y-%m-%dT%H:%M%:z", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%dT%H:%M:%S,%N%:z")
+
+
 def _date(ctx):
     # the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
-    a = Args.parse(ctx.args, COMMANDS["date"])
+    # -I[UNIT] / --iso-8601[=UNIT] take an optional value, so they are read here, before the shared parser
+    iso = None
+    args = []
+    for x in ctx.args:
+        unit = "" if x == "--iso-8601" else x[11:] if x.startswith("--iso-8601=") else x[2:] if x.startswith("-I") else None
+        if unit is None:
+            args.append(x)
+            continue
+        iso = "date" if unit == "" else next((u for u in _ISO_UNITS if u.startswith(unit)), None)
+        if iso is None:
+            raise UsageException(spec_message("date", "invalidIso", value=unit))
+    a = Args.parse(args, COMMANDS["date"])
     now = datetime.now(timezone.utc)
     if a.value("d") is not None:
         now = parse_date(a.value("d"), now)
     elif a.value("r") is not None:
         now = ctx.fs.stat(ctx.resolve(a.value("r"))).modified.replace(tzinfo=timezone.utc)
     fmt = next((p for p in a.positional if p.startswith("+")), None)
-    if a.has("I"):
-        ctx.print(strftime(now, "%Y-%m-%d"))
+    if iso is not None:
+        ctx.print(strftime(now, _ISO_FORMATS[_ISO_UNITS.index(iso)]))
     elif a.has("R"):
         ctx.print(strftime(now, "%a, %d %b %Y %H:%M:%S +0000"))
     else:
