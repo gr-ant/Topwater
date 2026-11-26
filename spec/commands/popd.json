@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "popd",
+  "category": "scripting",
+  "summary": "Return to the directory pushd left",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "messages": {
+    "stackEmpty": "directory stack empty"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "getopts",
+  "category": "scripting",
+  "summary": "Parse command-line options",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "messages": {
+    "usage": "usage: getopts optstring name [arg ...]",
+    "illegalOption": "{script}: illegal option -- {option}",
+    "missingArgument": "{script}: option requires an argument -- {option}"
+  }
+}

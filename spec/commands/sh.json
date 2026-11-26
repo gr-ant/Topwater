@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "sh",
+  "category": "shell",
+  "summary": "Run a command string (-c) or script file",
+  "version": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+  "parser": "custom",
+  "messages": {
+    "cOptionArgument": "-c: option requires an argument"
+  }
+}

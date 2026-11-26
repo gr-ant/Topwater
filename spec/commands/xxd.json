@@ -1,0 +1,18 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "xxd",
+  "category": "binary",
+  "summary": "Make a hex dump (-p plain, -l LEN, -s OFFSET)",
+  "parser": "args",
+  "options": [
+    {"short": "c", "long": ["cols"], "arg": "COLS", "description": "COLS bytes per line"},
+    {"short": "l", "long": ["len"], "arg": "LEN", "description": "stop after LEN bytes"},
+    {"short": "p", "long": ["plain"], "description": "plain hex, no offsets or text"},
+    {"short": "s", "long": ["seek"], "arg": "SEEK", "description": "start at offset SEEK"},
+    {"short": "u", "description": "upper-case hex", "ports": ["ts"]}
+  ],
+  "messages": {
+    "invalidNumber": "invalid number '{value}'",
+    "invalidColumns": "invalid number of columns"
+  }
+}

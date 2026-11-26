@@ -1,0 +1,17 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "head",
+  "category": "text",
+  "summary": "Print the first lines of files",
+  "parser": "args",
+  "options": [
+    {"short": "c", "long": ["bytes"], "arg": "NUM", "description": "show NUM bytes from the start (negative NUM: everything except the last NUM)"},
+    {"short": "n", "long": ["lines"], "arg": "NUM", "description": "show NUM lines from the start (negative NUM: everything except the last NUM)"},
+    {"short": "q", "long": ["quiet", "silent"], "description": "never print file name headers"},
+    {"short": "v", "long": ["verbose"], "description": "always print file name headers"}
+  ],
+  "messages": {
+    "openFailed": "cannot open {file:shell-always} for reading: {errno}",
+    "readDirectory": "error reading {file:shell-always}: {errno}"
+  }
+}

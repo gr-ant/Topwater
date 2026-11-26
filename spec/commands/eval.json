@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "eval",
+  "category": "scripting",
+  "summary": "Run its arguments as shell code",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

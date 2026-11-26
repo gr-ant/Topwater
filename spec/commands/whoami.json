@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "whoami",
+  "category": "system",
+  "summary": "Print the current user",
+  "parser": "custom"
+}

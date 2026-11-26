@@ -1,0 +1,15 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "rmdir",
+  "category": "file",
+  "summary": "Remove empty directories",
+  "parser": "args",
+  "options": [
+    {"long": ["ignore-fail-on-non-empty"], "key": "i", "description": "say nothing about directories that are not empty", "ports": ["ts"]},
+    {"short": "p", "long": ["parents"], "description": "remove the parents too"},
+    {"short": "v", "long": ["verbose"], "description": "report each directory removed"}
+  ],
+  "messages": {
+    "failedToRemove": "failed to remove {file:shell-always}: {reason}"
+  }
+}

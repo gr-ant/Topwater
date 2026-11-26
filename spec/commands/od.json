@@ -1,0 +1,21 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "od",
+  "category": "binary",
+  "summary": "Dump files in octal and other formats (-c, -x, -t x1, -An, -N LEN)",
+  "parser": "args",
+  "options": [
+    {"short": "A", "long": ["address-radix"], "arg": "RADIX", "description": "address base: d, o, x or n (none)"},
+    {"short": "c", "description": "show bytes as characters"},
+    {"short": "j", "long": ["skip-bytes"], "arg": "BYTES", "description": "skip BYTES first"},
+    {"short": "N", "long": ["read-bytes"], "arg": "BYTES", "description": "read only BYTES bytes"},
+    {"short": "o", "description": "octal 2-byte words"},
+    {"short": "t", "long": ["format"], "arg": "TYPE", "description": "output format (c, x1..x8, o1..o8)"},
+    {"short": "v", "description": "show repeated lines instead of *"},
+    {"short": "x", "description": "hex 2-byte words"}
+  ],
+  "messages": {
+    "invalidType": "invalid type string '{type}' (supported here: c, x1, x2, x4, x8, o1, o2, o4, o8)",
+    "invalidRadix": "invalid output address radix '{radix}'; it must be one character from [doxn]"
+  }
+}

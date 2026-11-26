@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "seq",
+  "category": "text",
+  "summary": "Print a sequence of numbers",
+  "parser": "custom",
+  "messages": {
+    "zeroIncrement": "invalid Zero increment value: '0'",
+    "tooManyNumbers": "too many numbers"
+  }
+}

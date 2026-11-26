@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "paste",
+  "category": "text",
+  "summary": "Merge lines of files",
+  "parser": "args",
+  "options": [
+    {"short": "d", "long": ["delimiters"], "arg": "LIST", "description": "join with the characters in LIST in turn (default tab)"},
+    {"short": "s", "long": ["serial"], "description": "join each file's lines into one line"}
+  ]
+}

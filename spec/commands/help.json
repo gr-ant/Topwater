@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "help",
+  "category": "shell",
+  "summary": "List available commands",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "noTopics": "no help topics match '{topic}'"
+  }
+}

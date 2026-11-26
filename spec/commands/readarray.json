@@ -1,0 +1,19 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "readarray",
+  "category": "scripting",
+  "summary": "Read lines from stdin into an array (-t drops the newlines)",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "args",
+  "options": [
+    {"short": "C", "arg": "CALLBACK", "description": "callback to run every QUANTUM lines (accepted, not run)"},
+    {"short": "c", "arg": "QUANTUM", "description": "lines between callbacks"},
+    {"short": "d", "arg": "DELIM", "description": "end lines with DELIM instead of newline"},
+    {"short": "n", "arg": "COUNT", "description": "read at most COUNT lines"},
+    {"short": "O", "arg": "ORIGIN", "description": "start storing at index ORIGIN"},
+    {"short": "s", "arg": "COUNT", "description": "skip the first COUNT lines"},
+    {"short": "t", "description": "drop the line terminator from each element"},
+    {"short": "u", "arg": "FD", "description": "take input from descriptor FD"}
+  ]
+}

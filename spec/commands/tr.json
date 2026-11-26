@@ -1,0 +1,19 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "tr",
+  "category": "text",
+  "summary": "Translate or delete characters",
+  "parser": "args",
+  "options": [
+    {"short": "C", "description": "complement SET1"},
+    {"short": "c", "long": ["complement"], "description": "complement SET1"},
+    {"short": "d", "long": ["delete"], "description": "delete the characters in SET1"},
+    {"short": "s", "long": ["squeeze-repeats"], "description": "squeeze repeats of the characters in the last set"},
+    {"short": "t", "long": ["truncate-set1"], "description": "first cut SET1 to the length of SET2", "ports": ["ts"]}
+  ],
+  "messages": {
+    "missingTranslation": "missing operand after '{operand}'\nTwo strings must be given when translating.",
+    "invalidCharacterClass": "invalid character class '{name}'",
+    "reverseRange": "range-endpoints of '{range}' are in reverse collating sequence order"
+  }
+}

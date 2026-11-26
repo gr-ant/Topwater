@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "less",
+  "category": "text",
+  "summary": "View files (non-interactive: prints them)",
+  "version": "less 590 (GNU regular expressions)",
+  "parser": "custom"
+}

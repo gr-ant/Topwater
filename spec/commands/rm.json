@@ -1,0 +1,21 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "rm",
+  "category": "file",
+  "summary": "Remove files or directories",
+  "parser": "args",
+  "options": [
+    {"short": "d", "description": "remove empty directories too"},
+    {"long": ["dir"], "key": "d", "description": "remove empty directories too", "ports": ["ts"]},
+    {"short": "f", "long": ["force"], "description": "ignore missing files; never ask"},
+    {"short": "i", "description": "ask before each removal (no terminal: remove nothing)", "ports": ["ts"]},
+    {"short": "R", "description": "delete directories along with everything in them"},
+    {"short": "r", "long": ["recursive"], "description": "delete directories along with everything in them"},
+    {"long": ["verbose"], "key": "v", "description": "report each removal", "ports": ["ts"]},
+    {"short": "v", "description": "report each removal", "ignored": ["cs", "py"]}
+  ],
+  "messages": {
+    "cannotRemove": "cannot remove '{file}': {reason}",
+    "refusingDots": "refusing to remove '.' or '..' directory: skipping '{file}'"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "sort",
+  "category": "text",
+  "summary": "Sort lines",
+  "usageExitCode": 2,
+  "parser": "args",
+  "options": [
+    {"short": "b", "long": ["ignore-leading-blanks"], "description": "ignore leading blanks"},
+    {"short": "C", "description": "check order quietly"},
+    {"short": "c", "long": ["check"], "description": "check whether the input is sorted"},
+    {"short": "d", "long": ["dictionary-order"], "description": "compare only letters, digits and blanks"},
+    {"short": "f", "long": ["ignore-case"], "description": "compare regardless of case"},
+    {"short": "g", "long": ["general-numeric-sort"], "description": "compare as floating-point numbers"},
+    {"short": "h", "long": ["human-numeric-sort"], "description": "compare sizes like 2K and 1G"},
+    {"short": "i", "long": ["ignore-nonprinting"], "description": "ignore non-printing characters"},
+    {"short": "k", "arg": "KEYDEF", "description": "sort on the field(s) KEYDEF"},
+    {"long": ["key"], "key": "k", "arg": "KEYDEF", "description": "sort on the field(s) KEYDEF", "ports": ["cs", "py"]},
+    {"short": "M", "long": ["month-sort"], "description": "compare month names"},
+    {"short": "m", "long": ["merge"], "description": "accepted and ignored (inputs are sorted as one)", "ports": ["ts"], "ignored": true},
+    {"short": "n", "long": ["numeric-sort"], "description": "compare as numbers"},
+    {"short": "o", "long": ["output"], "arg": "FILE", "description": "write to FILE"},
+    {"short": "R", "long": ["random-sort"], "description": "shuffle"},
+    {"short": "r", "long": ["reverse"], "description": "reverse the order"},
+    {"short": "S", "long": ["buffer-size"], "arg": "SIZE", "description": "accepted and ignored", "ports": ["ts"], "ignored": true},
+    {"short": "s", "long": ["stable"], "description": "keep equal lines in input order"},
+    {"short": "T", "long": ["temporary-directory"], "arg": "DIR", "description": "accepted and ignored", "ports": ["ts"], "ignored": true},
+    {"short": "t", "long": ["field-separator"], "arg": "SEP", "description": "fields are separated by SEP"},
+    {"short": "u", "long": ["unique"], "description": "drop repeated lines"},
+    {"short": "V", "long": ["version-sort"], "description": "compare version numbers"},
+    {"long": ["debug"], "key": "Z", "description": "accepted and ignored", "ignored": true},
+    {"short": "z", "long": ["zero-terminated"], "description": "lines end with NUL, not newline", "ignored": ["cs", "py"]}
+  ],
+  "messages": {
+    "openFailed": "cannot read: {file:shell}: {errno}",
+    "readDirectory": "read failed: {file:shell}: {errno}",
+    "multiCharacterTab": "multi-character tab '{value}'",
+    "invalidKey": "invalid number at field start: invalid count at start of {value:locale}",
+    "disorder": "{file}:{line}: disorder: {text}"
+  }
+}

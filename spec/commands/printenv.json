@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "printenv",
+  "category": "scripting",
+  "summary": "Print environment variables",
+  "parser": "custom"
+}

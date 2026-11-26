@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "free",
+  "category": "system",
+  "summary": "Display memory usage",
+  "version": "free from procps-ng 4.0.4",
+  "parser": "custom"
+}

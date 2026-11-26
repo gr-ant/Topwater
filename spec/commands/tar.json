@@ -1,0 +1,47 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "tar",
+  "category": "archive",
+  "summary": "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components)",
+  "version": "tar (GNU tar) 1.35",
+  "tryHelp": [
+    "Try 'tar --help' or 'tar --usage' for more information."
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "C", "long": ["directory"], "arg": "DIR", "description": "change to DIR first"},
+    {"short": "c", "long": ["create"], "description": "create an archive"},
+    {"short": "f", "long": ["file"], "arg": "ARCHIVE", "description": "the archive file (- for stdin/stdout)"},
+    {"short": "O", "long": ["to-stdout"], "description": "extract to standard output"},
+    {"short": "o", "long": ["no-same-owner"], "description": "accepted and ignored", "ignored": true},
+    {"short": "p", "long": ["preserve-permissions"], "description": "accepted and ignored", "ignored": true},
+    {"long": ["strip-components"], "key": "\u0001", "arg": "NUMBER", "description": "drop NUMBER leading path components when extracting"},
+    {"short": "t", "long": ["list"], "description": "list the archive"},
+    {"short": "v", "long": ["verbose"], "description": "list each member processed"},
+    {"short": "x", "long": ["extract", "get"], "description": "extract"},
+    {"short": "z", "long": ["gunzip", "gzip", "ungzip"], "description": "gzip the archive"}
+  ],
+  "messages": {
+    "oldOptionNeedsArgument": "Old option '{option}' requires an argument.",
+    "noMode": "You must specify one of the '-Acdtrux', '--delete' or '--test-label' options",
+    "manyModes": "You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option",
+    "unrecoverable": "Error is not recoverable: exiting now",
+    "previousErrors": "Exiting with failure status due to previous errors",
+    "emptyArchive": "Cowardly refusing to create an empty archive",
+    "compressedArchive": "Archive is compressed. Use -z option",
+    "gzipChildFailed": "\ngzip: stdin: {error}\ntar: Child returned status 1",
+    "cannotOpen": "{file}: Cannot open: {errno}",
+    "cannotStat": "{file}: Cannot stat: {errno}",
+    "removingLeading": "tar: Removing leading `{prefix}' from member names",
+    "removingLeadingLink": "tar: Removing leading `{prefix}' from hard link targets",
+    "notTar": "This does not look like a tar archive",
+    "unexpectedEof": "Unexpected EOF in archive",
+    "memberDotDot": "{name}: Member name contains '..'",
+    "cannotHardLink": "{name}: Cannot hard link to ‘{target}’: No such file or directory",
+    "cannotSymlink": "{name}: Cannot create symlink to ‘{target}’: Operation not supported",
+    "cannotMknod": "{name}: Cannot mknod: Operation not permitted",
+    "notFound": "{file}: Not found in archive",
+    "entryLimit": "archive exceeds the {limit}-entry extraction limit; stopping",
+    "byteLimit": "output exceeds the {limit}-byte extraction limit; stopping"
+  }
+}

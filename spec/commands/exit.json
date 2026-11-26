@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "exit",
+  "category": "scripting",
+  "summary": "Exit the shell",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

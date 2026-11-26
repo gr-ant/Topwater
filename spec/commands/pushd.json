@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "pushd",
+  "category": "scripting",
+  "summary": "Change directory, remembering the old one",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "messages": {
+    "noOtherDirectory": "no other directory",
+    "noDirectory": "{dir}: No such file or directory"
+  }
+}

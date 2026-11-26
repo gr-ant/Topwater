@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "command",
+  "category": "scripting",
+  "summary": "Run a command, or describe it with -v",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

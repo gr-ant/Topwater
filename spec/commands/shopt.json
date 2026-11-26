@@ -1,0 +1,16 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "shopt",
+  "category": "scripting",
+  "summary": "Set shell options (nullglob, dotglob, globstar, extglob, nocasematch ...)",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "args",
+  "options": [
+    {"short": "o", "description": "work on the set -o options"},
+    {"short": "p", "description": "print the settings as shopt commands"},
+    {"short": "q", "description": "print nothing; the status says whether it is set"},
+    {"short": "s", "description": "turn the options on"},
+    {"short": "u", "description": "turn the options off"}
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "nproc",
+  "category": "system",
+  "summary": "Show how many processors there are",
+  "parser": "custom"
+}

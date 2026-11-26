@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "kill",
+  "category": "scripting",
+  "summary": "Signal a process (background jobs have always finished already)",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "messages": {
+    "usage": "usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]",
+    "noSuchJob": "{job}: no such job",
+    "noSuchProcess": "({pid}) - No such process"
+  }
+}

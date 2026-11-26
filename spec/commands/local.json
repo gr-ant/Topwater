@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "local",
+  "category": "scripting",
+  "summary": "Declare function-local variables",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

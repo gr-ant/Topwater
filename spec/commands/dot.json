@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": ".",
+  "category": "shell",
+  "summary": "Run a script in the current shell",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "custom",
+  "messages": {
+    "filenameRequired": "filename argument required"
+  }
+}

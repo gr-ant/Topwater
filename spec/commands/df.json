@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "df",
+  "category": "system",
+  "summary": "Report filesystem disk space",
+  "parser": "custom"
+}

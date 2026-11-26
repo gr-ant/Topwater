@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "awk",
+  "category": "language",
+  "summary": "Pattern scanning and processing language",
+  "standardOptions": false,
+  "parser": "custom"
+}

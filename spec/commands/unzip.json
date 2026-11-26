@@ -1,0 +1,25 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "unzip",
+  "category": "archive",
+  "summary": "List or extract a zip archive (-l -o -n -d -p -q)",
+  "parser": "args",
+  "options": [
+    {"short": "d", "arg": "DIR", "description": "extract into DIR"},
+    {"short": "l", "description": "list the archive"},
+    {"short": "n", "description": "keep files that already exist"},
+    {"short": "o", "description": "overwrite without asking"},
+    {"short": "p", "description": "extract to standard output"},
+    {"short": "q", "description": "fewer messages"}
+  ],
+  "messages": {
+    "cannotFind": "unzip:  cannot find or open {name}, {name}.zip or {name}.ZIP.",
+    "noEndSignature": "  End-of-central-directory signature not found.  Either this file is not\n  a zipfile, or it constitutes one disk of a multi-part archive.  In the\n  latter case the central directory and zipfile comment will be found on\n  the last disk(s) of this archive.",
+    "noDirectory": "unzip:  cannot find zipfile directory in one of {name} or\n        {name}.zip, and cannot find {name}.ZIP, period.",
+    "skippedDotDot": "warning:  skipped \"../\" path component(s) in {name}",
+    "strippedAbsolute": "warning:  stripped absolute path spec from {name}",
+    "replacePrompt": "replace {file}? [y]es, [n]o, [A]ll, [N]one, [r]ename:  NULL\n(EOF or read error, treating as \"[N]one\" ...)",
+    "cannotCreate": "error:  cannot create {file}\n        {errno}",
+    "filenameNotMatched": "caution: filename not matched:  {pattern}"
+  }
+}

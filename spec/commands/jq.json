@@ -1,0 +1,33 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "jq",
+  "category": "language",
+  "summary": "Command-line JSON processor",
+  "version": "jq-1.7.1",
+  "help": [
+    "jq - commandline JSON processor [version 1.7]",
+    "",
+    "Usage:\tjq [options] <jq filter> [file...]",
+    "\tjq [options] --args <jq filter> [strings...]",
+    "\tjq [options] --jsonargs <jq filter> [JSON_TEXTS...]",
+    "",
+    "jq is a tool for processing JSON inputs, applying the given filter to",
+    "its JSON text inputs and producing the filter's results as JSON on",
+    "standard output.",
+    "",
+    "The simplest filter is ., which copies jq's input to its output",
+    "unmodified except for formatting.",
+    "",
+    "Example:",
+    "",
+    "\t$ echo '{\"foo\": 0}' | jq .",
+    "\t{",
+    "\t  \"foo\": 0",
+    "\t}"
+  ],
+  "parser": "custom",
+  "messages": {
+    "missingFilter": "Usage: jq [OPTIONS] FILTER [FILES...]"
+  },
+  "notes": "help mirrors the start of real jq 1.7.1's --help (which says [version 1.7]); the option list is left out until it is checked against what Topwater's jq supports."
+}

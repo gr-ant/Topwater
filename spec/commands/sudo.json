@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "sudo",
+  "category": "system",
+  "summary": "Run a command with another user's rights",
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "usage": "usage: sudo -h | -K | -k | -V\nusage: sudo [-AbEHknPS] [-u user] [command [arg ...]]",
+    "listDenied": "Sorry, user {user} may not run sudo on {host}.",
+    "notSudoer": "{user} is not in the sudoers file."
+  }
+}

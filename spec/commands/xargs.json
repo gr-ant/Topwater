@@ -1,0 +1,30 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "xargs",
+  "category": "text",
+  "summary": "Build and run commands from stdin",
+  "version": "xargs (GNU findutils) 4.9.0",
+  "parser": "args",
+  "options": [
+    {"short": "0", "long": ["null"], "description": "split the input at NUL bytes"},
+    {"short": "a", "long": ["arg-file"], "arg": "FILE", "description": "read items from FILE"},
+    {"short": "d", "long": ["delimiter"], "arg": "CHARACTER", "description": "split the input at CHARACTER"},
+    {"short": "E", "arg": "END", "description": "stop at the item END"},
+    {"long": ["eof"], "key": "E", "arg": "END", "description": "stop at the item END", "ports": ["ts"]},
+    {"short": "I", "long": ["replace"], "arg": "R", "description": "run once per line, replacing R in the command"},
+    {"short": "i", "description": "like -I {}", "ports": ["ts"]},
+    {"short": "L", "long": ["max-lines"], "arg": "MAX", "description": "give each command at most MAX input lines"},
+    {"short": "n", "long": ["max-args"], "arg": "MAX", "description": "give each command at most MAX items"},
+    {"short": "P", "long": ["max-procs"], "arg": "MAX", "description": "accepted and ignored (runs one at a time)", "ignored": true},
+    {"short": "p", "long": ["interactive"], "description": "accepted and ignored (no terminal)", "ignored": true},
+    {"short": "r", "long": ["no-run-if-empty"], "description": "do not run the command when there is no input"},
+    {"short": "s", "long": ["max-chars"], "arg": "MAX", "description": "accepted and ignored", "ignored": true},
+    {"short": "t", "long": ["verbose"], "description": "print each command to stderr before running it"},
+    {"short": "x", "long": ["exit"], "description": "accepted and ignored", "ignored": true}
+  ],
+  "messages": {
+    "unmatchedQuote": "unmatched {kind} quote; by default quotes are special to xargs unless you use the -0 option",
+    "invalidValue": "value {value} for -{option} option should be >= 1",
+    "exitedWith255": "{command}: exited with status 255; aborting"
+  }
+}

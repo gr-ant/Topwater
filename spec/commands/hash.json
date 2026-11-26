@@ -1,0 +1,15 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "hash",
+  "category": "scripting",
+  "summary": "Remember command locations",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "options": [
+    {"short": "d", "description": "forget the named commands"},
+    {"short": "l", "description": "print the table as hash -p commands"},
+    {"short": "p", "arg": "PATH", "description": "remember PATH as the location of the named command"},
+    {"short": "r", "description": "forget every remembered location"},
+    {"short": "t", "description": "show where each named command was found"}
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "ls",
+  "category": "file",
+  "summary": "List directory contents",
+  "usageExitCode": 2,
+  "parser": "args",
+  "options": [
+    {"short": "1", "description": "one name per line"},
+    {"short": "A", "long": ["almost-all"], "description": "show hidden entries except . and .."},
+    {"short": "a", "long": ["all"], "description": "show hidden entries"},
+    {"short": "C", "description": "names in columns", "ports": ["ts"]},
+    {"long": ["color"], "key": "1", "description": "accepted and ignored", "ports": ["ts"], "ignored": true},
+    {"short": "d", "long": ["directory"], "description": "show a directory itself rather than what it holds"},
+    {"short": "F", "description": "mark directories with /"},
+    {"short": "h", "long": ["human-readable"], "description": "sizes like 4.0K with -l"},
+    {"short": "H", "long": ["dereference-command-line"], "description": "follow symbolic links named on the command line"},
+    {"short": "L", "long": ["dereference"], "description": "show what symbolic links lead to instead of the links"},
+    {"short": "l", "description": "long listing"},
+    {"short": "R", "long": ["recursive"], "description": "list subdirectories recursively"},
+    {"short": "r", "long": ["reverse"], "description": "reverse the order"},
+    {"short": "S", "description": "sort by size"},
+    {"short": "t", "description": "sort by modification time"},
+    {"short": "k", "long": ["kibibytes"], "description": "with -s, count blocks in kilobytes (the default)"},
+    {"short": "s", "long": ["size"], "description": "show each file's size in blocks"},
+    {"long": ["time-style"], "key": "\u0001", "arg": "STYLE", "description": "with -l, show times as full-iso, long-iso, iso or +FORMAT"},
+    {"long": ["full-time"], "key": "\u0002", "description": "long listing with full-iso times"},
+    {"short": "Z", "description": "accepted and ignored (no SELinux)", "ignored": true}
+  ],
+  "messages": {
+    "badTimeStyle": "{problem} argument {value:locale} for ‘time style’\nValid arguments are:\n  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.",
+    "cannotAccess": "cannot access '{file}': {errno}",
+    "cannotOpenDirectory": "cannot open directory '{file}': {errno}",
+    "alreadyListed": "{file}: not listing already-listed directory"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "set",
+  "category": "scripting",
+  "summary": "Set shell options (-e, -u, -x, -f, -C, -o pipefail) or positional parameters",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

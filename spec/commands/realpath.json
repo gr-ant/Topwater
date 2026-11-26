@@ -1,0 +1,19 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "realpath",
+  "category": "utility",
+  "summary": "Print the absolute path",
+  "parser": "args",
+  "options": [
+    {"short": "e", "long": ["canonicalize-existing"], "description": "fail unless every component exists"},
+    {"short": "L", "long": ["logical"], "description": "accepted and ignored (links are always resolved as found)", "ignored": true},
+    {"short": "m", "long": ["canonicalize-missing"], "description": "allow any component to be missing"},
+    {"short": "P", "long": ["physical"], "description": "resolve symbolic links (the default)"},
+    {"short": "q", "long": ["quiet"], "description": "say nothing about failures"},
+    {"short": "s", "long": ["strip", "no-symlinks"], "description": "only make the path absolute; resolve no links"},
+    {"short": "z", "long": ["zero"], "description": "end each name with NUL instead of newline"}
+  ],
+  "messages": {
+    "failed": "{file:shell}: {errno}"
+  }
+}

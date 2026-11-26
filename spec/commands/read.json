@@ -1,0 +1,23 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "read",
+  "category": "scripting",
+  "summary": "Split one input line into variables",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "args",
+  "options": [
+    {"short": "a", "description": "store the words in the array NAME"},
+    {"short": "d", "arg": "DELIM", "description": "stop at DELIM instead of newline"},
+    {"short": "e", "description": "accepted and ignored (no Readline)", "ignored": true},
+    {"short": "i", "arg": "TEXT", "description": "accepted and ignored (no Readline)", "ignored": true},
+    {"short": "N", "arg": "NCHARS", "description": "read exactly NCHARS characters"},
+    {"short": "n", "arg": "NCHARS", "description": "read at most NCHARS characters"},
+    {"short": "p", "arg": "PROMPT", "description": "print PROMPT first"},
+    {"short": "r", "description": "keep backslashes as they are"},
+    {"short": "s", "description": "accepted and ignored (no terminal)", "ignored": true},
+    {"short": "t", "arg": "TIMEOUT", "description": "give up after TIMEOUT seconds"},
+    {"short": "u", "arg": "FD", "description": "take input from descriptor FD"}
+  ]
+}

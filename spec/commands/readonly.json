@@ -1,0 +1,9 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "readonly",
+  "category": "scripting",
+  "summary": "Make variables read-only",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "custom"
+}

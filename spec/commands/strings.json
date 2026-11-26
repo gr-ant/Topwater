@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "strings",
+  "category": "binary",
+  "summary": "Print printable character sequences in files (-n MIN)",
+  "parser": "args",
+  "options": [
+    {"short": "a", "long": ["all"], "description": "scan the whole file (the default)"},
+    {"short": "n", "long": ["bytes"], "arg": "MIN", "description": "only runs of at least MIN printable characters (default 4)"}
+  ]
+}

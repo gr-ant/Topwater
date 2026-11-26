@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "chown",
+  "category": "utility",
+  "summary": "Change file owner",
+  "parser": "custom",
+  "messages": {
+    "cannotAccess": "cannot access '{file}': {reason}"
+  }
+}

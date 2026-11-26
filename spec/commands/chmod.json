@@ -1,0 +1,14 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "chmod",
+  "category": "utility",
+  "summary": "Change file mode bits",
+  "parser": "custom",
+  "messages": {
+    "unrecognizedOption": "unrecognized option '{option}'",
+    "missingOperandAfter": "missing operand after {operand:locale}",
+    "cannotChangePermissions": "changing permissions of '{file}': Operation not permitted",
+    "cannotAccess": "cannot access '{file}': {reason}",
+    "invalidMode": "invalid mode: '{mode}'"
+  }
+}

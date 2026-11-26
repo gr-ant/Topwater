@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "timeout",
+  "category": "scripting",
+  "summary": "Run a command with a time limit",
+  "parser": "custom"
+}

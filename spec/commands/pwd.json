@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "pwd",
+  "category": "shell",
+  "summary": "Print the working directory",
+  "shellBuiltin": true,
+  "parser": "custom"
+}

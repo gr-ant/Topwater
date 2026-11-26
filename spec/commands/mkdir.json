@@ -1,0 +1,16 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "mkdir",
+  "category": "file",
+  "summary": "Create directories",
+  "parser": "args",
+  "options": [
+    {"short": "m", "long": ["mode"], "arg": "MODE", "description": "set the new directories' mode", "ports": ["ts"]},
+    {"short": "p", "long": ["parents"], "description": "make parents as needed; no error if it exists"},
+    {"short": "v", "long": ["verbose"], "description": "report each directory made"},
+    {"short": "Z", "description": "accepted and ignored (no SELinux)", "ignored": true}
+  ],
+  "messages": {
+    "cannotCreateDirectory": "cannot create directory {file:locale}: {reason}"
+  }
+}

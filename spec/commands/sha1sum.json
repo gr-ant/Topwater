@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "sha1sum",
+  "category": "utility",
+  "summary": "Compute SHA1 checksums",
+  "parser": "custom"
+}

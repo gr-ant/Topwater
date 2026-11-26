@@ -1,0 +1,22 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "touch",
+  "category": "file",
+  "summary": "Create empty files / update timestamps",
+  "parser": "args",
+  "options": [
+    {"short": "a", "description": "set the access time (there is only one time)"},
+    {"short": "c", "long": ["no-create"], "description": "do not create missing files"},
+    {"short": "d", "long": ["date"], "arg": "STRING", "description": "use the time STRING describes"},
+    {"short": "f", "long": ["time"], "description": "accepted and ignored", "ignored": true},
+    {"short": "h", "long": ["no-dereference"], "description": "accepted and ignored (there are no links)", "ignored": true},
+    {"short": "m", "description": "set the modification time"},
+    {"short": "r", "long": ["reference"], "arg": "FILE", "description": "use FILE's time"},
+    {"short": "t", "arg": "STAMP", "description": "take the time from STAMP ([[CC]YY]MMDDhhmm[.ss])"}
+  ],
+  "messages": {
+    "failedToGetAttributes": "failed to get attributes of {file:shell-always}: {reason}",
+    "invalidDateFormat": "invalid date format {value:locale}",
+    "cannotTouch": "cannot touch {file:shell-always}: {reason}"
+  }
+}

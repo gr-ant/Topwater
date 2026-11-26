@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "times",
+  "category": "scripting",
+  "summary": "Show the shell's CPU times",
+  "shellBuiltin": true,
+  "parser": "custom"
+}

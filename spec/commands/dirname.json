@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "dirname",
+  "category": "utility",
+  "summary": "Strip the last component from a path",
+  "parser": "args",
+  "options": [
+    {"short": "z", "long": ["zero"], "description": "end each result with NUL"}
+  ]
+}

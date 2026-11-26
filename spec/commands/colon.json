@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": ":",
+  "category": "shell",
+  "summary": "Do nothing, successfully (the null command)",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

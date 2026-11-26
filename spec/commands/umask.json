@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "umask",
+  "category": "scripting",
+  "summary": "Show the file mode creation mask",
+  "shellBuiltin": true,
+  "parser": "custom"
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "hostname",
+  "category": "system",
+  "summary": "Print the host name",
+  "parser": "custom"
+}

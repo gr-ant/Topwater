@@ -1,0 +1,35 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "mv",
+  "category": "file",
+  "summary": "Move or rename files",
+  "parser": "args",
+  "options": [
+    {"long": ["archive"], "key": "a", "description": "copy recursively, keeping modes and times", "ports": ["ts"]},
+    {"short": "f", "long": ["force"], "description": "overwrite without asking"},
+    {"short": "i", "description": "ask before overwriting (no terminal: never overwrite)"},
+    {"short": "n", "description": "never overwrite an existing file"},
+    {"long": ["dereference"], "key": "L", "description": "accepted and ignored (mv never follows links)", "ignored": true},
+    {"long": ["no-dereference"], "key": "P", "description": "accepted and ignored (mv never follows links)", "ignored": true},
+    {"long": ["no-clobber"], "key": "n", "description": "never overwrite an existing file", "ports": ["ts"]},
+    {"long": ["recursive"], "key": "r", "description": "copy directories recursively"},
+    {"short": "T", "long": ["no-target-directory"], "description": "treat the destination as a normal file", "ports": ["ts"]},
+    {"short": "t", "long": ["target-directory"], "arg": "DIRECTORY", "description": "copy or move everything into DIRECTORY", "ports": ["ts"]},
+    {"long": ["verbose"], "key": "v", "description": "report each file", "ports": ["ts"]},
+    {"short": "v", "description": "report each file"},
+    {"short": "Z", "description": "accepted and ignored (no SELinux)", "ignored": true}
+  ],
+  "messages": {
+    "missingDestination": "missing destination file operand after {file:shell-always}",
+    "cannotStat": "cannot stat '{file}': {errno}",
+    "targetFailed": "target '{file}': {errno}",
+    "sameFile": "{source:shell-always} and {dest:shell-always} are the same file",
+    "overwriteNonDirectory": "cannot overwrite non-directory {dest:shell-always} with directory {source:shell-always}",
+    "overwriteDirectory": "cannot overwrite directory {dest:shell-always} with non-directory",
+    "errorWriting": "error writing '{file}': {errno}",
+    "cannotMove": "cannot move '{source}' to '{dest}': {errno}",
+    "intoItself": "cannot move {source:shell-always} to a subdirectory of itself, {dest:shell-always}",
+    "intoItselfPlain": "cannot move '{source}' to a subdirectory of itself, '{dest}'",
+    "notEmpty": "cannot overwrite {dest:shell-always}: Directory not empty"
+  }
+}

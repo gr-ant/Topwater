@@ -1,0 +1,18 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "uname",
+  "category": "system",
+  "summary": "Print system information",
+  "parser": "args",
+  "options": [
+    {"short": "a", "long": ["all"], "description": "everything"},
+    {"short": "i", "description": "the hardware platform", "ports": ["ts"]},
+    {"short": "m", "long": ["machine"], "description": "the machine (x86_64)"},
+    {"short": "n", "long": ["nodename"], "description": "the host name"},
+    {"short": "o", "long": ["operating-system"], "description": "the operating system"},
+    {"short": "p", "description": "the processor", "ports": ["ts"]},
+    {"short": "r", "long": ["kernel-release"], "description": "the kernel release"},
+    {"short": "s", "long": ["kernel-name"], "description": "the kernel name (the default)"},
+    {"short": "v", "description": "the kernel version"}
+  ]
+}

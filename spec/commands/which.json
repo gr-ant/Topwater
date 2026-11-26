@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "which",
+  "category": "shell",
+  "summary": "Locate a command",
+  "parser": "custom"
+}

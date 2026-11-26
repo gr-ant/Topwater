@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "basename",
+  "category": "utility",
+  "summary": "Strip directory and suffix from a path",
+  "parser": "args",
+  "options": [
+    {"short": "a", "long": ["multiple"], "description": "treat every argument as a name"},
+    {"short": "s", "long": ["suffix"], "arg": "SUFFIX", "description": "remove SUFFIX too (implies -a)"},
+    {"short": "z", "long": ["zero"], "description": "end each result with NUL", "ignored": ["cs", "py"]}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "type",
+  "category": "shell",
+  "summary": "Describe a command",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "args",
+  "options": [
+    {"short": "a", "description": "show every match, not just the first"},
+    {"short": "f", "description": "skip functions"},
+    {"short": "P", "description": "search PATH only"},
+    {"short": "p", "description": "print the file path, if it is a file"},
+    {"short": "t", "description": "print one word: alias, keyword, function, builtin or file"}
+  ]
+}

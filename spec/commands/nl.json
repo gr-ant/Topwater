@@ -1,0 +1,15 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "nl",
+  "category": "text",
+  "summary": "Number lines",
+  "parser": "args",
+  "options": [
+    {"short": "b", "arg": "STYLE", "description": "which lines to number: a all, t non-empty (default), n none"},
+    {"short": "i", "arg": "NUMBER", "description": "step between line numbers", "ports": ["ts"]},
+    {"short": "n", "arg": "FORMAT", "description": "number format: ln, rn or rz", "ports": ["ts"]},
+    {"short": "s", "arg": "STRING", "description": "put STRING after each number"},
+    {"short": "v", "arg": "NUMBER", "description": "first line number", "ports": ["ts"]},
+    {"short": "w", "arg": "NUMBER", "description": "width of the number column"}
+  ]
+}

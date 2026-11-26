@@ -1,0 +1,9 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "echo",
+  "category": "shell",
+  "summary": "Print arguments",
+  "shellBuiltin": true,
+  "standardOptions": false,
+  "parser": "custom"
+}

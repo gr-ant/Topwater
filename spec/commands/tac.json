@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "tac",
+  "category": "text",
+  "summary": "Print lines in reverse order",
+  "parser": "custom",
+  "messages": {
+    "openFailed": "failed to open {file:shell-always} for reading: {errno}",
+    "readDirectory": "{file:shell}: read error: Invalid argument"
+  }
+}

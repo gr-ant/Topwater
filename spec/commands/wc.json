@@ -1,0 +1,14 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "wc",
+  "category": "text",
+  "summary": "Count lines, words and bytes",
+  "parser": "args",
+  "options": [
+    {"short": "c", "long": ["bytes"], "description": "count bytes"},
+    {"short": "L", "long": ["max-line-length"], "description": "print the longest line's length", "ports": ["ts"]},
+    {"short": "l", "long": ["lines"], "description": "count lines"},
+    {"short": "m", "long": ["chars"], "description": "count characters"},
+    {"short": "w", "long": ["words"], "description": "count words"}
+  ]
+}

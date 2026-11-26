@@ -1,0 +1,53 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "fgrep",
+  "category": "text",
+  "summary": "Search text, like grep -F",
+  "version": "grep (GNU grep) 3.11",
+  "reportsAs": "grep",
+  "usageExitCode": 2,
+  "tryHelp": [
+    "Usage: grep [OPTION]... PATTERNS [FILE]...",
+    "Try 'grep --help' for more information."
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "A", "long": ["after-context"], "arg": "NUM", "description": "also print NUM lines after each match"},
+    {"short": "a", "long": ["text"], "description": "search binary input as text"},
+    {"short": "B", "long": ["before-context"], "arg": "NUM", "description": "also print NUM lines before each match"},
+    {"short": "C", "long": ["context"], "arg": "NUM", "description": "print NUM lines around each match"},
+    {"short": "c", "long": ["count"], "description": "print how many lines matched instead of the lines"},
+    {"short": "E", "long": ["extended-regexp"], "description": "treat the pattern as an extended regex"},
+    {"short": "F", "long": ["fixed-strings"], "description": "treat the pattern as a fixed string"},
+    {"short": "H", "long": ["with-filename"], "description": "prefix each match with its file name"},
+    {"short": "h", "long": ["no-filename"], "description": "never prefix matches with file names"},
+    {"short": "I", "long": ["binary-files"], "description": "skip files that look binary"},
+    {"short": "i", "long": ["ignore-case"], "description": "match regardless of case"},
+    {"short": "L", "long": ["files-without-match"], "description": "list the files with no match"},
+    {"short": "l", "long": ["files-with-matches"], "description": "list the files with a match"},
+    {"short": "m", "long": ["max-count"], "arg": "NUM", "description": "stop after NUM matching lines"},
+    {"short": "n", "long": ["line-number"], "description": "prefix each match with its line number"},
+    {"short": "o", "long": ["only-matching"], "description": "print only the matched parts"},
+    {"short": "P", "long": ["perl-regexp"], "description": "treat the pattern as a Perl-style regex"},
+    {"short": "q", "long": ["quiet", "silent"], "description": "print nothing; the exit status says whether anything matched"},
+    {"short": "R", "long": ["dereference-recursive"], "description": "search directories recursively"},
+    {"short": "r", "long": ["recursive"], "description": "search directories recursively"},
+    {"short": "s", "long": ["no-messages"], "description": "do not report unreadable files"},
+    {"short": "U", "long": ["color", "colour", "line-buffered"], "description": "accepted and ignored (colour and buffering options)", "ignored": true},
+    {"short": "v", "long": ["invert-match"], "description": "select the lines that do not match"},
+    {"short": "w", "long": ["word-regexp"], "description": "match whole words only"},
+    {"short": "x", "long": ["line-regexp"], "description": "match whole lines only"},
+    {"short": "Z", "description": "end file names with a NUL byte"},
+    {"short": "e", "long": ["regexp"], "arg": "PATTERNS", "description": "use PATTERNS (may be given several times)", "custom": true},
+    {"short": "f", "long": ["file"], "arg": "FILE", "description": "read patterns from FILE, one per line", "custom": true},
+    {"long": ["include"], "arg": "GLOB", "description": "with -r, search only files whose names match GLOB", "custom": true},
+    {"long": ["exclude"], "arg": "GLOB", "description": "with -r, skip files whose names match GLOB", "custom": true},
+    {"long": ["exclude-dir"], "arg": "GLOB", "description": "with -r, skip directories whose names match GLOB", "custom": true}
+  ],
+  "messages": {
+    "openFailed": "{file}: {errno}",
+    "invalidRegex": "invalid regular expression: {detail}",
+    "leadingRepetition": "warning: {char} at start of expression",
+    "binaryFileMatches": "{file}: binary file matches"
+  }
+}

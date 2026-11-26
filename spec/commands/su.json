@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "su",
+  "category": "system",
+  "summary": "Run a command with a substitute user ID",
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "authenticationFailure": "Password: \nsu: Authentication failure"
+  }
+}

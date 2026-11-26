@@ -1,0 +1,27 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "zip",
+  "category": "archive",
+  "summary": "Package files into a zip archive (-r, -q)",
+  "parser": "args",
+  "options": [
+    {"short": "0", "description": "compression level 0", "ports": ["ts"]},
+    {"short": "1", "description": "compression level 1", "ports": ["ts"]},
+    {"short": "2", "description": "compression level 2", "ports": ["ts"]},
+    {"short": "3", "description": "compression level 3", "ports": ["ts"]},
+    {"short": "4", "description": "compression level 4", "ports": ["ts"]},
+    {"short": "5", "description": "compression level 5", "ports": ["ts"]},
+    {"short": "6", "description": "compression level 6", "ports": ["ts"]},
+    {"short": "7", "description": "compression level 7", "ports": ["ts"]},
+    {"short": "8", "description": "compression level 8", "ports": ["ts"]},
+    {"short": "9", "description": "compression level 9", "ports": ["ts"]},
+    {"short": "q", "long": ["quiet"], "description": "fewer messages"},
+    {"short": "r", "long": ["recurse-paths"], "description": "include directories recursively"}
+  ],
+  "messages": {
+    "noArchive": "\nzip error: Nothing to do! (no archive given)",
+    "badStructure": "\nzip error: Zip file structure invalid ({archive})",
+    "nameNotMatched": "\tzip warning: name not matched: {file}",
+    "nothingToDo": "\nzip error: Nothing to do! ({hint})"
+  }
+}

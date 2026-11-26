@@ -1,0 +1,14 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "tee",
+  "category": "text",
+  "summary": "Copy stdin to stdout and files",
+  "parser": "args",
+  "options": [
+    {"short": "a", "long": ["append"], "description": "append instead of overwriting"},
+    {"short": "i", "long": ["ignore-interrupts"], "description": "accepted and ignored", "ignored": true}
+  ],
+  "messages": {
+    "writeFailed": "{file}: {reason}"
+  }
+}

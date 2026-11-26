@@ -1,0 +1,21 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "bc",
+  "category": "language",
+  "summary": "Arbitrary-precision calculator",
+  "ports": ["cs"],
+  "version": "bc 1.07.1",
+  "help": [
+    "Usage: bc [options] [file ...]",
+    "Arbitrary-precision calculator.",
+    "",
+    "  -l            load the math library and set the default scale to 20",
+    "  -q, -s, -w    accepted and ignored (quiet / POSIX / warnings)",
+    "      --version  print the version and exit",
+    "      --help     print this message",
+    "",
+    "Reads a bc program from the files, or from standard input when none are given.",
+    "Limits: one invocation is stopped after 5 s, and any single number is capped at 100000 digits."
+  ],
+  "parser": "custom"
+}

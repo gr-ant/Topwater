@@ -1,0 +1,9 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "unset",
+  "category": "shell",
+  "summary": "Remove variables or functions (-f)",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "custom"
+}

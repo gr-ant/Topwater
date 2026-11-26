@@ -1,0 +1,19 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "tree",
+  "category": "file",
+  "summary": "Show a directory tree",
+  "version": "tree v2.1.1",
+  "parser": "args",
+  "options": [
+    {"short": "a", "description": "show hidden entries"},
+    {"short": "d", "description": "directories only"},
+    {"short": "F", "description": "mark directories with /", "ports": ["ts"]},
+    {"short": "f", "description": "print each entry's full path", "ports": ["ts"]},
+    {"short": "i", "description": "no indentation lines", "ports": ["ts"]},
+    {"short": "L", "arg": "LEVEL", "description": "descend at most LEVEL levels"}
+  ],
+  "messages": {
+    "errorOpeningDir": "{dir} [error opening dir]"
+  }
+}

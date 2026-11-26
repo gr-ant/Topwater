@@ -1,0 +1,20 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "find",
+  "category": "file",
+  "summary": "Search for files",
+  "version": "find (GNU findutils) 4.9.0",
+  "parser": "custom",
+  "messages": {
+    "unexpected": "unexpected `{token}'",
+    "cannotRead": "{file:locale}: {errno}",
+    "expectedExpression": "expected an expression after '{token}'",
+    "expectedParen": "invalid expression; expected `)'",
+    "missingArgument": "missing argument to `{predicate}'",
+    "unknownType": "Unknown argument to {predicate}: {value}",
+    "invalidArgument": "invalid argument `{value}' to `{predicate}'",
+    "invalidSizeType": "invalid -size type `{unit}'",
+    "unknownPredicate": "unknown predicate `{predicate}'",
+    "loop": "File system loop detected; {dir:locale} is part of the same file system loop as {loop:locale}."
+  }
+}

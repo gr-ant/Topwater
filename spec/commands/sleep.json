@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "sleep",
+  "category": "scripting",
+  "summary": "Pause for a number of seconds",
+  "parser": "custom",
+  "messages": {
+    "invalidTimeInterval": "invalid time interval '{value}'"
+  }
+}

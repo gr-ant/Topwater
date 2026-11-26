@@ -1,0 +1,18 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "cat",
+  "category": "file",
+  "summary": "Print files",
+  "parser": "args",
+  "options": [
+    {"short": "A", "long": ["show-all"], "description": "same as -vET"},
+    {"short": "b", "long": ["number-nonblank"], "description": "number the lines that are not empty"},
+    {"short": "E", "long": ["show-ends"], "description": "mark each line end with $"},
+    {"short": "e", "description": "same as -vE"},
+    {"short": "n", "long": ["number"], "description": "number every line"},
+    {"short": "s", "long": ["squeeze-blank"], "description": "squeeze runs of empty lines into one"},
+    {"short": "T", "long": ["show-tabs"], "description": "show tabs as ^I"},
+    {"short": "u", "description": "accepted and ignored", "ignored": true},
+    {"short": "v", "long": ["show-nonprinting"], "description": "show control characters with ^ and M- notation"}
+  ]
+}

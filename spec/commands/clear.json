@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "clear",
+  "category": "scripting",
+  "summary": "Clear the terminal",
+  "parser": "custom"
+}

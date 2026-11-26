@@ -1,0 +1,24 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "cut",
+  "category": "text",
+  "summary": "Select fields or characters from lines",
+  "parser": "args",
+  "options": [
+    {"short": "b", "long": ["bytes"], "arg": "LIST", "description": "select these bytes"},
+    {"short": "c", "long": ["characters"], "arg": "LIST", "description": "select these characters"},
+    {"short": "d", "long": ["delimiter"], "arg": "DELIM", "description": "fields are separated by DELIM (default tab)"},
+    {"short": "f", "long": ["fields"], "arg": "LIST", "description": "select these fields"},
+    {"short": "n", "description": "accepted and ignored", "ignored": true},
+    {"long": ["output-delimiter"], "key": "\u0002", "arg": "STRING", "description": "join selected parts with STRING"},
+    {"short": "s", "long": ["only-delimited"], "description": "skip lines with no delimiter"},
+    {"short": "z", "long": ["complement"], "description": "select everything except the list"}
+  ],
+  "messages": {
+    "delimiterNotSingle": "the delimiter must be a single character",
+    "listRequired": "you must specify a list of bytes, characters, or fields",
+    "fieldsFromOne": "fields and positions are numbered from 1",
+    "invalidFieldValue": "invalid field value '{part}'",
+    "invalidDecreasingRange": "invalid decreasing range"
+  }
+}

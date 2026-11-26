@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "chgrp",
+  "category": "utility",
+  "summary": "Change file group",
+  "parser": "custom",
+  "messages": {
+    "cannotAccess": "cannot access '{file}': {reason}"
+  }
+}

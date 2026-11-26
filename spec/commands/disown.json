@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "disown",
+  "category": "scripting",
+  "summary": "Forget background jobs",
+  "shellBuiltin": true,
+  "parser": "custom"
+}

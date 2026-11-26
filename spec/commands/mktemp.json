@@ -1,0 +1,18 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "mktemp",
+  "category": "utility",
+  "summary": "Make a uniquely named temporary file or directory",
+  "parser": "args",
+  "options": [
+    {"short": "d", "long": ["directory"], "description": "make a directory"},
+    {"long": ["dry-run"], "key": "u", "description": "print a name without creating anything", "ports": ["ts"]},
+    {"short": "p", "long": ["tmpdir"], "arg": "DIR", "description": "make it in DIR (default /tmp)"},
+    {"short": "q", "long": ["quiet"], "description": "suppress error messages"},
+    {"short": "t", "description": "make it in /tmp (or the -p DIR)"},
+    {"short": "u", "description": "print a name without creating anything", "ignored": ["cs", "py"]}
+  ],
+  "messages": {
+    "tooFewX": "too few X's in template '{template}'"
+  }
+}

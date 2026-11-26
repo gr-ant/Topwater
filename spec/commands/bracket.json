@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "[",
+  "category": "shell",
+  "summary": "Evaluate a conditional expression",
+  "shellBuiltin": true,
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "missingBracket": "missing `]'"
+  }
+}

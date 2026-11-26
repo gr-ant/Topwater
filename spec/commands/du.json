@@ -1,0 +1,21 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "du",
+  "category": "utility",
+  "summary": "Estimate disk usage",
+  "parser": "args",
+  "options": [
+    {"short": "a", "long": ["all"], "description": "list files too, not only directories"},
+    {"short": "b", "description": "apparent size in bytes", "ports": ["ts"]},
+    {"short": "c", "long": ["total"], "description": "add a grand total"},
+    {"short": "d", "long": ["max-depth"], "arg": "N", "description": "list only N levels deep"},
+    {"short": "h", "long": ["human-readable"], "description": "sizes like 4.0K and 1.2M"},
+    {"short": "k", "description": "sizes in kilobytes (the default)"},
+    {"short": "S", "description": "accepted and ignored", "ignored": true},
+    {"short": "s", "long": ["summarize"], "description": "just one total per argument"}
+  ],
+  "messages": {
+    "cannotAccess": "cannot access '{file}': {errno}",
+    "cannotReadDirectory": "cannot read directory '{file}': Permission denied"
+  }
+}

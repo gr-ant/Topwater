@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "dirs",
+  "category": "scripting",
+  "summary": "Show the directory stack",
+  "shellBuiltin": true,
+  "parser": "custom"
+}

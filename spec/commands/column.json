@@ -1,0 +1,14 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "column",
+  "category": "text",
+  "summary": "Format input into aligned columns (-t)",
+  "version": "column from util-linux 2.39.3",
+  "parser": "args",
+  "options": [
+    {"short": "n", "description": "accepted and ignored", "ignored": true},
+    {"short": "o", "long": ["output-separator"], "arg": "SEP", "description": "separate output columns with SEP"},
+    {"short": "s", "long": ["separator"], "arg": "SEP", "description": "split input on any of the characters in SEP"},
+    {"short": "t", "long": ["table"], "description": "line the input up as a table"}
+  ]
+}

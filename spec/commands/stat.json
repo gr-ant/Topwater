@@ -1,0 +1,16 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "stat",
+  "category": "utility",
+  "summary": "Show file status",
+  "parser": "args",
+  "options": [
+    {"short": "c", "long": ["format"], "arg": "FORMAT", "description": "print FORMAT (%n %s %a %A %U %G %y ...) instead of the default"},
+    {"short": "L", "long": ["dereference"], "description": "follow links (there are none)"},
+    {"long": ["printf"], "key": "c", "arg": "FORMAT", "description": "like --format", "ports": ["ts"]},
+    {"short": "t", "long": ["terse"], "description": "accepted and ignored", "ignored": true}
+  ],
+  "messages": {
+    "cannotStat": "cannot statx '{file}': {errno}"
+  }
+}

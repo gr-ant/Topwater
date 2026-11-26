@@ -1,0 +1,29 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "ln",
+  "category": "file",
+  "summary": "Create hard or symbolic links (-s symbolic, -f replace)",
+  "parser": "args",
+  "options": [
+    {"short": "b", "description": "accepted and ignored (no backups are made)", "ignored": true},
+    {"short": "f", "long": ["force"], "description": "replace an existing file of the same name"},
+    {"short": "L", "long": ["logical"], "description": "a hard link to a symbolic link links what it points to"},
+    {"short": "n", "long": ["no-dereference"], "description": "treat a link to a directory as a file when it is the destination"},
+    {"short": "P", "long": ["physical"], "description": "a hard link to a symbolic link links the link itself (the default)"},
+    {"short": "r", "long": ["relative"], "description": "with -s, store the target relative to the link's directory"},
+    {"short": "s", "long": ["symbolic"], "description": "create symbolic links rather than hard ones"},
+    {"short": "T", "long": ["no-target-directory"], "description": "treat the last operand as the link's name, never a directory"},
+    {"short": "t", "long": ["target-directory"], "arg": "DIR", "description": "make the links inside DIR"},
+    {"short": "v", "long": ["verbose"], "description": "print each link made"}
+  ],
+  "messages": {
+    "missingDestination": "missing destination file operand after {file:shell-always}",
+    "failedToAccess": "failed to access {file:shell-always}: {errno}",
+    "targetNotDirectory": "target {file:shell-always} is not a directory",
+    "targetFailed": "target {file:shell-always}: {errno}",
+    "createFailed": "failed to create {kind} link {file:shell-always}{arrow}: {errno}",
+    "hardLinkDirectory": "{file}: hard link not allowed for directory",
+    "overwriteDirectory": "{file}: cannot overwrite directory",
+    "sameFile": "{source:shell-always} and {dest:shell-always} are the same file"
+  }
+}

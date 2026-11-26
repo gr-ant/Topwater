@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "wait",
+  "category": "scripting",
+  "summary": "Wait for background jobs (they run to completion when started)",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "messages": {
+    "notPid": "`{id}': not a pid or valid job spec",
+    "notChild": "pid {pid} is not a child of this shell"
+  }
+}

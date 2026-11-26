@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "export",
+  "category": "shell",
+  "summary": "Set environment variables",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

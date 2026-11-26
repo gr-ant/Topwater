@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "builtin",
+  "category": "scripting",
+  "summary": "Run a shell builtin, bypassing a function of the same name",
+  "shellBuiltin": true,
+  "parser": "custom",
+  "messages": {
+    "notBuiltin": "{name}: not a shell builtin"
+  }
+}

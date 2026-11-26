@@ -1,0 +1,17 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "base64",
+  "category": "utility",
+  "summary": "Base64 encode/decode",
+  "parser": "args",
+  "options": [
+    {"short": "d", "long": ["decode"], "description": "decode instead of encode"},
+    {"short": "i", "long": ["ignore-garbage"], "description": "skip characters outside the base64 alphabet when decoding"},
+    {"short": "w", "long": ["wrap"], "arg": "COLS", "description": "wrap encoded lines at COLS characters (0: no wrapping)"}
+  ],
+  "messages": {
+    "readDirectory": "read error: {errno}",
+    "invalidInput": "invalid input",
+    "invalidWrap": "invalid wrap size: '{size}'"
+  }
+}

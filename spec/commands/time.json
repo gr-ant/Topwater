@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "time",
+  "category": "scripting",
+  "summary": "Time a command",
+  "parser": "custom"
+}

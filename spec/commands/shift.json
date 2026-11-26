@@ -1,0 +1,9 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "shift",
+  "category": "scripting",
+  "summary": "Shift positional parameters",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "custom"
+}

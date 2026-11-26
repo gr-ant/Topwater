@@ -1,0 +1,39 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "date",
+  "category": "system",
+  "summary": "Print the date and time",
+  "help": [
+    "Usage: date [OPTION]... [+FORMAT]",
+    "Print the current date and time, or the one given with -d, in UTC.",
+    "",
+    "  -d, --date=STRING        show the time described by STRING instead of now",
+    "  -r, --reference=FILE     show FILE's last modification time",
+    "  -u, --utc, --universal   use UTC (the clock is already UTC)",
+    "  -I, --iso-8601           print the date as YYYY-MM-DD",
+    "  -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000",
+    "",
+    "STRING can combine, in any order:",
+    "  dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120",
+    "  times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)",
+    "  zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)",
+    "  weekdays   Monday, fri   (moves forward to that day)",
+    "  words      now  today  yesterday  tomorrow",
+    "  relative   3 days ago   +2 hours   next week   last month   1 year",
+    "  epoch      @1795168800",
+    "",
+    "FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,",
+    "and %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s"
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "d", "long": ["date"], "arg": "STRING", "description": "show the time STRING describes instead of now"},
+    {"short": "I", "long": ["iso-8601"], "description": "print the date as YYYY-MM-DD"},
+    {"short": "R", "long": ["rfc-email"], "description": "print in email (RFC 5322) style"},
+    {"short": "r", "long": ["reference"], "arg": "FILE", "description": "show FILE's modification time"},
+    {"short": "u", "long": ["universal", "utc"], "description": "use UTC (the clock already is)"}
+  ],
+  "messages": {
+    "invalidDate": "invalid date {value:locale}"
+  }
+}

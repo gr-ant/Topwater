@@ -1,0 +1,7 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "md5sum",
+  "category": "utility",
+  "summary": "Compute MD5 checksums",
+  "parser": "custom"
+}

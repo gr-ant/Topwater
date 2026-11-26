@@ -1,0 +1,11 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "file",
+  "category": "utility",
+  "summary": "Determine file type",
+  "version": "file-5.45",
+  "parser": "custom",
+  "messages": {
+    "cannotOpen": "cannot open `{file}' (No such file or directory)"
+  }
+}

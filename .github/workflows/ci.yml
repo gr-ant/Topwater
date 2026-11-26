@@ -6,6 +6,17 @@ on:
 
 # All three implementations run the shared corpus in tests/corpus.
 jobs:
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # spec/ must satisfy its JSON schemas, and the ports' generated tables must match it (see spec/README.md)
+      - run: python3 tools/spec-gen/gen.py --check
+      - run: python3 tools/spec-gen/test_gen.py
+
   dotnet:
     runs-on: ubuntu-latest
     steps:

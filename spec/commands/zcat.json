@@ -1,0 +1,28 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "zcat",
+  "category": "archive",
+  "summary": "Decompress .gz files to stdout (gzip -dc)",
+  "version": "gzip 1.12",
+  "parser": "args",
+  "options": [
+    {"short": "1", "long": ["fast"], "description": "fastest compression"},
+    {"short": "2", "description": "compression level 2"},
+    {"short": "3", "description": "compression level 3"},
+    {"short": "4", "description": "compression level 4"},
+    {"short": "5", "description": "compression level 5"},
+    {"short": "6", "description": "compression level 6 (the default)"},
+    {"short": "7", "description": "compression level 7"},
+    {"short": "8", "description": "compression level 8"},
+    {"short": "9", "long": ["best"], "description": "best compression"},
+    {"short": "c", "long": ["stdout", "to-stdout"], "description": "write to standard output and keep the input files"},
+    {"short": "d", "long": ["decompress", "uncompress"], "description": "decompress"},
+    {"short": "f", "long": ["force"], "description": "overwrite existing output files"},
+    {"short": "k", "long": ["keep"], "description": "keep the input files"},
+    {"short": "l", "long": ["list"], "description": "list sizes and ratios of compressed files"},
+    {"short": "n", "long": ["no-name"], "description": "accepted and ignored (no name is stored)", "ignored": true},
+    {"short": "q", "long": ["quiet"], "description": "suppress warnings"},
+    {"short": "t", "long": ["test"], "description": "check that compressed files are intact"},
+    {"short": "v", "long": ["verbose"], "description": "report each file's name and ratio"}
+  ]
+}

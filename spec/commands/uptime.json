@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "uptime",
+  "category": "system",
+  "summary": "Show how long the system has been running",
+  "version": "uptime from procps-ng 4.0.4",
+  "parser": "custom"
+}

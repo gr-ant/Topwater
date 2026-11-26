@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "break",
+  "category": "scripting",
+  "summary": "Exit a loop",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

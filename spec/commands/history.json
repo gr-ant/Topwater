@@ -1,0 +1,9 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "history",
+  "category": "shell",
+  "summary": "Show command history",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "custom"
+}

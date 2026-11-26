@@ -1,0 +1,20 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "readlink",
+  "category": "utility",
+  "summary": "Print where a symbolic link points (-f: the full resolved path)",
+  "parser": "args",
+  "options": [
+    {"short": "e", "long": ["canonicalize-existing"], "description": "resolve every link; fail unless every component exists"},
+    {"short": "f", "long": ["canonicalize"], "description": "resolve every link; every component but the last must exist"},
+    {"short": "m", "long": ["canonicalize-missing"], "description": "resolve every link; any component may be missing"},
+    {"short": "n", "long": ["no-newline"], "description": "no newline after a single name"},
+    {"short": "q", "long": ["quiet"], "description": "say nothing about failures (the default)"},
+    {"short": "s", "long": ["silent"], "description": "same as -q"},
+    {"short": "v", "long": ["verbose"], "description": "report failures"},
+    {"short": "z", "long": ["zero"], "description": "end each name with NUL instead of newline"}
+  ],
+  "messages": {
+    "failed": "{file:shell}: {errno}"
+  }
+}

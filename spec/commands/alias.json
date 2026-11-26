@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "alias",
+  "category": "shell",
+  "summary": "Define or list aliases",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

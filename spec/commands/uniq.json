@@ -1,0 +1,20 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "uniq",
+  "category": "text",
+  "summary": "Collapse adjacent duplicate lines",
+  "parser": "args",
+  "options": [
+    {"short": "c", "long": ["count"], "description": "prefix lines with their count"},
+    {"short": "D", "description": "print every repeated line", "ports": ["ts"]},
+    {"short": "d", "long": ["repeated"], "description": "print one copy of each repeated line"},
+    {"short": "f", "long": ["skip-fields"], "arg": "N", "description": "skip N fields before comparing", "ports": ["ts"]},
+    {"short": "i", "long": ["ignore-case"], "description": "compare regardless of case"},
+    {"short": "s", "long": ["skip-chars"], "arg": "N", "description": "skip N characters before comparing", "ports": ["ts"]},
+    {"short": "u", "long": ["unique"], "description": "print only lines that are not repeated"},
+    {"short": "w", "long": ["check-chars"], "arg": "N", "description": "compare at most N characters", "ports": ["ts"]}
+  ],
+  "messages": {
+    "readDirectory": "error reading {file:shell-always}: {errno}"
+  }
+}

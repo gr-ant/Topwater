@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "return",
+  "category": "scripting",
+  "summary": "Return from a function",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "notInFunction": "can only `return' from a function or sourced script"
+  }
+}

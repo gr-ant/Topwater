@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "declare",
+  "category": "scripting",
+  "summary": "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

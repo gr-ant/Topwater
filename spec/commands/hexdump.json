@@ -1,0 +1,13 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "hexdump",
+  "category": "binary",
+  "summary": "Show file bytes in hex (-C canonical, -n LEN)",
+  "parser": "args",
+  "options": [
+    {"short": "C", "long": ["canonical"], "description": "hex and ASCII side by side"},
+    {"short": "n", "long": ["length"], "arg": "LENGTH", "description": "read only LENGTH bytes"},
+    {"short": "s", "long": ["skip"], "arg": "OFFSET", "description": "skip OFFSET bytes first"},
+    {"short": "v", "long": ["no-squeezing"], "description": "show repeated lines instead of *"}
+  ]
+}

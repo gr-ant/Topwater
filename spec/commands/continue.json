@@ -1,0 +1,10 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "continue",
+  "category": "scripting",
+  "summary": "Next loop iteration",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom"
+}

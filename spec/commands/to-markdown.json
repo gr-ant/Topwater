@@ -1,0 +1,25 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "to-markdown",
+  "category": "document",
+  "summary": "Convert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save)",
+  "help": [
+    "Usage: to-markdown [-o OUT.md] FILE...",
+    "Convert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save)."
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "o", "long": ["output"], "arg": "OUT.md", "description": "write the Markdown to OUT.md instead of stdout"}
+  ],
+  "messages": {
+    "missingOperand": "missing file operand\nUsage: to-markdown [-o OUT.md] FILE...",
+    "unsupportedFormat": "unsupported format '{format}' (supported: {supported})",
+    "invalidFile": "not a valid {format} file ({detail})",
+    "partMissing": "not a valid {format} file ({part} is missing)",
+    "archiveTooLarge": "archive expands to more than {megabytes} MB",
+    "dtdNotAllowed": "{name}: DTDs are not allowed",
+    "sheetTooLarge": "sheet '{name}' is too large",
+    "convertFailed": "{file}: {reason}"
+  },
+  "notes": "Topwater's own command: no real counterpart."
+}

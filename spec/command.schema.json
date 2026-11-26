@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/topwater/spec/command.schema.json",
+  "title": "Topwater command",
+  "description": "One built-in command. tools/spec-gen/gen.py turns these files into tables for the three ports; see spec/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "category", "summary", "parser"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string", "minLength": 1, "description": "The command name the agent types. The file is spec/commands/<name>.json, with . : [ spelled dot colon bracket." },
+    "category": {
+      "enum": ["file", "text", "shell", "scripting", "system", "utility", "binary", "archive", "document", "language"],
+      "description": "Grouping for documentation only."
+    },
+    "summary": { "type": "string", "minLength": 1, "description": "One line, no final period: what `help` lists, and the second line of the default --help." },
+    "ports": {
+      "type": "array", "items": { "$ref": "#/$defs/port" }, "uniqueItems": true, "minItems": 1,
+      "description": "The ports that have this command. Absent: all three. Anything else is a known gap, listed in spec/README.md."
+    },
+    "shellBuiltin": { "type": "boolean", "default": false, "description": "Part of bash itself: `type` says 'shell builtin' and errors are prefixed 'bash: '." },
+    "programFile": { "type": "boolean", "default": true, "description": "Whether /usr/bin/<name> exists (false for builtins a real system has no program for)." },
+    "standardOptions": { "type": "boolean", "default": true, "description": "Whether a lone --help / --version is answered with help / version (false: the command sees them as arguments)." },
+    "version": { "type": "string", "description": "What --version prints. Default: '<name> (GNU coreutils) 9.4'." },
+    "help": {
+      "type": "array", "items": { "type": "string" },
+      "description": "The --help text, one string per line (a final newline is added). Default: 'Usage: <name> [OPTION]... [ARG]...' then '<summary>.'. `help <name>` prints it only when given here."
+    },
+    "reportsAs": { "type": "string", "description": "The program name in usage errors when it differs from name (egrep reports as grep)." },
+    "usageExitCode": { "type": "integer", "default": 1, "description": "Exit status after a bad option or a missing operand." },
+    "tryHelp": {
+      "type": "array", "items": { "type": "string" },
+      "description": "The lines after a usage error. Default: \"Try '<name> --help' for more information.\"."
+    },
+    "parser": {
+      "enum": ["args", "custom"],
+      "description": "args: the shared getopt-style parser reads `options` (generated into each port). custom: the command parses its own arguments; `options` is documentation."
+    },
+    "options": { "type": "array", "items": { "$ref": "#/$defs/option" } },
+    "exitCodes": {
+      "type": "object", "patternProperties": { "^[0-9]+$": { "type": "string" } }, "additionalProperties": false,
+      "description": "What each exit status means, when more than success/failure."
+    },
+    "messages": {
+      "type": "object", "additionalProperties": { "type": "string" },
+      "description": "Diagnostic templates, keyed by a camelCase id the code uses. Placeholders: {name}, {name:shell}, {name:shell-always}, {name:locale}; see spec/README.md. Usually the text after the '<name>: ' prefix the port adds; a message of another shape (a leading newline, several lines, another program's prefix) is stored whole. A key missing here falls back to shell.json's defaults.messages."
+    },
+    "notes": { "type": "string", "description": "Free text for maintainers." }
+  },
+  "$defs": {
+    "port": { "enum": ["cs", "py", "ts"] },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [{ "required": ["short"] }, { "required": ["long", "key"] }, { "required": ["long", "custom"] }],
+      "properties": {
+        "short": { "type": "string", "pattern": "^[A-Za-z0-9]$", "description": "The letter after '-'." },
+        "long": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$" }, "minItems": 1, "description": "Names after '--' that mean the same option." },
+        "key": { "type": "string", "pattern": "^([A-Za-z0-9]|[\\u0001-\\u001f])$", "description": "The letter the code looks the option up by, when it is not `short` (long-only options use a control character)." },
+        "arg": { "type": "string", "description": "Present when the option takes a value: its name in help text (NUM, FILE...)." },
+        "description": { "type": "string", "minLength": 1, "description": "What Topwater does with it, in our own words (never a real program's help text)." },
+        "ports": { "type": "array", "items": { "$ref": "#/$defs/port" }, "uniqueItems": true, "minItems": 1, "description": "The ports that accept it. Absent: all that have the command." },
+        "custom": { "type": "boolean", "description": "The command reads this option itself before the shared parser, so it stays out of the generated table." },
+        "ignored": {
+          "anyOf": [{ "type": "boolean" }, { "type": "array", "items": { "$ref": "#/$defs/port" }, "uniqueItems": true, "minItems": 1 }],
+          "description": "Accepted but without effect: true in every port that accepts it, or the list of ports where it does nothing."
+        }
+      }
+    }
+  }
+}

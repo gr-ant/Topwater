@@ -1,0 +1,30 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "diff",
+  "category": "text",
+  "summary": "Show the differences between files (-u for unified)",
+  "version": "diff (GNU diffutils) 3.10",
+  "usageExitCode": 2,
+  "tryHelp": [
+    "diff: Try 'diff --help' for more information."
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "B", "description": "accepted and ignored", "ignored": true},
+    {"short": "b", "long": ["ignore-space-change"], "description": "ignore differences in how much white space there is"},
+    {"short": "i", "long": ["ignore-case"], "description": "ignore case"},
+    {"short": "N", "description": "treat missing files as empty"},
+    {"short": "q", "long": ["brief"], "description": "only say whether the files differ"},
+    {"short": "r", "long": ["recursive"], "description": "compare directories recursively"},
+    {"short": "s", "long": ["report-identical-files"], "description": "say so when the files are the same"},
+    {"short": "U", "arg": "NUM", "description": "unified output with NUM lines of context"},
+    {"short": "u", "long": ["unified"], "description": "unified output"},
+    {"short": "w", "long": ["ignore-all-space"], "description": "treat lines that differ only in spacing as equal"}
+  ],
+  "messages": {
+    "missingOperandAfter": "missing operand after '{operand}'",
+    "extraOperand": "extra operand '{operand}'",
+    "fileNotFound": "{file}: No such file or directory",
+    "tooLarge": "files too large to compare"
+  }
+}

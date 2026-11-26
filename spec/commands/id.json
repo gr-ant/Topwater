@@ -1,0 +1,14 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "id",
+  "category": "system",
+  "summary": "Show the user's and groups' ids",
+  "parser": "args",
+  "options": [
+    {"short": "G", "description": "list every group the user is in"},
+    {"short": "g", "description": "print the group id"},
+    {"short": "n", "description": "print names instead of numbers"},
+    {"short": "r", "description": "accepted and ignored", "ignored": true},
+    {"short": "u", "description": "print the user id"}
+  ]
+}

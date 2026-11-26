@@ -1,0 +1,14 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "cd",
+  "category": "shell",
+  "summary": "Move to another directory",
+  "shellBuiltin": true,
+  "programFile": false,
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "tooManyArguments": "too many arguments",
+    "failed": "{dir}: {errno}"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Topwater shared strings",
+  "description": "spec/shell.json: defaults for every command, getopt and errno strings, quoting rules and the shell's own diagnostics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["defaults", "getopt", "errno", "quoting", "diagnostics"],
+  "properties": {
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "help", "tryHelp", "messages"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "help": { "$ref": "#/$defs/lines" },
+        "tryHelp": { "$ref": "#/$defs/lines" },
+        "messages": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "getopt": { "$ref": "#/$defs/strings" },
+    "errno": { "$ref": "#/$defs/strings" },
+    "quoting": { "$ref": "#/$defs/strings" },
+    "diagnostics": { "$ref": "#/$defs/strings" },
+    "notes": { "type": "string" }
+  },
+  "$defs": {
+    "lines": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "strings": { "type": "object", "additionalProperties": { "type": "string" } }
+  }
+}

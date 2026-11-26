@@ -1,0 +1,19 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "tail",
+  "category": "text",
+  "summary": "Print the last lines of files",
+  "parser": "args",
+  "options": [
+    {"short": "c", "long": ["bytes"], "arg": "NUM", "description": "show NUM bytes from the end (+NUM: from byte NUM on)"},
+    {"short": "F", "long": ["retry"], "description": "same as -f"},
+    {"short": "f", "long": ["follow"], "description": "print what is there and stop (nothing else writes the file)"},
+    {"short": "n", "long": ["lines"], "arg": "NUM", "description": "show NUM lines from the end (+NUM: from line NUM on)"},
+    {"short": "q", "long": ["quiet", "silent"], "description": "never print file name headers"},
+    {"short": "v", "long": ["verbose"], "description": "always print file name headers"}
+  ],
+  "messages": {
+    "openFailed": "cannot open {file:shell-always} for reading: {errno}",
+    "readDirectory": "error reading {file:shell-always}: {errno}"
+  }
+}

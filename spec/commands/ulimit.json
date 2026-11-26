@@ -1,0 +1,8 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "ulimit",
+  "category": "scripting",
+  "summary": "Show resource limits",
+  "shellBuiltin": true,
+  "parser": "custom"
+}

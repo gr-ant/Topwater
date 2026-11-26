@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "printf",
+  "category": "shell",
+  "summary": "Format and print data",
+  "shellBuiltin": true,
+  "standardOptions": false,
+  "parser": "custom",
+  "messages": {
+    "usage": "usage: printf [-v var] format [arguments]"
+  }
+}

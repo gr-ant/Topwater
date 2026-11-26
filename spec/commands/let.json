@@ -1,0 +1,12 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "let",
+  "category": "scripting",
+  "summary": "Evaluate arithmetic expressions",
+  "shellBuiltin": true,
+  "programFile": false,
+  "parser": "custom",
+  "messages": {
+    "expressionExpected": "expression expected"
+  }
+}
