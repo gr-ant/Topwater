@@ -56,7 +56,7 @@ Requires .NET 8 or later.
 dotnet add package Topwater --prerelease
 ```
 
-This installs `0.1.0-preview.3`; [CHANGELOG.md](CHANGELOG.md) says what changed.
+This installs `0.1.0-preview.4`; [CHANGELOG.md](CHANGELOG.md) says what changed.
 
 ```csharp
 using Topwater;
@@ -81,10 +81,10 @@ public class Tools
 
 ### Python
 
-Requires Python 3.10 or later. Standard library only. Not on PyPI yet, so install from the repository:
+Requires Python 3.10 or later. Standard library only.
 
 ```bash
-pip install "git+https://github.com/gr-ant/Topwater#subdirectory=python"
+pip install --pre topwater
 ```
 
 ```python
@@ -111,13 +111,10 @@ Inside async code, use `await topwater.execute_tool(shell, command)` instead of 
 
 ### TypeScript
 
-Requires Node 22.3 or later. No runtime dependencies; the package is an ES module. Not on npm yet, so build it from
-the repository:
+Requires Node 22.3 or later. No runtime dependencies; the package is an ES module.
 
 ```bash
-git clone https://github.com/gr-ant/Topwater
-(cd Topwater/typescript && npm install && npm run build)
-npm install ./Topwater/typescript
+npm install topwater
 ```
 
 ```ts
@@ -297,9 +294,9 @@ Topwater is in preview. APIs may change before 1.0. [CHANGELOG.md](CHANGELOG.md)
 
 | | Where | State |
 |---|---|---|
-| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.3` published |
-| **Python** | [`python/`](python/README.md) | not on PyPI; install from the repository |
-| **TypeScript** | [`typescript/`](typescript/README.md) | not on npm; build from the repository |
+| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.4` |
+| **Python** | PyPI: [topwater](https://pypi.org/project/topwater/) | `0.1.0a4` (`pip install --pre topwater`) |
+| **TypeScript** | npm: [topwater](https://www.npmjs.com/package/topwater) | `0.1.0-preview.4` |
 | **Browser** | [demo](https://gr-ant.github.io/Topwater/), [`typescript/`](typescript/README.md#in-the-browser) | the TypeScript build in a Web Worker |
 
 This README describes `main`. `git`, web access, symbolic links and the `.topwater` recording file are newer than

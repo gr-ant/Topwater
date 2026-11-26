@@ -1,7 +1,7 @@
 # Changelog
 
-Topwater is in preview: APIs and file formats may change between previews. The .NET packages are on NuGet; the
-Python and TypeScript packages are not published yet and are used from the repository.
+Topwater is in preview: APIs and file formats may change between previews. The packages are on NuGet, PyPI and npm
+(from 0.1.0-preview.4 for PyPI and npm).
 
 ## 0.1.0-preview.4 (2026-11-26)
 

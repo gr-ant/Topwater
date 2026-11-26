@@ -17,12 +17,10 @@ This page covers the TypeScript API. The [main README](https://github.com/gr-ant
 
 ## Install
 
-Not on npm yet. Build it from the repository; the package is an ES module:
+The package is an ES module:
 
 ```bash
-git clone https://github.com/gr-ant/Topwater
-(cd Topwater/typescript && npm install && npm run build)
-npm install ./Topwater/typescript
+npm install topwater
 ```
 
 ## Quickstart

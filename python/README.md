@@ -18,13 +18,11 @@ This page covers the Python API. The [main README](https://github.com/gr-ant/Top
 
 ## Install
 
-Not on PyPI yet. Install from the repository:
-
 ```bash
-pip install "git+https://github.com/gr-ant/Topwater#subdirectory=python"
+pip install --pre topwater
 ```
 
-or, from a clone, `pip install ./python`.
+Previews are pre-releases on PyPI, hence `--pre`. From a clone: `pip install ./python`.
 
 ## Quickstart
 
@@ -140,7 +138,7 @@ limits and isolation as the agent itself. See [Containers](https://github.com/gr
 Each adapter is an extra. Until the package is on PyPI, name the repository:
 
 ```bash
-pip install "topwater[langchain] @ git+https://github.com/gr-ant/Topwater#subdirectory=python"
+pip install --pre "topwater[langchain]"
 ```
 
 The extras are `langchain`, `llamaindex`, `openai-agents`, `claude-agent-sdk`, `pydantic-ai`, `crewai`,
