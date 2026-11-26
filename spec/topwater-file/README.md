@@ -60,6 +60,20 @@ file; the header's limits can only lower them):
 A reader may check checkpoints after the first against the counts above without building them, and build each when a
 replay first needs it; anything wrong inside one (a blob, a path, the session) is then reported at that point.
 
+## Web exchanges
+
+A shell with web access (`AllowWeb`) adds `web` to the header: its policy without the credentials' values
+(`credentials` lists only the host names) and without its handler. A call that made requests adds `web`: each request
+as it went out of the policy check and what came back, in order, redirects included. A response's body is a blob
+(`body` names it, `size` is its length; no `body` when empty), stored after credentials were scrubbed; a request that
+failed below the policy has `error` (`resolve`, `blocked`, `connect`, `timeout`, `tls` or `recv`) instead of a status.
+Requests the policy refused are not stored: a replay under the same policy refuses them again.
+
+A shell built from the recording serves these in order, starting at the first call it runs, and never uses the
+network. A reader checks each blob as it does a file's (present, the stated size, matching its hash), every body
+together at most MaxFileSystemBytes, `status` from 100 to 999, and `error` one of the six. Files without `web` load as
+before; the history version stays 1, since a Topwater without web access has no `curl` to replay anyway.
+
 ## `files`
 
 A call's `files` is informational: the paths whose entry (type, mode, owner, mtime, content or link) differs between

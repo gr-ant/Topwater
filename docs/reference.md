@@ -10,6 +10,7 @@ show their APIs and list what they don't have yet.
 - [MCP servers](#mcp-servers)
 - [Microsoft.Extensions.AI](#microsoftextensionsai)
 - [Authenticated API calls](#authenticated-api-calls)
+- [Web access](#web-access)
 - [Files and permissions](#files-and-permissions)
 - [Documents](#documents)
 - [Real host programs](#real-host-programs)
@@ -393,6 +394,88 @@ read. Use a read-only token with the narrowest scope the API offers, list `Paths
 method with typed parameters for anything that writes. Scrubbing catches the credential as sent, not encoded
 copies of it (base64, URL-encoded, split across JSON strings). The base URL is yours: check it for look-alike
 (IDN) host names before you register it.
+
+## Web access
+
+`curl` and `wget` are always there, but without a policy every host fails to resolve, as on a machine with no
+network. `AllowWeb` lets them reach the sites you list:
+
+```csharp
+shell.AllowWeb(new WebPolicy
+{
+    Domains = ["api.github.com", "*.wikipedia.org"],   // *.x matches subdomains of x, not x itself
+    Methods = ["GET"],                                  // the default; GET also allows HEAD
+    Credentials = { ["api.github.com"] = () => $"Bearer {secrets.Get("github")}" },
+});
+```
+
+```python
+shell.allow_web(WebPolicy(domains=["api.github.com", "*.wikipedia.org"],
+                          credentials={"api.github.com": lambda: "Bearer " + token}))
+```
+
+```ts
+shell.allowWeb({ domains: ['api.github.com', '*.wikipedia.org'], credentials: { 'api.github.com': () => `Bearer ${token}` } });
+```
+
+| Option | Default | |
+|---|---|---|
+| `Domains` | none | host names, exact or `*.name` |
+| `Methods` | `GET` | |
+| `AllowHttp` | false | https only unless set |
+| `MaxResponseBytes` | 10,000,000 | read as it streams; the command stops there (`curl` exit 63) |
+| `MaxRequestsPerCall`, `MaxRequests` | 20, 500 | per tool call and per shell; every redirect counts |
+| `Timeout` | 30 s | per request; the call's own limit still applies |
+| `MaxRedirects` | 10 | `curl --max-redirs` and `wget --max-redirect` can only lower it |
+| `Credentials` | none | the `Authorization` header for an exact host, added in your code |
+| `ExplainBlocked` | false | say "Blocked by the web policy: ..." instead of failing like an unknown host |
+| `Handler` (`transport` in Python and TypeScript) | the network | send requests your own way (tests, proxies); must not follow redirects |
+
+`curl` takes `-s -S -f --fail-with-body -L --max-redirs -i -I -o -O -X -H -d --data-raw --data-binary
+--data-urlencode --json -G -u -A -w -m --compressed -v` (`@file` and `@-` work as in curl; `-w` knows `http_code`,
+`response_code`, `content_type`, `size_download`, `url_effective`, `redirect_url`, `num_redirects`, `method` and
+`exitcode`). `wget` takes `-O` (`-O -`), `-q`, `-S`, `--header`, `--post-data`, `--post-file`, `-U`, `-T` and
+`--max-redirect`. Output, error messages and exit codes match curl 8.5 and wget 1.21 on Ubuntu 24.04 for the cases in
+[`tests/web`](../tests/web/cases.jsonl), recorded from the real programs; all three ports run them. Differences:
+no progress meter, a shorter `wget` report (no Resolving/Connecting lines, dots or speeds, no retries), `-v` shows
+only the request and response headers, and `-k` / `--no-check-certificate` are accepted and ignored: certificates
+are always checked.
+
+A host outside the policy fails exactly like a name that does not resolve (`curl: (6) Could not resolve host`,
+`wget` exit 4), and an IP address like one that refuses connections (`curl: (7)`). That is what the agent would
+see on a machine whose DNS only knows your sites, and it says nothing about the policy. Set `ExplainBlocked` when
+you would rather the agent learn why, so it stops trying. A method the policy does not allow, or a reached request
+limit, always says so (exit 1).
+
+What it guarantees, even against a hostile agent:
+
+- **Only your hosts.** The URL is parsed one way in all three ports: user info never becomes the host
+  (`https://allowed.com@evil.com/` is evil.com), IPv4 in any form (`2130706433`, `0x7f.1`, `0177.0.0.1`) is
+  normalized first, and every redirect is checked like the first URL.
+- **No internal addresses.** A name is resolved once; if any address is loopback, private, link-local (169.254.169.254,
+  the cloud metadata service), CGNAT, multicast, reserved, unspecified, IPv6 unique-local or site-local, or an IPv4
+  one of these inside IPv6 (`::ffff:`, NAT64, 6to4), the request is refused. Otherwise the connection goes to the
+  address that was checked, while TLS and `Host` use the name, so DNS rebinding cannot swap it. IP literals are
+  refused the same way, even when listed in `Domains`. No setting turns this off; only the tests can.
+- **Nothing of yours leaks.** No proxy settings, cookies or default headers of your process are used. The agent's
+  `Host`, `Content-Length`, `Transfer-Encoding`, `Connection` and `Proxy-*` headers are dropped, header values cannot
+  hold line breaks, and its `Authorization` (and `-u`) for a host with a credential is replaced by yours. Neither
+  goes to another host after a redirect.
+- **The credential stays hidden,** as with `RegisterApi`: not in `-v`, scrubbed from response headers and bodies,
+  and never stored in a recording.
+- **Bounded.** Response bytes, response headers (64 KB), request bodies (1,000,000 bytes), requests, redirects and
+  time are capped. Bodies reach the virtual filesystem only through normal output and `-o`.
+
+What it does not guarantee: the agent can read anything on the sites you allow and send what it read elsewhere to
+any allowed site with an allowed method. Keep `Methods` to `GET` unless writes are the point, list exact hosts, and
+mention the sites in your tool description (the default one says the network is not available). A `Handler` that
+connects somewhere itself skips the address check, which happens where names are resolved. `Fork()` does not
+inherit web access.
+
+**In the browser** the TypeScript build uses `fetch` under the same policy, with two limits: the browser resolves
+names itself, so internal addresses can be refused only when written as IP literals, and a site must allow the page's
+origin with CORS, or the request fails like a broken connection. Without `-L`, a redirect cannot be seen
+(`fetch` hides it) and fails the same way.
 
 ## Files and permissions
 
@@ -920,6 +1003,12 @@ exit code and trailer call by call. The `ReplayReport` lists the calls that ran,
 A recording made with a virtual clock and a seed (`recording.IsDeterministic`) replays exactly on the same Topwater
 version. One made without them still replays, but needs `ReplayNormalizers.Volatile` for anything that prints the time.
 
+A shell with [web access](#web-access) records every request and its response (status, headers and the body as a
+blob, after credentials are scrubbed) with the call, and the policy without its credentials in the header. A shell
+built from the recording (`CreateShell`, `ShellAtAsync`, `ReplayAsync`, the viewer) serves those responses in order
+and never touches the network; a request that was not recorded fails with `Topwater replay: GET URL is not in the
+recording`, which shows up as a difference.
+
 ### The machine at any turn
 
 `await recording.ShellAtAsync(i)` gives a shell as it was right after call `i` (-1: before the first). It restores the
@@ -1143,8 +1232,8 @@ What each commonly tried program does:
 
 Real background jobs (`cmd &` runs to completion before the next command, so `wait` only reports its
 status), job control (`fg`, `bg`, `%1`), `>(...)`, `coproc`, `compgen`/`complete`, `caller`, running shell
-commands from inside `awk` (`print | "cmd"`), group permissions, and a real `python` or
-network access. `sleep` really waits, up to the call's time limit (`MaxCallDuration`).
+commands from inside `awk` (`print | "cmd"`), group permissions, a real `python`, and network access beyond
+[web access](#web-access) to the sites you allow. `sleep` really waits, up to the call's time limit (`MaxCallDuration`).
 
 A few shell behaviours differ from bash on purpose or for simplicity: the last command of a pipeline runs
 in the current shell (like `shopt -s lastpipe`), so `cmd | while read ...; done` can set variables; aliases

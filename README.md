@@ -198,6 +198,7 @@ Adapters do the wiring for common frameworks:
 | Tools described by JSON Schema | `shell.RegisterTools(...)` | `register_tools(shell, ...)` | `shell.registerTools(...)` |
 | An MCP server | `shell.MountMcpAsync(...)` (package `Topwater.Mcp`) | `topwater.mcp.mount_mcp(shell, ...)` | `shell.mountMcp(...)` |
 | An HTTP API, credentials hidden from the model | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `shell.registerApi(...)` |
+| [Web access](docs/reference.md#web-access) to sites you list, through `curl` and `wget` | `shell.AllowWeb(new WebPolicy { ... })` | `shell.allow_web(WebPolicy(...))` | `shell.allowWeb({ ... })` |
 | A real program from your machine | `shell.RegisterHostCommand("git")` | `register_host_command(shell, "git")` | not yet |
 
 An MCP server becomes one program with a subcommand per tool (`github list-issues --repo acme/api`), so its tool
@@ -239,7 +240,7 @@ and GNU tools ([`tests/corpus`](tests/corpus/README.md)), each with a short list
 ## Safety
 
 **Simulated.** Shell commands are interpreted in your process and read and write only the in-memory filesystem.
-They cannot open host files, start processes or use the network.
+They cannot open host files, start processes or use the network, unless you allow a list of sites with `AllowWeb`.
 
 **Limited.** Every limit is on by default, with the same defaults in all three. When one is reached, the model gets
 a message that says what was cut off and what to do instead:

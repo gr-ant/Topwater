@@ -28,7 +28,22 @@
           }
         },
         "appCommands": { "type": "array", "items": { "type": "string" }, "description": "The app's own commands the shell had; a replay needs them registered." },
-        "metadata": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form facts: model, task, harness, ..." }
+        "metadata": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form facts: model, task, harness, ..." },
+        "web": {
+          "type": "object", "description": "The web policy the shell had (Shell.AllowWeb), without the credentials' values or a handler.",
+          "properties": {
+            "domains": { "type": "array", "items": { "type": "string" } },
+            "methods": { "type": "array", "items": { "type": "string" } },
+            "allowHttp": { "type": "boolean" },
+            "maxResponseBytes": { "type": "integer", "minimum": 0 },
+            "maxRequestsPerCall": { "type": "integer", "minimum": 0 },
+            "maxRequests": { "type": "integer", "minimum": 0 },
+            "timeoutMs": { "type": "integer", "minimum": 0 },
+            "maxRedirects": { "type": "integer", "minimum": 0 },
+            "explainBlocked": { "type": "boolean" },
+            "credentials": { "type": "array", "items": { "type": "string" }, "description": "Hosts that had a credential; never the value." }
+          }
+        }
       }
     },
     "call": {
@@ -45,7 +60,24 @@
         "files": {
           "type": "array", "items": { "$ref": "manifest.schema.json#/$defs/path" }, "uniqueItems": true,
           "description": "Paths the call added, changed or removed (content, type, mode, owner, mtime or link), sorted. Left out when none."
+        },
+        "web": {
+          "type": "array", "items": { "$ref": "#/$defs/exchange" },
+          "description": "The requests the call made, in order, and what came back; a replay serves these instead of the network."
         }
+      }
+    },
+    "exchange": {
+      "type": "object", "required": ["method", "url"],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "minLength": 1 },
+        "status": { "type": "integer", "minimum": 100, "maximum": 999 },
+        "reason": { "type": "string" },
+        "headers": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
+        "body": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blobs/<sha256> holding the body, after credentials were scrubbed; absent when empty." },
+        "size": { "type": "integer", "minimum": 0 },
+        "error": { "enum": ["resolve", "blocked", "connect", "timeout", "tls", "recv"], "description": "How the request failed instead of getting an answer." }
       }
     }
   }
