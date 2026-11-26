@@ -500,7 +500,7 @@ public sealed partial class Shell
         var started = NowUtc;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await RunCallAsync(commandLine, cancellationToken);
-        recorder.Add(commandLine, result, watch.Elapsed, started);
+        recorder.Add(commandLine, result, watch.Elapsed, started, Web?.TakeLog());
         return result;
     }
 
@@ -516,6 +516,7 @@ public sealed partial class Shell
         string? trailer = null;
         var previousUser = Fs.RunAs;
         _totalIterations = _scriptDepth = _lineno = 0; // each call is a new bash -c: its lines count from 1
+        Web?.BeginCall();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(Options.MaxCallDuration);
         var callToken = budget.Token; // everything below, built-ins included, sees the call's time limit

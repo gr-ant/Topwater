@@ -51,6 +51,9 @@ public sealed class Recording
     public TimeSpan MaxCallDuration { get; set; }
     public long MaxFileSystemBytes { get; set; }
     public long MaxStringBytes { get; set; }
+    /// <summary>The web access the shell had (<see cref="Shell.AllowWeb"/>), without its credentials or handler; null: none.
+    /// A replay serves the recorded responses under it and never touches the network.</summary>
+    public WebPolicy? Web { get; set; }
 
     /// <summary>True when the recording ran on a virtual clock with a random seed, so a replay on the same Topwater must match exactly.</summary>
     public bool IsDeterministic => StartTime != null && RandomSeed != null;
@@ -64,10 +67,20 @@ public sealed class Recording
     };
 
     /// <summary>A fresh shell at the recording's start: its options, then <paramref name="configure"/> (register your commands), then the start snapshot.</summary>
-    public Shell CreateShell(Action<Shell>? configure = null, ShellSnapshot? start = null)
+    public Shell CreateShell(Action<Shell>? configure = null, ShellSnapshot? start = null) => CreateShell(configure, start, 0);
+
+    /// <param name="firstCall">The call the shell runs first, so its web requests get that call's recorded responses.</param>
+    public Shell CreateShell(Action<Shell>? configure, ShellSnapshot? start, int firstCall)
     {
         var shell = new Shell(CreateOptions());
         configure?.Invoke(shell);
+        if (Web is { } w) // the recorded responses, never the network, and no credential is looked up
+            shell.AllowWeb(new WebSession(new WebPolicy
+            {
+                Domains = w.Domains, Methods = w.Methods, AllowHttp = w.AllowHttp, MaxResponseBytes = w.MaxResponseBytes, MaxRequestsPerCall = w.MaxRequestsPerCall,
+                MaxRequests = w.MaxRequests, Timeout = w.Timeout, MaxRedirects = w.MaxRedirects, ExplainBlocked = w.ExplainBlocked,
+                Credentials = w.Credentials.Keys.ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.Ordinal),
+            }, [.. Calls.Skip(firstCall).SelectMany(c => c.Web ?? [])]));
         shell.Restore(start ?? Start);
         return shell;
     }
@@ -81,7 +94,7 @@ public sealed class Recording
         if (index < -1 || index >= Calls.Count) throw new ArgumentOutOfRangeException(nameof(index));
         int from = index;
         while (from >= 0 && Calls[from].SnapshotAfter == null) from--;
-        var shell = CreateShell(configure, from >= 0 ? Calls[from].SnapshotAfter : null);
+        var shell = CreateShell(configure, from >= 0 ? Calls[from].SnapshotAfter : null, from + 1);
         for (int i = from + 1; i <= index; i++) await shell.RunAsync(Calls[i].Command, cancellationToken);
         return shell;
     }
@@ -135,7 +148,7 @@ public sealed class Recording
     /// </summary>
     public async Task<Recording> RerecordAsync(IReplayTarget target, CancellationToken cancellationToken = default)
     {
-        var copy = new Recording(Start, CreateOptions()) { Created = DateTimeOffset.UtcNow, Metadata = new(Metadata, StringComparer.Ordinal), AppCommands = [.. AppCommands] };
+        var copy = new Recording(Start, CreateOptions()) { Created = DateTimeOffset.UtcNow, Metadata = new(Metadata, StringComparer.Ordinal), AppCommands = [.. AppCommands], Web = Web };
         var shell = (target as ShellTarget)?.Shell;
         var before = shell?.Snapshot();
         for (int i = 0; i < Calls.Count; i++)
@@ -147,7 +160,7 @@ public sealed class Recording
             var after = shell?.Snapshot();
             copy.Calls.Add(RecordedCall.From(call.Index, call.Command, r, watch.Elapsed) with
             {
-                Time = started, Files = after == null ? null : ShellSnapshot.ChangedFiles(before!, after),
+                Time = started, Files = after == null ? null : ShellSnapshot.ChangedFiles(before!, after), Web = shell?.Web?.TakeLog() is { Count: > 0 } w ? w : null,
                 SnapshotAfter = call.SnapshotAfter != null || i == Calls.Count - 1 ? after : null,
             });
             before = after;
@@ -186,17 +199,25 @@ public sealed class Recording
             },
             AppCommands = AppCommands.Count > 0 ? AppCommands : null,
             Metadata = Metadata.Count > 0 ? Metadata : null,
+            Web = Web is { } p ? new WebEntry
+            {
+                Domains = [.. p.Domains], Methods = [.. p.Methods], AllowHttp = p.AllowHttp, MaxResponseBytes = p.MaxResponseBytes,
+                MaxRequestsPerCall = p.MaxRequestsPerCall, MaxRequests = p.MaxRequests, TimeoutMs = (long)p.Timeout.TotalMilliseconds,
+                MaxRedirects = p.MaxRedirects, ExplainBlocked = p.ExplainBlocked, Credentials = [.. p.Credentials.Keys.Order(StringComparer.Ordinal)],
+            } : null,
         };
+        // the response bodies' blobs first: a zip writes one entry at a time
+        var lines = Calls.Select(c => JsonSerializer.Serialize(new CallEntry
+        {
+            Index = c.Index, Command = c.Command, Stdout = c.Stdout, Stderr = c.Stderr, ExitCode = c.ExitCode, Trailer = c.Trailer,
+            ElapsedMs = Math.Round(c.Elapsed.TotalMilliseconds, 3), Time = c.Time is { } t ? Iso(t) : null,
+            Files = c.Files is { Count: > 0 } f ? f : null,
+            Web = c.Web is { Count: > 0 } web ? [.. web.Select(x => ExchangeEntry.From(x, zip, written))] : null,
+        }, Json)).ToList();
         using (var w = new StreamWriter(zip.CreateEntry("history.jsonl", CompressionLevel.Fastest).Open(), new UTF8Encoding(false)) { NewLine = "\n" })
         {
             w.WriteLine(JsonSerializer.Serialize(header, Json));
-            foreach (var c in Calls)
-                w.WriteLine(JsonSerializer.Serialize(new CallEntry
-                {
-                    Index = c.Index, Command = c.Command, Stdout = c.Stdout, Stderr = c.Stderr, ExitCode = c.ExitCode, Trailer = c.Trailer,
-                    ElapsedMs = Math.Round(c.Elapsed.TotalMilliseconds, 3), Time = c.Time is { } t ? Iso(t) : null,
-                    Files = c.Files is { Count: > 0 } f ? f : null,
-                }, Json));
+            foreach (var line in lines) w.WriteLine(line);
         }
         Start.WriteTo(zip, "checkpoints/0.json", written);
         for (int i = 0; i < Calls.Count; i++) Calls[i].SnapshotAfter?.WriteTo(zip, $"checkpoints/{i + 1}.json", written);
@@ -300,7 +321,21 @@ public sealed class Recording
         if (!checkpoints.ContainsKey(0)) throw Bad("checkpoints/0.json (the start) is missing");
         var budget = new SnapshotBudget(limits);
         var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files)), limits);
-        ReadCalls(reader, rec, (_, _) => null, limits);
+        long webBytes = 0;
+        ReadCalls(reader, rec, (_, _) => null, limits, (blob, size, where) =>
+        {
+            // every response body together within one machine's worth of files
+            if ((webBytes += size) > limits.MaxFileSystemBytes) throw Bad($"{where}: the recorded responses hold more than {limits.MaxFileSystemBytes} bytes (MaxFileSystemBytes)");
+            if (size == 0) return [];
+            if (!ShellSnapshot.Blob.IsMatch(blob ?? "")) throw Bad($"{where}: bad blob {JsonSerializer.Serialize(blob)}");
+            var entry = zip.GetEntry("blobs/" + blob) ?? throw Bad($"{where}: blob {blob} is missing");
+            var raw = new MemoryStream();
+            using (var st = entry.Open()) ShellSnapshot.ReadCapped(st, raw, size, "blob " + blob);
+            var b = raw.ToArray();
+            if (b.Length != size || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(b)).ToLowerInvariant() != blob)
+                throw Bad($"{where}: blob {blob} doesn't hold the {size} bytes it should");
+            return b;
+        });
 
         // the machine of the file is the one after the last checkpoint: a reader of either must see the same
         var (lastN, lastName) = checkpoints.Last();
@@ -456,6 +491,7 @@ public sealed class Recording
             TopwaterVersion = h.Topwater,
             Metadata = h.Metadata ?? new(StringComparer.Ordinal),
             AppCommands = h.AppCommands ?? [],
+            Web = h.Web?.ToPolicy(),
         };
     }
 
@@ -467,7 +503,7 @@ public sealed class Recording
         return TimeSpan.FromMilliseconds(limit == Timeout.InfiniteTimeSpan ? Math.Min(file, int.MaxValue) : Math.Min(file, (long)limit.TotalMilliseconds));
     }
 
-    static void ReadCalls(TextReader reader, Recording rec, Func<SnapshotRef?, string, ShellSnapshot?> snap, ShellOptions limits)
+    static void ReadCalls(TextReader reader, Recording rec, Func<SnapshotRef?, string, ShellSnapshot?> snap, ShellOptions limits, Func<string?, long, string, byte[]>? blob = null)
     {
         int lineNo = 1;
         while (reader.ReadLine() is { } line)
@@ -487,6 +523,8 @@ public sealed class Recording
                 Time = e.Time is { } t ? Time(t, "time", $"line {lineNo}: ") : null,
                 Files = e.Files,
                 SnapshotAfter = e.Snapshot == null ? null : snap(e.Snapshot, $"call {e.Index}"),
+                Web = e.Web?.Select((x, i) => x?.ToExchange(blob ?? ((_, _, w) => throw Bad($"{w}: web responses need a .topwater file")), $"line {lineNo} web {i}")
+                    ?? throw Bad($"line {lineNo}: null in web")).ToList(),
             });
         }
     }
@@ -514,8 +552,72 @@ public sealed class Recording
         public OptionsEntry? Options { get; set; }
         public List<string>? AppCommands { get; set; }
         public Dictionary<string, string>? Metadata { get; set; }
+        public WebEntry? Web { get; set; }
         // old JSON Lines recordings only
         public SnapshotRef? Start { get; set; }
+    }
+
+    /// <summary>The policy in the header: everything but the credentials' values and the handler.</summary>
+    sealed class WebEntry
+    {
+        public List<string>? Domains { get; set; }
+        public List<string>? Methods { get; set; }
+        public bool AllowHttp { get; set; }
+        public long MaxResponseBytes { get; set; }
+        public int MaxRequestsPerCall { get; set; }
+        public int MaxRequests { get; set; }
+        public long TimeoutMs { get; set; }
+        public int MaxRedirects { get; set; }
+        public bool ExplainBlocked { get; set; }
+        public List<string>? Credentials { get; set; }
+
+        public WebPolicy ToPolicy()
+        {
+            var policy = new WebPolicy
+            {
+                Domains = Domains ?? [], Methods = Methods ?? ["GET"], AllowHttp = AllowHttp, MaxResponseBytes = MaxResponseBytes,
+                MaxRequestsPerCall = MaxRequestsPerCall, MaxRequests = MaxRequests, Timeout = TimeSpan.FromMilliseconds(Math.Clamp(TimeoutMs, 0, int.MaxValue)),
+                MaxRedirects = MaxRedirects, ExplainBlocked = ExplainBlocked,
+                Credentials = (Credentials ?? []).ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.Ordinal),
+            };
+            try { _ = new WebSession(policy); }
+            catch (ArgumentException e) { throw Bad("bad web policy: " + e.Message); }
+            return policy;
+        }
+    }
+
+    /// <summary>One request of a call and its response; the body is a blob.</summary>
+    sealed class ExchangeEntry
+    {
+        public string? Method { get; set; }
+        public string? Url { get; set; }
+        public int Status { get; set; }
+        public string? Reason { get; set; }
+        public List<List<string>>? Headers { get; set; }
+        public string? Body { get; set; }
+        public long Size { get; set; }
+        public string? Error { get; set; }
+
+        public static ExchangeEntry From(WebExchange x, ZipArchive zip, HashSet<string> written)
+        {
+            string? blob = null;
+            if (x.Body.Length > 0)
+            {
+                blob = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(x.Body)).ToLowerInvariant();
+                if (written.Add(blob)) using (var s = zip.CreateEntry("blobs/" + blob, CompressionLevel.Fastest).Open()) s.Write(x.Body);
+            }
+            return x.Error != null ? new() { Method = x.Method, Url = x.Url, Error = x.Error }
+                : new() { Method = x.Method, Url = x.Url, Status = x.Status, Reason = x.Reason, Headers = [.. x.Headers.Select(h => new List<string> { h.Key, h.Value })], Body = blob, Size = x.Body.Length };
+        }
+
+        public WebExchange ToExchange(Func<string?, long, string, byte[]> blob, string where)
+        {
+            if (Method is not { Length: > 0 } m || Url is not { Length: > 0 } u) throw Bad($"{where}: method and url are required");
+            if (Error != null)
+                return Error is "resolve" or "blocked" or "connect" or "timeout" or "tls" or "recv" ? new(m, u, 0, "", [], []) { Error = Error } : throw Bad($"{where}: unknown error {JsonSerializer.Serialize(Error)}");
+            if (Status is < 100 or > 999 || Size < 0 || Headers?.Any(h => h is not { Count: 2 } || h.Contains(null!)) == true) throw Bad($"{where}: bad response");
+            return new(m, u, Status, Reason ?? "", [.. (Headers ?? []).Select(h => new KeyValuePair<string, string>(h[0], h[1]))], blob(Body, Size, where));
+        }
     }
 
     sealed class OptionsEntry
@@ -549,6 +651,7 @@ public sealed class Recording
         public double ElapsedMs { get; set; }
         public string? Time { get; set; }
         public IReadOnlyList<string>? Files { get; set; }
+        public List<ExchangeEntry?>? Web { get; set; }
         // old JSON Lines recordings only
         public SnapshotRef? Snapshot { get; set; }
     }
@@ -563,6 +666,8 @@ public sealed record RecordedCall(int Index, string Command, string Stdout, stri
     public DateTimeOffset? Time { get; init; }
     /// <summary>The paths the call added, changed or removed, sorted (null when not known, e.g. an older recording).</summary>
     public IReadOnlyList<string>? Files { get; init; }
+    /// <summary>The web requests the call made and what came back, in order (null: none).</summary>
+    public IReadOnlyList<WebExchange>? Web { get; init; }
 
     public ShellResult Result => new(Stdout, Stderr, ExitCode) { Trailer = Trailer };
 
@@ -601,8 +706,9 @@ public sealed class ShellRecorder : IDisposable
     /// <summary>The recording so far; it keeps growing until <see cref="Stop"/>.</summary>
     public Recording Recording { get; }
 
-    internal void Add(string command, ShellResult result, TimeSpan elapsed, DateTimeOffset started)
+    internal void Add(string command, ShellResult result, TimeSpan elapsed, DateTimeOffset started, List<WebExchange>? web = null)
     {
+        Recording.Web ??= _shell.Web?.Policy;
         int index = Recording.Calls.Count;
         // the last call always has a snapshot, so a saved recording holds the end state; it is taken when first used (or
         // when recording stops), since the next call usually replaces it.
@@ -611,7 +717,7 @@ public sealed class ShellRecorder : IDisposable
         if (index > 0 && !_keepLast) Recording.Calls[^1] = Recording.Calls[^1] with { SnapshotAfter = null };
         _keepLast = _every > 0 && (index + 1) % _every == 0;
         var after = _keepLast ? _shell.Snapshot() : new ShellSnapshot(_shell.Snapshot, _shell.Options.User, _shell.Options.Hostname, _shell.Now);
-        Recording.Calls.Add(RecordedCall.From(index, command, result, elapsed) with { Time = started, Files = _changes.Changes(), SnapshotAfter = after });
+        Recording.Calls.Add(RecordedCall.From(index, command, result, elapsed) with { Time = started, Files = _changes.Changes(), SnapshotAfter = after, Web = web is { Count: > 0 } ? web : null });
     }
 
     /// <summary>Snapshots the machine now and attaches it to the last call (a mark a viewer can jump to).</summary>

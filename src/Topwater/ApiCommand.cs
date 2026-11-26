@@ -152,8 +152,7 @@ public static class ApiCommandExtensions
             string credential;
             try { credential = ep.Auth?.Invoke() ?? ""; }
             catch (Exception) { ctx.Stderr.WriteLine($"{program}: the credentials for {alias} are not available"); return 1; }  // the message may describe the secret
-            var secrets = new[] { credential, credential.IndexOf(' ') is var sp and > 0 ? credential[(sp + 1)..].Trim() : "" }
-                .Where(s => s.Length >= 8).Distinct().OrderByDescending(s => s.Length).ToArray();  // a very short "secret" would shred ordinary output
+            var secrets = SecretsOf(credential);
             string Scrub(string s) => secrets.Aggregate(s, (t, secret) => t.Replace(secret, "[REDACTED]", StringComparison.Ordinal));
 
             using var request = new HttpRequestMessage(new HttpMethod(method), uri);
@@ -222,6 +221,11 @@ public static class ApiCommandExtensions
             return 1;
         }, $"call HTTP APIs ({string.Join(", ", endpoints.Keys)}); run `{program} --help`", $"{program} METHOD ENDPOINT PATH [options]");
     }
+
+    /// <summary>What to scrub from responses: the credential and the token after its scheme, longest first.</summary>
+    internal static string[] SecretsOf(string credential) =>
+        new[] { credential, credential.IndexOf(' ') is var sp and > 0 ? credential[(sp + 1)..].Trim() : "" }
+            .Where(s => s.Length >= 8).Distinct().OrderByDescending(s => s.Length).ToArray();  // a very short "secret" would shred ordinary output
 
     static bool IsToken(string s) => s.Length > 0 && s.All(char.IsAsciiLetter);
     // the agent may set the allowed headers, so the credential cannot live in one of them

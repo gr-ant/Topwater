@@ -1,0 +1,81 @@
+{"id": "web-001", "script": "curl -s http://api.test/hello", "stdout": "hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-002", "script": "curl -s http://api.test/json | grep -o topwater", "stdout": "topwater\n", "stderr": "", "exitCode": 0}
+{"id": "web-003", "script": "curl -s http://api.test/missing; echo rc=$?", "stdout": "not found\nrc=0\n", "stderr": "", "exitCode": 0}
+{"id": "web-004", "script": "curl -sf http://api.test/missing; echo rc=$?", "stdout": "rc=22\n", "stderr": "", "exitCode": 0}
+{"id": "web-005", "script": "curl -sSf http://api.test/missing; echo rc=$?", "stdout": "rc=22\n", "stderr": "curl: (22) The requested URL returned error: 404\n", "exitCode": 0}
+{"id": "web-006", "script": "curl -s --fail-with-body http://api.test/error; echo rc=$?", "stdout": "boom\nrc=22\n", "stderr": "", "exitCode": 0}
+{"id": "web-007", "script": "curl -si http://api.test/hello", "stdout": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\nhello\n", "stderr": "", "exitCode": 0}
+{"id": "web-008", "script": "curl -sI http://api.test/hello", "stdout": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\n", "stderr": "", "exitCode": 0}
+{"id": "web-009", "script": "curl -s http://api.test/redirect; echo rc=$?", "stdout": "rc=0\n", "stderr": "", "exitCode": 0}
+{"id": "web-010", "script": "curl -sL http://api.test/redirect", "stdout": "hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-011", "script": "curl -siL http://api.test/redirect-abs", "stdout": "HTTP/1.1 301 Moved Permanently\r\nLocation: http://api.test/json\r\nContent-Length: 0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\n\r\n{\"name\":\"topwater\",\"n\":3}\n", "stderr": "", "exitCode": 0}
+{"id": "web-012", "script": "curl -sSL --max-redirs 3 http://api.test/loop; echo rc=$?", "stdout": "rc=47\n", "stderr": "curl: (47) Maximum (3) redirects followed\n", "exitCode": 0}
+{"id": "web-013", "script": "curl -sSL http://api.test/redirect-away; echo rc=$?", "stdout": "rc=6\n", "stderr": "curl: (6) Could not resolve host: elsewhere.test\n", "exitCode": 0}
+{"id": "web-014", "script": "curl -sSL http://api.test/redirect-local; echo rc=$?", "stdout": "rc=7\n", "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Couldn't connect to server\n", "exitCode": 0}
+{"id": "web-015", "script": "curl -sSL http://api.test/redirect-meta; echo rc=$?", "stdout": "rc=7\n", "stderr": "curl: (7) Failed to connect to 169.254.169.254 port 80 after 0 ms: Couldn't connect to server\n", "exitCode": 0}
+{"id": "web-016", "script": "curl -s -o out.txt http://api.test/hello; cat out.txt", "stdout": "hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-017", "script": "curl -s -O http://api.test/files/report.csv; cat report.csv", "stdout": "a,b\n1,2\n", "stderr": "", "exitCode": 0}
+{"id": "web-018", "script": "curl -sS -O http://api.test/; echo rc=$?", "stdout": "rc=23\n", "stderr": "curl: (23) Failed writing received data to disk/application\n", "exitCode": 0}
+{"id": "web-019", "script": "curl -sS -o /nonexistent/x http://api.test/hello; echo rc=$?", "stdout": "rc=23\n", "stderr": "curl: (23) Failure writing output to destination\n", "exitCode": 0}
+{"id": "web-020", "script": "curl -s -w '%{http_code}\\n' -o /dev/null http://api.test/missing", "stdout": "404\n", "stderr": "", "exitCode": 0}
+{"id": "web-021", "script": "curl -s -w '%{http_code} %{content_type} %{size_download} %{url_effective} %{redirect_url}\\n' -o /dev/null http://api.test/redirect", "stdout": "302  0 http://api.test/redirect http://api.test/hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-022", "script": "curl -sL -w '%{num_redirects} %{method} %{exitcode} %{response_code}\\n' -o /dev/null http://api.test/redirect", "stdout": "1 GET 0 200\n", "stderr": "", "exitCode": 0}
+{"id": "web-023", "script": "curl -sS -w '%{bogus}x\\n' http://api.test/hello", "stdout": "hello\nx\n", "stderr": "curl: unknown --write-out variable: 'bogus'\n", "exitCode": 0}
+{"id": "web-024", "script": "curl -s -X POST -d 'a=1&b=2' http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\na=1&b=2", "stderr": "", "exitCode": 0}
+{"id": "web-025", "script": "curl -s -d a=1 -d b=2 http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\na=1&b=2", "stderr": "", "exitCode": 0}
+{"id": "web-026", "script": "printf '{\"x\":1}\\n' > body.json; curl -s -d @body.json -H 'Content-Type: application/json' http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/json\naccept: */*\nuser-agent: curl/8.5.0\n\n{\"x\":1}", "stderr": "", "exitCode": 0}
+{"id": "web-027", "script": "printf 'line1\\nline2\\n' | curl -s --data-binary @- http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\nline1\nline2\n", "stderr": "", "exitCode": 0}
+{"id": "web-028", "script": "printf 'line1\\nline2\\n' | curl -s -d @- http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\nline1line2", "stderr": "", "exitCode": 0}
+{"id": "web-029", "script": "curl -s --data-raw '@notafile' http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\n@notafile", "stderr": "", "exitCode": 0}
+{"id": "web-030", "script": "curl -sS -d @missing http://api.test/echo; echo rc=$?", "stdout": "rc=26\n", "stderr": "curl: option -d: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\n", "exitCode": 0}
+{"id": "web-031", "script": "curl -s --json '{\"a\":1}' http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/json\naccept: application/json\nuser-agent: curl/8.5.0\n\n{\"a\":1}", "stderr": "", "exitCode": 0}
+{"id": "web-032", "script": "curl -s -G -d q=x -d n=2 http://api.test/echo", "stdout": "GET /echo?q=x&n=2\naccept: */*\nuser-agent: curl/8.5.0\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-033", "script": "curl -s -G --data-urlencode 'q=a b&c' http://api.test/echo", "stdout": "GET /echo?q=a+b%26c\naccept: */*\nuser-agent: curl/8.5.0\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-034", "script": "curl -s -u user:pass http://api.test/echo", "stdout": "GET /echo\naccept: */*\nauthorization: Basic dXNlcjpwYXNz\nuser-agent: curl/8.5.0\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-035", "script": "curl -s http://user:pw@api.test/echo", "stdout": "GET /echo\naccept: */*\nauthorization: Basic dXNlcjpwdw==\nuser-agent: curl/8.5.0\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-036", "script": "curl -s -A 'agent/1.0' -H 'X-Test: yes' http://api.test/echo", "stdout": "GET /echo\naccept: */*\nuser-agent: agent/1.0\nx-test: yes\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-037", "script": "curl -s -H 'Accept:' -H 'User-Agent:' http://api.test/echo", "stdout": "GET /echo\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-038", "script": "curl -s -X DELETE http://api.test/echo", "stdout": "DELETE /echo\naccept: */*\nuser-agent: curl/8.5.0\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-039", "script": "curl -s -X PUT -d v=1 http://api.test/echo", "stdout": "PUT /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\nv=1", "stderr": "", "exitCode": 0}
+{"id": "web-040", "script": "curl -sL -d x=1 http://api.test/redirect-303", "stdout": "GET /echo\naccept: */*\nuser-agent: curl/8.5.0\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-041", "script": "curl -sL -d x=1 http://api.test/redirect-307", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: curl/8.5.0\n\nx=1", "stderr": "", "exitCode": 0}
+{"id": "web-042", "script": "curl -s http://api.test/noeol; echo '|'", "stdout": "no newline|\n", "stderr": "", "exitCode": 0}
+{"id": "web-043", "script": "curl -s http://api.test/gzip | wc -c", "stdout": "31\n", "stderr": "", "exitCode": 0}
+{"id": "web-044", "script": "curl -s --compressed http://api.test/gzip", "stdout": "compressed\n", "stderr": "", "exitCode": 0}
+{"id": "web-045", "script": "curl -s http://api.test/hello http://api.test/json", "stdout": "hello\n{\"name\":\"topwater\",\"n\":3}\n", "stderr": "", "exitCode": 0}
+{"id": "web-046", "script": "curl -s api.test/hello", "stdout": "hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-047", "script": "curl -sS http://nope.invalid/; echo rc=$?", "stdout": "rc=6\n", "stderr": "curl: (6) Could not resolve host: nope.invalid\n", "exitCode": 0}
+{"id": "web-048", "script": "curl -s http://nope.invalid/; echo rc=$?", "stdout": "rc=6\n", "stderr": "", "exitCode": 0}
+{"id": "web-049", "script": "curl -sS 'https://api.test@evil.test/'; echo rc=$?", "stdout": "rc=6\n", "stderr": "curl: (6) Could not resolve host: evil.test\n", "exitCode": 0}
+{"id": "web-050", "script": "curl -sS http://2130706433:9/; echo rc=$?", "stdout": "rc=7\n", "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Couldn't connect to server\n", "exitCode": 0}
+{"id": "web-051", "script": "curl -sS http://0x7f.0.0.1:9/; echo rc=$?", "stdout": "rc=7\n", "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Couldn't connect to server\n", "exitCode": 0}
+{"id": "web-052", "script": "curl -sS 'http://[::1]:9/'; echo rc=$?", "stdout": "rc=7\n", "stderr": "curl: (7) Failed to connect to ::1 port 9 after 0 ms: Couldn't connect to server\n", "exitCode": 0}
+{"id": "web-053", "script": "curl -sS 'http://a@b@api.test/'; echo rc=$?", "stdout": "rc=3\n", "stderr": "curl: (3) URL rejected: Bad hostname\n", "exitCode": 0}
+{"id": "web-054", "script": "curl -sS htp://api.test/; echo rc=$?", "stdout": "rc=1\n", "stderr": "curl: (1) Protocol \"htp\" not supported or disabled in libcurl\n", "exitCode": 0}
+{"id": "web-055", "script": "curl; echo rc=$?", "stdout": "rc=2\n", "stderr": "curl: try 'curl --help' or 'curl --manual' for more information\n", "exitCode": 0}
+{"id": "web-056", "script": "curl --bogus http://api.test/; echo rc=$?", "stdout": "rc=2\n", "stderr": "curl: option --bogus: is unknown\ncurl: try 'curl --help' or 'curl --manual' for more information\n", "exitCode": 0}
+{"id": "web-057", "script": "curl -X; echo rc=$?", "stdout": "rc=2\n", "stderr": "curl: option -X: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n", "exitCode": 0}
+{"id": "web-058", "script": "curl --version | head -1 | cut -d' ' -f1-2", "stdout": "curl 8.5.0\n", "stderr": "", "exitCode": 0}
+{"id": "web-059", "script": "wget -q -O - http://api.test/hello", "stdout": "hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-060", "script": "wget -qO- http://api.test/json", "stdout": "{\"name\":\"topwater\",\"n\":3}\n", "stderr": "", "exitCode": 0}
+{"id": "web-061", "script": "wget -q http://api.test/hello; wget -q http://api.test/hello; cat hello hello.1", "stdout": "hello\nhello\n", "stderr": "", "exitCode": 0}
+{"id": "web-062", "script": "wget -q http://api.test/files/report.csv; cat report.csv", "stdout": "a,b\n1,2\n", "stderr": "", "exitCode": 0}
+{"id": "web-063", "script": "wget -q http://api.test/redirect; cat redirect", "stdout": "hello\n", "stderr": "", "exitCode": 0}
+{"id": "web-064", "script": "wget -q -O out http://api.test/missing; echo rc=$?; wc -c < out", "stdout": "rc=8\n0\n", "stderr": "", "exitCode": 0}
+{"id": "web-065", "script": "wget -q -O - http://api.test/error; echo rc=$?", "stdout": "rc=8\n", "stderr": "", "exitCode": 0}
+{"id": "web-066", "script": "wget -q -O - --max-redirect 2 http://api.test/loop; echo rc=$?", "stdout": "rc=8\n", "stderr": "", "exitCode": 0}
+{"id": "web-067", "script": "wget -q -O - http://api.test/redirect-away; echo rc=$?", "stdout": "rc=4\n", "stderr": "", "exitCode": 0}
+{"id": "web-068", "script": "wget -q -O - --header 'X-Test: 1' --post-data 'a=1' http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: Wget/1.21.4\nx-test: 1\n\na=1", "stderr": "", "exitCode": 0}
+{"id": "web-069", "script": "printf 'k=v' > f; wget -q -O - --post-file f http://api.test/echo", "stdout": "POST /echo\ncontent-type: application/x-www-form-urlencoded\naccept: */*\nuser-agent: Wget/1.21.4\n\nk=v", "stderr": "", "exitCode": 0}
+{"id": "web-070", "script": "wget -q -O - -U 'agent/2' http://api.test/echo", "stdout": "GET /echo\naccept: */*\nuser-agent: agent/2\n\n", "stderr": "", "exitCode": 0}
+{"id": "web-071", "script": "wget -qS -O /dev/null http://api.test/hello", "stdout": "", "stderr": "  HTTP/1.1 200 OK\n  Content-Type: text/plain\n  Content-Length: 6\n", "exitCode": 0}
+{"id": "web-072", "script": "wget -qS -O /dev/null http://api.test/redirect", "stdout": "", "stderr": "  HTTP/1.1 302 Found\n  Location: /hello\n  Content-Length: 0\n  HTTP/1.1 200 OK\n  Content-Type: text/plain\n  Content-Length: 6\n", "exitCode": 0}
+{"id": "web-073", "script": "wget -q http://nope.invalid/; echo rc=$?", "stdout": "rc=4\n", "stderr": "", "exitCode": 0}
+{"id": "web-074", "script": "wget http://nope.invalid/ 2>&1 | tail -1; echo rc=${PIPESTATUS[0]}", "stdout": "wget: unable to resolve host address ‘nope.invalid’\nrc=4\n", "stderr": "", "exitCode": 0}
+{"id": "web-075", "script": "wget -q -O /nonexistent/x http://api.test/hello; echo rc=$?", "stdout": "rc=1\n", "stderr": "/nonexistent/x: No such file or directory\n", "exitCode": 0}
+{"id": "web-076", "script": "wget -q http://api.test/; echo rc=$?; ls", "stdout": "rc=8\n", "stderr": "", "exitCode": 0}
+{"id": "web-077", "script": "wget; echo rc=$?", "stdout": "rc=1\n", "stderr": "wget: missing URL\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n", "exitCode": 0}
+{"id": "web-078", "script": "wget --bogus; echo rc=$?", "stdout": "rc=2\n", "stderr": "wget: unrecognized option '--bogus'\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n", "exitCode": 0}
+{"id": "web-079", "script": "wget -z; echo rc=$?", "stdout": "rc=2\n", "stderr": "wget: invalid option -- 'z'\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n", "exitCode": 0}
+{"id": "web-080", "script": "wget -O; echo rc=$?", "stdout": "rc=2\n", "stderr": "wget: option requires an argument -- 'O'\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n", "exitCode": 0}
+{"id": "web-081", "script": "wget --version | head -1", "stdout": "GNU Wget 1.21.4 built on linux-gnu.\n", "stderr": "", "exitCode": 0}

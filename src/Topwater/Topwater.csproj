@@ -10,4 +10,9 @@
     <PackageTags>agents;ai;llm;tool-use;function-calling;bash;shell;sandbox;simulation</PackageTags>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- the web access tests reach a loopback server through the real connection path (WebAddresses' test hooks) -->
+    <InternalsVisibleTo Include="Topwater.Tests" />
+  </ItemGroup>
+
 </Project>

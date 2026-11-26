@@ -1,0 +1,177 @@
+{
+ "host": "api.test",
+ "routes": {
+  "/hello": {
+   "status": 200,
+   "reason": "OK",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ]
+   ],
+   "body": "hello\n"
+  },
+  "/json": {
+   "status": 200,
+   "reason": "OK",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ]
+   ],
+   "body": "{\"name\":\"topwater\",\"n\":3}\n"
+  },
+  "/missing": {
+   "status": 404,
+   "reason": "Not Found",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ]
+   ],
+   "body": "not found\n"
+  },
+  "/error": {
+   "status": 500,
+   "reason": "Internal Server Error",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ]
+   ],
+   "body": "boom\n"
+  },
+  "/noeol": {
+   "status": 200,
+   "reason": "OK",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ]
+   ],
+   "body": "no newline"
+  },
+  "/redirect": {
+   "status": 302,
+   "reason": "Found",
+   "headers": [
+    [
+     "Location",
+     "/hello"
+    ]
+   ],
+   "body": ""
+  },
+  "/redirect-abs": {
+   "status": 301,
+   "reason": "Moved Permanently",
+   "headers": [
+    [
+     "Location",
+     "http://api.test/json"
+    ]
+   ],
+   "body": ""
+  },
+  "/redirect-303": {
+   "status": 303,
+   "reason": "See Other",
+   "headers": [
+    [
+     "Location",
+     "/echo"
+    ]
+   ],
+   "body": ""
+  },
+  "/redirect-307": {
+   "status": 307,
+   "reason": "Temporary Redirect",
+   "headers": [
+    [
+     "Location",
+     "/echo"
+    ]
+   ],
+   "body": ""
+  },
+  "/redirect-away": {
+   "status": 302,
+   "reason": "Found",
+   "headers": [
+    [
+     "Location",
+     "http://elsewhere.test/x"
+    ]
+   ],
+   "body": ""
+  },
+  "/redirect-local": {
+   "status": 302,
+   "reason": "Found",
+   "headers": [
+    [
+     "Location",
+     "http://127.0.0.1:9/"
+    ]
+   ],
+   "body": ""
+  },
+  "/loop": {
+   "status": 302,
+   "reason": "Found",
+   "headers": [
+    [
+     "Location",
+     "/loop"
+    ]
+   ],
+   "body": ""
+  },
+  "/gzip": {
+   "status": 200,
+   "reason": "OK",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ],
+    [
+     "Content-Encoding",
+     "gzip"
+    ]
+   ],
+   "bodyBase64": "H4sIAAAAAAACA0vOzy0oSi0uTk3hAgC7bU/ICwAAAA=="
+  },
+  "/files/report.csv": {
+   "status": 200,
+   "reason": "OK",
+   "headers": [
+    [
+     "Content-Type",
+     "text/csv"
+    ]
+   ],
+   "body": "a,b\n1,2\n"
+  },
+  "/echo": {
+   "echo": true
+  },
+  "/redirect-meta": {
+   "status": 302,
+   "reason": "Found",
+   "headers": [
+    [
+     "Location",
+     "http://169.254.169.254/latest/meta-data/"
+    ]
+   ],
+   "body": ""
+  }
+ }
+}

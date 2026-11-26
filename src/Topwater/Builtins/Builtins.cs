@@ -88,6 +88,7 @@ internal static partial class Builtins
         RegisterBinaryCommands(shell);
         RegisterArchiveCommands(shell);
         Git.Register(shell);
+        RegisterWebCommands(shell);
     }
 
     /// <summary>`tool --version` / `tool --help` for built-ins, so probing them looks like a real system.</summary>

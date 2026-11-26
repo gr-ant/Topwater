@@ -30,6 +30,7 @@
   <ItemGroup>
     <None Include="..\corpus\**\*" LinkBase="corpus" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\spec\**\*" LinkBase="spec" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\web\**\*" LinkBase="web" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

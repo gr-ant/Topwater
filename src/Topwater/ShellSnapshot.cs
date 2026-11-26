@@ -192,7 +192,7 @@ public sealed class ShellSnapshot
     internal static readonly Regex HostName = new(@"^[A-Za-z0-9][A-Za-z0-9.-]{0,63}\z");
     static readonly Regex VarName = new(@"^[A-Za-z_][A-Za-z0-9_]*\z");
     static readonly Regex Word = new(@"^[A-Za-z0-9_+-]{1,32}\z");
-    static readonly Regex Blob = new(@"^[0-9a-f]{64}\z");
+    internal static readonly Regex Blob = new(@"^[0-9a-f]{64}\z");
 
     const string Invalid = "not a valid Topwater snapshot: ";
     static InvalidDataException Bad(string why) => new(Invalid + why);
