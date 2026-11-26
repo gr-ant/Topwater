@@ -1,9 +1,31 @@
 # Topwater for TypeScript
 
-A port of [Topwater](../README.md) to TypeScript/Node: a simulated bash shell for LLM agents. An in-process bash
-interpreter, an in-memory Ubuntu-like filesystem with users and permissions, about 110 reimplemented commands, and
-resource limits, with no runtime dependencies. The same code runs in Node 22+ and in browsers (see below). `../docs/reference.md` describes the behaviour;
-this package follows it except where noted below.
+One `bash` tool for your LLM agent, backed by a simulated Linux machine that runs inside your Node process or in the
+browser. No runtime dependencies. The same code runs in Node 22 or later and in browsers.
+
+This page covers the TypeScript API. The [main README](../README.md) explains what Topwater is, and
+[docs/](../docs/README.md) is the reference; its samples are C#, and this package follows it except where
+[noted below](#differences-from-the-c-version).
+
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Agent frameworks](#agent-frameworks)
+- [Deterministic runs, snapshots and recordings](#deterministic-runs-snapshots-and-recordings)
+- [In the browser](#in-the-browser)
+- [Differences from the C# version](#differences-from-the-c-version)
+- [Layout and tests](#layout-and-tests)
+
+## Install
+
+Not on npm yet. Build it from the repository; the package is an ES module:
+
+```bash
+git clone https://github.com/gr-ant/Topwater
+(cd Topwater/typescript && npm install && npm run build)
+npm install ./Topwater/typescript
+```
+
+## Quickstart
 
 ```ts
 import { Shell, BashTool } from 'topwater';
@@ -93,8 +115,8 @@ for await (const message of query({ prompt: '...', options: bashOptions(new Shel
 
 ## Deterministic runs, snapshots and recordings
 
-Machines and recordings are `.topwater` files (`../spec/topwater-file`), the same in every port, so they move freely
-between them:
+Machines and recordings are [`.topwater` files](../docs/snapshots-and-recordings.md#the-file-format), the same in
+every implementation, so they move freely between them:
 
 ```ts
 import { Shell, ShellSnapshot, Recording, startRecording } from 'topwater';
@@ -117,33 +139,16 @@ call records the shell's clock when it started (`time`) and the paths it added, 
 deterministic recording made in another port re-runs here with the same times, `$RANDOM` values and `mktemp` names;
 where the ports' commands differ, so does the output.
 
-## Layout
-
-| File | What |
-|---|---|
-| `src/parser.ts` | recursive-descent parser for the shell language (words, expansions, heredocs, compound commands) |
-| `src/shell.ts` | the interpreter: expansion, redirections, pipelines, functions, traps, limits, the `Shell` API |
-| `src/vfs.ts` | the in-memory filesystem, permissions, the disk cap |
-| `src/arith.ts`, `src/glob.ts`, `src/regex.ts`, `src/format.ts`, `src/bytes.ts` | arithmetic, patterns, POSIX regex, printf/strftime, binary-safe text |
-| `src/commands/*.ts` | built-ins and programs (`builtins`, `files`, `text`, `sed`, `awk`, `jq*`, `binary`, `archive`, `git`, `gitcore`) |
-| `src/inflate.ts`, `src/compress.ts`, `src/md5.ts`, `src/sha1.ts` | a synchronous inflate, compression via `CompressionStream` and a small synchronous zlib for git, MD5, SHA-1 (no `node:zlib`/`node:crypto`) |
-| `src/tools.ts` | schema-described tools and MCP mounting |
-| `src/snapshot.ts`, `src/recording.ts` | machines and recordings as `.topwater` files (and loading the older recording format) |
-| `browser/` | the Web Worker host (`worker.ts`), the page-side `TopwaterSession` (`session.ts`), the demo pages (`demo/`: the terminal and the recording viewer) and the viewer's worker (`replay-worker.ts`, `diff.ts`) |
-| `test/corpus.test.ts` | runs the shared cases in `../tests/corpus` (recorded from real bash and GNU tools) |
-
-`npm test` runs everything. The shared cases live in `../tests/corpus`, not here; known differences are listed with reasons in `../tests/corpus/skip/typescript.json`.
-
 ## Differences from the C# version
 
-- Not ported yet: `bc`, `Fork`, real host programs (`RegisterHostCommand`), the `[Command]` attribute binder (use `registerTools`
-  with a JSON Schema instead), and the Microsoft.Extensions.AI adapter.
+- Not ported yet: `bc`, `Fork`, real host programs (`RegisterHostCommand`), containers, replaying a recording as a
+  test or on real bash in Docker (`Topwater.Replay`), and the `[Command]` attribute binder (use `registerTools` with a
+  JSON Schema instead).
 - A single JavaScript regular-expression match cannot be interrupted. In Node, loading the package sets V8's
   `--enable-experimental-regexp-engine-on-excessive-backtracks` flag (process-wide; it changes speed, never results),
   so a catastrophically backtracking match switches to V8's linear-time engine instead of hanging. Patterns with
   backreferences have no linear engine: one such match can still overrun the call's time limit (the C# version caps
   one match at 5 s). Run the shell in a worker thread (in a browser, a Web Worker; see below) if you need a hard stop.
-- `to-markdown` does not read PDF (neither does the C# version; nothing here touches the host).
 - `zip` and `gzip -v` report the ratio of the platform's deflate (`CompressionStream`), which differs slightly from
   Info-ZIP's; compression levels (`-1`..`-9`) are accepted but ignored.
 - `shell.fs` is your app's unrestricted view of the files; the shell and its commands work through a view that acts as
@@ -153,18 +158,25 @@ where the ports' commands differ, so does the output.
 
 ## In the browser
 
-`npm run build:browser` writes:
+The hosted [demo](https://gr-ant.github.io/Topwater/) and [replay viewer](https://gr-ant.github.io/Topwater/replay.html)
+are this build. `npm run build:browser` writes:
 
 - `dist-browser/topwater.js`: the library as one minified ES module (same API as the Node package; no Node imports).
 - `dist-browser/worker.js`: a Web Worker that runs a shell; drive it with `TopwaterSession` from `browser/session.ts`.
 - `browser/dist/`: the demo, a folder of static files. Serve it from any static host
-  (`python3 -m http.server -d browser/dist`); it makes no requests outside its own folder. `index.html` is a terminal;
-  `replay.html` is the recording viewer: open a `.topwater` file or an old `.jsonl` recording (or the bundled sample, recorded in .NET), step
-  through its turns, see each turn's output, the files as they were after it and a diff of what it changed, and open
-  the terminal on the machine as of any turn ("Open a terminal here", which hands the snapshot over through
-  `localStorage` to `index.html?fork=...`). A turn's files come from the recording's snapshot after it when there is
-  one; otherwise the viewer's worker restores the nearest earlier snapshot and re-runs the calls in between with this
-  port, and says whether each re-run printed what was recorded (for another port's recording it may not: the ports differ).
+  (`python3 -m http.server -d browser/dist`); it makes no requests outside its own folder. `index.html` is a terminal
+  and `replay.html` is the recording viewer.
+
+The viewer opens a `.topwater` file or an old `.jsonl` recording (or the bundled sample, recorded in .NET). Step
+through its turns and see each turn's output, the files as they were after it and what it changed, or compare any
+two moments. "Continue from here" opens a terminal in the page on the machine as of that turn; what you type forms a
+branch of the timeline that you can compare with the others and download as its own `.topwater` file. "Open in a new
+tab" hands the machine to `index.html?fork=...` through `localStorage` instead.
+
+A turn's files come from the recording's checkpoint after it when there is one. Otherwise the viewer's worker
+restores the nearest earlier checkpoint and re-runs the calls in between with this implementation, and says whether
+each re-run printed what was recorded. For a recording made in another implementation it may not: they differ in
+places.
 
 Run the shell in a worker, not on the page's thread: one JavaScript call (a catastrophically backtracking regex, a long
 synchronous loop inside a command) can't be interrupted from inside, and browsers have no regex-engine fallback flag.
@@ -180,3 +192,22 @@ What a browser doesn't have:
 - `registerApi` uses `fetch`, so it can only reach APIs that allow your page's origin (CORS), and any credential you
   give it lives in the page. Prefer a proxy you control.
 - `npm run test:browser` builds the demo and checks it in headless Chromium (Playwright).
+
+## Layout and tests
+
+| File | What |
+|---|---|
+| `src/parser.ts` | recursive-descent parser for the shell language (words, expansions, heredocs, compound commands) |
+| `src/shell.ts` | the interpreter: expansion, redirections, pipelines, functions, traps, limits, the `Shell` API |
+| `src/vfs.ts` | the in-memory filesystem, permissions, the disk cap |
+| `src/arith.ts`, `src/glob.ts`, `src/regex.ts`, `src/format.ts`, `src/bytes.ts` | arithmetic, patterns, POSIX regex, printf/strftime, binary-safe text |
+| `src/commands/*.ts` | built-ins and programs (`builtins`, `files`, `text`, `sed`, `awk`, `jq*`, `binary`, `archive`, `git`, `gitcore`) |
+| `src/inflate.ts`, `src/compress.ts`, `src/md5.ts`, `src/sha1.ts` | a synchronous inflate, compression via `CompressionStream` and a small synchronous zlib for git, MD5, SHA-1 (no `node:zlib`/`node:crypto`) |
+| `src/tools.ts` | schema-described tools and MCP mounting |
+| `src/snapshot.ts`, `src/recording.ts` | machines and recordings as `.topwater` files (and loading the older recording format) |
+| `browser/` | the Web Worker host (`worker.ts`), the page-side `TopwaterSession` (`session.ts`), the demo pages (`demo/`: the terminal and the recording viewer) and the viewer's worker (`replay-worker.ts`, `diff.ts`) |
+| `test/corpus.test.ts` | runs the shared cases in `../tests/corpus` (recorded from real bash and GNU tools) |
+
+`npm test` runs everything, and `npm run typecheck` checks the types. The shared cases live in
+[`../tests/corpus`](../tests/corpus/README.md), not here; known differences are listed with reasons in
+`../tests/corpus/skip/typescript.json`.
