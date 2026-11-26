@@ -573,6 +573,7 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
             except (ssl.SSLError, ssl.CertificateError):
                 raise TransportError("tls") from None
         conn = http.client.HTTPConnection(u.host, u.port, timeout=timeout)
+        conn.response_class = _InterimCapped
         conn.sock = sock
         conn.putrequest(method, u.path_and_query, skip_host=True, skip_accept_encoding=True)
         conn.putheader("Host", u.host_for_url + ("" if u.default_port else f":{u.port}"))
@@ -622,6 +623,19 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
         killer.cancel()
         killer.join()
         sock.close()
+
+
+class _InterimCapped(http.client.HTTPResponse):
+    """100 Continue responses count toward the header limit, as in the other ports: a flood of them fails (recv)."""
+    _interim = 0
+
+    def _read_status(self):
+        version, status, reason = super()._read_status()
+        if status == http.client.CONTINUE:
+            self._interim += len(version) + len(reason) + 9
+            if self._interim > MAX_HEADER_BYTES:
+                raise http.client.HTTPException("too many interim responses")
+        return version, status, reason
 
 
 def _shutdown(fd: int) -> None:

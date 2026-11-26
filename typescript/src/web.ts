@@ -519,6 +519,11 @@ export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => a
     });
     let cut: ((e?: any) => void) | undefined;
     r.on('error', (e: any) => cut ? cut(e) : done(() => reject(classify(e, req.signal, true))));
+    let interim = 0; // 1xx responses count toward the header limit, as in the other ports: a flood of them fails
+    r.on('information', (info: any) => {
+      interim += 14 + String(info.statusMessage ?? '').length + (info.rawHeaders as string[]).reduce((n, h) => n + h.length + 2, 0);
+      if (interim > MAX_HEADER_BYTES) { done(() => reject(fail('recv'))); r.destroy(); }
+    });
     if (req.body) r.write(req.body);
     r.end();
   });
