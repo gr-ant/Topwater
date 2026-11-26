@@ -97,7 +97,8 @@ export class ShellSnapshot {
 
 export class SnapshotVersionError extends Error {}
 
-const USER = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$/, HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$/, VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** @internal */
+export const USER = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$/, HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$/, VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WORD = /^[A-Za-z0-9_+-]{1,32}$/, BLOB = /^[0-9a-f]{64}$/;
 const check = (v: unknown, shape: RegExp, what: string): string => {
   if (typeof v === 'string' && shape.test(v)) return v;
@@ -176,7 +177,9 @@ export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, s
     // blobs for four file systems, the manifest, history.jsonl and up to 1000 checkpoints
     try { return readZip(bytes, 4 * o.maxExtractEntries + 1002); } catch (e) { throw bad(e instanceof ZipFormatError ? e.message : 'not a zip file'); }
   });
-  const byName = new Map(entries.map(e => [e.name, e]));
+  const byName = new Map<string, ZipEntry>();
+  // two entries of one name would let each reader pick a different one
+  for (const e of entries) { if (byName.has(e.name)) throw bad(`entry ${JSON.stringify(e.name)} appears twice`); byName.set(e.name, e); }
   const open = (name: string, max: number, what: string) => {
     const e = byName.get(name)!;
     if (e.method === 0) { if (e.data.length > max) throw bad(`${what} is larger than ${max} bytes`); return e.data; }
@@ -187,18 +190,15 @@ export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, s
   return {
     names: [...byName.keys()],
     has: (name: string) => byName.has(name),
-    /** a UTF-8 entry, at most the manifest cap */
-    text: (name: string) => guard(() => {
-      try { return new TextDecoder('utf-8', { fatal: true }).decode(open(name, maxManifest, name)); }
-      catch (e) { throw e instanceof SnapshotError ? e : bad(`${name} is not UTF-8`); }
-    }),
-    /** manifest.json or a checkpoint, checked like a snapshot */
-    machine: (name: string) => guardAsync(async () => {
+    /** an entry's bytes, at most `max` */
+    bytes: (name: string, max: number) => guard(() => open(name, max, name)),
+    /** manifest.json or a checkpoint, checked like a snapshot; `budget.entries` (when given) is what all checkpoints may still hold */
+    machine: (name: string, budget?: { entries: number }) => guardAsync(async () => {
       if (!byName.has(name)) throw bad(`${name} is missing`);
       let m: Record<string, any>;
       try { m = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(open(name, maxManifest, name))); }
       catch (e) { throw e instanceof SnapshotError ? e : bad(`${name} is not JSON`); }
-      return readMachine(m, name, o, blobs, (blob, size) => byName.has(blob) ? open(blob, size, blob) : null);
+      return readMachine(m, name, o, blobs, (blob, size) => byName.has(blob) ? open(blob, size, blob) : null, budget);
     }),
   };
 }
@@ -208,7 +208,7 @@ const passThrough = (e: unknown) => e instanceof SnapshotError || e instanceof S
 function guard<T>(f: () => T): T { try { return f(); } catch (e) { throw passThrough(e); } }
 async function guardAsync<T>(f: () => Promise<T>): Promise<T> { try { return await f(); } catch (e) { throw passThrough(e); } }
 
-async function readMachine(m: Record<string, any>, name: string, o: Limits, cache: BlobCache, blobBytes: (entry: string, size: number) => Uint8Array | null): Promise<ShellSnapshot> {
+async function readMachine(m: Record<string, any>, name: string, o: Limits, cache: BlobCache, blobBytes: (entry: string, size: number) => Uint8Array | null, budget?: { entries: number }): Promise<ShellSnapshot> {
   if (!m || typeof m !== 'object' || m.format !== FORMAT) throw bad(`${name} is not a Topwater snapshot manifest`);
   if (typeof m.version !== 'number') throw bad('no format version');
   if (m.version > SNAPSHOT_FORMAT_VERSION)
@@ -218,6 +218,10 @@ async function readMachine(m: Record<string, any>, name: string, o: Limits, cach
   const user = check(m.user, USER, 'user'), hostname = check(m.hostname, HOST, 'hostname');
   const fileList: any[] = Array.isArray(m.files) ? m.files : m.files == null ? [] : (() => { throw bad('files is not a list'); })();
   if (fileList.length > o.maxExtractEntries) throw bad(`more than ${o.maxExtractEntries} files and directories (MaxExtractEntries)`);
+  if (budget) {
+    if (fileList.length > budget.entries) throw bad(`the checkpoints hold more than ${4 * o.maxExtractEntries} files and directories together (4 x MaxExtractEntries)`);
+    budget.entries -= fileList.length;
+  }
   let total = 0;
   for (const f of fileList) {
     if (f && typeof f === 'object' && f.size == null) f.size = 0; // C# leaves zero sizes out

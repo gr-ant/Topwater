@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
+import { deflateRawSync } from 'node:zlib';
 import { Shell, ShellSnapshot, SnapshotError, Recording, startRecording } from '../src/index.js';
 import { buildZip, crc32, readZip, writeZip } from '../src/commands/zipfile.js';
 import { inflateRaw } from '../src/inflate.js';
@@ -277,6 +278,77 @@ describe('recordings in the C# format', () => {
     const crowded = buildZip(Array.from({ length: 1003 }, (_, i) => [`x${i}`, ''] as [string, string]));
     await expect(ShellSnapshot.load(crowded, { maxExtractEntries: 0 })).rejects.toThrow(/1003 entries, more than 1002/);
     await expect(Recording.load(crowded, undefined, { maxExtractEntries: 0 })).rejects.toThrow(/1003 entries, more than 1002/);
+  });
+
+  it('refuses a history that inflates past its cap, or has too many lines, quickly', async () => {
+    const good = await smallRecording();
+    const header = entryText(good, 'history.jsonl').split('\n')[0] + '\n';
+    const withHistory = (raw: Buffer) => {
+      const data = deflateRawSync(raw, { level: 9 });
+      return writeZip(readZip(good).map(e => e.name === 'history.jsonl' ? { ...e, method: 8, usize: raw.length, data, crc: 0 } : e));
+    };
+    const refusedFast = async (file: Uint8Array | string, why: RegExp, limits = {}) => {
+      const t0 = performance.now();
+      await expect(Recording.load(file, undefined, limits)).rejects.toThrow(why);
+      expect(performance.now() - t0).toBeLessThan(5000);
+    };
+    // 236 MB of newlines, and 15.7 million lines of {"command":""}: about 250 KB deflated each
+    await refusedFast(withHistory(Buffer.alloc(236_000_000, '\n')), /history.jsonl is larger than 67108864 bytes/);
+    await refusedFast(withHistory(Buffer.concat([Buffer.from(header), Buffer.alloc(15_728_625 * 15, '{"command":""}\n')])), /history.jsonl is larger than/);
+    // every line counts against MaxExtractEntries, blank ones too, in both formats
+    await refusedFast(withHistory(Buffer.from(header + '\n'.repeat(1001))), /more than 1000 calls \(MaxExtractEntries\)/, { maxExtractEntries: 1000 });
+    const jsonl = JSON.stringify({ format: 'topwater-recording', version: 1, options: {}, start: { embedded: Buffer.from(await ShellSnapshot.capture(new Shell()).save()).toString('base64') } }) + '\n';
+    await refusedFast(jsonl + '\n'.repeat(5_000_000), /more than 100000 calls/);
+    await refusedFast(jsonl + '{"command":"true"}\n'.repeat(1001), /more than 1000 calls/, { maxExtractEntries: 1000 });
+    expect((await Recording.load(jsonl + '{"command":"true"}\n'.repeat(1000), undefined, { maxExtractEntries: 1000 })).calls.length).toBe(1000);
+  }, 60_000);
+
+  it('budgets the entries of all checkpoints together, before building them', async () => {
+    const limits = { maxExtractEntries: 1000 };
+    const base = JSON.parse(entryText(await ShellSnapshot.capture(new Shell()).save(), 'manifest.json'));
+    const dir = (path: string) => ({ path, type: 'dir', mode: '0755', owner: 'root', mtime: base.created });
+    const full = new TextEncoder().encode(JSON.stringify({ ...base, cwd: '/', files: [dir('/'), ...Array.from({ length: 999 }, (_, i) => dir(`/d${i}`))] }));
+    const deflated = deflateRawSync(full);
+    const header = entryText(await smallRecording(), 'history.jsonl').split('\n')[0];
+    const history = (calls: number) => header + '\n' + '{"command":"true"}\n'.repeat(calls);
+    const zipOf = (calls: number) => {
+      const entry = (name: string, raw: Uint8Array, data = deflateRawSync(raw)) => ({ name, method: 8, flags: 0, crc: crc32(raw), usize: raw.length, time: 0, date: 33, ext: 0, data });
+      // every checkpoint shares one deflated manifest of 1000 directories
+      return writeZip([entry('manifest.json', full, deflated), entry('history.jsonl', new TextEncoder().encode(history(calls))),
+        ...Array.from({ length: calls + 1 }, (_, i) => entry(`checkpoints/${i}.json`, full, deflated))]);
+    };
+    expect((await Recording.load(zipOf(3), undefined, limits)).calls.length).toBe(3); // 4 x 1000 entries: exactly the budget
+    for (const calls of [4, 999]) {
+      const t0 = performance.now();
+      await expect(Recording.load(zipOf(calls), undefined, limits)).rejects.toThrow(/checkpoints\/4.json: the checkpoints hold more than 4000 files and directories together/);
+      expect(performance.now() - t0).toBeLessThan(5000);
+    }
+  }, 60_000);
+
+  it('refuses duplicate entries, bad header names and malformed call lines', async () => {
+    const good = await smallRecording();
+    const dup = writeZip([...readZip(good), readZip(good).find(e => e.name === 'history.jsonl')!]);
+    await expect(Recording.load(dup)).rejects.toThrow(/entry "history.jsonl" appears twice/);
+    await expect(ShellSnapshot.load(dup)).rejects.toThrow(/appears twice/);
+    const nul = writeZip(readZip(good).map(e => e.name === 'checkpoints/2.json' ? { ...e, name: 'checkpoints/2.json\0x' } : e));
+    await expect(Recording.load(nul)).rejects.toThrow(/is not a checkpoint name/);
+    const edit = (f: (lines: any[]) => void) => editEntry(good, 'history.jsonl', t => {
+      const lines = t.trimEnd().split('\n').map(l => JSON.parse(l));
+      f(lines);
+      return lines.map(l => JSON.stringify(l)).join('\n') + '\n';
+    });
+    const refused: [(lines: any[]) => void, RegExp][] = [
+      [l => { l[0].options.user = '../../x'; }, /bad user/],
+      [l => { l[0].options.hostname = 'a b'; }, /bad hostname/],
+      [l => { l[0].options.maxFileSystemBytes = 1.5; }, /bad maxFileSystemBytes/],
+      [l => { l[0].options.randomSeed = 1.5; }, /not a valid Topwater recording: bad randomSeed/],
+      [l => { l[1].index = -1; }, /bad index/], [l => { l[1].index = '1'; }, /bad index/], [l => { l[1].index = 1.5; }, /bad index/],
+      [l => { l[1].files = { a: 1 }; }, /files is not a list/], [l => { l[1].files = ['/a', null]; }, /files is not a list/],
+      [l => { l[1].time = '2026'; }, /bad line 2 time/],
+      [l => { l[1].elapsedMs = -1; }, /bad elapsedMs/],
+    ];
+    for (const [f, why] of refused) await expect(Recording.load(edit(f)), String(why)).rejects.toThrow(why);
+    expect(() => writeZip(Array.from({ length: 65536 }, () => ({ name: 'x', method: 0, flags: 0, crc: 0, usize: 0, time: 0, date: 0, ext: 0, data: new Uint8Array() })))).toThrow(/at most 65535 entries/);
   });
 
   it('the shell\'s files a call touched: added, changed and removed, with links', async () => {

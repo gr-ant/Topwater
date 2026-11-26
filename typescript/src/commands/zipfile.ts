@@ -58,6 +58,8 @@ export function readZip(bytes: Uint8Array, maxEntries = Infinity): ZipEntry[] {
 }
 
 export function writeZip(entries: ZipEntry[]): Uint8Array {
+  // the end record counts entries in 16 bits (no zip64 here)
+  if (entries.length > 0xffff) throw new RangeError(`a zip holds at most 65535 entries, not ${entries.length}`);
   const out: Uint8Array[] = [], central: Uint8Array[] = [];
   let offset = 0;
   for (const e of entries) {
