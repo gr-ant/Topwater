@@ -409,6 +409,129 @@ public class RecordingTests
     }
 
     [Fact]
+    public async Task Checkpoints_are_built_only_when_a_replay_needs_one()
+    {
+        // 60 checkpoints of 1,500 directories: each is checked against the limits on load, none is built
+        var sh = new Shell(Deterministic);
+        Assert.Equal(0, (await sh.RunAsync("mkdir d && cd d && for i in $(seq 1500); do mkdir d$i; done")).ExitCode);
+        var rec = sh.StartRecording(new RecordingOptions { SnapshotEvery = 1 });
+        for (int i = 0; i < 60; i++) await sh.RunAsync($"echo {i} > /home/agent/f{i}");
+        rec.Stop();
+        var file = Bytes(rec.Recording);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var loaded = LoadBytes(file);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+        Assert.All(loaded.Calls, c => Assert.NotNull(c.SnapshotAfter));
+        Assert.Equal("59\n", (await (await loaded.ShellAtAsync(59)).RunAsync("cat /home/agent/f59")).Stdout);
+        // every checkpoint built in turn, a few kept: the same machines, and the file saves back the same
+        for (int i = 0; i < 60; i++) Assert.Equal($"{i}\n", (await (await loaded.ShellAtAsync(i)).RunAsync($"cat /home/agent/f{i}")).Stdout);
+        Assert.Equal(Entry(file, "checkpoints/31.json"), Entry(Bytes(loaded), "checkpoints/31.json"));
+
+        // so a checkpoint that is wrong inside (a blob that doesn't match) fails when it is built, as InvalidDataException
+        var blob = "blobs/" + System.Text.RegularExpressions.Regex.Match(Entry(file, "checkpoints/30.json"), "\"path\":\"/home/agent/f29\"[^}]*\"blob\":\"([0-9a-f]+)\"").Groups[1].Value;
+        var tampered = LoadBytes(Tamper(file, z => Put(z, blob, "XX\n")));
+        Assert.Contains("doesn't match its hash", (await Assert.ThrowsAsync<InvalidDataException>(() => tampered.ShellAtAsync(40))).Message);
+    }
+
+    [Fact]
+    public async Task A_recording_larger_than_a_snapshot_opens_as_one()
+    {
+        // checkpoints make a file up to four times a snapshot: Shell.Load reads its machine (manifest.json) all the same
+        var limits = new ShellOptions { MaxFileSystemBytes = 400_000, MaxStringBytes = 4_000, MaxExtractEntries = 400 };
+        var sh = new Shell(new ShellOptions { StartTime = Deterministic.StartTime, RandomSeed = 1 });
+        using var rec = sh.StartRecording(new RecordingOptions { SnapshotEvery = 1 });
+        var random = new Random(7);
+        for (int i = 0; i < 5; i++)
+        {
+            var noise = new byte[300_000];
+            random.NextBytes(noise);
+            sh.Fs.WriteAllBytes("/home/agent/noise", noise);
+            await sh.RunAsync("true");
+        }
+        rec.Stop();
+        var file = Bytes(rec.Recording);
+        Assert.True(file.Length > ShellSnapshot_MaxArchiveBytes(limits), $"{file.Length} bytes");
+        Assert.Equal(5, LoadBytes(file, limits).Calls.Count);
+        var end = Shell.Load(new MemoryStream(file), limits);
+        Assert.Equal((await sh.RunAsync("md5sum noise")).Stdout, (await end.RunAsync("md5sum noise")).Stdout);
+    }
+
+    static long ShellSnapshot_MaxArchiveBytes(ShellOptions o) => 2 * o.MaxFileSystemBytes + 4 * o.MaxStringBytes + 1024L * o.MaxExtractEntries;
+
+    [Fact]
+    public async Task Manifest_must_be_the_last_checkpoint()
+    {
+        var file = Bytes(await Record(snapshotEvery: 2));
+        // a reader taking the machine from manifest.json and one replaying to the last checkpoint must see the same
+        Assert.Contains("manifest.json is not the machine of checkpoints/4.json, the last checkpoint",
+            Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => Put(z, "manifest.json", Entry(file, "checkpoints/2.json"))))).Message);
+        Assert.Contains("manifest.json is missing", Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => z.GetEntry("manifest.json")!.Delete()))).Message);
+        Assert.Contains("manifest.json is not a Topwater snapshot manifest", Assert.Throws<InvalidDataException>(() => LoadBytes(Tamper(file, z => Put(z, "manifest.json", "{}")))).Message);
+        // the same machine written another way (key order, spacing) is the same machine
+        var reordered = JsonNode.Parse(Entry(file, "manifest.json"))!.AsObject();
+        var flipped = new JsonObject(reordered.Reverse().Select(p => KeyValuePair.Create(p.Key, p.Value?.DeepClone())));
+        Assert.Equal(4, LoadBytes(Tamper(file, z => Put(z, "manifest.json", flipped.ToJsonString(new() { WriteIndented = true })))).Calls.Count);
+    }
+
+    [Fact]
+    public async Task Changed_files_come_from_the_filesystem_and_match_comparing_snapshots()
+    {
+        // the recorder tracks changed nodes; a rerecord compares whole snapshots: the lists must be the same
+        var sh = new Shell(Deterministic);
+        await sh.RunAsync("mkdir -p a/b c && echo 1 > a/b/x && echo 2 > a/y && ln a/y c/h && ln -s ../a c/s");
+        var rec = sh.StartRecording();
+        foreach (var command in new[]
+        {
+            "cat a/y; ls -R", "echo 3 > a/b/x", "echo 3 > a/b/x", "mkdir n && cp -r a n/", "mv a/b c/b", "mv n/a c/b2 && rm -r n",
+            "mkdir -p m/b && mv c/b m/ 2>&1; mv -T c/b2 m/b 2>&1; ls m/b", "ln a/y a/z && rm c/h", "mv a/y a/zz", "echo 4 >> a/z",
+            "chmod 700 c && touch -d 2020-01-01 c/s", "rm -r m && mkdir m && echo q > m/b", "cd c && rm -rf ../a && mkdir ../a", "true",
+            "rm -rf /home/agent/* && mkdir a", "for i in 1 2 3; do echo $i > f$i; done; mv f1 f4; ln f2 f5; rm f2",
+        })
+            await sh.RunAsync(command);
+        rec.Stop();
+        var again = await rec.Recording.RerecordAsync(new ShellTarget(rec.Recording.CreateShell()));
+        for (int i = 0; i < again.Calls.Count; i++)
+            Assert.True(again.Calls[i].Files!.SequenceEqual(rec.Recording.Calls[i].Files ?? []),
+                $"call {i}: snapshots say {string.Join(" ", again.Calls[i].Files!)}; the recorder says {string.Join(" ", rec.Recording.Calls[i].Files ?? [])}");
+        Assert.Contains("/home/agent/a/zz", rec.Recording.Calls[8].Files!);
+        Assert.Equal([], rec.Recording.Calls[2].Files!); // the same content again, on a clock that stands still
+    }
+
+    [Fact]
+    public async Task Refuses_the_values_every_port_refuses()
+    {
+        var file = Bytes(await Record());
+        var lines = Entry(file, "history.jsonl").TrimEnd('\n').Split('\n');
+        byte[] Line(int i, Action<JsonNode> edit)
+        {
+            var copy = (string[])lines.Clone();
+            var node = JsonNode.Parse(copy[i])!;
+            edit(node);
+            copy[i] = node.ToJsonString();
+            return Tamper(file, z => Put(z, "history.jsonl", string.Join('\n', copy) + "\n"));
+        }
+        string Refused(byte[] f) => Assert.Throws<InvalidDataException>(() => LoadBytes(f)).Message;
+        Assert.Contains("line 2: bad index", Refused(Line(1, c => c["index"] = -1)));
+        Assert.Contains("line 2 is not JSON", Refused(Line(1, c => c["index"] = 1.5)));
+        Assert.Contains("line 2 is not JSON", Refused(Line(1, c => c["index"] = "1")));
+        Assert.Contains("line 3: bad elapsedMs", Refused(Line(2, c => c["elapsedMs"] = -1)));
+        Assert.Contains("line 3: bad elapsedMs", Refused(Line(2, c => c["elapsedMs"] = 1e300)));
+        Assert.Contains("line 2 is not JSON", Refused(Line(1, c => c["files"] = new JsonObject())));
+        Assert.Contains("line 2: null in files", Refused(Line(1, c => c["files"] = new JsonArray(null, "/x"))));
+        Assert.Contains("line 2: bad time \"2026\"", Refused(Line(1, c => c["time"] = "2026")));
+        Assert.Contains("bad startTime", Refused(Line(0, h => h["options"]!["startTime"] = "3/4/2026")));
+        Assert.Contains("bad header", Refused(Line(0, h => h["options"]!["maxFileSystemBytes"] = 1.5)));
+        Assert.Contains("bad header", Refused(Line(0, h => h["options"]!["randomSeed"] = 1.5)));
+        // a byte order mark is not part of the format
+        Assert.Contains("the header is not JSON", Refused(Tamper(file, z => Put(z, "history.jsonl", "\uFEFF" + string.Join('\n', lines) + "\n"))));
+        // messages name the field, not .NET's types
+        var wrongType = Refused(Line(1, c => c["command"] = 5));
+        Assert.Contains("has the wrong type", wrongType);
+        Assert.DoesNotContain("Topwater.", wrongType);
+        Assert.StartsWith("not a valid Topwater recording: ", Refused(Line(0, h => h["created"] = "yesterday")));
+    }
+
+    [Fact]
     public async Task Refuses_duplicate_entries_bad_header_names_and_a_directory_that_holds_more_than_it_says()
     {
         var file = Bytes(await Record());

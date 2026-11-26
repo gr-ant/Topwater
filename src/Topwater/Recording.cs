@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Topwater;
@@ -271,6 +272,7 @@ public sealed class Recording
 
     static Recording LoadTopwater(Stream stream, ShellOptions limits, long maxFile)
     {
+        long start = stream.Position;
         using var zip = ShellSnapshot.OpenZip(stream, limits, maxFile);
         if (zip.GetEntry("history.jsonl") is not { } history)
         {
@@ -283,7 +285,7 @@ public sealed class Recording
             });
         }
         // read as it inflates, never whole: deflate shrinks a run of newlines a thousandfold
-        using var reader = new StreamReader(new CappedStream(history.Open(), MaxHistoryBytes(limits)), new UTF8Encoding(false, throwOnInvalidBytes: true));
+        using var reader = new StreamReader(new CappedStream(history.Open(), MaxHistoryBytes(limits)), new UTF8Encoding(false, throwOnInvalidBytes: true), detectEncodingFromByteOrderMarks: false);
         var h = ReadHeader(reader, HistoryFormat, FormatVersion);
 
         // the checkpoints, checked by name before any is read
@@ -299,13 +301,35 @@ public sealed class Recording
         var budget = new SnapshotBudget(limits);
         var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files)), limits);
         ReadCalls(reader, rec, (_, _) => null, limits);
+
+        // the machine of the file is the one after the last checkpoint: a reader of either must see the same
+        var (lastN, lastName) = checkpoints.Last();
+        if (lastN > rec.Calls.Count) throw Bad($"{lastName} is past the last call ({rec.Calls.Count})");
+        var last = ShellSnapshot.ReadManifestBytes(zip, lastName, limits);
+        if (!SameJson(ShellSnapshot.ReadManifestBytes(zip, "manifest.json", limits), last)) throw Bad($"manifest.json is not the machine of {lastName}, the last checkpoint");
+
+        // the other checkpoints are checked against the limits now and built when a replay needs one; the file stays in memory
+        // for that, compressed, instead of every machine in it built
+        if (checkpoints.Count == 1) return rec;
+        stream.Position = start;
+        var file = new MemoryStream();
+        stream.CopyTo(file);
+        var kept = new ShellSnapshot.Kept(4);
+        ZipArchive? reread = null;
         foreach (var (n, name) in checkpoints.Skip(1))
         {
-            if (n > rec.Calls.Count) throw Bad($"{name} is past the last call ({rec.Calls.Count})");
-            rec.Calls[n - 1] = rec.Calls[n - 1] with { SnapshotAfter = budget.Add(ShellSnapshot.ReadManifest(zip, name, limits, budget.Files)) };
+            var snap = ShellSnapshot.ReadOutline(n == lastN ? last : ShellSnapshot.ReadManifestBytes(zip, name, limits, check: false), name, limits, budget.Files, budget.Bytes, () => ShellSnapshot.Checked(() =>
+            {
+                reread ??= new ZipArchive(new MemoryStream(file.GetBuffer(), 0, (int)file.Length, writable: false), ZipArchiveMode.Read);
+                return ShellSnapshot.ReadManifest(reread, name, limits);
+            }, Invalid), kept);
+            budget.Count();
+            rec.Calls[n - 1] = rec.Calls[n - 1] with { SnapshotAfter = snap };
         }
         return rec;
     }
+
+    static bool SameJson(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b) || JsonNode.DeepEquals(JsonNode.Parse(a), JsonNode.Parse(b));
 
     /// <summary>The most bytes history.jsonl may inflate to: twice what the session's variables may hold.</summary>
     internal static long MaxHistoryBytes(ShellOptions o) => 2 * o.MaxStringBytes;
@@ -336,7 +360,7 @@ public sealed class Recording
 
     static Recording LoadJsonLines(Stream stream, Func<string, Stream>? openSnapshot, ShellOptions limits)
     {
-        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
         var h = ReadHeader(reader, LegacyFormat, 1);
         var budget = new SnapshotBudget(limits);
         ShellSnapshot Snap(SnapshotRef? r, string what)
@@ -383,9 +407,14 @@ public sealed class Recording
         public ShellSnapshot Add(ShellSnapshot snap, bool counted = false)
         {
             if (!counted) Count();
-            if ((_bytes += snap.Fs.UsedBytes) > _maxBytes)
-                throw Bad($"the snapshots hold more than {_maxBytes} bytes of files together ({MaxSnapshotsFileSystems} x MaxFileSystemBytes)");
+            Bytes(snap.Fs.UsedBytes);
             return snap;
+        }
+
+        public void Bytes(long n)
+        {
+            if ((_bytes += n) > _maxBytes)
+                throw Bad($"the snapshots hold more than {_maxBytes} bytes of files together ({MaxSnapshotsFileSystems} x MaxFileSystemBytes)");
         }
     }
 
@@ -395,13 +424,13 @@ public sealed class Recording
         // the version first, so a newer format fails with that, not with whatever it changed
         Probe p;
         try { p = JsonSerializer.Deserialize<Probe>(first, Json) ?? throw Bad("no header"); }
-        catch (JsonException e) { throw Bad("the header is not JSON: " + e.Message); }
+        catch (JsonException e) { throw Bad("the header is not JSON: " + ShellSnapshot.JsonError(e)); }
         if (p.Format != format) throw Bad($"the first line is not a {format} header");
         if (p.Version > version)
             throw new NotSupportedException($"{(format == HistoryFormat ? "history" : "recording")} format version {p.Version} is newer than this version of Topwater supports ({version}); upgrade Topwater to read it");
         if (p.Version < 1) throw Bad($"unknown format version {p.Version}");
         try { return JsonSerializer.Deserialize<Header>(first, Json)!; }
-        catch (JsonException e) { throw Bad("bad header: " + e.Message); }
+        catch (JsonException e) { throw Bad("bad header: " + ShellSnapshot.JsonError(e)); }
     }
 
     static Recording NewRecording(Header h, ShellSnapshot start, ShellOptions limits)
@@ -415,7 +444,7 @@ public sealed class Recording
         return new Recording(start, new ShellOptions
         {
             User = o.User ?? d.User, Hostname = o.Hostname ?? d.Hostname,
-            StartTime = o.StartTime is { } st ? DateTimeOffset.Parse(st, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal) : null,
+            StartTime = o.StartTime is { } st ? Time(st, "startTime") : null,
             RandomSeed = o.RandomSeed,
             MaxLoopIterations = (int)Cap(o.MaxLoopIterations, limits.MaxLoopIterations), MaxExtractBytes = Cap(o.MaxExtractBytes, limits.MaxExtractBytes),
             MaxExtractEntries = (int)Cap(o.MaxExtractEntries, limits.MaxExtractEntries),
@@ -423,7 +452,7 @@ public sealed class Recording
             MaxFileSystemBytes = Cap(o.MaxFileSystemBytes, limits.MaxFileSystemBytes), MaxStringBytes = Cap(o.MaxStringBytes, limits.MaxStringBytes),
         })
         {
-            Created = h.Created is { } c ? DateTimeOffset.Parse(c, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal) : default,
+            Created = h.Created is { } c ? Time(c, "created") : default,
             TopwaterVersion = h.Topwater,
             Metadata = h.Metadata ?? new(StringComparer.Ordinal),
             AppCommands = h.AppCommands ?? [],
@@ -448,17 +477,24 @@ public sealed class Recording
             if (line.Length == 0) continue;
             CallEntry e;
             try { e = JsonSerializer.Deserialize<CallEntry>(line, Json) ?? throw Bad($"line {lineNo} is null"); }
-            catch (JsonException ex) { throw Bad($"line {lineNo} is not JSON: {ex.Message}"); }
+            catch (JsonException ex) { throw Bad($"line {lineNo} is not JSON: {ShellSnapshot.JsonError(ex)}"); }
             if (e.Command == null) throw Bad($"line {lineNo} has no command");
+            if (e.Index < 0) throw Bad($"line {lineNo}: bad index");
+            if (!(e.ElapsedMs is >= 0 and <= 1e12)) throw Bad($"line {lineNo}: bad elapsedMs");
             if (e.Files?.Contains(null!) == true) throw Bad($"line {lineNo}: null in files");
             rec.Calls.Add(new RecordedCall(e.Index, e.Command, e.Stdout ?? "", e.Stderr ?? "", e.ExitCode, e.Trailer, TimeSpan.FromMilliseconds(e.ElapsedMs))
             {
-                Time = e.Time is { } t ? DateTimeOffset.TryParse(t, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time) ? time : throw Bad($"line {lineNo}: bad time")
-                    : null,
+                Time = e.Time is { } t ? Time(t, "time", $"line {lineNo}: ") : null,
                 Files = e.Files,
                 SnapshotAfter = e.Snapshot == null ? null : snap(e.Snapshot, $"call {e.Index}"),
             });
         }
+    }
+
+    static DateTimeOffset Time(string s, string what, string where = "")
+    {
+        try { return new(ShellSnapshot.ParseTime(s, what), TimeSpan.Zero); }
+        catch (InvalidDataException) { throw Bad($"{where}bad {what} {JsonSerializer.Serialize(s)}"); }
     }
 
     static string? CurrentVersion => typeof(Shell).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
@@ -547,14 +583,15 @@ public sealed class ShellRecorder : IDisposable
 {
     readonly Shell _shell;
     readonly int _every;
-    ShellSnapshot _last; // the machine after the last call: what the next call's changed files are measured against
-    bool _keepLast;      // whether the last call's snapshot stays once another call follows
+    readonly VirtualFileSystem.ChangeTracker _changes; // the paths each call changed, without a snapshot per call
+    bool _keepLast; // whether the last call's snapshot stays once another call follows
 
     internal ShellRecorder(Shell shell, RecordingOptions options)
     {
         _shell = shell;
         _every = options.SnapshotEvery;
-        Recording = new Recording(_last = shell.Snapshot(), shell.Options)
+        _changes = new(shell.Fs);
+        Recording = new Recording(shell.Snapshot(), shell.Options)
         {
             Metadata = new(options.Metadata, StringComparer.Ordinal),
             AppCommands = [.. shell.AppCommandNames()],
@@ -567,25 +604,34 @@ public sealed class ShellRecorder : IDisposable
     internal void Add(string command, ShellResult result, TimeSpan elapsed, DateTimeOffset started)
     {
         int index = Recording.Calls.Count;
-        var after = _shell.Snapshot();
-        // the last call always keeps its snapshot, so a saved recording holds the end state
+        // the last call always has a snapshot, so a saved recording holds the end state; it is taken when first used (or
+        // when recording stops), since the next call usually replaces it.
+        // shortcut: a change made to the shell outside RunAsync after the last call, before then, is in it too; snapshot
+        // every call again if a host needs that
         if (index > 0 && !_keepLast) Recording.Calls[^1] = Recording.Calls[^1] with { SnapshotAfter = null };
         _keepLast = _every > 0 && (index + 1) % _every == 0;
-        Recording.Calls.Add(RecordedCall.From(index, command, result, elapsed) with { Time = started, Files = ShellSnapshot.ChangedFiles(_last, after), SnapshotAfter = after });
-        _last = after;
+        var after = _keepLast ? _shell.Snapshot() : new ShellSnapshot(_shell.Snapshot, _shell.Options.User, _shell.Options.Hostname, _shell.Now);
+        Recording.Calls.Add(RecordedCall.From(index, command, result, elapsed) with { Time = started, Files = _changes.Changes(), SnapshotAfter = after });
     }
 
     /// <summary>Snapshots the machine now and attaches it to the last call (a mark a viewer can jump to).</summary>
     public void SnapshotNow()
     {
-        _last = _shell.Snapshot();
-        if (Recording.Calls.Count == 0) { Recording.Start = _last; return; }
-        Recording.Calls[^1] = Recording.Calls[^1] with { SnapshotAfter = _last };
+        var now = _shell.Snapshot();
+        _changes.Changes(); // the next call's files are measured from here
+        if (Recording.Calls.Count == 0) { Recording.Start = now; return; }
+        Recording.Calls[^1] = Recording.Calls[^1] with { SnapshotAfter = now };
         _keepLast = true;
     }
 
     /// <summary>Stops recording; later calls are not added.</summary>
-    public void Stop() { if (_shell.Recorder == this) _shell.Recorder = null; }
+    public void Stop()
+    {
+        if (_shell.Recorder != this) return;
+        _shell.Recorder = null;
+        if (Recording.Calls.Count > 0) Recording.Calls[^1].SnapshotAfter?.Build();
+    }
+
     public void Dispose() => Stop();
 
     public void Save(Stream stream) => Recording.Save(stream);

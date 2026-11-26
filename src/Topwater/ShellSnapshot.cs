@@ -25,12 +25,52 @@ public sealed class ShellSnapshot
 
     internal ShellSnapshot(VirtualFileSystem fs, ShellState state, string user, string hostname, DateTime created)
     {
-        Fs = fs; State = state; User = user; Hostname = hostname; Created = created;
+        _fs = fs; _state = state; User = user; Hostname = hostname; Created = created;
     }
 
+    /// <summary>A snapshot whose machine is built by <paramref name="load"/> when first used: a recording's checkpoint, read
+    /// from the file when a replay needs it (and dropped again when <paramref name="kept"/> holds too many), or the machine
+    /// after a recorder's last call.</summary>
+    internal ShellSnapshot(Func<ShellSnapshot> load, string user, string hostname, DateTime created, Kept? kept = null)
+    {
+        _load = load; _kept = kept; User = user; Hostname = hostname; Created = created;
+    }
+
+    VirtualFileSystem? _fs;
+    ShellState? _state;
+    Func<ShellSnapshot>? _load;
+    readonly Kept? _kept;
+
     // never handed out: Restore copies from it
-    internal VirtualFileSystem Fs { get; }
-    internal ShellState State { get; }
+    internal VirtualFileSystem Fs => _fs ?? Built()._fs!;
+    internal ShellState State => _state ?? Built()._state!;
+
+    /// <summary>Builds the machine now if it is still to be read.</summary>
+    internal void Build() => _ = Fs;
+
+    ShellSnapshot Built()
+    {
+        lock ((object?)_kept ?? this)
+        {
+            if (_fs != null) return this;
+            var built = _load!();
+            (_fs, _state) = (built._fs!, built._state!);
+            if (_kept == null) _load = null; // built once for good
+            else _kept.Add(this);
+            return built;
+        }
+    }
+
+    /// <summary>The few lazily read snapshots of one file that stay built; older ones are dropped and read again when needed.</summary>
+    internal sealed class Kept(int capacity)
+    {
+        readonly Queue<ShellSnapshot> _built = new();
+        public void Add(ShellSnapshot s)
+        {
+            _built.Enqueue(s);
+            while (_built.Count > capacity) { var old = _built.Dequeue(); (old._fs, old._state) = (null, null); }
+        }
+    }
 
     /// <summary>The agent's user name on the machine the snapshot was taken from.</summary>
     public string User { get; }
@@ -120,7 +160,8 @@ public sealed class ShellSnapshot
         var o = limits ?? new ShellOptions();
         return Checked(() =>
         {
-            using var zip = OpenZip(stream, o, MaxArchiveBytes(o));
+            // any .topwater file: a recording's checkpoints make it up to four times a snapshot; the machine read stays one
+            using var zip = OpenZip(stream, o, Recording.MaxSnapshotsFileSystems * MaxArchiveBytes(o));
             return ReadManifest(zip, "manifest.json", o, countFiles);
         });
     }
@@ -142,7 +183,7 @@ public sealed class ShellSnapshot
         try { return read(); }
         catch (Exception e) when (e is not (NotSupportedException or OperationCanceledException or OutOfMemoryException) && !e.Message.StartsWith("not a valid Topwater "))
         {
-            throw new InvalidDataException(invalid + e.Message, e);
+            throw new InvalidDataException(invalid + (e is JsonException j ? JsonError(j) : e.Message), e);
         }
     }
 
@@ -252,19 +293,7 @@ public sealed class ShellSnapshot
     /// <summary>Reads the manifest <paramref name="name"/> (manifest.json or a checkpoint) and the blobs it names.</summary>
     internal static ShellSnapshot ReadManifest(ZipArchive zip, string name, ShellOptions o, Action<int>? countFiles = null)
     {
-        long maxManifest = MaxManifestBytes(o);
-        var manifestEntry = zip.GetEntry(name) ?? throw Bad($"{name} is missing");
-        var json = new MemoryStream();
-        using (var s = manifestEntry.Open()) ReadCapped(s, json, maxManifest, name);
-        var bytes = json.GetBuffer().AsSpan(0, (int)json.Length);
-
-        // the version first, so a newer format fails with that, not with whatever it changed
-        var probe = JsonSerializer.Deserialize<Probe>(bytes, Json);
-        if (probe?.Format != FormatName) throw Bad($"{name} is not a Topwater snapshot manifest");
-        if (probe.Version > FormatVersion)
-            throw new NotSupportedException($"snapshot format version {probe.Version} is newer than this version of Topwater supports ({FormatVersion}); upgrade Topwater to load it");
-        if (probe.Version < 1) throw Bad($"unknown format version {probe.Version}");
-        var m = JsonSerializer.Deserialize<Manifest>(bytes, Json)!;
+        var m = JsonSerializer.Deserialize<Manifest>(ReadManifestBytes(zip, name, o), Json)!;
 
         var user = Check(m.User, UserName, "user");
         var hostname = Check(m.Hostname, HostName, "hostname");
@@ -274,15 +303,97 @@ public sealed class ShellSnapshot
         return new ShellSnapshot(fs, state, user, hostname, ParseTime(m.Created, "created"));
     }
 
-    static VirtualFileSystem ReadFiles(ZipArchive zip, List<FileEntry> files, ShellOptions o)
+    /// <summary>A manifest's bytes (capped), its format and version checked: the version first, so a newer format fails with
+    /// that, not with whatever it changed.</summary>
+    internal static byte[] ReadManifestBytes(ZipArchive zip, string name, ShellOptions o, bool check = true)
+    {
+        var manifestEntry = zip.GetEntry(name) ?? throw Bad($"{name} is missing");
+        var json = new MemoryStream();
+        using (var s = manifestEntry.Open()) ReadCapped(s, json, MaxManifestBytes(o), name);
+        var bytes = json.ToArray();
+        if (check) CheckVersion(JsonSerializer.Deserialize<Probe>(bytes, Json), name);
+        return bytes;
+    }
+
+    static void CheckVersion(Probe? probe, string name)
+    {
+        if (probe?.Format != FormatName) throw Bad($"{name} is not a Topwater snapshot manifest");
+        if (probe.Version > FormatVersion)
+            throw new NotSupportedException($"snapshot format version {probe.Version} is newer than this version of Topwater supports ({FormatVersion}); upgrade Topwater to load it");
+        if (probe.Version < 1) throw Bad($"unknown format version {probe.Version}");
+    }
+
+    /// <summary>
+    /// A checkpoint (<paramref name="what"/>) checked without building it: format, version, user, hostname, time, and its entries and bytes against
+    /// the limits (<paramref name="countFiles"/> and <paramref name="countBytes"/> charge them to the file's budget). The
+    /// rest (each entry, blob and the session) is checked when <paramref name="load"/> first builds it.
+    /// </summary>
+    internal static ShellSnapshot ReadOutline(byte[] bytes, string what, ShellOptions o, Action<int> countFiles, Action<long> countBytes, Func<ShellSnapshot> load, Kept kept)
+    {
+        // read as a stream of tokens: building 100,000 entries only to count them costs what building the machine does
+        string? user = null, hostname = null, created = null;
+        var probe = new Probe();
+        var files = new List<FileEntry>();
+        var r = new Utf8JsonReader(bytes);
+        if (!r.Read() || r.TokenType != JsonTokenType.StartObject) throw Bad("the manifest is not an object");
+        while (r.Read() && r.TokenType == JsonTokenType.PropertyName)
+        {
+            var name = r.GetString();
+            r.Read();
+            if (name == "format") probe.Format = r.TokenType == JsonTokenType.String ? r.GetString() : null;
+            else if (name == "version") probe.Version = r.TokenType == JsonTokenType.Number && r.TryGetInt32(out var v) ? v : throw Bad($"{what}: bad version");
+            else if (name is "user" or "hostname" or "created")
+            {
+                var value = r.TokenType == JsonTokenType.String ? r.GetString() : null;
+                if (name == "user") user = value; else if (name == "hostname") hostname = value; else created = value;
+            }
+            else if (name == "files" && r.TokenType == JsonTokenType.StartArray)
+            {
+                files.Clear(); // a repeated name: the last one counts, as when the machine is built
+                while (r.Read() && r.TokenType != JsonTokenType.EndArray)
+                {
+                    var f = new FileEntry();
+                    files.Add(f);
+                    if (r.TokenType != JsonTokenType.StartObject) { r.Skip(); continue; }
+                    while (r.Read() && r.TokenType == JsonTokenType.PropertyName)
+                    {
+                        if (r.ValueTextEquals("type")) { r.Read(); f.Type = r.TokenType == JsonTokenType.String ? r.GetString() : null; }
+                        else if (r.ValueTextEquals("size")) { r.Read(); f.Size = r.TokenType == JsonTokenType.Number && r.TryGetInt64(out var n) ? n : throw Bad("a size is not a whole number"); }
+                        else if (r.ValueTextEquals("link")) { r.Read(); f.Link = r.TokenType == JsonTokenType.Null ? null : ""; }
+                        else { r.Read(); r.Skip(); }
+                    }
+                }
+            }
+            else r.Skip();
+        }
+        CheckVersion(probe, what);
+        var u = Check(user, UserName, "user");
+        var h = Check(hostname, HostName, "hostname");
+        var t = ParseTime(created, "created");
+        countFiles(files.Count);
+        countBytes(CheckSizes(files, o));
+        return new ShellSnapshot(load, u, h, t, kept);
+    }
+
+    /// <summary>Checks a manifest's entry count and file bytes against the limits; returns the bytes held once (hard links
+    /// share their first name's).</summary>
+    static long CheckSizes(List<FileEntry> files, ShellOptions o)
     {
         if (files.Count > o.MaxExtractEntries) throw Bad($"more than {o.MaxExtractEntries} files and directories (MaxExtractEntries)");
-        long total = 0;
+        long total = 0, held = 0;
         foreach (var f in files)
         {
-            if (f?.Type == "file") total += f.Size >= 0 ? f.Size : throw Bad($"{f.Path}: negative size");
+            if (f?.Type != "file") continue;
+            total += f.Size >= 0 ? f.Size : throw Bad($"{f.Path}: negative size");
+            if (f.Link == null) held += f.Size;
             if (total > o.MaxFileSystemBytes) throw Bad($"the files hold more than {o.MaxFileSystemBytes} bytes (MaxFileSystemBytes)");
         }
+        return held;
+    }
+
+    static VirtualFileSystem ReadFiles(ZipArchive zip, List<FileEntry> files, ShellOptions o)
+    {
+        CheckSizes(files, o);
         var fs = new VirtualFileSystem();
         var cache = new Dictionary<(string, bool), object>(); // identical contents load once and are shared, as in memory
         var strict = new UTF8Encoding(false, throwOnInvalidBytes: true);
@@ -419,8 +530,17 @@ public sealed class ShellSnapshot
     static string FormatTime(DateTime t) =>
         (t.Kind == DateTimeKind.Local ? t.ToUniversalTime() : DateTime.SpecifyKind(t, DateTimeKind.Utc)).ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
 
-    static DateTime ParseTime(string? s, string what) =>
-        DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var t) ? t : throw Bad($"bad {what} {JsonSerializer.Serialize(s)}");
+    /// <summary>An ISO 8601 date and time (no zone: UTC) as UTC; the same shapes every port reads.</summary>
+    internal static DateTime ParseTime(string? s, string what) =>
+        s != null && IsoTime.IsMatch(s.Trim()) && DateTime.TryParse(s.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var t)
+            ? t : throw Bad($"bad {what} {JsonSerializer.Serialize(s)}");
+
+    static readonly Regex IsoTime = new(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,7})?)?(Z|[+-][0-9]{2}:?[0-9]{2})?\z");
+
+    /// <summary>A JSON error's message without .NET type names: what a file's author can act on.</summary>
+    internal static string JsonError(JsonException e) => JsonTypeName.Replace(e.Message, "has the wrong type");
+
+    static readonly Regex JsonTypeName = new(@"could not be converted to \S+(?=\. Path:)");
 
     // ---------- the manifest (format version 1) ----------
 

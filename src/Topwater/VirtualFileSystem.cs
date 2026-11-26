@@ -33,26 +33,51 @@ public sealed class VirtualFileSystem
 {
     abstract class Node
     {
-        public DateTime Modified = DateTime.UtcNow;
-        public string Owner = "root";
-        public int Mode;
-        public int Nlink = 1; // names this file or link has (hard links); unused for directories
+        DateTime _modified = DateTime.UtcNow;
+        string _owner = "root";
+        int _mode, _nlink = 1;
+        public DateTime Modified { get => _modified; set { _modified = value; Touch(); } }
+        public string Owner { get => _owner; set { _owner = value; Touch(); } }
+        public int Mode { get => _mode; set { _mode = value; Touch(); } }
+        public int Nlink { get => _nlink; set { _nlink = value; Touch(); } } // names this file or link has (hard links); unused for directories
+        /// <summary>When this node (or a directory's list of names) last changed, on <see cref="ChangeClock"/>.</summary>
+        public long Changed = Interlocked.Increment(ref ChangeClock);
+        public void Touch() => Changed = Interlocked.Increment(ref ChangeClock);
     }
-    sealed class Dir : Node { public readonly SortedDictionary<string, Node> Children = new(StringComparer.Ordinal); }
-    sealed class LinkNode : Node { public string Target = ""; }
+    /// <summary>Counts changes to every filesystem's nodes, so a <see cref="ChangeTracker"/> visits only what moved since it last looked.</summary>
+    static long ChangeClock;
+    sealed class Dir : Node
+    {
+        public readonly Names Children;
+        public long Listed = Interlocked.Increment(ref ChangeClock); // when a name was last added, removed or replaced
+        public Dir() => Children = new(this);
+    }
+    /// <summary>A directory's names; adding, removing or replacing one marks the directory's list changed.</summary>
+    sealed class Names(Dir owner) : SortedDictionary<string, Node>(StringComparer.Ordinal)
+    {
+        public new Node this[string name] { get => base[name]; set { base[name] = value; Mark(); } }
+        public new void Add(string name, Node node) { base.Add(name, node); Mark(); }
+        public bool TryAdd(string name, Node node) { if (ContainsKey(name)) return false; Add(name, node); return true; }
+        public new bool Remove(string name) { if (!base.Remove(name)) return false; Mark(); return true; }
+        void Mark() => owner.Listed = Interlocked.Increment(ref ChangeClock);
+    }
+    sealed class LinkNode : Node { string _target = ""; public string Target { get => _target; set { _target = value; Touch(); } } }
     sealed class FileNode : Node
     {
         string? _text = "";
         System.Text.StringBuilder? _appended; // `>>` writes accumulate here, so append loops stay linear
+        byte[]? _data;
+        long? _reportedSize;
+        long _size;
         public string Content
         {
             // the builder is dropped once read, so a file isn't held twice; the next append copies it once (as the read did)
             get { if (_text == null) { _text = _appended!.ToString(); _appended = null; } return _text; }
-            set { _text = value; _appended = null; }
+            set { _text = value; _appended = null; Touch(); }
         }
-        public byte[]? Data; // set for binary files; Content is then unused
-        public long? ReportedSize; // what `ls -l` and `stat` show for a program stub, whose real content is a few bytes
-        public long Size; // real bytes held, as counted against the filesystem's capacity
+        public byte[]? Data { get => _data; set { _data = value; Touch(); } } // set for binary files; Content is then unused
+        public long? ReportedSize { get => _reportedSize; set { _reportedSize = value; Touch(); } } // what `ls -l` and `stat` show for a program stub, whose real content is a few bytes
+        public long Size { get => _size; set { _size = value; Touch(); } } // real bytes held, as counted against the filesystem's capacity
         public byte[] Raw => Data ?? System.Text.Encoding.UTF8.GetBytes(Content);
 
         /// <param name="reserve">Called with the change in size before anything changes; throws to refuse the write.</param>
@@ -636,10 +661,94 @@ public sealed class VirtualFileSystem
             var (path, n) = stack.Pop();
             string? hard = null;
             if (n.Nlink > 1 && !first.TryAdd(n, path)) hard = first[n];
-            if (n is FileNode f) { yield return new(path, false, f.Mode, f.Owner, f.Modified, f.Data == null ? f.Content : null, f.Data, f.ReportedSize, HardLink: hard); continue; }
-            if (n is LinkNode l) { yield return new(path, false, l.Mode, l.Owner, l.Modified, LinkTarget: l.Target, HardLink: hard); continue; }
-            yield return new(path, true, n.Mode, n.Owner, n.Modified);
-            foreach (var (name, child) in ((Dir)n).Children.Reverse()) stack.Push((path == "/" ? "/" + name : path + "/" + name, child));
+            yield return EntryOf(n, path, hard);
+            if (n is Dir d) foreach (var (name, child) in d.Children.Reverse()) stack.Push((Child(path, name), child));
+        }
+    }
+
+    static string Child(string dir, string name) => dir == "/" ? "/" + name : dir + "/" + name;
+
+    static Entry EntryOf(Node n, string path, string? hard) => n switch
+    {
+        FileNode f => new(path, false, f.Mode, f.Owner, f.Modified, f.Data == null ? f.Content : null, f.Data, f.ReportedSize, HardLink: hard),
+        LinkNode l => new(path, false, l.Mode, l.Owner, l.Modified, LinkTarget: l.Target, HardLink: hard),
+        _ => new(path, true, n.Mode, n.Owner, n.Modified),
+    };
+
+    /// <summary>
+    /// The paths whose entry (as <see cref="Entries"/> gives it) changed since the tracker last looked, sorted: the same list
+    /// as comparing two snapshots, without copying the tree. Each look walks the nodes but builds entries only for nodes
+    /// changed since (<see cref="Node.Changed"/>), names a directory gained or replaced, and hard-linked files, whose first
+    /// name can move when another name changes.
+    /// </summary>
+    internal sealed class ChangeTracker
+    {
+        readonly VirtualFileSystem _fs;
+        long _seen = long.MaxValue; // the first look sees everything as new
+        readonly Dictionary<string, (Entry Entry, Node Node)> _known = new(StringComparer.Ordinal);
+        readonly Dictionary<string, (string Name, Node Node)[]> _names = new(StringComparer.Ordinal); // each directory's names when last looked at
+
+        public ChangeTracker(VirtualFileSystem fs) { _fs = fs; Changes(); }
+
+        public List<string> Changes()
+        {
+            long now = Volatile.Read(ref ChangeClock);
+            var changed = new List<string>();
+            var gone = new HashSet<string>(StringComparer.Ordinal); // what was below a removed or replaced name, until seen again
+            var first = new Dictionary<Node, string>(ReferenceEqualityComparer.Instance);
+            var root = _fs._root;
+            Visit(root, "/", _seen == long.MaxValue || !ReferenceEquals(_known["/"].Node, root), changed, gone, first);
+            foreach (var p in gone) { _known.Remove(p); _names.Remove(p); changed.Add(p); }
+            _seen = now;
+            changed.Sort(StringComparer.Ordinal);
+            return changed;
+        }
+
+        void Visit(Node n, string path, bool moved, List<string> changed, HashSet<string> gone, Dictionary<Node, string> first)
+        {
+            string? hard = null;
+            if (n.Nlink > 1 && !first.TryAdd(n, path)) hard = first[n];
+            if (moved || n.Changed > _seen || n.Nlink > 1)
+            {
+                var e = EntryOf(n, path, hard);
+                if (!_known.TryGetValue(path, out var old) || old.Entry != e) changed.Add(path);
+                _known[path] = (e, n);
+                gone.Remove(path);
+            }
+            if (n is not Dir d)
+            {
+                if (moved) _names.Remove(path); // it may have been a directory
+                return;
+            }
+            if (!moved && d.Listed <= _seen)
+            {
+                foreach (var (name, child) in _names[path]) // the same names as last time, without walking the sorted tree
+                    if (child is Dir || child.Changed > _seen || child.Nlink > 1) Visit(child, Child(path, name), false, changed, gone, first);
+                return;
+            }
+            // names gained, lost or replaced: merge the sorted lists of before and now
+            var before = _names.GetValueOrDefault(path) ?? [];
+            var now = new (string Name, Node Node)[d.Children.Count];
+            int i = 0, j = 0;
+            foreach (var (name, child) in d.Children)
+            {
+                now[j++] = (name, child);
+                while (i < before.Length && string.CompareOrdinal(before[i].Name, name) < 0) Gone(Child(path, before[i++].Name), gone);
+                bool had = i < before.Length && before[i].Name == name, same = had && ReferenceEquals(before[i].Node, child);
+                if (had) i++;
+                if (!(moved || !same || child is Dir || child.Changed > _seen || child.Nlink > 1)) continue;
+                var p = Child(path, name);
+                if (had && (moved || !same)) Gone(p, gone); // replaced: what was below it is gone unless seen again
+                Visit(child, p, moved || !same, changed, gone, first);
+            }
+            while (i < before.Length) Gone(Child(path, before[i++].Name), gone);
+            _names[path] = now;
+        }
+
+        void Gone(string path, HashSet<string> gone)
+        {
+            gone.Add(path);
+            if (_names.TryGetValue(path, out var names)) foreach (var (name, _) in names) Gone(Child(path, name), gone);
         }
     }
 

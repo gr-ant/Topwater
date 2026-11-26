@@ -273,6 +273,11 @@ static class Cli
             File.Move(temp, path, overwrite: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new CliException($"{path}: {e.Message}"); }
+        catch (InvalidDataException e) // a recording's checkpoint is read when first used: here
+        {
+            File.Delete(temp);
+            throw new CliException(e.Message);
+        }
     }
 
     static Task<int> ExportCommand(string[] args, Io io, CancellationToken ct)
