@@ -3,8 +3,8 @@
 One `bash` tool for your LLM agent, backed by a simulated Linux machine that runs inside your Python process. Your
 functions are commands on it. Python 3.10 or later, standard library only.
 
-This page covers the Python API. The [main README](../README.md) explains what Topwater is, and
-[docs/](../docs/README.md) is the reference; its samples are C#, and the names below are their Python equivalents.
+This page covers the Python API. The [main README](https://github.com/gr-ant/Topwater/blob/main/README.md) explains what Topwater is, and
+[docs/](https://github.com/gr-ant/Topwater/blob/main/docs/README.md) is the reference; its samples are C#, and the names below are their Python equivalents.
 
 - [Install](#install)
 - [Quickstart](#quickstart)
@@ -28,7 +28,7 @@ or, from a clone, `pip install ./python`.
 
 ## Quickstart
 
-`db` stands for your own data; the [main README](../README.md#python) has a version that runs as it is.
+`db` stands for your own data; the [main README](https://github.com/gr-ant/Topwater/blob/main/README.md#python) has a version that runs as it is.
 
 ```python
 import topwater
@@ -45,7 +45,7 @@ output = shell.run("orders --status open | jq length").to_tool_output()
 ```
 
 - **Tool definition for your model:** `topwater.TOOL_NAME`, `TOOL_DESCRIPTION`, `TOOL_INPUT_SCHEMA`. On a shell with
-  [web access](../docs/web.md), use `topwater.tool_description(shell)`, which names the sites; the adapters do.
+  [web access](https://github.com/gr-ant/Topwater/blob/main/docs/web.md), use `topwater.tool_description(shell)`, which names the sites; the adapters do.
 - **Limits**, all on by default:
   `Shell(max_call_duration=120, max_file_system_bytes=128 << 20, max_string_bytes=32 << 20, ...)`. Option names are
   the C# ones in snake_case, and `max_call_duration` is in seconds. `ShellResult.trailer` holds the note a limit adds.
@@ -83,7 +83,7 @@ from topwater.host import bubblewrap, register_host_command   # real host progra
 duckdb = register_host_command(shell, "duckdb", launcher=bubblewrap())   # duckdb.close() removes its folder and the command
 ```
 
-All of these do real work when the agent calls them. [Your programs](../docs/programs.md) says what each guarantees.
+All of these do real work when the agent calls them. [Your programs](https://github.com/gr-ant/Topwater/blob/main/docs/programs.md) says what each guarantees.
 
 ## Files and documents
 
@@ -95,11 +95,11 @@ text = topwater.convert.to_markdown(data, "report.xlsx")
 ```
 
 To give the built-in `git` an identity, write `/home/agent/.gitconfig` with `shell.fs.write_text`, or set
-`GIT_AUTHOR_*` and `GIT_COMMITTER_*` in `shell.env` ([git](../docs/machine.md#git)).
+`GIT_AUTHOR_*` and `GIT_COMMITTER_*` in `shell.env` ([git](https://github.com/gr-ant/Topwater/blob/main/docs/machine.md#git)).
 
 ## Snapshots and recordings
 
-Machines and recordings are [`.topwater` files](../docs/snapshots-and-recordings.md#the-file-format), the same in
+Machines and recordings are [`.topwater` files](https://github.com/gr-ant/Topwater/blob/main/docs/snapshots-and-recordings.md#the-file-format), the same in
 every implementation.
 
 ```python
@@ -133,7 +133,7 @@ shell = Shell(result.snapshot.user); shell.restore(result.snapshot)
 
 An exported image holds what the agent wrote: its files, scripts and `~/.bashrc`, with the session script it
 sources. A shell in the image runs that content, so treat the image as untrusted and run it with the same care,
-limits and isolation as the agent itself. See [Containers](../docs/containers.md).
+limits and isolation as the agent itself. See [Containers](https://github.com/gr-ant/Topwater/blob/main/docs/containers.md).
 
 ## Agent frameworks
 
@@ -223,7 +223,7 @@ mode, and Microsoft points new projects to Microsoft Agent Framework.
 ## Where Python differs
 
 - **Not ported yet:** `bc`, the virtual clock and random seed ([deterministic
-  runs](../docs/snapshots-and-recordings.md#deterministic-runs)), and replaying a recording as a test or on real bash
+  runs](https://github.com/gr-ant/Topwater/blob/main/docs/snapshots-and-recordings.md#deterministic-runs)), and replaying a recording as a test or on real bash
   in Docker (`Topwater.Replay`).
 - **Errors.** Snapshot load errors are `topwater.snapshot.SnapshotError` (a `ValueError`; C#'s `InvalidDataException`)
   and `SnapshotVersionError` (C#'s `NotSupportedException`); a bad recording raises `RecordingError`, a
@@ -260,6 +260,6 @@ mode, and Microsoft points new projects to Microsoft Agent Framework.
 cd python && python -m pytest -q
 ```
 
-The shared cases live in [`../tests/corpus`](../tests/corpus/README.md), recorded from real bash and GNU tools, and
+The shared cases live in [`../tests/corpus`](https://github.com/gr-ant/Topwater/blob/main/tests/corpus/README.md), recorded from real bash and GNU tools, and
 run through `tests/test_corpus.py`. Known differences are in `../tests/corpus/skip/python.json`. Examples with a
 real model are in `examples/`.

@@ -3,8 +3,8 @@
 One `bash` tool for your LLM agent, backed by a simulated Linux machine that runs inside your Node process or in the
 browser. No runtime dependencies. The same code runs in Node 22.3 or later and in browsers.
 
-This page covers the TypeScript API. The [main README](../README.md) explains what Topwater is, and
-[docs/](../docs/README.md) is the reference; its samples are C#, and this package follows it except where
+This page covers the TypeScript API. The [main README](https://github.com/gr-ant/Topwater/blob/main/README.md) explains what Topwater is, and
+[docs/](https://github.com/gr-ant/Topwater/blob/main/docs/README.md) is the reference; its samples are C#, and this package follows it except where
 [noted below](#differences-from-the-c-version).
 
 - [Install](#install)
@@ -49,7 +49,7 @@ const toolResult = await BashTool.execute(shell, 'ls -la');
 | `shell.Fs.WriteAllText / WriteAllBytes` | `shell.fs.writeText / writeBytes` (also `readText`, `mkdir`, `chmod`, `setOwner`, ...) |
 | `shell.RegisterTools(program, specs, invoke)` | `shell.registerTools(program, specs, (tool, args) => ({ text, isError }))` |
 | `shell.MountMcpAsync(program, client)` | `await shell.mountMcp(program, client, { include })` with any MCP client that has `listTools`/`callTool` (the official SDK `Client` fits) |
-| `shell.AllowWeb(new WebPolicy { ... })` | `shell.allowWeb({ domains, methods, credentials, ... })`: [web access](../docs/web.md) for `curl` and `wget` |
+| `shell.AllowWeb(new WebPolicy { ... })` | `shell.allowWeb({ domains, methods, credentials, ... })`: [web access](https://github.com/gr-ant/Topwater/blob/main/docs/web.md) for `curl` and `wget` |
 | `BashTool.ExecuteAsync(shell, cmd)` | `BashTool.execute(shell, cmd)` |
 | `BashTool.DescriptionFor(shell)` | `BashTool.descriptionFor(shell)` |
 
@@ -117,7 +117,7 @@ for await (const message of query({ prompt: '...', options: bashOptions(new Shel
 
 ## Deterministic runs, snapshots and recordings
 
-Machines and recordings are [`.topwater` files](../docs/snapshots-and-recordings.md#the-file-format), the same in
+Machines and recordings are [`.topwater` files](https://github.com/gr-ant/Topwater/blob/main/docs/snapshots-and-recordings.md#the-file-format), the same in
 every implementation, so they move freely between them:
 
 ```ts
@@ -211,5 +211,5 @@ What a browser doesn't have:
 | `test/corpus.test.ts` | runs the shared cases in `../tests/corpus` (recorded from real bash and GNU tools) |
 
 `npm test` runs everything, and `npm run typecheck` checks the types. The shared cases live in
-[`../tests/corpus`](../tests/corpus/README.md), not here; known differences are listed with reasons in
+[`../tests/corpus`](https://github.com/gr-ant/Topwater/blob/main/tests/corpus/README.md), not here; known differences are listed with reasons in
 `../tests/corpus/skip/typescript.json`.
