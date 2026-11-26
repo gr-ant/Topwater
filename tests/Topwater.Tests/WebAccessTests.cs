@@ -235,7 +235,7 @@ public class WebAccessTests
         var started = DateTime.UtcNow;
         var r = await sh.RunAsync("curl -sS -m 0.2 http://api.test/hello; echo $?; wget -q -T 0.2 http://api.test/hello; echo $?");
         Assert.Equal("28\n4\n", r.Stdout);
-        Assert.StartsWith("curl: (28) Operation timed out", r.Stderr);
+        Assert.StartsWith("curl: (28) Operation timed out after 200 milliseconds with 0 bytes received\n", r.Stderr);
         Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
     }
 

@@ -317,7 +317,8 @@ internal sealed class WebSession
         lock (_log) _log.Add(exchange);
         if (exchange.Error is { } error)
             throw new WebFailure(Enum.Parse<WebError>(error == "blocked" ? "Resolve" : error, ignoreCase: true), url.Host, url.Port,
-                error == "blocked" ? Explain($"{url.Host} resolves to a private or reserved address") : null);
+                error == "blocked" ? Explain($"{url.Host} resolves to a private or reserved address") : null)
+            { Detail = ((long)timeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) };
         bool truncated = exchange.Body.Length > Policy.MaxResponseBytes;
         return new(url, method, exchange.Status, exchange.Reason, [.. exchange.Headers], truncated ? exchange.Body[..(int)Policy.MaxResponseBytes] : exchange.Body, truncated);
     }

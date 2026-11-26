@@ -242,7 +242,7 @@ internal static partial class Builtins
             WebError.Protocol => (1, M("protocol", ("scheme", f.Host))),
             WebError.Resolve => (6, M("resolve", ("host", f.Host))),
             WebError.Connect => (7, M("connect", ("host", f.Host), ("port", f.Port.ToString(CultureInfo.InvariantCulture)))),
-            WebError.Timeout => (28, M("timeout", ("ms", "0"), ("bytes", "0"))),
+            WebError.Timeout => (28, M("timeout", ("ms", f.Detail), ("bytes", "0"))),
             WebError.Tls => (60, M("tls", ("host", f.Host))),
             WebError.Redirects => (47, M("redirects", ("max", f.Detail))),
             WebError.BadHeader => (43, M("badHeader")),
