@@ -82,18 +82,21 @@ _CURL_PROTOCOLS = ("dict", "file", "ftp", "ftps", "gopher", "gophers", "http", "
 _REDIR_PROTOCOLS = ("http", "https", "ftp", "ftps")
 
 
-def _proto_set(spec: str, start, warn) -> set:
+def _proto_set(spec: str, start, warn) -> set | None:
     """--proto and --proto-redir: from start, each comma-separated name added (+ or none), removed (-) or made the only one
-    (=); "all" is every protocol. An unknown name gets a warning and is skipped."""
+    (=); "all" is every protocol. An unknown name gets a warning and is skipped; None when a sign other than these, or none
+    of a name, makes it a usage error."""
     result = set(start)
-    for token in spec.split(","):
+    for token in filter(None, spec.split(",")):
         i, action = 0, "+"
-        while i < len(token) and token[i] in "+-=":
+        while i < len(token) and not (token[i].isascii() and token[i].isalnum()):
+            if token[i] not in "+-=":
+                return None
             action = token[i]
             i += 1
+        if i == len(token):
+            return None
         name = token[i:].lower()
-        if not name:
-            continue
         if action == "=":
             result.clear()
         names = _CURL_PROTOCOLS if name == "all" else (name,) if name in _CURL_PROTOCOLS else ()
@@ -221,9 +224,11 @@ async def _curl(ctx):
     retries, retry_delay, retry_max_time = retry
     retry_all, retry_refused, fail_early = has("\x13"), has("\x14"), has("\x17")
     protocols, redir_protocols = set(_CURL_PROTOCOLS), set(_REDIR_PROTOCOLS)
-    for key, value, _ in opts:
+    for key, value, name in opts:
         if key in ("\x15", "\x16"):
             got = _proto_set(value, _CURL_PROTOCOLS if key == "\x15" else _REDIR_PROTOCOLS, lambda w: ctx.stderr.write(_curl_warning(w)))
+            if got is None:
+                return usage(spec_message("curl", "badlyUsed", option=name))
             if key == "\x15":
                 protocols = got
             else:
@@ -387,13 +392,17 @@ async def _curl(ctx):
                     why = "retryTimeout"
                 elif code == 7 and retry_refused:
                     why = "retryRefused"
-                elif code in (0, 22) and last_r is not None and last_r.status in (408, 429, 500, 502, 503, 504, 522, 524):
+                elif code in (0, 22) and last_r is not None and last_r.status in (408, 429, 500, 502, 503, 504):
                     why = "retryHttp"
                 elif retry_all and code:
                     why = "retryAll"
             if why is None or retry_max_time > 0 and time.monotonic() - started >= retry_max_time:
                 break
             wait = retry_delay if retry_delay > 0 else min(600, 1 << min(tries, 10))
+            # an HTTP retry waits at least the Retry-After seconds (shortcut: the HTTP-date form is not read)
+            after = (last_r.header("Retry-After") or "").strip() if why == "retryHttp" else ""
+            if after.isascii() and after.isdigit() and int(after) > wait:
+                wait = int(after)
             if not has("s"):  # -S brings back errors, not warnings
                 ctx.stderr.write(_curl_warning(spec_message("curl", "retrying", why=spec_message("curl", why), seconds=str(wait), left=str(retries - tries))))
             sh = ctx.shell

@@ -172,6 +172,32 @@
     ]
    ],
    "body": ""
+  },
+  "/busy": {
+   "status": 503,
+   "reason": "Service Unavailable",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ],
+    [
+     "Retry-After",
+     "2"
+    ]
+   ],
+   "body": "busy\n"
+  },
+  "/bad-gateway-cf": {
+   "status": 522,
+   "reason": "Connection Timed Out",
+   "headers": [
+    [
+     "Content-Type",
+     "text/plain"
+    ]
+   ],
+   "body": "cf\n"
   }
  }
 }

@@ -14,6 +14,7 @@ Python and TypeScript packages are not published yet and are used from the repos
   times, `size_upload`, `scheme`, `errormsg`, ...), and `--tlsv1.2`, `--http1.1`, `--no-progress-meter`, `-#`
   accepted and ignored; `wget -nv`, `-P`, `-nc`, `--spider`, with `-t` and `--show-progress` accepted. With several
   URLs and no `--fail-early`, `curl` now exits with the last URL's status, as curl does.
+  `--retry` waits at least the server's `Retry-After`; on a virtual clock the `-w` times read 0, so recordings replay.
 - **`find -links N`** selects by link count, and `/usr/local/man` is a link to `share/man` as on Ubuntu.
 
 ## 0.1.0-preview.3 (2026-11-26)

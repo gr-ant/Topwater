@@ -53,17 +53,19 @@ internal static partial class Builtins
         "pop3", "pop3s", "rtmp", "rtmpe", "rtmps", "rtmpt", "rtmpte", "rtmpts", "rtsp", "scp", "sftp", "smb", "smbs", "smtp", "smtps", "telnet", "tftp", "ws", "wss"];
 
     /// <summary>--proto and --proto-redir: from <paramref name="start"/>, each comma-separated name added (+ or none), removed (-) or
-    /// made the only one (=); "all" is every protocol. An unknown name gets a warning and is skipped.</summary>
-    static HashSet<string> ProtoSet(string spec, IEnumerable<string> start, Action<string> warn)
+    /// made the only one (=); "all" is every protocol. An unknown name gets a warning and is skipped; null when a sign other
+    /// than these, or none of a name, makes it a usage error.</summary>
+    static HashSet<string>? ProtoSet(string spec, IEnumerable<string> start, Action<string> warn)
     {
         var set = new HashSet<string>(start, StringComparer.Ordinal);
-        foreach (var token in spec.Split(','))
+        foreach (var token in spec.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             int i = 0;
             char action = '+';
-            for (; i < token.Length && token[i] is '+' or '-' or '='; i++) action = token[i];
+            for (; i < token.Length && !char.IsAsciiLetterOrDigit(token[i]); i++)
+                if (token[i] is '+' or '-' or '=') action = token[i]; else return null;
+            if (i == token.Length) return null;
             var name = token[i..].ToLowerInvariant();
-            if (name.Length == 0) continue;
             if (action == '=') set.Clear();
             string[] names = name == "all" ? CurlProtocols : CurlProtocols.Contains(name) ? [name] : [];
             if (names.Length == 0) { warn(CommandSpec.Message("curl", "unknownProtocol", ("name", token[i..]))); continue; }
@@ -168,9 +170,10 @@ internal static partial class Builtins
         var (retries, retryDelay, retryMaxTime) = (retry[0], retry[1], retry[2]);
         bool retryAll = Has('\u0013'), retryRefused = Has('\u0014'), failEarly = Has('\u0017');
         HashSet<string> protocols = [.. CurlProtocols], redirProtocols = ["http", "https", "ftp", "ftps"];
-        foreach (var (key, value, _) in opts.Where(o => o.Key is '\u0015' or '\u0016'))
+        foreach (var (key, value, name) in opts.Where(o => o.Key is '\u0015' or '\u0016'))
         {
             var set = ProtoSet(value!, key == '\u0015' ? CurlProtocols : ["http", "https", "ftp", "ftps"], w => ctx.Stderr.Write(CurlWarning(w)));
+            if (set == null) return Usage(CommandSpec.Message("curl", "badlyUsed", ("option", name)));
             if (key == '\u0015') protocols = set; else redirProtocols = set;
         }
 
@@ -230,7 +233,7 @@ internal static partial class Builtins
         foreach (var raw in urls)
         {
             var output = outputs.Count > 0 ? outputs.Dequeue() : ('\0', null);
-            var started = ctx.Shell.Now;
+            var sinceFirst = ctx.Shell.StartTimer();
             int code = 0, redirects = 0;
             WebResponse? last = null;
             Dictionary<string, string> vars = [];
@@ -243,7 +246,8 @@ internal static partial class Builtins
                 string? target = null;
                 bool retriable = true;
                 var hops = new List<(WebResponse Response, double At, int RequestBytes)>();
-                var clock = System.Diagnostics.Stopwatch.StartNew();
+                ctx.CancellationToken.ThrowIfCancellationRequested(); // on a virtual clock the waits take no time: the call's limit ends the tries
+                var clock = ctx.Shell.StartTimer(); // the shell's clock, so a recording on a virtual one replays
                 try
                 {
                     if (query != null) urlText += (raw.Contains('?') ? "&" : "?") + query;
@@ -262,7 +266,7 @@ internal static partial class Builtins
                         // shortcut: the body counts toward the first request only; a 303 drops it, other redirects resend it
                         var request = $"{r.Method} {r.Url.PathAndQuery} HTTP/1.1\r\nHost: {r.Url.HostForUrl}{(r.Url.DefaultPort ? "" : ":" + r.Url.Port)}\r\n"
                             + string.Concat(sent.Select(h => $"{h.Key}: {h.Value}\r\n")) + (body != null && hops.Count == 0 ? $"Content-Length: {body.Length}\r\n" : "") + "\r\n";
-                        hops.Add((r, clock.Elapsed.TotalSeconds, Encoding.UTF8.GetByteCount(request) + (body != null && hops.Count == 0 ? body.Length : 0)));
+                        hops.Add((r, clock().TotalSeconds, Encoding.UTF8.GetByteCount(request) + (body != null && hops.Count == 0 ? body.Length : 0)));
                         if (verbose)
                         {
                             var sb = new StringBuilder($"> {r.Method} {r.Url.PathAndQuery} HTTP/1.1\r\n> Host: {r.Url.HostForUrl}{(r.Url.DefaultPort ? "" : ":" + r.Url.Port)}\r\n");
@@ -310,7 +314,7 @@ internal static partial class Builtins
                 if (buffer.Length > 0) ctx.Stdout.Write(ByteText.Decode(buffer.ToArray()));
                 if (code != 0) Error(code, message);
 
-                double total = clock.Elapsed.TotalSeconds;
+                double total = clock().TotalSeconds;
                 long size = last?.Body.Length ?? 0, upload = body?.Length ?? 0;
                 string Secs(double x) => x.ToString("0.000000", CultureInfo.InvariantCulture);
                 vars = new()
@@ -332,14 +336,16 @@ internal static partial class Builtins
                 string? why = !retriable || tries >= retries ? null
                     : code is 6 or 28 ? "retryTimeout"
                     : code == 7 && retryRefused ? "retryRefused"
-                    : code is 0 or 22 && last?.Status is 408 or 429 or 500 or 502 or 503 or 504 or 522 or 524 ? "retryHttp"
+                    : code is 0 or 22 && last?.Status is 408 or 429 or 500 or 502 or 503 or 504 ? "retryHttp"
                     : retryAll && code != 0 ? "retryAll" : null;
-                if (why == null || retryMaxTime > 0 && (ctx.Shell.Now - started).TotalSeconds >= retryMaxTime) break;
+                if (why == null || retryMaxTime > 0 && sinceFirst().TotalSeconds >= retryMaxTime) break;
                 long wait = retryDelay > 0 ? retryDelay : Math.Min(600, 1L << (int)Math.Min(tries, 10));
+                // an HTTP retry waits at least the Retry-After seconds (shortcut: the HTTP-date form is not read)
+                if (why == "retryHttp" && long.TryParse(last?.Header("Retry-After"), NumberStyles.None, CultureInfo.InvariantCulture, out var after) && after > wait) wait = after;
                 if (!Has('s')) // -S brings back errors, not warnings
                     ctx.Stderr.Write(CurlWarning(CommandSpec.Message("curl", "retrying", ("why", CommandSpec.Message("curl", why)), ("seconds", wait.ToString(CultureInfo.InvariantCulture)),
                         ("left", (retries - tries).ToString(CultureInfo.InvariantCulture)))));
-                await ctx.Shell.SleepAsync(TimeSpan.FromSeconds(wait), ctx.CancellationToken);
+                await ctx.Shell.SleepAsync(TimeSpan.FromSeconds(Math.Min(wait, 86400)), ctx.CancellationToken); // a longer wait never ends before the call does
             }
             exit = code; // without --fail-early, the last URL's status
             if (Last('w') is { } format) ctx.Stdout.Write(WriteOut(ctx, format, last, redirects, code, method, forced, vars));

@@ -59,14 +59,18 @@ const CURL_PROTOCOLS = ['dict', 'file', 'ftp', 'ftps', 'gopher', 'gophers', 'htt
 const REDIR_PROTOCOLS = ['http', 'https', 'ftp', 'ftps'];
 
 /** --proto and --proto-redir: from `start`, each comma-separated name added (+ or none), removed (-) or made the only one (=);
- * "all" is every protocol. An unknown name gets a warning and is skipped. */
-function protoSet(spec: string, start: string[], warn: (w: string) => void): Set<string> {
+ * "all" is every protocol. An unknown name gets a warning and is skipped; null when a sign other than these, or none of a
+ * name, makes it a usage error. */
+function protoSet(spec: string, start: string[], warn: (w: string) => void): Set<string> | null {
   const set = new Set(start);
-  for (const token of spec.split(',')) {
+  for (const token of spec.split(',').filter(t => t !== '')) {
     let i = 0, action = '+';
-    for (; i < token.length && '+-='.includes(token[i]); i++) action = token[i];
+    for (; i < token.length && !/[A-Za-z0-9]/.test(token[i]); i++) {
+      if (!'+-='.includes(token[i])) return null;
+      action = token[i];
+    }
+    if (i === token.length) return null;
     const name = token.slice(i).toLowerCase();
-    if (name.length === 0) continue;
     if (action === '=') set.clear();
     const names = name === 'all' ? CURL_PROTOCOLS : CURL_PROTOCOLS.includes(name) ? [name] : [];
     if (names.length === 0) { warn(specMessage('curl', 'unknownProtocol', { name: token.slice(i) })); continue; }
@@ -90,7 +94,6 @@ function curlWarning(text: string): string {
   return out;
 }
 
-/** Waits like `sleep`: on the virtual clock, or really, up to the call's deadline. */
 const isLetter = (c: string) => /^[A-Za-z]$/.test(c);
 
 async function curl(ctx: CommandContext): Promise<number> {
@@ -158,8 +161,9 @@ async function curl(ctx: CommandContext): Promise<number> {
   const [retries, retryDelay, retryMaxTime] = retry;
   const retryAll = has('\u0013'), retryRefused = has('\u0014'), failEarly = has('\u0017');
   let protocols = new Set(CURL_PROTOCOLS), redirProtocols = new Set(REDIR_PROTOCOLS);
-  for (const { key, value } of opts.filter(o => o.key === '\u0015' || o.key === '\u0016')) {
+  for (const { key, value, name } of opts.filter(o => o.key === '\u0015' || o.key === '\u0016')) {
     const set = protoSet(value!, key === '\u0015' ? CURL_PROTOCOLS : REDIR_PROTOCOLS, w => ctx.stderr.write(curlWarning(w)));
+    if (set === null) return usage(M('badlyUsed', { option: name }));
     if (key === '\u0015') protocols = set; else redirProtocols = set;
   }
 
@@ -221,8 +225,11 @@ async function curl(ctx: CommandContext): Promise<number> {
       let target: string | null = null;
       code = 0; redirects = 0; lastResponse = null;
       const hops: { response: WebResponse; at: number; requestBytes: number }[] = [];
-      const clock = performance.now();
-      const elapsed = () => (performance.now() - clock) / 1000;
+      // on a virtual clock the waits take no time: the call's limit ends the tries; give the host's event loop a turn now and then
+      ctx.checkTime();
+      if (tries % 256 === 255) await new Promise(r => setTimeout(r, 0));
+      const clock = ctx.shell.now(); // the shell's clock, so a recording on a virtual one replays
+      const elapsed = () => (ctx.shell.now() - clock) / 1000;
       try {
         if (query !== null) urlText += (raw.includes('?') ? '&' : '?') + query;
         const url = WebUrl.parse(urlText);
@@ -308,13 +315,16 @@ async function curl(ctx: CommandContext): Promise<number> {
       const why = !retriable || tries >= retries ? null
         : code === 6 || code === 28 ? 'retryTimeout'
         : code === 7 && retryRefused ? 'retryRefused'
-        : (code === 0 || code === 22) && [408, 429, 500, 502, 503, 504, 522, 524].includes(status) ? 'retryHttp'
+        : (code === 0 || code === 22) && [408, 429, 500, 502, 503, 504].includes(status) ? 'retryHttp'
         : retryAll && code !== 0 ? 'retryAll' : null;
       if (why === null || retryMaxTime > 0 && (ctx.shell.now() - started) / 1000 >= retryMaxTime) break;
-      const wait = retryDelay > 0 ? retryDelay : Math.min(600, 2 ** Math.min(tries, 10));
+      let wait = retryDelay > 0 ? retryDelay : Math.min(600, 2 ** Math.min(tries, 10));
+      // an HTTP retry waits at least the Retry-After seconds (shortcut: the HTTP-date form is not read)
+      const after = why === 'retryHttp' && lr ? header(lr, 'Retry-After')?.trim() : undefined;
+      if (after !== undefined && /^\d+$/.test(after) && Number(after) > wait) wait = Number(after);
       if (!has('s')) // -S brings back errors, not warnings
         ctx.stderr.write(curlWarning(M('retrying', { why: M(why), seconds: String(wait), left: String(retries - tries) })));
-      await sleepFor(ctx, wait * 1000);
+      await sleepFor(ctx, Math.min(wait, 86400) * 1000); // a longer wait never ends before the call does
     }
     exit = code; // without --fail-early, the last URL's status
     if (format !== null) ctx.stdout.write(writeOut(ctx, format, lastResponse, redirects, code, method, forced, vars));

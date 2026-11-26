@@ -302,6 +302,28 @@ public class WebAccessTests
         Assert.Equal("curl: (7) Topwater replay: GET http://api.test/hello is not in the recording\n", r.Stderr);
     }
 
+    [Fact]
+    public async Task RetriesOnAVirtualClockStopAtTheCallsTimeLimit()
+    {
+        // the waits move the virtual clock and take no real time, so only the call's limit ends the tries
+        var sh = new Shell(new ShellOptions { StartTime = new DateTimeOffset(2026, 11, 25, 9, 0, 0, TimeSpan.Zero), MaxCallDuration = TimeSpan.FromSeconds(0.5) });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await sh.RunAsync("curl -s --retry 2000000000 http://x.test/");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), clock.Elapsed.ToString());
+    }
+
+    [Fact]
+    public async Task WriteOutTimesOnAVirtualClockReplay()
+    {
+        var sh = new Shell(new ShellOptions { StartTime = new DateTimeOffset(2026, 11, 25, 9, 0, 0, TimeSpan.Zero), RandomSeed = 3 }).AllowWeb(FixturePolicy(new FixtureHandler()));
+        var recorder = sh.StartRecording();
+        var r = await sh.RunAsync("curl -s -o /dev/null -w '%{time_total} %{time_starttransfer} %{speed_download}\\n' http://api.test/hello");
+        Assert.Equal("0.000000 0.000000 0\n", r.Stdout);
+        recorder.Stop();
+        var report = await recorder.Recording.ReplayAsync();
+        Assert.True(report.Matches, report.ToString());
+    }
+
     /// <summary>The calls in recordings/web-from-csharp.topwater, which the Python and TypeScript ports load and replay too.</summary>
     internal static readonly string[] WebScenario =
     [

@@ -67,9 +67,11 @@ no progress meter, a shorter `wget` report (no Resolving/Connecting lines, dots 
 only the request and response headers, `-k` / `--no-check-certificate` are accepted and ignored (certificates are
 always checked), and so are the TLS and HTTP version options (`--tlsv1.2`, `--http1.1`, ...), progress options
 (`--no-progress-meter`, `-#`, wget `--show-progress`) and wget `-t`. `curl --retry` waits as curl does (1 second,
-doubling) and every wait counts toward the call's time limit; each try is a request under the policy's limits, and a
-host the policy refuses is not tried again. `-w` times are measured around the whole request: `time_namelookup`,
-`time_connect`, `time_appconnect` and `time_pretransfer` read 0.
+doubling, or longer when the server's `Retry-After` asks for it) and every wait counts toward the call's time limit;
+each try is a request under the policy's limits, and a request the policy refuses with a reason (`ExplainBlocked`) is
+not sent again. `-w` times come from the shell's clock and are measured around the whole request: `time_namelookup`,
+`time_connect`, `time_appconnect` and `time_pretransfer` read 0, and on a virtual clock (`StartTime`) every time
+reads `0.000000` and the speeds `0`, so recordings replay exactly.
 
 ## Blocked requests
 

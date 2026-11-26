@@ -412,6 +412,23 @@ describe('recorded web exchanges', () => {
     expect(r.stderr).toBe('curl: (7) Topwater replay: GET http://api.test/hello is not in the recording\n');
   });
 
+  it('retries on a virtual clock stop at the call\'s time limit (board 035 B1)', async () => {
+    // the waits move the virtual clock and take no real time, so only the call's limit ends the tries
+    const sh = new Shell({ startTime: Date.UTC(2026, 10, 25, 9), maxCallDurationMs: 500 });
+    const t0 = Date.now();
+    await sh.run('curl -s --retry 2000000000 http://x.test/');
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it('-w times on a virtual clock replay (board 035 B2)', async () => {
+    const sh = new Shell({ startTime: Date.UTC(2026, 10, 25, 9), randomSeed: 3 }).allowWeb(fixturePolicy(fixture().transport));
+    const rec = startRecording(sh);
+    const r = await sh.run("curl -s -o /dev/null -w '%{time_total} %{time_starttransfer} %{speed_download}\\n' http://api.test/hello");
+    expect(r.stdout).toBe('0.000000 0.000000 0\n');
+    rec.stop();
+    expect((await rec.recording.replay()).differences).toEqual([]);
+  });
+
   it('replays the C# recording', async () => {
     const rec = await Recording.load(new Uint8Array(readFileSync(root + 'tests/Topwater.Tests/recordings/web-from-csharp.topwater')));
     expect(rec.calls.map(c => c.command)).toEqual([
