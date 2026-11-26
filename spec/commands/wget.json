@@ -75,7 +75,8 @@
     "badUrl": "{url}: Invalid host name.",
     "scheme": "{url}: Unsupported scheme {scheme:locale}.",
     "replay": "wget: Topwater replay: {request} is not in the recording",
-    "invalidHeader": "wget: --header: Invalid header {header:locale}."
+    "invalidHeader": "wget: --header: Invalid header {header:locale}.",
+    "lengthUnspecified": "unspecified"
   },
   "notes": "Registered in every shell; without a web policy every host fails to resolve. The progress report is shortened: no Resolving/Connecting lines, no dots or speed. No retries."
 }

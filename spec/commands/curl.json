@@ -108,7 +108,17 @@
     "tls": "SSL certificate problem: unable to verify the certificate of {host}",
     "blocked": "Blocked by the web policy: {reason}",
     "unknownWriteOut": "curl: unknown --write-out variable: '{name}'",
-    "replay": "Topwater replay: {request} is not in the recording"
+    "replay": "Topwater replay: {request} is not in the recording",
+    "reasonHost": "{host} is not an allowed host (allowed: {allowed})",
+    "reasonPrivate": "{host} is a private or reserved address",
+    "reasonResolvesPrivate": "{host} resolves to a private or reserved address",
+    "reasonHttps": "only https:// URLs are allowed",
+    "reasonMethod": "{method} requests are not allowed",
+    "reasonBody": "the request body is larger than {limit} bytes",
+    "reasonCallLimit": "the limit of {limit} requests in one call was reached",
+    "reasonSessionLimit": "the limit of {limit} requests for this session was reached",
+    "reasonNoCredential": "the credentials for {host} are not available",
+    "reasonBadCredential": "the credentials for {host} are not a valid header value"
   },
-  "notes": "Registered in every shell; without a web policy (Shell.AllowWeb and the ports' equivalents) every host fails to resolve, as on a machine without a network. No progress meter is printed."
+  "notes": "The reason* messages are the web policy's reasons, shared with wget (WebSession builds them). Registered in every shell; without a web policy (Shell.AllowWeb and the ports' equivalents) every host fails to resolve, as on a machine without a network. No progress meter is printed."
 }
