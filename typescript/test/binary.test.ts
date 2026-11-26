@@ -126,3 +126,14 @@ describe('hashes', () => {
     expect(r.stdout).toBe('676e0ec24cbc5d824eb54de42140de3d  -\n');
   });
 });
+
+describe('pipe text', () => {
+  test('round-trips any bytes, including a 4-byte character whose low surrogate looks like an escape', () => {
+    const pair = Uint8Array.from([0xff, 0xf0, 0x90, 0x82, 0x80]); // U+10080 is D800 DC80 in UTF-16
+    expect([...encodeText(decodeBytes(pair))]).toEqual([...pair]);
+    for (let n = 0; n < 200; n++) {
+      const data = Uint8Array.from({ length: 1000 }, () => Math.random() * 256);
+      expect(Buffer.from(encodeText(decodeBytes(data))).equals(Buffer.from(data))).toBe(true);
+    }
+  });
+});

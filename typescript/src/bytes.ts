@@ -41,7 +41,8 @@ export function encodeText(text: string): Uint8Array {
   const flush = (end: number) => { if (end > start) for (const b of encoder.encode(text.slice(start, end))) parts.push(b); };
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
-    if (c >= FIRST && c <= LAST) { flush(i); parts.push(c - FIRST + 0x80); start = i + 1; }
+    if (c >= 0xd800 && c <= 0xdbff && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) i++; // a pair's low half (U+10000+) is no escape
+    else if (c >= FIRST && c <= LAST) { flush(i); parts.push(c - FIRST + 0x80); start = i + 1; }
   }
   flush(text.length);
   return Uint8Array.from(parts);
