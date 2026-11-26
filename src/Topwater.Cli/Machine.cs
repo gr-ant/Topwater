@@ -163,14 +163,14 @@ sealed class Machine
         catch (DecoderFallbackException) { fs.WriteAllBytes(path, data); }
     }
 
-    /// <summary>
-    /// Copies a virtual file or directory out to the host. Existing host files at the same paths are overwritten, nothing else
-    /// is deleted, and nothing is written through a host symlink or outside <paramref name="host"/>.
-    /// </summary>
     // Windows and macOS file systems ignore case by default, so C:\Out and c:\out are the same folder there
     static readonly StringComparison HostPathComparison =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
+    /// <summary>
+    /// Copies a virtual file or directory out to the host. Existing host files at the same paths are overwritten, nothing else
+    /// is deleted, and nothing is written through a host symlink or outside <paramref name="host"/>.
+    /// </summary>
     public static void Export(Shell shell, string vfs, string host, TextWriter log)
     {
         var fs = shell.Fs;

@@ -482,7 +482,7 @@ internal sealed class Lexer(string s, int firstLine = 1)
         }
         if (terminator != null)
         {
-            if (_i >= s.Length) throw new ParseException(CommandSpec.Format(CommandSpec.Diagnostics.EofMatching, ("terminator", terminator.ToString())));
+            if (_i >= s.Length) throw new ParseException(CommandSpec.Format(CommandSpec.Diagnostics.EofMatching, ("terminator", terminator.Value.ToString())));
             _i++;
         }
         Flush();

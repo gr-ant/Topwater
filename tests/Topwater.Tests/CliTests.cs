@@ -51,7 +51,7 @@ public sealed class CliTests : IDisposable
         var (client, stop) = await Connect(Machine.Open(new MachineOptions(), TextWriter.Null));
         try
         {
-            Assert.Equal("topwater", client.ServerInfo.Name);
+            Assert.Equal("topwater", client.ServerInfo?.Name);
             var tool = Assert.Single(await client.ListToolsAsync());
             Assert.Equal("bash", tool.Name);
             Assert.Equal(McpServerCommand.Description, tool.Description);

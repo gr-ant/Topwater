@@ -247,7 +247,7 @@ public sealed class Recording
     /// Reads a .topwater file written by <see cref="Save(Stream)"/> (one without history, such as a snapshot, gives a recording
     /// with no calls), or an older JSON Lines recording. <paramref name="openSnapshot"/> opens such a recording's side-car
     /// snapshot by the relative name it gives, only ever plain segments of letters, digits, '.', '_' and '-'; the opener must treat
-    /// it as nothing else. Snapshots are loaded as untrusted (see <see cref="ShellSnapshot.Load"/>) under <paramref name="limits"/>,
+    /// it as nothing else. Snapshots are loaded as untrusted (see <see cref="ShellSnapshot.Load(Stream, ShellOptions)"/>) under <paramref name="limits"/>,
     /// or else the default limits (never the ones the file names); the replay shell's limits are the file's clamped to the same
     /// bound, so a recording can lower limits but never raise them. Throws <see cref="InvalidDataException"/> for a malformed
     /// file and <see cref="NotSupportedException"/> for a newer format version.

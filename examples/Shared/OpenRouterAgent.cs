@@ -35,7 +35,7 @@ public static class OpenRouterAgent
                 commands.Add(new AgentCommand(command, result.ExitCode, result.Stdout, result.Stderr));
                 if (verbose)
                     Console.WriteLine($"  $ {command.Trim().Split('\n')[0]}\n    -> exit {result.ExitCode}{(result.Stderr.Trim().Length > 0 ? " | " + result.Stderr.Trim().Split('\n')[0] : "")}");
-                messages.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call["id"]!.GetValue<string>(), ["content"] = result.ToToolOutput() });
+                messages.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call!["id"]!.GetValue<string>(), ["content"] = result.ToToolOutput() });
             }
         }
         return new AgentRun("(turn limit reached)", commands);

@@ -17,7 +17,7 @@ namespace Topwater;
 /// </summary>
 public sealed class ShellSnapshot
 {
-    /// <summary>The newest version of the saved format this Topwater writes; <see cref="Load"/> refuses newer ones. Version 2 added
+    /// <summary>The newest version of the saved format this Topwater writes; <see cref="Load(Stream, ShellOptions)"/> refuses newer ones. Version 2 added
     /// symbolic links (type "symlink" with a "target") and hard links (a "link" naming the entry's first path); a snapshot
     /// without links is still written as version 1, so older Topwater can load it.</summary>
     public const int FormatVersion = 2;
@@ -695,7 +695,7 @@ public sealed partial class Shell
     public void Save(Stream stream) => Snapshot().Save(stream);
 
     /// <summary>
-    /// A new shell from a saved snapshot (see <see cref="ShellSnapshot.Load"/> for the checks). It has the built-ins but none of
+    /// A new shell from a saved snapshot (see <see cref="ShellSnapshot.Load(Stream, ShellOptions)"/> for the checks). It has the built-ins but none of
     /// your registered commands: register them again, or configure a shell first and call
     /// <c>shell.Restore(ShellSnapshot.Load(stream, shell.Options))</c>. Without <paramref name="options"/>, the snapshot's user and
     /// host name are used with the default limits.

@@ -121,8 +121,8 @@ await Task.WhenAll(jobs.Select(async job =>
         try
         {
             run = string.IsNullOrEmpty(openRouterKey)
-                ? await GeminiAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25)
-                : await OpenRouterAgent.RunAsync(shell, prompt, key, descriptions[job.variant], SystemPrompt, maxTurns: 25);
+                ? await GeminiAgent.RunAsync(shell, prompt, key!, descriptions[job.variant], SystemPrompt, maxTurns: 25)
+                : await OpenRouterAgent.RunAsync(shell, prompt, key!, descriptions[job.variant], SystemPrompt, maxTurns: 25);
         }
         catch (Exception e) { run = new AgentRun($"(API error: {e.Message})", []); }
         recorder.Stop(); // before the checks, which run commands of their own
