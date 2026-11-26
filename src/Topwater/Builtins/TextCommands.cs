@@ -236,7 +236,7 @@ internal static partial class Builtins
             {
                 int j = text.IndexOf(c, i + 1);
                 if (j < 0 || text.IndexOf('\n', i + 1, j - i - 1) >= 0)
-                    throw new ShellException($"unmatched {(c == '\'' ? "single" : "double")} quote; by default quotes are special to xargs unless you use the -0 option");
+                    throw new ShellException(CommandSpec.Message("xargs", "unmatchedQuote", ("kind", c == '\'' ? "single" : "double")));
                 cur.Append(text, i + 1, j - i - 1);
                 inWord = true;
                 i = j + 1;
@@ -248,11 +248,11 @@ internal static partial class Builtins
         return items;
     }
 
-    static int CountArg(string spec, string what)
+    static int CountArg(string cmd, string spec, string what)
     {
         var digits = spec.TrimStart('+', '-');
         return digits.Length > 0 && digits.All(char.IsAsciiDigit) && int.TryParse(digits, out var n) ? n
-            : throw new ShellException($"invalid number of {what}: {QuoteL(spec)}");
+            : throw new ShellException(CommandSpec.Message(cmd, "invalidCount", ("what", what), ("value", spec)));
     }
 
     static Regex BuildRegex(List<string> patterns, bool extended, bool fixedString, bool ignoreCase, bool word = false, bool line = false, bool perl = false)
@@ -267,7 +267,7 @@ internal static partial class Builtins
         if (word) re = $@"\b(?:{re})\b";
         if (line) re = $"^(?:{re})$";
         try { return new Regex(re, ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None, Shell.RegexTimeout); }
-        catch (ArgumentException e) { throw new ShellException($"invalid regular expression: {e.Message}", 2); }
+        catch (ArgumentException e) { throw new ShellException(CommandSpec.Message("grep", "invalidRegex", ("detail", e.Message)), 2); }
     }
 
     static (HashSet<int> Wanted, int OpenFrom) ParseList(string spec)
@@ -280,7 +280,7 @@ internal static partial class Builtins
             int dash = part.IndexOf('-');
             string a = dash < 0 ? part : part[..dash], b = dash < 0 ? "" : part[(dash + 1)..];
             if (!a.All(char.IsAsciiDigit) || !b.All(char.IsAsciiDigit) || (a.Length == 0 && b.Length == 0) || (a.Length > 0 && int.Parse(a) == 0))
-                throw new ShellException(a == "0" ? "fields and positions are numbered from 1" : $"invalid field value '{part}'");
+                throw new ShellException(a == "0" ? CommandSpec.Message("cut", "fieldsFromOne") : CommandSpec.Message("cut", "invalidFieldValue", ("part", part)));
             if (dash < 0) result.Add(int.Parse(a));
             else if (b.Length == 0) openFrom = Math.Min(openFrom, int.Parse(a));
             else for (int k = a.Length > 0 ? int.Parse(a) : 1, to = int.Parse(b); k <= to; k++) result.Add(k);
@@ -313,7 +313,7 @@ internal static partial class Builtins
                     kind = m.Groups[2].Value[0];
                     value = m.Groups[3].Value;
                     if (m.Groups[1].Length > 0) rest.Add("-" + m.Groups[1].Value);
-                    if (value.Length == 0) value = i < args.Count ? args[i++] : throw new ShellException($"option requires an argument -- '{kind}'", 2);
+                    if (value.Length == 0) value = i < args.Count ? args[i++] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingShortArgument, ("option", kind.ToString())));
                 }
                 else if (lng.Success)
                 {
@@ -324,11 +324,7 @@ internal static partial class Builtins
                 if (kind == 'e') patterns.Add(value);
                 else patterns.AddRange(SplitLines(value == "-" ? ctx.StdinText : ctx.Fs.ReadAllText(ctx.ResolvePath(value))));
             }
-            var a = Args.Parse(rest, "invcrRlLEFwxohHqsIaZPU", "ABCm",
-                "binary-files=I,text=a,ignore-case=i,line-number=n,invert-match=v,count=c,recursive=r,files-with-matches=l,files-without-match=L,"
-                + "extended-regexp=E,fixed-strings=F,word-regexp=w,line-regexp=x,only-matching=o,quiet=q,silent=q,max-count=m,perl-regexp=P,"
-                + "no-filename=h,with-filename=H,no-messages=s,color=U,colour=U,line-buffered=U,after-context=A,before-context=B,context=C,"
-                + "dereference-recursive=R");
+            var a = Args.Parse(rest, CommandSpec.Of("grep"));
             var positional = a.Positional.ToList();
             if (patterns.Count == 0)
             {
@@ -344,7 +340,7 @@ internal static partial class Builtins
             if (a.Has('E') && !a.Has('F') && !a.Has('P'))
                 foreach (var p in patterns)
                     if (Regex.Match(p, @"^[*+?]|(?<!\\)[(|]([*+?])") is { Success: true } lead)
-                        ctx.Stderr.WriteLine($"grep: warning: {lead.Value[^1]} at start of expression");
+                        ctx.Stderr.WriteLine("grep: " + CommandSpec.Message("grep", "leadingRepetition", ("char", lead.Value[^1].ToString())));
             var re = BuildRegex(patterns, a.Has('E'), a.Has('F'), a.Has('i'), a.Has('w'), a.Has('x'), a.Has('P'));
             int after = int.Parse(a.Value('A') ?? a.Value('C') ?? "0"), before = int.Parse(a.Value('B') ?? a.Value('C') ?? "0");
             int maxCount = a.Value('m') is { } mc ? int.Parse(mc) : int.MaxValue;
@@ -358,13 +354,13 @@ internal static partial class Builtins
                 var abs = ctx.ResolvePath(f);
                 if (!ctx.Fs.IsDirectory(abs)) { files.Add(f); continue; }
                 walked = true;
-                if (!recursive) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {f}: Is a directory"); error = true; continue; }
                 var above = new HashSet<string>(StringComparer.Ordinal) { ctx.Fs.RealPath(abs, out _) ?? abs }; // the directories being walked
+                if (!recursive) { if (!a.Has('s')) ctx.Stderr.WriteLine("grep: " + CommandSpec.Message("grep", "openFailed", ("file", f), ("errno", "Is a directory"))); error = true; continue; }
                 void Walk(string dirAbs, string display)
                 {
                     IReadOnlyList<string> names;
                     try { names = ctx.Fs.List(dirAbs); }
-                    catch (ShellException) { if (!a.Has('s')) ctx.Stderr.WriteLine($"grep: {display}: Permission denied"); error = true; return; }
+                    catch (ShellException) { if (!a.Has('s')) ctx.Stderr.WriteLine("grep: " + CommandSpec.Message("grep", "openFailed", ("file", display), ("errno", "Permission denied"))); error = true; return; }
                     foreach (var name in names)
                     {
                         ctx.CancellationToken.ThrowIfCancellationRequested(); // -R can make the walk far bigger than the tree: the call's time limit
@@ -403,7 +399,7 @@ internal static partial class Builtins
                 if (a.Has('l')) { if (hits.Count > 0) ctx.Stdout.WriteLine(name); continue; }
                 if (a.Has('L')) { if (hits.Count == 0) ctx.Stdout.WriteLine(name); continue; }
                 if (a.Has('c')) { ctx.Stdout.WriteLine(prefix != null ? $"{prefix}:{hits.Count}" : hits.Count.ToString()); continue; }
-                if (binary) { if (hits.Count > 0) ctx.Stdout.WriteLine($"grep: {name}: binary file matches"); continue; }
+                if (binary) { if (hits.Count > 0) ctx.Stdout.WriteLine("grep: " + CommandSpec.Message("grep", "binaryFileMatches", ("file", name))); continue; }
 
                 int lastPrinted = -1;
                 var hitSet = hits.ToHashSet();
@@ -422,21 +418,20 @@ internal static partial class Builtins
                 }
             }
             return error && !(a.Has('q') && code == 0) ? 2 : code;
-        }, "Search text with regular expressions");
+        });
 
         // Ubuntu's egrep and fgrep are scripts that run `grep -E` / `grep -F`, so messages say "grep:"
         foreach (var (alias, flag) in new[] { ("egrep", "-E"), ("fgrep", "-F") })
             shell.Register(alias, ctx => shell.Commands["grep"].Handler(
-                new CommandContext(ctx.Shell, "grep", [flag, .. ctx.Args], ctx.Io.Stdin, ctx.Stdout, ctx.Stderr, ctx.CancellationToken) { Fds = ctx.Fds }),
-                $"Search text, like grep {flag}");
+                new CommandContext(ctx.Shell, "grep", [flag, .. ctx.Args], ctx.Io.Stdin, ctx.Stdout, ctx.Stderr, ctx.CancellationToken) { Fds = ctx.Fds }));
 
         CommandHandler headTail = ctx =>
         {
             bool head = ctx.Name == "head";
             // shortcut: tail -f/-F print what is there and return instead of following (nothing else writes the file)
-            var a = Args.Parse(Args.NumericShorthand(ctx.Args), head ? "qv" : "qvfF", "nc", "lines=n,bytes=c,quiet=q,silent=q,verbose=v" + (head ? "" : ",follow=f,retry=F"));
-            if (a.Value('n') is { } lines0) CountArg(lines0, "lines"); // a bad count is reported before any file is opened
-            if (a.Value('c') is { } bytes0) CountArg(bytes0, "bytes");
+            var a = Args.Parse(Args.NumericShorthand(ctx.Args), CommandSpec.Of(ctx.Name));
+            if (a.Value('n') is { } lines0) CountArg(ctx.Name, lines0, "lines"); // a bad count is reported before any file is opened
+            if (a.Value('c') is { } bytes0) CountArg(ctx.Name, bytes0, "bytes");
             int code = 0;
             var inputs = InputBytes(ctx, a.Positional, () => code = 1).ToList();
             for (int k = 0; k < inputs.Count; k++)
@@ -445,7 +440,7 @@ internal static partial class Builtins
                 if ((inputs.Count > 1 && !a.Has('q')) || a.Has('v')) ctx.Stdout.WriteLine((k > 0 ? "\n" : "") + $"==> {name} <==");
                 if (a.Value('c') is { } bytes) // byte counts
                 {
-                    int n = CountArg(bytes, "bytes");
+                    int n = CountArg(ctx.Name, bytes, "bytes");
                     byte[] chunk = head
                         ? bytes.StartsWith('-') ? data[..Math.Max(0, data.Length - n)] : data[..Math.Min(n, data.Length)]
                         : bytes.StartsWith('+') ? data[Math.Min(data.Length, Math.Max(0, n - 1))..] : n > 0 ? data[Math.Max(0, data.Length - n)..] : [];
@@ -454,7 +449,7 @@ internal static partial class Builtins
                 }
                 var text = ByteText.Decode(data);
                 var spec = a.Value('n') ?? "10";
-                int count = CountArg(spec, "lines");
+                int count = CountArg(ctx.Name, spec, "lines");
                 var lines = SplitLines(text);
                 List<string> pick;
                 if (head) pick = spec.StartsWith('-') ? lines.Take(Math.Max(0, lines.Count - count)).ToList() : lines.Take(count).ToList();
@@ -466,12 +461,12 @@ internal static partial class Builtins
             }
             return Task.FromResult(code);
         };
-        shell.Register("head", headTail, "Print the first lines of files");
-        shell.Register("tail", headTail, "Print the last lines of files");
+        shell.Register("head", headTail);
+        shell.Register("tail", headTail);
 
         shell.Register("wc", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "lwcm", longs: "lines=l,words=w,bytes=c,chars=m");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("wc"));
             bool all = !a.Has('l') && !a.Has('w') && !a.Has('c') && !a.Has('m');
             bool[] selected = [all || a.Has('l'), all || a.Has('w'), all || a.Has('c') || a.Has('m')];
             int code = 0;
@@ -499,13 +494,13 @@ internal static partial class Builtins
             }
             if (a.Positional.Count > 1) ctx.Stdout.WriteLine(Row(tl, tw, tc, "total"));
             return code;
-        }, "Count lines, words and bytes");
+        });
 
-        shell.Register("sort", ctx => Sort.Run(ctx), "Sort lines");
+        shell.Register("sort", ctx => Sort.Run(ctx));
 
         shell.Register("uniq", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "cdui", longs: "count=c,repeated=d,unique=u,ignore-case=i");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("uniq"));
             int code = 0;
             var text = string.Concat(Inputs(ctx, a.Positional.Take(1).ToList(), () => code = 1).Select(i => i.Text));
             if (code != 0) return code;
@@ -520,18 +515,18 @@ internal static partial class Builtins
                 ctx.Stdout.WriteLine(a.Has('c') ? $"{count,7} {line}" : line);
             }
             return 0;
-        }, "Collapse adjacent duplicate lines");
+        });
 
         shell.Register("cut", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "snz", "dfcbO", "delimiter=d,fields=f,characters=c,bytes=b,only-delimited=s,complement=z,output-delimiter=O");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("cut"));
             var delim = a.Value('d') ?? "\t";
-            if (delim.Length != 1) throw new ShellException("the delimiter must be a single character");
+            if (delim.Length != 1) throw new ShellException(CommandSpec.Message("cut", "delimiterNotSingle"));
             var chars = a.Value('c') ?? a.Value('b');
-            var spec = chars ?? a.Value('f') ?? throw new UsageException("you must specify a list of bytes, characters, or fields");
+            var spec = chars ?? a.Value('f') ?? throw new UsageException(CommandSpec.Message("cut", "listRequired"));
             var (wantedSet, openFrom) = ParseList(spec);
             bool complement = a.Has('z');
-            var outDelim = a.Value('O');
+            var outDelim = a.Value('\u0002'); // --output-delimiter (long only)
             IEnumerable<string> Pick(IReadOnlyList<string> items) =>
                 items.Where((_, i) => (i + 1 >= openFrom || wantedSet.Contains(i + 1)) != complement);
             int code = 0;
@@ -545,13 +540,13 @@ internal static partial class Builtins
                 }
             ctx.Stdout.Write(sb.ToString());
             return code;
-        }, "Select fields or characters from lines");
+        });
 
         shell.Register("tr", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "dscC", longs: "delete=d,squeeze-repeats=s,complement=c");
-            if (a.Positional.Count == 0) throw new UsageException("missing operand");
-            if (a.Positional.Count > 2) throw new UsageException($"extra operand {QuoteL(a.Positional[2])}");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("tr"));
+            if (a.Positional.Count == 0) throw new UsageException(CommandSpec.Message("tr", "missingOperand"));
+            if (a.Positional.Count > 2) throw new UsageException(CommandSpec.Message("tr", "extraOperand", ("operand", a.Positional[2])));
             var set1 = ExpandSet(a.Positional[0]);
             var set2 = a.Positional.Count > 1 ? ExpandSet(a.Positional[1]) : "";
             bool complement = a.Has('c') || a.Has('C');
@@ -569,11 +564,11 @@ internal static partial class Builtins
             }
             ctx.Stdout.Write(sb.ToString());
             return 0;
-        }, "Translate or delete characters");
+        });
 
         shell.Register("tee", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "ai", longs: "append=a,ignore-interrupts=i");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("tee"));
             int code = 0;
             foreach (var f in a.Positional)
             {
@@ -586,13 +581,13 @@ internal static partial class Builtins
                 }
                 catch (ShellException e)
                 {
-                    ctx.Stderr.WriteLine($"tee: {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}");
+                    ctx.Stderr.WriteLine("tee: " + CommandSpec.Message("tee", "writeFailed", ("file", f), ("reason", e.Message[(e.Message.LastIndexOf(':') + 2)..])));
                     code = 1;
                 }
             }
             ctx.Stdout.Write(ctx.StdinText);
             return code;
-        }, "Copy stdin to stdout and files");
+        });
 
         shell.Register("xargs", async ctx =>
         {
@@ -604,8 +599,7 @@ internal static partial class Builtins
                 opts.Add(ctx.Args[i]);
                 if (ctx.Args[i] is "-I" or "-n" or "-d" or "-L" or "-P" or "-s" or "-E" or "-a" && i + 1 < ctx.Args.Count) opts.Add(ctx.Args[++i]);
             }
-            var a = Args.Parse(opts, "0rtpx", "InLdPsEa", "null=0,no-run-if-empty=r,verbose=t,max-args=n,max-lines=L,delimiter=d,"
-                + "max-procs=P,replace=I,arg-file=a,interactive=p,exit=x,max-chars=s");
+            var a = Args.Parse(opts, CommandSpec.Of("xargs"));
             var command = ctx.Args.Skip(i).ToList();
             if (command.Count == 0) command.Add("echo");
             var input = a.Value('a') is { } file ? ctx.Fs.ReadAllText(ctx.ResolvePath(file)) : ctx.StdinText;
@@ -619,7 +613,7 @@ internal static partial class Builtins
                 else
                 {
                     int per = int.Parse(a.Value('L')!);
-                    if (per < 1) throw new ShellException($"value {a.Value('L')} for -L option should be >= 1");
+                    if (per < 1) throw new ShellException(CommandSpec.Message("xargs", "invalidValue", ("value", a.Value('L')!), ("option", "L")));
                     var words = lines.Select(XargsWords).Where(w => w.Count > 0).ToList();
                     groups = words.Chunk(per).Select(c => c.SelectMany(w => w).ToList()).ToList();
                 }
@@ -636,7 +630,7 @@ internal static partial class Builtins
                 }
                 else items = XargsWords(input);
                 int per = a.Value('n') is { } n ? int.Parse(n) : Math.Max(1, items.Count);
-                if (per < 1) throw new ShellException($"value {a.Value('n')} for -n option should be >= 1");
+                if (per < 1) throw new ShellException(CommandSpec.Message("xargs", "invalidValue", ("value", a.Value('n')!), ("option", "n")));
                 groups = items.Chunk(per).Select(c => c.ToList()).ToList();
             }
             if (groups.Count == 0)
@@ -651,13 +645,13 @@ internal static partial class Builtins
                 if (a.Has('t')) ctx.Stderr.WriteLine(string.Join(' ', argv));
                 var rc = await ctx.InvokeAsync(argv);
                 if (rc == 127) return 127;
-                if (rc == 255) { ctx.Stderr.WriteLine($"xargs: {argv[0]}: exited with status 255; aborting"); return 124; }
+                if (rc == 255) { ctx.Stderr.WriteLine("xargs: " + CommandSpec.Message("xargs", "exitedWith255", ("command", argv[0]))); return 124; }
                 if (rc != 0) code = 123;
             }
             return code;
-        }, "Build and run commands from stdin");
+        });
 
-        shell.Register("sed", ctx => Sed.Run(ctx), "Stream editor", Sed.Help);
+        shell.Register("sed", ctx => Sed.Run(ctx));
     }
 
     static readonly Dictionary<string, string> TrClasses = new()
@@ -743,9 +737,7 @@ internal static class Sort
 
     public static int Run(CommandContext ctx)
     {
-        var a = Args.Parse(ctx.Args, "rnufhVgsbcCdiMRzZ", "kto",
-            "reverse=r,numeric-sort=n,unique=u,ignore-case=f,key=k,field-separator=t,output=o,general-numeric-sort=g,human-numeric-sort=h,"
-            + "version-sort=V,stable=s,ignore-leading-blanks=b,check=c,dictionary-order=d,month-sort=M,random-sort=R,ignore-nonprinting=i,zero-terminated=z,debug=Z");
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("sort"));
         var args = ctx.Args;
         var specs = new List<string>();
         for (int i = 0; i < args.Count; i++)
@@ -755,13 +747,13 @@ internal static class Sort
             else if (args[i].StartsWith("--key=")) specs.Add(args[i][6..]);
         }
         string? sep = a.Value('t') is { } t ? Builtins.Unescape(t) : null;
-        if (sep != null && sep.Length != 1) throw new ShellException($"multi-character tab '{a.Value('t')}'", 2);
+        if (sep != null && sep.Length != 1) throw new ShellException(CommandSpec.Message("sort", "multiCharacterTab", ("value", a.Value('t')!)), 2);
         var globalOpts = string.Concat(Ordering.Where(a.Has));
         var keys = new List<Key>();
         foreach (var spec in specs)
         {
             var km = Regex.Match(spec, @"^(\d+)(?:\.(\d+))?([a-zA-Z]*)(?:,(\d+)(?:\.(\d+))?([a-zA-Z]*))?$");
-            if (!km.Success || int.Parse(km.Groups[1].Value) == 0) throw new ShellException($"invalid number at field start: invalid count at start of {Builtins.QuoteL(spec)}", 2);
+            if (!km.Success || int.Parse(km.Groups[1].Value) == 0) throw new ShellException(CommandSpec.Message("sort", "invalidKey", ("value", spec)), 2);
             var opts = km.Groups[3].Value + km.Groups[6].Value;
             keys.Add(new Key(int.Parse(km.Groups[1].Value), km.Groups[2].Success ? int.Parse(km.Groups[2].Value) : 1,
                 km.Groups[4].Success ? int.Parse(km.Groups[4].Value) : null, km.Groups[5].Success ? int.Parse(km.Groups[5].Value) : 0,
@@ -813,7 +805,7 @@ internal static class Sort
                 int c = Compare(items[i - 1], items[i]);
                 if (c > 0 || (a.Has('u') && c == 0))
                 {
-                    if (a.Has('c')) ctx.Stderr.WriteLine($"sort: {(a.Positional.Count > 0 ? named[0].Name : "-")}:{i + 1}: disorder: {items[i].Line}");
+                    if (a.Has('c')) ctx.Stderr.WriteLine("sort: " + CommandSpec.Message("sort", "disorder", ("file", a.Positional.Count > 0 ? named[0].Name : "-"), ("line", (i + 1).ToString()), ("text", items[i].Line)));
                     return 1;
                 }
             }
@@ -861,34 +853,8 @@ internal static class Sed
         public Dictionary<char, char> Table = [];
     }
 
-    // our own summary of the options this sed takes (not GNU's help text); also printed after a usage error
-    internal const string Usage = """
-        Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...
-        Run a script of editing commands over each line of the input and print the result.
-
-          -n, --quiet, --silent    print only what the script prints (p, s///p, ...)
-          -e script, --expression=script
-                                   add the commands in script
-          -f script-file, --file=script-file
-                                   add the commands in a file
-          -i[SUFFIX], --in-place[=SUFFIX]
-                                   write the result back into each file; with SUFFIX,
-                                   keep the original under the name FILE+SUFFIX
-          -E, -r, --regexp-extended
-                                   read regular expressions as POSIX extended ones
-          -s, --separate           treat each file as its own input, not one stream
-          -u, --unbuffered         accepted, no effect
-              --debug, --posix, --sandbox, --follow-symlinks
-                                   accepted, no effect
-              --help               show this help
-              --version            show the version
-
-        Without -e or -f, the first operand is the script. The other operands are
-        input files; with none, sed reads standard input.
-
-        """;
-
-    internal const string Help = Usage;
+    // the help text (spec/commands/sed.json) is also printed after a usage error
+    static string Usage => CommandSpec.Of("sed").Help!;
 
     public static int Run(CommandContext ctx)
     {
@@ -901,7 +867,7 @@ internal static class Sed
             if (kind == 'e') { scripts.Add((value, $"-e expression #{++expressions}")); return; }
             string text;
             try { text = value == "-" ? ctx.StdinText : ctx.Fs.ReadAllText(ctx.ResolvePath(value)); }
-            catch (ShellException e) { throw new ShellException($"couldn't open file {value}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}", 4); }
+            catch (ShellException e) { throw new ShellException(CommandSpec.Message("sed", "cannotOpenScript", ("file", value), ("errno", e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..])), 4); }
             scripts.Add((text, $"file {value}"));
         }
         var files = new List<string>();
@@ -924,12 +890,12 @@ internal static class Sed
                     case "separate": separate = true; break;
                     case "in-place": inPlace = true; suffix = value ?? ""; break;
                     case "expression" or "file":
-                        if (value == null && i >= args.Count) return Bad($"option '--{name}' requires an argument");
+                        if (value == null && i >= args.Count) return Bad(CommandSpec.Format(CommandSpec.Getopt.MissingLongArgument, ("option", name)));
                         AddScript(name[0], value ?? args[i++]);
                         break;
                     case "posix" or "debug" or "sandbox" or "follow-symlinks" or "unbuffered": break;
-                    case "help": ctx.Stdout.Write(Help); return 0;
-                    default: return Bad($"unrecognized option '{arg}'");
+                    case "help": ctx.Stdout.Write(Usage); return 0;
+                    default: return Bad(CommandSpec.Format(CommandSpec.Getopt.UnrecognizedOption, ("option", arg)));
                 }
                 continue;
             }
@@ -945,11 +911,11 @@ internal static class Sed
                 else if (f is 'e' or 'f')
                 {
                     var value = arg[(k + 1)..];
-                    if (value.Length == 0 && i >= args.Count) return Bad($"option requires an argument -- '{f}'");
+                    if (value.Length == 0 && i >= args.Count) return Bad(CommandSpec.Format(CommandSpec.Getopt.MissingShortArgument, ("option", f.ToString())));
                     AddScript(f, value.Length > 0 ? value : args[i++]);
                     break;
                 }
-                else return Bad($"invalid option -- '{f}'");
+                else return Bad(CommandSpec.Format(CommandSpec.Getopt.InvalidOption, ("option", f.ToString())));
             }
         }
         if (scripts.Count == 0)
@@ -962,15 +928,15 @@ internal static class Sed
 
         if (inPlace)
         {
-            if (files.Count == 0) throw new ShellException("no input files", 1);
+            if (files.Count == 0) throw new ShellException(CommandSpec.Message("sed", "noInputFiles"), 1);
             int code = 0;
             foreach (var f in files)
             {
                 var path = ctx.ResolvePath(f);
                 string original;
                 try { original = ctx.Fs.ReadAllText(path); }
-                catch (ShellException) when (ctx.Fs.IsDirectory(path)) { ctx.Stderr.WriteLine($"sed: couldn't edit {f}: not a regular file"); code = 4; continue; }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"sed: can't read {f}: {e.Message[(e.Message.LastIndexOf(':') + 2)..]}"); code = 2; continue; }
+                catch (ShellException) when (ctx.Fs.IsDirectory(path)) { ctx.Stderr.WriteLine("sed: " + CommandSpec.Message("sed", "notRegularFile", ("file", f))); code = 4; continue; }
+                catch (ShellException e) { ctx.Stderr.WriteLine("sed: " + CommandSpec.Message("sed", "openFailed", ("file", f), ("errno", e.Message[(e.Message.LastIndexOf(':') + 2)..]))); code = 2; continue; }
                 var output = new StringWriter();
                 var quitCode = Execute(cmds, original, output, quiet, ctx.CancellationToken, ctx.Shell.Options.MaxStringBytes);
                 if (suffix.Length > 0)
@@ -1064,18 +1030,18 @@ internal static class Sed
                 i++;
             }
             if (i >= n || script[i] != delim)
-                throw Fail(what switch { "addr" => "unterminated address regex", "y" => "unterminated `y' command", _ => "unterminated `s' command" }, i);
+                throw Fail(what switch { "addr" => CommandSpec.Message("sed", "unterminatedAddress"), "y" => CommandSpec.Message("sed", "unterminatedY"), _ => CommandSpec.Message("sed", "unterminatedS") }, i);
             i++;
             return sb.ToString();
         }
 
         Regex CompileRegex(string text, RegexOptions options, int errorAt)
         {
-            if (text.Length == 0) return lastRe ?? throw Fail("no previous regular expression", errorAt);
+            if (text.Length == 0) return lastRe ?? throw Fail(CommandSpec.Message("sed", "noPreviousRegex"), errorAt);
             if (Builtins.PosixRegexError(text, extended, grep: false) is { } error)
                 throw error == Builtins.ClassSyntax ? new ShellException(error, 4) : Fail(error, errorAt);
             try { return lastRe = new Regex(Builtins.PosixToNet(text, extended), options, Shell.RegexTimeout); }
-            catch (ArgumentException e) { throw Fail($"invalid regular expression: {e.Message}", errorAt); }
+            catch (ArgumentException e) { throw Fail(CommandSpec.Message("sed", "invalidRegex", ("detail", e.Message)), errorAt); }
         }
 
         int ReadNumber()
@@ -1131,7 +1097,7 @@ internal static class Sed
         string ReadText()
         {
             SkipBlanks();
-            if (i >= n) throw Fail("expected \\ after `a', `c' or `i'", i);
+            if (i >= n) throw Fail(CommandSpec.Message("sed", "expectedBackslash"), i);
             if (script[i] == '\\')
             {
                 i++;
@@ -1157,29 +1123,29 @@ internal static class Sed
             {
                 i++;
                 SkipBlanks();
-                c.A2 = ReadAddr(true) ?? throw Fail("unexpected `,'", Math.Min(i + 1, n));
+                c.A2 = ReadAddr(true) ?? throw Fail(CommandSpec.Message("sed", "unexpectedComma"), Math.Min(i + 1, n));
             }
-            if (c.A1 is ZeroAddr && c.A2 is not RegexAddr) throw Fail("invalid usage of line address 0", Math.Min(i + 1, n));
+            if (c.A1 is ZeroAddr && c.A2 is not RegexAddr) throw Fail(CommandSpec.Message("sed", "lineZero"), Math.Min(i + 1, n));
             SkipBlanks();
             if (i < n && script[i] == '!')
             {
                 c.Negate = true;
                 i++;
                 SkipBlanks();
-                if (i < n && script[i] == '!') throw Fail("multiple `!'s", i + 1);
+                if (i < n && script[i] == '!') throw Fail(CommandSpec.Message("sed", "multipleBang"), i + 1);
             }
-            if (i >= n) throw Fail("missing command", i);
+            if (i >= n) throw Fail(CommandSpec.Message("sed", "missingCommand"), i);
             char op = c.Op = script[i++];
             switch (op)
             {
                 case '{': blocks.Push((cmds.Count, i)); break;
                 case '}':
-                    if (blocks.Count == 0) throw Fail("unexpected `}'", i);
-                    if (c.A1 != null) throw Fail("} doesn't want any addresses", i);
+                    if (blocks.Count == 0) throw Fail(CommandSpec.Message("sed", "unexpectedBrace"), i);
+                    if (c.A1 != null) throw Fail(CommandSpec.Message("sed", "braceAddresses"), i);
                     cmds[blocks.Pop().Cmd].Target = cmds.Count + 1;
                     break;
                 case 's':
-                    if (i >= n) throw Fail("unterminated `s' command", i);
+                    if (i >= n) throw Fail(CommandSpec.Message("sed", "unterminatedS"), i);
                     char delim = script[i++];
                     var find = ReadDelimited(delim, "regex");
                     c.Repl = ParseReplacement(ReadDelimited(delim, "replacement"));
@@ -1191,8 +1157,8 @@ internal static class Sed
                         if (char.IsAsciiDigit(f))
                         {
                             c.Nth = ReadNumber();
-                            if (numbered) throw Fail("multiple number options to `s' command", i);
-                            if (c.Nth == 0) throw Fail("number option to `s' command may not be zero", i);
+                            if (numbered) throw Fail(CommandSpec.Message("sed", "multipleNumbers"), i);
+                            if (c.Nth == 0) throw Fail(CommandSpec.Message("sed", "zeroNumber"), i);
                             numbered = true;
                             continue;
                         }
@@ -1200,38 +1166,38 @@ internal static class Sed
                         i++;
                         switch (f)
                         {
-                            case 'g' when c.Global: throw Fail("multiple `g' options to `s' command", i);
-                            case 'p' when c.Print: throw Fail("multiple `p' options to `s' command", i);
+                            case 'g' when c.Global: throw Fail(CommandSpec.Message("sed", "multipleG"), i);
+                            case 'p' when c.Print: throw Fail(CommandSpec.Message("sed", "multipleP"), i);
                             case 'g': c.Global = true; break;
                             case 'p': c.Print = true; break;
                             case 'i' or 'I': options |= RegexOptions.IgnoreCase; break;
                             case 'm' or 'M': options |= RegexOptions.Multiline; break;
                             case 'w' when script.IndexOf('\n', i) is var eol && script[i..(eol < 0 ? n : eol)].Trim().Length == 0:
-                                throw Fail("missing filename in r/R/w/W commands", i);
-                            default: throw Fail($"the `{f}' flag of `s' is not supported", i);
+                                throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
+                            default: throw Fail(CommandSpec.Message("sed", "flagNotSupported", ("flag", f.ToString())), i);
                         }
                     }
                     SkipBlanks();
-                    if (i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail("unknown option to `s'", i + 1);
+                    if (i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail(CommandSpec.Message("sed", "unknownSOption"), i + 1);
                     // GNU compiles the regex once it has read the character that ends the command
                     int compiledAt = i < n && script[i] is ';' or '\n' ? i + 1 : i;
                     c.Re = CompileRegex(find, options, compiledAt);
                     var maxRef = c.Repl.OfType<GroupPart>().Select(g => g.Group).DefaultIfEmpty(0).Max();
-                    if (maxRef > c.Re.GetGroupNumbers().Length - 1) throw Fail($"invalid reference \\{maxRef} on `s' command's RHS", compiledAt);
+                    if (maxRef > c.Re.GetGroupNumbers().Length - 1) throw Fail(CommandSpec.Message("sed", "invalidReference", ("number", maxRef.ToString())), compiledAt);
                     break;
                 case 'y':
                     char yd = i < n ? script[i] : '\0';
                     i++;
                     var src = Builtins.Unescape(ReadDelimited(yd, "y"));
                     var dst = Builtins.Unescape(ReadDelimited(yd, "y"));
-                    if (src.Length != dst.Length) throw Fail("strings for `y' command are different lengths", i);
+                    if (src.Length != dst.Length) throw Fail(CommandSpec.Message("sed", "yLengths"), i);
                     for (int k = 0; k < src.Length; k++) c.Table[src[k]] = dst[k];
                     break;
                 case 'a' or 'i' or 'c': c.Text = ReadText(); break;
                 case ':':
-                    if (c.A1 != null) throw Fail(": doesn't want any addresses", i);
+                    if (c.A1 != null) throw Fail(CommandSpec.Message("sed", "colonAddresses"), i);
                     var label = ReadLabel();
-                    if (label.Length == 0) throw Fail("\":\" lacks a label", i);
+                    if (label.Length == 0) throw Fail(CommandSpec.Message("sed", "colonLabel"), i);
                     labels[label] = cmds.Count;
                     break;
                 case 'b' or 't' or 'T': c.Label = ReadLabel(); break;
@@ -1242,18 +1208,18 @@ internal static class Sed
                     break;
                 default:
                     int at = i;
-                    if (op is 'r' or 'R' or 'w' or 'W' && ReadLabel().Length == 0) throw Fail("missing filename in r/R/w/W commands", i);
-                    if (!"=dDgGhHnNpPxz".Contains(op)) throw Fail($"unknown command: `{op}'", at);
+                    if (op is 'r' or 'R' or 'w' or 'W' && ReadLabel().Length == 0) throw Fail(CommandSpec.Message("sed", "missingFilename"), i);
+                    if (!"=dDgGhHnNpPxz".Contains(op)) throw Fail(CommandSpec.Message("sed", "unknownCommand", ("op", op.ToString())), at);
                     break;
             }
             cmds.Add(c);
             SkipBlanks();
-            if (op != '{' && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail("extra characters after command", i + 1);
+            if (op != '{' && i < n && script[i] is not (';' or '\n' or '}' or '#')) throw Fail(CommandSpec.Message("sed", "extraCharacters"), i + 1);
         }
-        if (blocks.Count > 0) throw Fail("unmatched `{'", blocks.Peek().At, charZero: true);
+        if (blocks.Count > 0) throw Fail(CommandSpec.Message("sed", "unmatchedBrace"), blocks.Peek().At, charZero: true);
         foreach (var c in cmds.Where(c => c.Op is 'b' or 't' or 'T'))
         {
-            if (c.Label.Length > 0 && !labels.ContainsKey(c.Label)) throw new ShellException($"can't find label for jump to `{c.Label}'", 4);
+            if (c.Label.Length > 0 && !labels.ContainsKey(c.Label)) throw new ShellException(CommandSpec.Message("sed", "missingLabel", ("label", c.Label)), 4);
             c.Target = c.Label.Length > 0 ? labels[c.Label] : cmds.Count;
         }
         return cmds;
@@ -1403,7 +1369,7 @@ internal static class Sed
             bool tflag = false, autoprint = !quiet;
             for (int pc = 0; pc < cmds.Count;)
             {
-                if (++steps > 10_000_000) throw new ShellException("too many steps (a branch loops forever?)");
+                if (++steps > 10_000_000) throw new ShellException(CommandSpec.Message("sed", "tooManySteps"));
                 if ((steps & 1023) == 0) ct.ThrowIfCancellationRequested(); // the call's time limit, or `timeout`
                 if (ps.Length > maxString || hold.Length > maxString)
                     throw Shell.TooLarge("sed: pattern space", maxString, "process the input in smaller pieces");

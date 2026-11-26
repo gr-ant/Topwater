@@ -265,9 +265,6 @@ public sealed partial class Shell
     DateTime InstalledAt => (_virtualNow is null ? DateTime.Today : Options.StartTime!.Value.UtcDateTime.Date).AddDays(-142).AddHours(9).AddMinutes(13);
 
     // bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
-    static readonly HashSet<string> NoProgramFile = ["alias", "break", "cd", "command", "continue", "declare", "eval", "exit", "export", "help",
-        "history", "let", "local", "mapfile", "read", "readarray", "readonly", "return", "set", "shift", "shopt", "source", "trap", "type", "typeset", "unalias", "unset"];
-
     HashSet<string>? _builtinNames;
 
     internal static int Oct(string s) => Convert.ToInt32(s, 8);
@@ -275,7 +272,7 @@ public sealed partial class Shell
 
     public ShellOptions Options { get; }
     public VirtualFileSystem Fs { get; }
-    public Dictionary<string, string> Environment { get; private set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, string> Environment { get; internal set; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> Aliases { get; private set; } = new(StringComparer.Ordinal);
     public IReadOnlyList<string> History => _history;
     public IReadOnlyDictionary<string, RegisteredCommand> Commands => _commands;
@@ -293,7 +290,7 @@ public sealed partial class Shell
     internal bool Xtrace { get; set; }
     internal bool Noclobber { get; set; }
     /// <summary>declare attributes by variable name: i integer, r readonly, l/u lower/upper case, n nameref, x exported.</summary>
-    internal Dictionary<string, string> VarAttrs { get; private set; } = new(StringComparer.Ordinal);
+    internal Dictionary<string, string> VarAttrs { get; set; } = new(StringComparer.Ordinal);
     /// <summary>How many `source`/`.` files are running, so `return` knows whether it may end one.</summary>
     internal int SourceDepth { get; set; }
     /// <summary>fds 3 and up opened by `exec 3&gt;file` / `exec 3&lt;file`: a TextWriter or a StdinBuffer.</summary>
@@ -391,6 +388,8 @@ public sealed partial class Shell
 
     public Shell Register(string name, CommandHandler handler, string description = "", string? usage = null)
     {
+        // built-ins take their summary and help from spec/ (Generated/CommandSpec.g.cs)
+        if (_builtinNames is null && description == "" && usage is null && CommandSpec.Commands.TryGetValue(name, out var spec)) (description, usage) = (spec.Summary, spec.Help);
         _commands[name] = new RegisteredCommand(name, description, usage, handler);
         _builtinNames?.Remove(name); // an app command replacing a built-in owns its own --help/--version
         WriteProgramFile(name);
@@ -399,7 +398,7 @@ public sealed partial class Shell
 
     void WriteProgramFile(string name)
     {
-        bool shellOnly = NoProgramFile.Contains(name) && (_builtinNames is null || _builtinNames.Contains(name));
+        bool shellOnly = CommandSpec.Commands.TryGetValue(name, out var spec) && !spec.ProgramFile && (_builtinNames is null || _builtinNames.Contains(name));
         if (shellOnly || name.Contains('/') || name is "." or ".." or ":" || !Fs.IsDirectory("/usr/bin")) return;
         using var _ = Fs.AsRoot();
         foreach (var dir in new[] { "/usr/bin/", "/bin/" })
@@ -1037,7 +1036,7 @@ public sealed partial class Shell
                         var target = await ExpandSingleAsync(r.Target!, io, ct);
                         object dup = target == "-" ? (r.Op == "<&" ? new StdinBuffer("") : TextWriter.Null)
                             : int.TryParse(target, out var n) && Descriptor(n, io) is { } d ? d
-                            : throw new ShellException($"{target}: {(int.TryParse(target, out _) ? "Bad file descriptor" : "ambiguous redirect")}");
+                            : throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.RedirectFailed, ("target", target), ("reason", int.TryParse(target, out _) ? CommandSpec.Errno.EBADF : CommandSpec.Diagnostics.AmbiguousRedirect)));
                         io = WithFd(io, r.Fd, dup);
                         break;
                     default: // > >> >| &> &>>
@@ -1078,7 +1077,7 @@ public sealed partial class Shell
         if (path is "/dev/stderr" or "/dev/stdout") return path == "/dev/stderr" ? io.Err : io.Out;
         if (path.StartsWith("/dev/fd/") && int.TryParse(path[8..], out var fd) && Descriptor(fd, io) is TextWriter fw) return fw;
         if (Fs.IsDirectory(path)) throw new ShellException($"{target}: Is a directory");
-        if (Noclobber && r.Op is ">" or "&>" && Fs.IsFile(path)) throw new ShellException($"{target}: cannot overwrite existing file");
+        if (Noclobber && r.Op is ">" or "&>" && Fs.IsFile(path)) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.Noclobber, ("target", target)));
         if (!r.Op.EndsWith(">>") || !Fs.Exists(path)) Fs.WriteAllText(path, ""); // truncate on open, like bash
         return open(path);
     }
@@ -1115,7 +1114,7 @@ public sealed partial class Shell
                 {
                     var t = await ExpandSingleAsync(r.Target!, io, ct);
                     target = t == "-" ? null : int.TryParse(t, out var n) && Descriptor(n, io) is { } d ? (d is SwitchWriter sw ? sw.Target : d)
-                        : throw new ShellException($"{t}: Bad file descriptor");
+                        : throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.RedirectFailed, ("target", t), ("reason", CommandSpec.Errno.EBADF)));
                 }
                 else target = await OpenOutputAsync(r, io, ct, path => new FileAppender(Fs, path));
                 int named = r.FdVariable == null ? r.Fd
@@ -1261,7 +1260,7 @@ public sealed partial class Shell
                 if (found == null)
                 {
                     io.Err.WriteLine(Environment.GetValueOrDefault("PATH", "") == "" ? $"{ErrPrefix}{name}: No such file or directory"
-                        : $"{argv[0]}: command not found (run 'help' to list available commands)");
+                        : CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", argv[0])));
                     return 127;
                 }
                 Hashed[name] = (found, 1);
@@ -1271,7 +1270,7 @@ public sealed partial class Shell
         }
         if (!_commands.TryGetValue(name, out var cmd))
         {
-            io.Err.WriteLine($"{argv[0]}: command not found (run 'help' to list available commands)");
+            io.Err.WriteLine(CommandSpec.Format(CommandSpec.Diagnostics.CommandNotFound, ("command", argv[0])));
             return 127;
         }
         var ctx = new CommandContext(this, name, argv.Skip(1).ToList(), io.Stdin, io.Out, io.Err, ct) { Fds = io.Fds };
@@ -1284,8 +1283,8 @@ public sealed partial class Shell
         catch (ControlFlow) { throw; }
         catch (UsageException e) when (!Builtins.IsShellBuiltin(this, name))
         {
-            io.Err.Write(Builtins.UsageError(name is "egrep" or "fgrep" ? "grep" : name, e.Message));
-            return name is "ls" or "grep" or "egrep" or "fgrep" or "sort" or "diff" ? 2 : 1;
+            io.Err.Write(Builtins.UsageError(name, e.Message));
+            return CommandSpec.Commands.TryGetValue(name, out var spec) ? spec.UsageExitCode : 1;
         }
         catch (ShellException e)
         {
@@ -1389,7 +1388,7 @@ public sealed partial class Shell
         if (text.StartsWith(ExecutableStub[..4]))
         {
             if (StubCommand(path) is { } stub) return await InvokeAsync([stub, .. argv.Skip(1)], io, ct, skipFunctions: true);
-            io.Err.WriteLine($"{ErrPrefix}{name}: cannot execute binary file");
+            io.Err.WriteLine(ErrPrefix + CommandSpec.Format(CommandSpec.Diagnostics.CannotExecuteBinary, ("name", name)));
             return 126;
         }
         if (text.StartsWith("#!"))
@@ -1416,7 +1415,7 @@ public sealed partial class Shell
         var parts = line.Split([' ', '\t'], 2);
         if (StubCommand(parts[0]) is not { } program)
         {
-            io.Err.WriteLine($"{ErrPrefix}{name}: cannot execute: required file not found");
+            io.Err.WriteLine(ErrPrefix + CommandSpec.Format(CommandSpec.Diagnostics.RequiredFileNotFound, ("name", name)));
             return 127;
         }
         var opt = parts.Length > 1 ? parts[1].Trim() : "";
@@ -1515,7 +1514,7 @@ public sealed partial class Shell
     /// <summary>`local NAME[=VALUE]`: remembers the outer value and attributes so they are restored when the function returns.</summary>
     internal void DeclareLocal(string name, string? value)
     {
-        if (_locals.Count == 0) throw new ShellException("can only be used in a function");
+        if (_locals.Count == 0) throw new ShellException(CommandSpec.Diagnostics.OnlyInFunction);
         if (_locals.Peek().TryAdd(name, (Environment.TryGetValue(name, out var old) ? old : null, VarAttrs.GetValueOrDefault(name)))) VarAttrs.Remove(name);
         MarkShellVariable(name);
         Environment[name] = value ?? "";
@@ -1573,7 +1572,7 @@ public sealed partial class Shell
             SetElement(r.Name, r.Sub, Converted(Resolve(r.Name), value, append ? GetElement(r.Name, r.Sub) : null));
             return;
         }
-        if (!Parser.IsName(name)) throw new ShellException($"`{name}': not a valid identifier");
+        if (!Parser.IsName(name)) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.NotValidIdentifier, ("name", name)));
         CheckWritable(name);
         if (name == "SECONDS" && long.TryParse(value, out var seconds)) { _secondsBase = Now.AddSeconds(-seconds); return; }
         if (name == "RANDOM") { _random = (ulong)(long.TryParse(value, out var seed) ? seed : 0); return; }
@@ -1599,7 +1598,7 @@ public sealed partial class Shell
 
     void CheckWritable(string name)
     {
-        if (HasAttr(name, 'r')) throw new ShellException($"{name}: readonly variable");
+        if (HasAttr(name, 'r')) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ReadonlyVariable, ("name", name)));
     }
 
     static readonly string[] BashVersInfo = ["5", "2", "21", "1", "release", "x86_64-pc-linux-gnu"];
@@ -1680,7 +1679,7 @@ public sealed partial class Shell
         if (array is { Assoc: true }) return subscript;
         long i = Arith.Eval(this, subscript);
         if (i < 0) i += array?.Next ?? 1;
-        return i >= 0 ? i.ToString(CultureInfo.InvariantCulture) : throw new ShellException($"{name}: bad array subscript");
+        return i >= 0 ? i.ToString(CultureInfo.InvariantCulture) : throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadArraySubscript, ("name", name)));
     }
 
     /// <summary>One element, or null if unset. A plain variable answers as element 0.</summary>
@@ -1710,7 +1709,7 @@ public sealed partial class Shell
             return;
         }
         var name = ArrayRef(target)?.Name ?? target;
-        if (HasAttr(name, 'r')) throw new ShellException($"{name}: cannot unset: readonly variable");
+        if (HasAttr(name, 'r')) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.CannotUnsetReadonly, ("name", name)));
         Environment.Remove(name);
         Arrays.Remove(name);
         VarAttrs.Remove(name);
@@ -1746,7 +1745,7 @@ public sealed partial class Shell
             // ${a[@]:-word}: the array as a whole is tested; empty means no elements (or, with ':', nothing but empty text)
             bool missing = items.Count == 0 || op[0] == ':' && string.Join(r.Sub == "*" ? IfsJoiner : " ", items).Length == 0;
             if (op.EndsWith('?') && missing) throw Fatal(io, $"{r.Name}[{r.Sub}]: {(word.Length > 0 ? await ParamWordAsync(word, quoted, io, ct) : "parameter null or not set")}", 127);
-            if (op.EndsWith('=') && missing) throw new ShellException($"{r.Name}[{r.Sub}]: bad array subscript");
+            if (op.EndsWith('=') && missing) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadArraySubscript, ("name", $"{r.Name}[{r.Sub}]")));
             if (op.EndsWith('-')) return missing ? [await ParamWordAsync(word, quoted, io, ct)] : items;
             if (op.EndsWith('+')) return missing ? [] : [await ParamWordAsync(word, quoted, io, ct)];
             return items;
@@ -1756,7 +1755,7 @@ public sealed partial class Shell
             var spec = r.Tail[1..].Split(':', 2);
             long from = await EvalArithAsync(spec[0], io, ct);
             long count = spec.Length == 1 ? long.MaxValue : await EvalArithAsync(spec[1], io, ct);
-            if (count < 0) throw new ShellException($"{spec[1].Trim()}: substring expression < 0");
+            if (count < 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.SubstringNegative, ("expression", spec[1].Trim())));
             // an indexed array is sliced by index, so a sparse array skips its gaps: offsets count from the first index >= from
             if (a is { Assoc: false } && !r.Keys)
             {
@@ -1949,7 +1948,7 @@ public sealed partial class Shell
         var name = m.Groups[1].Value;
         if (HasAttr(name, 'n')) return null; // ${!ref} of a nameref is the name it refers to
         var target = GetVariable(name);
-        if (target.Length == 0) throw new ShellException($"{name}: invalid indirect expansion");
+        if (target.Length == 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.InvalidIndirect, ("name", name)));
         return target + m.Groups[2].Value;
     }
 
@@ -2015,7 +2014,7 @@ public sealed partial class Shell
             return GetVariable(expr[1..]).Length.ToString(CultureInfo.InvariantCulture);
         }
         var m = ParamRe.Match(expr);
-        if (!m.Success) throw new ShellException($"${{{expr}}}: bad substitution");
+        if (!m.Success) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("expr", expr)));
         var name = m.Groups[1].Value;
         var rest = m.Groups[2].Value;
         var value = GetVariable(name);
@@ -2031,7 +2030,7 @@ public sealed partial class Shell
                 case '-': return missing ? await ParamWordAsync(word, quoted, io, ct) : value;
                 case '=':
                     if (!missing) return value;
-                    if (!Parser.IsName(name)) throw new ShellException($"${name}: cannot assign in this way");
+                    if (!Parser.IsName(name)) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.CannotAssign, ("name", name)));
                     SetVar(name, await ParamWordAsync(word, quoted, io, ct));
                     return GetVariable(name);
                 case '+': return missing ? "" : await ParamWordAsync(word, quoted, io, ct);
@@ -2105,7 +2104,7 @@ public sealed partial class Shell
                 'u' => value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..],
                 'A' => Builtins.AttributeFlags(this, Resolve(name)) is { Length: > 0 } flags ? $"declare -{flags} {name}={QuoteValue(value)}" : $"{name}={QuoteValue(value)}",
                 'P' => value,
-                _ => throw new ShellException($"${{{expr}}}: bad substitution"),
+                _ => throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("expr", expr))),
             };
         }
         if (rest[0] == ':')
@@ -2117,17 +2116,17 @@ public sealed partial class Shell
             var tail = value[(int)offset..];
             if (spec.Length == 1) return tail;
             long len = await EvalArithAsync(spec[1], io, ct);
-            if (len < 0 && (len += tail.Length) < 0) throw new ShellException($"{spec[1].Trim()}: substring expression < 0");
+            if (len < 0 && (len += tail.Length) < 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.SubstringNegative, ("expression", spec[1].Trim())));
             return tail[..(int)Math.Min(len, tail.Length)];
         }
-        throw new ShellException($"${{{expr}}}: bad substitution");
+        throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("expr", expr)));
     }
 
     /// <summary>set -u: expanding an unset variable is an error that ends the (sub)shell, like bash.</summary>
     void CheckSet(string name, Io io)
     {
         if (!Nounset || name is "@" or "*" || IsSet(name)) return;
-        throw Fatal(io, $"{name}: unbound variable", 127);
+        throw Fatal(io, CommandSpec.Format(CommandSpec.Diagnostics.UnboundVariable, ("name", name)), 127);
     }
 
     /// <summary>&lt;(cmd): writes cmd's output to /dev/fd/N (removed after the tool call) and returns that path.</summary>
@@ -2404,9 +2403,9 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
 
     public async Task<bool> EvaluateAsync()
     {
-        if (items.Count == 0) throw new ShellException("syntax error in conditional expression", 2);
+        if (items.Count == 0) throw new ShellException(CommandSpec.Diagnostics.ConditionalSyntax, 2);
         var v = await Or();
-        if (_p < items.Count) throw new ShellException($"syntax error in conditional expression near `{items[_p]}'", 2);
+        if (_p < items.Count) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ConditionalSyntaxNear, ("token", items[_p].ToString())), 2);
         return v;
     }
 
@@ -2436,11 +2435,11 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
         {
             _p++;
             var v = await Or();
-            if (!IsOp(")")) throw new ShellException("syntax error in conditional expression: expected `)'", 2);
+            if (!IsOp(")")) throw new ShellException(CommandSpec.Diagnostics.ConditionalParen, 2);
             _p++;
             return v;
         }
-        if (_p >= items.Count) throw new ShellException("syntax error in conditional expression: unexpected end", 2);
+        if (_p >= items.Count) throw new ShellException(CommandSpec.Diagnostics.ConditionalEnd, 2);
         if (items[_p].UnquotedLiteral is { } u && Unary.Contains(u) && _p + 1 < items.Count && !(_p + 2 < items.Count && Parser.IsCondBinary(items[_p + 1])))
         {
             var arg = await shell.ExpandSingleAsync(items[_p + 1], io, ct);
@@ -2451,7 +2450,7 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
         if (_p < items.Count && Parser.IsCondBinary(items[_p]))
         {
             var op = items[_p++].UnquotedLiteral!;
-            if (_p >= items.Count) throw new ShellException($"unexpected argument to conditional binary operator `{op}'", 2);
+            if (_p >= items.Count) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ConditionalBinaryArgument, ("op", op)), 2);
             var right = items[_p++];
             var l = await shell.ExpandSingleAsync(left, io, ct);
             switch (op)
@@ -2540,7 +2539,7 @@ internal static class Brace
             foreach (var alt in alts)
             {
                 results.AddRange(ExpandText(text[..open] + alt + text[(close + 1)..]));
-                if (results.Count > MaxItems) throw new ShellException("brace expansion: too many items");
+                if (results.Count > MaxItems) throw new ShellException(CommandSpec.Diagnostics.BraceTooMany);
             }
             return results;
         }
@@ -2572,7 +2571,7 @@ internal static class Brace
             bool pad = m.Groups[1].Value.TrimStart('-').StartsWith('0') && m.Groups[1].Value.Length > 1
                        || m.Groups[2].Value.TrimStart('-').StartsWith('0') && m.Groups[2].Value.Length > 1;
             int width = Math.Max(m.Groups[1].Value.Length, m.Groups[2].Value.Length);
-            if (Math.Abs(b - a) / step > MaxItems) throw new ShellException("brace expansion: too many items");
+            if (Math.Abs(b - a) / step > MaxItems) throw new ShellException(CommandSpec.Diagnostics.BraceTooMany);
             var list = new List<string>();
             for (long v = a; a <= b ? v <= b : v >= b; v += a <= b ? step : -step)
                 list.Add(pad ? v.ToString(CultureInfo.InvariantCulture).PadLeft(width, '0') : v.ToString(CultureInfo.InvariantCulture));

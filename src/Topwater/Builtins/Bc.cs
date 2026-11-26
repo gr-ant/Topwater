@@ -29,21 +29,7 @@ internal static class Bc
     const int MaxDigits = 100000;
     static readonly TimeSpan TimeLimit = TimeSpan.FromSeconds(5);
 
-    const string Usage = """
-        Usage: bc [options] [file ...]
-        An arbitrary precision calculator language.
-
-          -l            load the math library and set the default scale to 20
-          -q, -s, -w    accepted and ignored (quiet / POSIX / warnings)
-              --version  print the version and exit
-              --help     print this message
-
-        Reads a bc program from the files, or from standard input when none are given.
-        Limits: one invocation is stopped after 5 s, and any single number is capped at 100000 digits.
-
-        """;
-
-    public static void Register(Shell shell) => shell.Register("bc", Run, "An arbitrary precision calculator language", Usage);
+    public static void Register(Shell shell) => shell.Register("bc", Run);
 
     // ---- errors and limits -------------------------------------------------
 

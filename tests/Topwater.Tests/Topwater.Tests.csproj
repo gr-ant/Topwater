@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <None Include="..\corpus\**\*" LinkBase="corpus" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\spec\**\*" LinkBase="spec" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

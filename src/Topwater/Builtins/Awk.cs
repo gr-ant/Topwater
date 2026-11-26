@@ -12,7 +12,7 @@ namespace Topwater;
 /// </summary>
 internal static class Awk
 {
-    public static void Register(Shell shell) => shell.Register("awk", ctx => new AwkRunner(ctx).Run(), "Pattern scanning and processing language");
+    public static void Register(Shell shell) => shell.Register("awk", ctx => new AwkRunner(ctx).Run());
 }
 
 internal readonly struct AV

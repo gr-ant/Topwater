@@ -26,7 +26,7 @@ internal sealed class Arith
 
     public static long Eval(Shell sh, string expr, int depth = 0)
     {
-        if (depth > 20) throw new ShellException($"{expr}: expression recursion level exceeded");
+        if (depth > 20) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.RecursionExceeded, ("expression", expr)));
         if (expr.Contains('$')) expr = Dollar.Replace(expr, m => sh.GetVariable(m.Groups[1].Value));
         var tokens = Tokenize(expr);
         if (tokens.Count == 0) return 0;
@@ -57,14 +57,14 @@ internal sealed class Arith
                     for (; j < s.Length; j++)
                         if (s[j] == '[') depth++;
                         else if (s[j] == ']' && --depth == 0) { j++; break; }
-                    if (depth > 0) throw new ShellException($"{s}: syntax error: bad array subscript");
+                    if (depth > 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ArithmeticBadSubscript, ("expression", s)));
                 }
                 tokens.Add(s[i..j]);
                 i = j;
                 continue;
             }
             var op = Ops.FirstOrDefault(o => string.CompareOrdinal(s, i, o, 0, o.Length) == 0)
-                     ?? throw new ShellException($"{s}: syntax error: invalid arithmetic operator (error token is \"{s[i..]}\")");
+                     ?? throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.InvalidArithmeticOperator, ("expression", s), ("token", s[i..])));
             // `5--3` (after $a-$b is substituted) is two minus signs; `--` is one operator only next to a name
             bool nextIsName = i + 2 < s.Length && (char.IsLetter(s[i + 2]) || s[i + 2] == '_');
             if (op is "++" or "--" && !nextIsName && !(tokens.Count > 0 && IsIdent(tokens[^1]))) op = op[..1];
@@ -74,7 +74,7 @@ internal sealed class Arith
         return tokens;
     }
 
-    ShellException Syntax(string token) => new($"{_src.Trim()}: syntax error in expression (error token is \"{token}\")");
+    ShellException Syntax(string token) => new(CommandSpec.Format(CommandSpec.Diagnostics.ArithmeticSyntax, ("expression", _src.Trim()), ("token", token)));
     string? Peek => _p < _t.Count ? _t[_p] : null;
     bool Accept(string s) { if (Peek != s) return false; _p++; return true; }
     static bool IsIdent(string s) => char.IsLetter(s[0]) || s[0] == '_';
@@ -140,7 +140,7 @@ internal sealed class Arith
 
     long Apply(string op, long l, long r, bool ev)
     {
-        if (op is "/" or "%" && r == 0) return ev ? throw new ShellException($"{_src.Trim()}: division by 0") : 0;
+        if (op is "/" or "%" && r == 0) return ev ? throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.DivisionByZero, ("expression", _src.Trim()))) : 0;
         return op switch
         {
             "+" => l + r, "-" => l - r, "*" => l * r, "/" => r == -1 ? -l : l / r, "%" => r == -1 ? 0 : l % r, "**" => Pow(l, r),
@@ -154,7 +154,7 @@ internal sealed class Arith
     /// <summary>Exponentiation by squaring, wrapping around like bash's 64-bit arithmetic.</summary>
     long Pow(long b, long e)
     {
-        if (e < 0) throw new ShellException($"{_src.Trim()}: exponent less than 0 (error token is \"{e}\")");
+        if (e < 0) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.NegativeExponent, ("expression", _src.Trim()), ("token", e.ToString())));
         long r = 1;
         for (; e > 0; e >>= 1, b *= b) if ((e & 1) != 0) r *= b;
         return r;
@@ -163,7 +163,7 @@ internal sealed class Arith
     /// <summary>A literal in the given base; values past 64 bits wrap around like bash.</summary>
     static long ParseLiteral(string digits, int radix, string tok)
     {
-        if (digits.Length == 0 || radix < 2 || radix > 64) throw new ShellException($"{tok}: invalid arithmetic base (error token is \"{tok}\")");
+        if (digits.Length == 0 || radix < 2 || radix > 64) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.InvalidBase, ("token", tok)));
         ulong v = 0;
         foreach (var c in digits)
         {
@@ -176,7 +176,7 @@ internal sealed class Arith
                 '_' => 63,
                 _ => 99,
             };
-            if (d >= radix) throw new ShellException($"{tok}: value too great for base (error token is \"{tok}\")");
+            if (d >= radix) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ValueTooGreat, ("token", tok)));
             v = unchecked(v * (ulong)radix + (ulong)d);
         }
         return unchecked((long)v);
@@ -186,7 +186,7 @@ internal sealed class Arith
     {
         // every nesting level passes through here; a stack overflow would kill the host process
         if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
-            throw new ShellException("expression is nested too deeply");
+            throw new ShellException(CommandSpec.Diagnostics.ExpressionNested);
         if (Accept("+")) return Unary(ev);
         if (Accept("-")) return -Unary(ev);
         if (Accept("!")) return Unary(ev) == 0 ? 1 : 0;
@@ -232,7 +232,7 @@ internal sealed class Arith
             }
             catch (Exception e) when (e is FormatException or ArgumentException or OverflowException)
             {
-                throw new ShellException($"{tok}: value too great for base (error token is \"{tok}\")");
+                throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.ValueTooGreat, ("token", tok)));
             }
         }
         if (!IsIdent(tok)) throw Syntax(tok);

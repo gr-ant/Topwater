@@ -186,7 +186,7 @@ internal sealed class Lexer(string s)
                 return;
             }
             if (c == '<' && Peek(1) == '(') { tokens.Add(new(TokenKind.Word, Word: LexWord())); return; }
-            if (c == '>' && Peek(1) == '(') throw new ParseException("process substitution >(...) is not supported by this shell (write to a file, then read it)");
+            if (c == '>' && Peek(1) == '(') throw new ParseException(CommandSpec.Diagnostics.ProcessSubstitution);
             if (c is '>' or '<') { tokens.Add(LexRedirect(c == '>' ? 1 : 0)); return; }
             if (c == '(' && Peek(1) == '(' && FindArithClose(_i + 2) is var close and >= 0)
             {
@@ -248,7 +248,7 @@ internal sealed class Lexer(string s)
         if (op is "<<" or "<<-")
         {
             while (Peek() is ' ' or '\t') _i++;
-            if (_i >= s.Length || "\n;|&<>()".Contains(s[_i])) throw new ParseException("syntax error near unexpected token `newline'");
+            if (_i >= s.Length || "\n;|&<>()".Contains(s[_i])) throw new ParseException(CommandSpec.Format(CommandSpec.Diagnostics.UnexpectedToken, ("token", "newline")));
             var w = LexWord();
             var doc = new HereDoc(string.Concat(w.Parts.OfType<LiteralPart>().Select(p => p.Text)), !w.Parts.Any(p => p.Quoted), op == "<<-");
             _pending.Add(doc);
@@ -361,7 +361,7 @@ internal sealed class Lexer(string s)
                 case '\'':
                     Flush();
                     int j = s.IndexOf('\'', _i + 1);
-                    if (j < 0) throw new ParseException("unexpected EOF while looking for matching `''");
+                    if (j < 0) throw new ParseException(CommandSpec.Diagnostics.EofSingleQuote);
                     parts.Add(new LiteralPart(s[(_i + 1)..j], true));
                     _i = j + 1;
                     break;
@@ -437,7 +437,7 @@ internal sealed class Lexer(string s)
                 default: sb.Append('\\').Append(n); break;
             }
         }
-        if (i >= s.Length) throw new ParseException("unexpected EOF while looking for matching `''");
+        if (i >= s.Length) throw new ParseException(CommandSpec.Diagnostics.EofSingleQuote);
         _i = i + 1;
         return sb.ToString();
 
@@ -470,7 +470,7 @@ internal sealed class Lexer(string s)
         }
         if (terminator != null)
         {
-            if (_i >= s.Length) throw new ParseException($"unexpected EOF while looking for matching `{terminator}'");
+            if (_i >= s.Length) throw new ParseException(CommandSpec.Format(CommandSpec.Diagnostics.EofMatching, ("terminator", terminator.ToString())));
             _i++;
         }
         Flush();
@@ -502,7 +502,7 @@ internal sealed class Lexer(string s)
             {
                 Flush();
                 int j = s.IndexOf('\'', _i + 1);
-                if (j < 0) throw new ParseException("unexpected EOF while looking for matching `''");
+                if (j < 0) throw new ParseException(CommandSpec.Diagnostics.EofSingleQuote);
                 parts.Add(new LiteralPart(s[(_i + 1)..j], true));
                 _i = j + 1;
             }
@@ -539,7 +539,7 @@ internal sealed class Lexer(string s)
             for (; k < s.Length; k++)
                 if (s[k] == '[') depth++;
                 else if (s[k] == ']' && --depth == 0) break;
-            if (k >= s.Length) throw new ParseException("unexpected EOF while looking for matching `]'");
+            if (k >= s.Length) throw new ParseException(CommandSpec.Diagnostics.EofBracket);
             var expr = s[(_i + 2)..k];
             _i = k + 1;
             return new ArithPart(expr, quoted);
@@ -553,7 +553,7 @@ internal sealed class Lexer(string s)
                 if (s[k] == '{') depth++;
                 else if (s[k] == '}') { if (depth == 0) break; depth--; }
             }
-            if (k >= s.Length) throw new ParseException("unexpected EOF while looking for matching `}'");
+            if (k >= s.Length) throw new ParseException(CommandSpec.Diagnostics.EofBrace);
             var name = s[(_i + 2)..k];
             _i = k + 1;
             return new VariablePart(name, quoted);
@@ -584,7 +584,7 @@ internal sealed class Lexer(string s)
             if (s[j] == '\\' && j + 1 < s.Length && s[j + 1] is '`' or '\\' or '$') j++;
             sb.Append(s[j]);
         }
-        if (j >= s.Length) throw new ParseException("unexpected EOF while looking for matching ``'");
+        if (j >= s.Length) throw new ParseException(CommandSpec.Diagnostics.EofBacktick);
         _i = j + 1;
         return new CommandSubPart(sb.ToString(), quoted);
     }
@@ -628,7 +628,7 @@ internal sealed class Lexer(string s)
                     break;
             }
         }
-        throw new ParseException("unexpected EOF while looking for matching `)'");
+        throw new ParseException(CommandSpec.Diagnostics.EofParen);
     }
 
     /// <summary>From just after a `&lt;&lt;`, returns the index after the heredoc's closing delimiter line.</summary>
@@ -683,11 +683,11 @@ internal sealed class Parser
     bool IsWord(string w) => Cur is { Kind: TokenKind.Word } t && t.Word!.Is(w);
     void SkipNewlines() { while (IsOp("\n")) _p++; }
     void SkipSeparators() { while (IsOp("\n") || IsOp(";")) _p++; }
-    ParseException Unexpected() => new($"syntax error near unexpected token `{Cur?.ToString() ?? "newline"}'");
+    ParseException Unexpected() => new(CommandSpec.Format(CommandSpec.Diagnostics.UnexpectedToken, ("token", Cur?.ToString() ?? "newline")));
 
     void Expect(string word)
     {
-        if (!IsWord(word)) throw Cur == null ? new ParseException($"syntax error: unexpected end of file (expected `{word}')") : Unexpected();
+        if (!IsWord(word)) throw Cur == null ? new ParseException(CommandSpec.Format(CommandSpec.Diagnostics.UnexpectedEofExpecting, ("word", word))) : Unexpected();
         _p++;
     }
 
@@ -757,7 +757,7 @@ internal sealed class Parser
     Command ParseCommand()
     {
         if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
-            throw new ParseException("command is nested too deeply");
+            throw new ParseException(CommandSpec.Diagnostics.NestedTooDeeply);
         int start = Cur?.Line ?? 0;
         if (Cur is { Kind: TokenKind.Arith } arith) { _p++; return WithRedirects(new ArithCommand(arith.Op), start); }
         if (IsOp("(") || IsWord("{"))
@@ -765,7 +765,7 @@ internal sealed class Parser
             bool sub = IsOp("(");
             _p++;
             var body = ParseScript(sub ? ")" : "}");
-            if (sub ? !IsOp(")") : !IsWord("}")) throw Cur == null ? new ParseException("syntax error: unexpected end of file") : Unexpected();
+            if (sub ? !IsOp(")") : !IsWord("}")) throw Cur == null ? new ParseException(CommandSpec.Diagnostics.UnexpectedEof) : Unexpected();
             _p++;
             return WithRedirects(new GroupCommand(body, sub), start);
         }
@@ -780,7 +780,7 @@ internal sealed class Parser
                 case "function": return ParseFunction(true);
                 case "[[": return WithRedirects(ParseCond(), start);
                 case "select": return WithRedirects(ParseFor(select: true), start);
-                case "coproc": throw new ParseException("'coproc' is not supported by this shell");
+                case "coproc": throw new ParseException(CommandSpec.Diagnostics.Coproc);
             }
             if (Reserved.Contains(kw) || kw == "}") throw Unexpected();
             if (At(1) is { Kind: TokenKind.Op, Op: "(" } && At(2) is { Kind: TokenKind.Op, Op: ")" }) return ParseFunction(false);
@@ -854,7 +854,7 @@ internal sealed class Parser
         {
             _p++;
             var parts = arith.Op.Split(';');
-            if (parts.Length != 3) throw new ParseException("syntax error: expected `for (( init; cond; step ))'");
+            if (parts.Length != 3) throw new ParseException(CommandSpec.Diagnostics.ForArithmetic);
             SkipSeparators();
             Expect("do");
             var b = ParseScript("done");
@@ -889,7 +889,7 @@ internal sealed class Parser
         var clauses = new List<(List<Word>, Script, string)>();
         while (!IsWord("esac"))
         {
-            if (Cur == null) throw new ParseException("syntax error: unexpected end of file (expected `esac')");
+            if (Cur == null) throw new ParseException(CommandSpec.Diagnostics.EofEsac);
             if (IsOp("(")) _p++;
             var patterns = new List<Word>();
             while (true)
@@ -924,7 +924,7 @@ internal sealed class Parser
             _p++;
         }
         SkipNewlines();
-        if (Cur == null) throw new ParseException("syntax error: unexpected end of file");
+        if (Cur == null) throw new ParseException(CommandSpec.Diagnostics.UnexpectedEof);
         int start = Cur.Start;
         var body = ParseCommand();
         return new FunctionDef(name, body) { Source = _src[start..Math.Max(start, _t[_p - 1].End)].TrimEnd() };
@@ -938,7 +938,7 @@ internal sealed class Parser
         {
             switch (Cur)
             {
-                case null: throw new ParseException("syntax error: unexpected end of file (expected `]]')");
+                case null: throw new ParseException(CommandSpec.Diagnostics.EofDoubleBracket);
                 case { Kind: TokenKind.Word } w: items.Add(w.Word!); break;
                 case { Kind: TokenKind.Op, Op: "&&" or "||" or "(" or ")" } o: items.Add(Word.Lit(o.Op)); break;
                 case { Kind: TokenKind.Redirect, Redirect: { Op: "<" or ">", Here: null } r }: items.Add(Word.Lit(r.Op)); break;

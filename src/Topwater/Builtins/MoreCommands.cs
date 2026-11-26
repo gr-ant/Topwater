@@ -9,12 +9,12 @@ namespace Topwater;
 internal static partial class Builtins
 {
     static int ParseCount(CommandContext ctx, int fallback) =>
-        ctx.Args.Count == 0 ? fallback : int.TryParse(ctx.Args[0], out var n) ? n : throw new ShellException($"{ctx.Args[0]}: numeric argument required", 2);
+        ctx.Args.Count == 0 ? fallback : int.TryParse(ctx.Args[0], out var n) ? n : throw new ShellException(CommandSpec.Message(ctx.Name, "numericArgument", ("value", ctx.Args[0])), 2);
 
     static TimeSpan ParseDuration(string s)
     {
         var m = System.Text.RegularExpressions.Regex.Match(s, @"^(\d+(?:\.\d+)?)([smhd]?)$");
-        if (!m.Success) throw new ShellException($"invalid time interval '{s}'");
+        if (!m.Success) throw new ShellException(CommandSpec.Message("sleep", "invalidTimeInterval", ("value", s)));
         var n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
         return m.Groups[2].Value switch { "m" => TimeSpan.FromMinutes(n), "h" => TimeSpan.FromHours(n), "d" => TimeSpan.FromDays(n), _ => TimeSpan.FromSeconds(n) };
     }
@@ -22,7 +22,7 @@ internal static partial class Builtins
     static int LoopJump(CommandContext ctx, bool isBreak)
     {
         if (ctx.Shell.LoopDepth > 0) throw new LoopControl(isBreak, Math.Max(1, ParseCount(ctx, 1)));
-        ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: only meaningful in a `for', `while', or `until' loop");
+        ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: " + CommandSpec.Message(ctx.Name, "onlyInLoop"));
         return 0;
     }
 
@@ -68,7 +68,7 @@ internal static partial class Builtins
         if (all) lines.AddRange(sh.LocateAll(a).Select(p => $"{a} is {p}"));
         else if (lines.Count == 0 && sh.Locate(a) is { } l)
             lines.Add(!l.Hashed ? $"{a} is {l.Path}" : $"{a} is hashed ({(l.Path.StartsWith('/') || l.Path.StartsWith("./") ? "" : "./")}{l.Path})");
-        if (lines.Count == 0) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}type: {a}: not found"); return false; }
+        if (lines.Count == 0) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}type: " + CommandSpec.Message("type", "notFound", ("name", a))); return false; }
         foreach (var line in all ? lines : lines.Take(1)) ctx.Stdout.WriteLine(line);
         return true;
     }
@@ -117,18 +117,18 @@ internal static partial class Builtins
             if (ctx.Args.Count > 0 && !int.TryParse(ctx.Args[0], out _))
             {
                 // bash still exits, with status 2
-                ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}exit: {ctx.Args[0]}: numeric argument required");
+                ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}exit: " + CommandSpec.Message("exit", "numericArgument", ("value", ctx.Args[0])));
                 throw new ExitSignal(2);
             }
             throw new ExitSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255);
-        }), "Exit the shell");
+        }));
         shell.Register("return", (Func<CommandContext, int>)(ctx =>
         {
-            if (!ctx.Shell.InFunction && ctx.Shell.SourceDepth == 0) throw new ShellException("can only `return' from a function or sourced script", 2);
+            if (!ctx.Shell.InFunction && ctx.Shell.SourceDepth == 0) throw new ShellException(CommandSpec.Message("return", "notInFunction"), 2);
             throw new ReturnSignal(ParseCount(ctx, ctx.Shell.LastExitCode) & 255);
-        }), "Return from a function");
-        shell.Register("break", (Func<CommandContext, int>)(ctx => LoopJump(ctx, true)), "Exit a loop");
-        shell.Register("continue", (Func<CommandContext, int>)(ctx => LoopJump(ctx, false)), "Next loop iteration");
+        }));
+        shell.Register("break", (Func<CommandContext, int>)(ctx => LoopJump(ctx, true)));
+        shell.Register("continue", (Func<CommandContext, int>)(ctx => LoopJump(ctx, false)));
 
         shell.Register("shift", ctx =>
         {
@@ -137,7 +137,7 @@ internal static partial class Builtins
             if (n > pos.Count) return 1;
             ctx.Shell.Positional = pos.Skip(n).ToList();
             return 0;
-        }, "Shift positional parameters");
+        });
 
         shell.Register("trap", ctx =>
         {
@@ -163,7 +163,7 @@ internal static partial class Builtins
             foreach (var sig in signals)
                 if (act is null or "-") traps.Remove(Name(sig)); else traps[Name(sig)] = act;
             return 0;
-        }, "Run a command when the shell exits (EXIT), a command fails (ERR) or a function returns (RETURN)");
+        });
 
         shell.Register("shopt", ctx =>
         {
@@ -174,12 +174,12 @@ internal static partial class Builtins
                 "localvar_inherit", "localvar_unset", "login_shell", "mailwarn", "no_empty_cmd_completion", "nocaseglob", "nocasematch",
                 "noexpand_translation", "nullglob", "patsub_replacement", "progcomp", "progcomp_alias", "promptvars", "restricted_shell",
                 "shift_verbose", "sourcepath", "varredir_close", "xpg_echo"];
-            var a = Args.Parse(ctx.Args, "supqo");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("shopt"));
             if (a.Has('o'))
             {
                 // shopt -o: the set -o options
                 foreach (var n in a.Positional)
-                    if (!ctx.Shell.SetOption(n, a.Has('s')) && (a.Has('s') || a.Has('u'))) throw new ShellException($"{n}: invalid option name");
+                    if (!ctx.Shell.SetOption(n, a.Has('s')) && (a.Has('s') || a.Has('u'))) throw new ShellException(CommandSpec.Message("shopt", "invalidOptionName", ("name", n)));
                 if (a.Has('s') || a.Has('u')) return 0;
                 foreach (var (n, on) in ctx.Shell.OptionList)
                     if (a.Positional.Count == 0 || a.Positional.Contains(n)) ctx.Stdout.WriteLine($"{n,-15}\t{(on ? "on" : "off")}");
@@ -190,7 +190,7 @@ internal static partial class Builtins
             {
                 foreach (var n in names)
                 {
-                    if (!known.Contains(n)) throw new ShellException($"{n}: invalid shell option name");
+                    if (!known.Contains(n)) throw new ShellException(CommandSpec.Message("shopt", "invalidShellOptionName", ("name", n)));
                     if (a.Has('s')) ctx.Shell.Shopts.Add(n); else ctx.Shell.Shopts.Remove(n);
                 }
                 return 0;
@@ -198,13 +198,13 @@ internal static partial class Builtins
             int code = 0;
             foreach (var n in names)
             {
-                if (!known.Contains(n)) { ctx.Stderr.WriteLine($"shopt: {n}: invalid shell option name"); code = 1; continue; }
+                if (!known.Contains(n)) { ctx.Stderr.WriteLine("shopt: " + CommandSpec.Message("shopt", "invalidShellOptionName", ("name", n))); code = 1; continue; }
                 bool on = ctx.Shell.Shopts.Contains(n);
                 if (code == 0 && !on) code = 1;
                 if (!a.Has('q')) ctx.Stdout.WriteLine($"{n,-15}\t{(on ? "on" : "off")}");
             }
             return code;
-        }, "Set shell options (nullglob, dotglob, globstar, extglob, nocasematch ...)");
+        });
 
         shell.Register("set", ctx =>
         {
@@ -235,15 +235,15 @@ internal static partial class Builtins
                             continue;
                         }
                         var opt = args[++i];
-                        if (!sh.SetOption(opt, on)) throw new ShellException($"{opt}: invalid option name", 2);
+                        if (!sh.SetOption(opt, on)) throw new ShellException(CommandSpec.Message("set", "invalidOptionName", ("name", opt)), 2);
                     }
                     else if ("eufxC".Contains(c)) sh.SetOption(c switch { 'e' => "errexit", 'u' => "nounset", 'f' => "noglob", 'x' => "xtrace", _ => "noclobber" }, on);
-                    else if (!"abhkmnpvBEHPT".Contains(c)) throw new ShellException($"{a[0]}{c}: invalid option", 2); // accepted, no effect here
+                    else if (!"abhkmnpvBEHPT".Contains(c)) throw new ShellException(CommandSpec.Message("set", "builtinInvalidOption", ("option", $"{a[0]}{c}")), 2); // accepted, no effect here
                 }
             }
             if (i < args.Count) sh.Positional = args.Skip(i).ToList();
             return 0;
-        }, "Set shell options (-e, -u, -x, -f, -C, -o pipefail) or positional parameters");
+        });
 
         CommandHandler declare = ctx =>
         {
@@ -264,7 +264,7 @@ internal static partial class Builtins
                         case 'a' or 'A': listOnly += c; break; // arrays were declared before the built-in ran
                         case 't': break;
                         case 'i' or 'r' or 'x' or 'l' or 'u' or 'n': if (a[0] == '-') on += c; else off += c; break;
-                        default: throw new ShellException($"-{c}: invalid option", 2);
+                        default: throw new ShellException(CommandSpec.Message(ctx.Name, "builtinInvalidOption", ("option", $"-{c}")), 2);
                     }
             }
             if (functions || functionNames) return Task.FromResult(PrintFunctions(ctx, names, functionNames));
@@ -281,7 +281,7 @@ internal static partial class Builtins
             {
                 foreach (var n in names)
                     if (DeclareLine(sh, n) is { } line) ctx.Stdout.WriteLine(line);
-                    else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: {n}: not found"); code = 1; }
+                    else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}{ctx.Name}: " + CommandSpec.Message(ctx.Name, "notFound", ("name", n))); code = 1; }
                 return Task.FromResult(code);
             }
             bool local = ctx.Name == "local" || ctx.Name is "declare" or "typeset" && sh.InFunction && !global;
@@ -293,7 +293,7 @@ internal static partial class Builtins
                 var value = eq > 0 ? arg[(eq + 1)..] : null;
                 try
                 {
-                    if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException($"`{arg}': not a valid identifier");
+                    if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.NotValidIdentifier, ("name", arg)));
                     if (local) sh.DeclareLocal(name, null); // shortcut: `local x` is empty here, unset in bash
                     if (on.Contains('n'))
                     {
@@ -313,19 +313,19 @@ internal static partial class Builtins
             }
             return Task.FromResult(code);
         };
-        shell.Register("local", declare, "Declare function-local variables");
-        shell.Register("declare", declare, "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)");
-        shell.Register("typeset", declare, "Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)");
-        shell.Register("readonly", declare, "Make variables read-only");
+        shell.Register("local", declare);
+        shell.Register("declare", declare);
+        shell.Register("typeset", declare);
+        shell.Register("readonly", declare);
 
         shell.Register("read", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "rsea", "ptdnuNi");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("read"));
             var sh = ctx.Shell;
             var names = a.Positional.Count > 0 ? a.Positional : ["REPLY"];
             var input = ctx.StdinBuffer;
             if (a.Value('u') is { } u && u != "0")
-                input = int.TryParse(u, out var fd) && (ctx.Fds?.GetValueOrDefault(fd) as StdinBuffer ?? sh.InputFd(fd)) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
+                input = int.TryParse(u, out var fd) && (ctx.Fds?.GetValueOrDefault(fd) as StdinBuffer ?? sh.InputFd(fd)) is { } fdInput ? fdInput : throw new ShellException(CommandSpec.Message(ctx.Name, "badFileDescriptor", ("fd", u)));
             var delim = a.Value('d') is { } dv ? (dv.Length == 0 ? '\0' : dv[0]) : '\n';
             string? line;
             if (a.Value('N') is { } exact) line = input.ReadChars(int.Parse(exact), null);
@@ -355,16 +355,16 @@ internal static partial class Builtins
             }
             // like bash, a final line with no trailing newline is still assigned, but read reports end of input
             return input.LastTerminated ? 0 : 1;
-        }, "Read a line from stdin into variables");
+        });
 
         CommandHandler mapfile = ctx =>
         {
-            var a = Args.Parse(ctx.Args, "t", "dnsuCcO");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of(ctx.Name));
             var sh = ctx.Shell;
             var name = a.Positional.Count > 0 ? a.Positional[0] : "MAPFILE";
             var input = ctx.StdinBuffer;
             if (a.Value('u') is { } u && u != "0")
-                input = int.TryParse(u, out var fd) && (ctx.Fds?.GetValueOrDefault(fd) as StdinBuffer ?? sh.InputFd(fd)) is { } fdInput ? fdInput : throw new ShellException($"{u}: invalid file descriptor: Bad file descriptor");
+                input = int.TryParse(u, out var fd) && (ctx.Fds?.GetValueOrDefault(fd) as StdinBuffer ?? sh.InputFd(fd)) is { } fdInput ? fdInput : throw new ShellException(CommandSpec.Message(ctx.Name, "badFileDescriptor", ("fd", u)));
             var delim = a.Value('d') is { } dv ? (dv.Length == 0 ? '\0' : dv[0]) : '\n';
             long max = a.Value('n') is { } n ? long.Parse(n) : 0, skip = a.Value('s') is { } sk ? long.Parse(sk) : 0;
             long index = a.Value('O') is { } origin ? long.Parse(origin) : 0;
@@ -380,12 +380,12 @@ internal static partial class Builtins
             }
             return Task.FromResult(0);
         };
-        shell.Register("mapfile", mapfile, "Read lines from stdin into an array (-t drops the newlines)");
-        shell.Register("readarray", mapfile, "Read lines from stdin into an array (-t drops the newlines)");
+        shell.Register("mapfile", mapfile);
+        shell.Register("readarray", mapfile);
 
         shell.Register("getopts", ctx =>
         {
-            if (ctx.Args.Count < 2) throw new ShellException("usage: getopts optstring name [arg ...]", 2);
+            if (ctx.Args.Count < 2) throw new ShellException(CommandSpec.Message("getopts", "usage"), 2);
             var sh = ctx.Shell;
             string spec = ctx.Args[0], name = ctx.Args[1];
             var args = ctx.Args.Count > 2 ? ctx.Args.Skip(2).ToList() : sh.Positional;
@@ -413,7 +413,7 @@ internal static partial class Builtins
             if (at < 0)
             {
                 if (silent) sh.SetVar("OPTARG", c.ToString());
-                else { ctx.Stderr.WriteLine($"{sh.GetVariable("0")}: illegal option -- {c}"); sh.Unset("OPTARG"); }
+                else { ctx.Stderr.WriteLine(CommandSpec.Message("getopts", "illegalOption", ("script", sh.GetVariable("0")), ("option", c.ToString()))); sh.Unset("OPTARG"); }
                 return Done(0, "?");
             }
             if (at + 1 >= spec.Length || spec[at + 1] != ':') { sh.Unset("OPTARG"); return Done(0, c.ToString()); }
@@ -422,12 +422,12 @@ internal static partial class Builtins
             else if (silent) { sh.SetVar("OPTARG", c.ToString()); return Done(0, ":"); }
             else
             {
-                ctx.Stderr.WriteLine($"{sh.GetVariable("0")}: option requires an argument -- {c}");
+                ctx.Stderr.WriteLine(CommandSpec.Message("getopts", "missingArgument", ("script", sh.GetVariable("0")), ("option", c.ToString())));
                 sh.Unset("OPTARG");
                 return Done(0, "?");
             }
             return Done(0, c.ToString());
-        }, "Parse command-line options");
+        });
 
         shell.Register("exec", async ctx =>
         {
@@ -435,7 +435,7 @@ internal static partial class Builtins
             var args = ctx.Args.SkipWhile(a => a is "-c" or "-l").ToList();
             if (args.Count == 0) return 0;
             throw new ExitSignal(await ctx.Shell.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true));
-        }, "Replace the shell with a command, or redirect the shell's own input and output");
+        });
 
         shell.Register("wait", ctx =>
         {
@@ -447,14 +447,14 @@ internal static partial class Builtins
             foreach (var id in ids)
             {
                 if (id.StartsWith('%')) { code = 0; continue; }
-                if (!int.TryParse(id, out var pid)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}wait: `{id}': not a pid or valid job spec"); code = 2; continue; }
+                if (!int.TryParse(id, out var pid)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}wait: " + CommandSpec.Message("wait", "notPid", ("id", id))); code = 2; continue; }
                 code = ctx.Shell.WaitFor(pid);
-                if (code == 127) ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}wait: pid {pid} is not a child of this shell");
+                if (code == 127) ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}wait: " + CommandSpec.Message("wait", "notChild", ("pid", pid.ToString())));
             }
             return code;
-        }, "Wait for background jobs (they run to completion when started)");
-        shell.Register("jobs", _ => 0, "List background jobs (none are ever still running)");
-        shell.Register("disown", _ => 0, "Forget background jobs");
+        });
+        shell.Register("jobs", _ => 0);
+        shell.Register("disown", _ => 0);
 
         shell.Register("kill", ctx =>
         {
@@ -473,15 +473,15 @@ internal static partial class Builtins
                 }
                 targets.Add(a);
             }
-            if (targets.Count == 0) throw new ShellException("usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]", 2);
+            if (targets.Count == 0) throw new ShellException(CommandSpec.Message("kill", "usage"), 2);
             foreach (var t in targets)
             {
                 if (t == "4242") { if (signal != 0) throw new ExitSignal(128 + signal); continue; } // the shell itself
-                ctx.Stderr.WriteLine(t.StartsWith('%') ? $"{ctx.Shell.ErrPrefix}kill: {t}: no such job" : $"{ctx.Shell.ErrPrefix}kill: ({t}) - No such process");
+                ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}kill: " + (t.StartsWith('%') ? CommandSpec.Message("kill", "noSuchJob", ("job", t)) : CommandSpec.Message("kill", "noSuchProcess", ("pid", t))));
                 code = 1;
             }
             return code;
-        }, "Send a signal to a process (background jobs have always finished already)");
+        });
 
         shell.Register("hash", ctx =>
         {
@@ -497,14 +497,14 @@ internal static partial class Builtins
                     if (ch == 'r') sh.Hashed.Clear();
                     else if (ch == 't') show = true;
                     else if (ch == 'd') delete = true;
-                    else if (ch == 'p') { path = i + 1 < ctx.Args.Count ? ctx.Args[++i] : throw new UsageException("-p: option requires an argument"); break; }
+                    else if (ch == 'p') { path = i + 1 < ctx.Args.Count ? ctx.Args[++i] : throw new UsageException(CommandSpec.Message("hash", "builtinOptionArgument", ("option", "-p"))); break; }
                     else if (ch == 'l') list = true;
-                    else throw new UsageException($"-{ch}: invalid option");
+                    else throw new UsageException(CommandSpec.Message("hash", "builtinInvalidOption", ("option", $"-{ch}")));
             }
             var names = ctx.Args.Skip(i).ToList();
             if ((show || delete) && names.Count == 0)
             {
-                ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: -{(show ? 't' : 'd')}: option requires an argument");
+                ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: " + CommandSpec.Message("hash", "builtinOptionArgument", ("option", show ? "-t" : "-d")));
                 return 1;
             }
             // -l: each entry as the command that would hash it again
@@ -520,17 +520,17 @@ internal static partial class Builtins
                 if (show && sh.HashLookup(n) is { } hashed) ctx.Stdout.WriteLine(list ? Reusable(n, hashed) : names.Count > 1 ? $"{n}\t{hashed}" : hashed);
                 else if (delete && sh.Hashed.Remove(n)) { }
                 else if (path != null) sh.Hashed[n] = (path, 0);
-                else if (show || delete) { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
+                else if (show || delete) { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: " + CommandSpec.Message("hash", "notFound", ("name", n))); code = 1; }
                 else if (n.Contains('/') || IsShellBuiltin(sh, n) || sh.Functions.ContainsKey(n) || sh.IsUnfiled(n)) { }
                 else if (sh.SearchPathAll(n).FirstOrDefault() is { } found) sh.Hashed[n] = (found, 0);
-                else { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: {n}: not found"); code = 1; }
+                else { ctx.Stderr.WriteLine($"{sh.ErrPrefix}hash: " + CommandSpec.Message("hash", "notFound", ("name", n))); code = 1; }
             }
             return code;
-        }, "Remember command locations");
+        });
 
         shell.Register("builtin", ctx => ctx.Args.Count == 0 ? Task.FromResult(0)
             : IsShellBuiltin(ctx.Shell, ctx.Args[0]) ? ctx.Shell.InvokeAsync(ctx.Args, ctx.Io, ctx.CancellationToken, skipFunctions: true)
-            : throw new ShellException($"{ctx.Args[0]}: not a shell builtin"), "Run a shell builtin, bypassing a function of the same name");
+            : throw new ShellException(CommandSpec.Message("builtin", "notBuiltin", ("name", ctx.Args[0]))));
 
         string Dirs(Shell sh)
         {
@@ -541,7 +541,7 @@ internal static partial class Builtins
         int ChangeDir(CommandContext ctx, string dir)
         {
             var abs = ctx.ResolvePath(dir);
-            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{dir}: No such file or directory");
+            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException(CommandSpec.Message("pushd", "noDirectory", ("dir", dir)));
             ctx.Shell.Environment["OLDPWD"] = ctx.Shell.Cwd;
             ctx.Shell.Cwd = abs;
             return 0;
@@ -553,23 +553,23 @@ internal static partial class Builtins
             var old = sh.Cwd;
             if (args.Count == 0)
             {
-                if (sh.DirStack.Count == 0) throw new ShellException("no other directory");
+                if (sh.DirStack.Count == 0) throw new ShellException(CommandSpec.Message("pushd", "noOtherDirectory"));
                 ChangeDir(ctx, sh.DirStack[0]);
                 sh.DirStack[0] = old;
             }
             else { ChangeDir(ctx, args[0]); sh.DirStack.Insert(0, old); }
             ctx.Stdout.WriteLine(Dirs(sh));
             return 0;
-        }, "Change directory, remembering the old one");
+        });
         shell.Register("popd", ctx =>
         {
             var sh = ctx.Shell;
-            if (sh.DirStack.Count == 0) throw new ShellException("directory stack empty");
+            if (sh.DirStack.Count == 0) throw new ShellException(CommandSpec.Message("popd", "stackEmpty"));
             ChangeDir(ctx, sh.DirStack[0]);
             sh.DirStack.RemoveAt(0);
             ctx.Stdout.WriteLine(Dirs(sh));
             return 0;
-        }, "Return to the directory pushd left");
+        });
         shell.Register("dirs", ctx =>
         {
             if (ctx.Args.Contains("-c")) { ctx.Shell.DirStack.Clear(); return 0; }
@@ -581,25 +581,26 @@ internal static partial class Builtins
             }
             else ctx.Stdout.WriteLine(line);
             return 0;
-        }, "Show the directory stack");
+        });
 
         shell.Register("ulimit", ctx =>
         {
             if (ctx.Args.Any(a => !a.StartsWith('-'))) return 0; // setting a limit: accepted
             ctx.Stdout.WriteLine(ctx.Args.Contains("-n") ? "1024" : ctx.Args.Contains("-s") ? "8192" : ctx.Args.Contains("-c") ? "0" : "unlimited");
             return 0;
-        }, "Show resource limits");
-        shell.Register("times", ctx => { ctx.Stdout.Write("0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n"); return 0; }, "Show the shell's CPU times");
+        });
+        shell.Register("times", ctx => { ctx.Stdout.Write("0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n"); return 0; });
+        shell.Register("umask", ctx => { if (ctx.Args.Count == 0) ctx.Stdout.WriteLine("0022"); return 0; });
 
-        shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken), "Run arguments as a shell command");
+        shell.Register("eval", ctx => ctx.Shell.RunScriptTextAsync(string.Join(' ', ctx.Args), ctx.Io, subshell: false, ctx.CancellationToken));
 
         shell.Register("let", ctx =>
         {
-            if (ctx.Args.Count == 0) throw new ShellException("expression expected");
+            if (ctx.Args.Count == 0) throw new ShellException(CommandSpec.Message("let", "expressionExpected"));
             long v = 0;
             foreach (var expr in ctx.Args) v = Arith.Eval(ctx.Shell, expr);
             return v != 0 ? 0 : 1;
-        }, "Evaluate arithmetic expressions");
+        });
 
         shell.Register("command", async ctx =>
         {
@@ -616,7 +617,7 @@ internal static partial class Builtins
                 else code = 1;
             }
             return code;
-        }, "Run a command, or describe it with -v");
+        });
 
         shell.Register("printenv", ctx =>
         {
@@ -629,25 +630,25 @@ internal static partial class Builtins
             foreach (var n in ctx.Args)
                 if (ctx.Shell.Environment.TryGetValue(n, out var v)) ctx.Stdout.WriteLine(v); else code = 1;
             return code;
-        }, "Print environment variables");
+        });
 
         shell.Register("sleep", async ctx =>
         {
-            if (ctx.Args.Count == 0) throw new UsageException("missing operand");
+            if (ctx.Args.Count == 0) throw new UsageException(CommandSpec.Message("sleep", "missingOperand"));
             var total = ctx.Args.Aggregate(TimeSpan.Zero, (t, a) => t + ParseDuration(a));
             await ctx.Shell.SleepAsync(total, ctx.CancellationToken);
             return 0;
-        }, "Pause for a number of seconds");
+        });
 
         shell.Register("timeout", async ctx =>
         {
             var args = ctx.Args.SkipWhile(a => a.StartsWith('-')).ToList();
-            if (args.Count < 2) throw new ShellException("missing operand", 125);
+            if (args.Count < 2) throw new ShellException(CommandSpec.Message("timeout", "missingOperand"), 125);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
             cts.CancelAfter(ParseDuration(args[0]));
             try { return await ctx.Shell.WithVirtualTimeoutAsync(ParseDuration(args[0]), () => ctx.Shell.InvokeAsync(args.Skip(1).ToList(), ctx.Io, cts.Token)) ?? 124; }
             catch (OperationCanceledException) when (!ctx.CancellationToken.IsCancellationRequested) { return 124; }
-        }, "Run a command with a time limit");
+        });
 
         shell.Register("time", async ctx =>
         {
@@ -656,9 +657,9 @@ internal static partial class Builtins
             var t = elapsed();
             ctx.Stderr.Write($"\nreal\t{(int)t.TotalMinutes}m{t.TotalSeconds % 60:0.000}s\nuser\t0m0.000s\nsys\t0m0.000s\n");
             return code;
-        }, "Time a command");
+        });
 
-        shell.Register("clear", _ => 0, "Clear the terminal");
+        shell.Register("clear", _ => 0);
     }
 
     static string Hex(byte[] bytes) => Convert.ToHexString(bytes).ToLowerInvariant();
@@ -667,8 +668,8 @@ internal static partial class Builtins
     {
         shell.Register("basename", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "az", "s", "multiple=a,suffix=s,zero=z");
-            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("basename"));
+            if (a.Positional.Count == 0) throw new UsageException(CommandSpec.Message("basename", "missingOperand"));
             var suffix = a.Value('s') ?? (!a.Has('a') && a.Positional.Count == 2 ? a.Positional[1] : null);
             var names = a.Has('a') || a.Value('s') != null ? a.Positional : a.Positional.Take(1).ToList();
             foreach (var n in names)
@@ -678,12 +679,12 @@ internal static partial class Builtins
                 ctx.Stdout.WriteLine(b);
             }
             return 0;
-        }, "Strip directory and suffix from a path");
+        });
 
         shell.Register("dirname", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "z", longs: "zero=z");
-            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("dirname"));
+            if (a.Positional.Count == 0) throw new UsageException(CommandSpec.Message("dirname", "missingOperand"));
             foreach (var n in a.Positional)
             {
                 var t = n.TrimEnd('/');
@@ -691,15 +692,15 @@ internal static partial class Builtins
                 ctx.Stdout.Write((t.Length == 0 ? "/" : i < 0 ? "." : i == 0 ? "/" : t[..i].TrimEnd('/') is var d && d.Length > 0 ? d : "/") + (a.Has('z') ? "\0" : "\n"));
             }
             return 0;
-        }, "Strip the last component from a path");
+        });
 
         CommandHandler realpath = ctx =>
         {
-            var a = Args.Parse(ctx.Args, "fesmqnzvLP", longs: "canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,no-symlinks=s,quiet=q,no-newline=n,zero=z,verbose=v,logical=L,physical=P");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of(ctx.Name));
             bool readlink = ctx.Name == "readlink", plain = readlink && !a.Has('f') && !a.Has('e') && !a.Has('m');
             // readlink is silent about failures unless -v; realpath reports them unless -q
             bool report = readlink ? a.Has('v') : !a.Has('q');
-            if (a.Positional.Count == 0 && readlink) throw new UsageException("missing operand");
+            if (a.Positional.Count == 0 && readlink) throw new UsageException(CommandSpec.Message("readlink", "missingOperand"));
             var fs = ctx.Fs;
             var end = a.Has('z') ? "\0" : readlink && a.Has('n') && a.Positional.Count == 1 ? "" : "\n";
             int code = 0;
@@ -712,23 +713,23 @@ internal static partial class Builtins
                     catch (ShellException e) { result = null; why = Reason(e); }
                 else if (!readlink && a.Has('s')) { result = VirtualFileSystem.Normalize(ctx.Shell.Cwd, p); why = null; } // -s: no links resolved
                 else result = fs.RealPath(abs, out why, existing: a.Has('e')) ?? (a.Has('m') ? abs : null);
-                if (result == null) { if (report) ctx.Stderr.WriteLine($"{ctx.Name}: {Builtins.Quote(p)}: {why}"); code = 1; continue; }
+                if (result == null) { if (report) ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message(ctx.Name, "failed", ("file", p), ("errno", why ?? ""))); code = 1; continue; }
                 ctx.Stdout.Write(result + end);
             }
             return Task.FromResult(code);
         };
-        shell.Register("realpath", realpath, "Print the absolute path");
-        shell.Register("readlink", realpath, "Print resolved path (-f)");
+        shell.Register("realpath", realpath);
+        shell.Register("readlink", realpath);
 
         shell.Register("stat", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "Lt", "c", "format=c,dereference=L,terse=t");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("stat"));
             int code = 0;
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
                 bool follow = a.Has('L');
-                if (!ctx.Fs.Exists(abs, follow)) { ctx.Stderr.WriteLine($"stat: cannot statx '{p}': {ctx.Fs.WhyMissing(abs, follow)}"); code = 1; continue; }
+                if (!ctx.Fs.Exists(abs, follow)) { ctx.Stderr.WriteLine("stat: " + CommandSpec.Message("stat", "cannotStat", ("file", p), ("errno", ctx.Fs.WhyMissing(abs, follow)))); code = 1; continue; }
                 var st = ctx.Fs.Stat(abs, follow);
                 var type = st.IsSymlink ? "symbolic link" : st.IsDirectory ? "directory" : st.Size == 0 ? "regular empty file" : "regular file";
                 var named = st.LinkTarget is { } target ? $"{QuoteAlways(p)} -> {QuoteAlways(target)}" : QuoteAlways(p);
@@ -760,11 +761,11 @@ internal static partial class Builtins
                     $"Modify: {mtime}\nChange: {mtime}\n");
             }
             return code;
-        }, "Show file status");
+        });
 
         shell.Register("du", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "shacSk", "d", "summarize=s,human-readable=h,all=a,total=c,max-depth=d");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("du"));
             int maxDepth = a.Has('s') ? 0 : a.Value('d') is { } d ? int.Parse(d) : int.MaxValue;
             string Fmt(long kb) => !a.Has('h') ? kb.ToString()
                 : kb < 10 ? $"{kb:0.0}K" : kb < 1024 ? $"{kb}K" : kb < 1024 * 1024 ? $"{kb / 1024.0:0.#}M" : $"{kb / 1048576.0:0.#}G";
@@ -786,12 +787,12 @@ internal static partial class Builtins
             foreach (var p in a.Positional.DefaultIfEmpty("."))
             {
                 var abs = ctx.ResolvePath(p);
-                if (!ctx.Fs.Exists(abs, follow: false)) { ctx.Stderr.WriteLine($"du: cannot access '{p}': No such file or directory"); code = 1; continue; }
+                if (!ctx.Fs.Exists(abs, follow: false)) { ctx.Stderr.WriteLine("du: " + CommandSpec.Message("du", "cannotAccess", ("file", p), ("errno", "No such file or directory"))); code = 1; continue; }
                 total += Walk(abs, p, 0);
             }
             if (a.Has('c')) ctx.Stdout.WriteLine($"{Fmt(total)}\ttotal");
             return code;
-        }, "Estimate disk usage");
+        });
 
         shell.Register("df", ctx =>
         {
@@ -810,47 +811,47 @@ internal static partial class Builtins
                 ? $"Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1      {H(size),5} {H(used),5} {H(avail),5} {pct,3}% /\ntmpfs           3.9G     0  3.9G   0% /dev/shm\n"
                 : $"Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1      {size / 1024,10} {(used + 1023) / 1024,7} {avail / 1024,9} {pct,3}% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n");
             return 0;
-        }, "Report filesystem disk space");
+        });
 
-        shell.Register("chmod", Chmod.Run, "Change file mode bits");
+        shell.Register("chmod", Chmod.Run);
 
         CommandHandler chown = ctx =>
         {
             var files = ctx.Args.Where(x => !x.StartsWith('-')).Skip(1).ToList(); // first operand is the owner
-            if (files.Count == 0) throw new UsageException("missing operand");
+            if (files.Count == 0) throw new UsageException(CommandSpec.Message(ctx.Name, "missingOperand"));
             var owner = ctx.Args.First(x => !x.StartsWith('-')).Split(':')[0];
             int code = 0;
             foreach (var f in files)
             {
                 var path = ctx.ResolvePath(f);
-                if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot access '{f}': {ctx.Fs.WhyMissing(path)}"); code = 1; continue; }
+                if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message(ctx.Name, "cannotAccess", ("file", f), ("reason", ctx.Fs.WhyMissing(path)))); code = 1; continue; }
                 try { ctx.Fs.SetOwner(path, owner.Length > 0 ? owner : ctx.Fs.Stat(path).Owner, ctx.Args.Contains("-R")); }
                 catch (ShellException) { ctx.Stderr.WriteLine($"{ctx.Name}: changing ownership of '{f}': Operation not permitted"); code = 1; }
             }
             return Task.FromResult(code);
         };
-        shell.Register("chown", chown, "Change file owner");
-        shell.Register("chgrp", chown, "Change file group");
+        shell.Register("chown", chown);
+        shell.Register("chgrp", chown);
 
         // the agent is a regular user: privilege escalation fails the way it does on a real server
         shell.Register("sudo", ctx =>
         {
             var user = ctx.Shell.Options.User;
             if (ctx.Args is ["-V"] or ["--version"]) { ctx.Stdout.WriteLine("Sudo version 1.9.15p5"); return 0; }
-            if (ctx.Args.Count == 0) { ctx.Stderr.WriteLine("usage: sudo -h | -K | -k | -V\nusage: sudo [-AbEHknPS] [-u user] [command [arg ...]]"); return 1; }
-            if (ctx.Args[0] is "-l" or "--list") { ctx.Stderr.WriteLine($"Sorry, user {user} may not run sudo on {ctx.Shell.Options.Hostname}."); return 1; }
-            ctx.Stderr.WriteLine($"{user} is not in the sudoers file.");
+            if (ctx.Args.Count == 0) { ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "usage")); return 1; }
+            if (ctx.Args[0] is "-l" or "--list") { ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "listDenied", ("user", user), ("host", ctx.Shell.Options.Hostname))); return 1; }
+            ctx.Stderr.WriteLine(CommandSpec.Message("sudo", "notSudoer", ("user", user)));
             return 1;
-        }, "Execute a command as another user");
+        });
         shell.Register("su", ctx =>
         {
-            ctx.Stderr.WriteLine("Password: \nsu: Authentication failure");
+            ctx.Stderr.WriteLine(CommandSpec.Message("su", "authenticationFailure"));
             return 1;
-        }, "Run a command with a substitute user ID");
+        });
 
         shell.Register("nl", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "", "bsw");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("nl"));
             bool all = a.Value('b') == "a";
             int width = int.Parse(a.Value('w') ?? "6"), n = 0, code = 0;
             var sep = a.Value('s') ?? "\t";
@@ -858,7 +859,7 @@ internal static partial class Builtins
                 foreach (var line in SplitLines(text))
                     ctx.Stdout.WriteLine(line.Length == 0 && !all ? "" : $"{(++n).ToString().PadLeft(width)}{sep}{line}");
             return code;
-        }, "Number lines");
+        });
 
         CommandHandler pager = ctx =>
         {
@@ -866,8 +867,8 @@ internal static partial class Builtins
             foreach (var (_, text) in Inputs(ctx, ctx.Args.Where(x => !x.StartsWith('-') && !x.StartsWith('+')).ToList(), () => code = 1)) ctx.Stdout.Write(text);
             return Task.FromResult(code);
         };
-        shell.Register("less", pager, "View files (non-interactive: prints them)");
-        shell.Register("more", pager, "View files (non-interactive: prints them)");
+        shell.Register("less", pager);
+        shell.Register("more", pager);
 
         shell.Register("file", ctx =>
         {
@@ -876,7 +877,7 @@ internal static partial class Builtins
             {
                 var abs = ctx.ResolvePath(p);
                 string desc;
-                if (!ctx.Fs.Exists(abs)) { desc = $"cannot open `{p}' (No such file or directory)"; code = 1; }
+                if (!ctx.Fs.Exists(abs)) { desc = CommandSpec.Message("file", "cannotOpen", ("file", p)); code = 1; }
                 else if (ctx.Fs.IsDirectory(abs)) desc = "directory";
                 else
                 {
@@ -893,7 +894,7 @@ internal static partial class Builtins
                 ctx.Stdout.WriteLine($"{p}: {desc}");
             }
             return code;
-        }, "Determine file type");
+        });
 
         shell.Register("rev", ctx =>
         {
@@ -901,18 +902,18 @@ internal static partial class Builtins
             foreach (var (_, text) in Inputs(ctx, ctx.Args, () => code = 1))
                 foreach (var line in SplitLines(text)) ctx.Stdout.WriteLine(new string(line.Reverse().ToArray()));
             return code;
-        }, "Reverse each line");
+        });
 
         shell.Register("tac", ctx =>
         {
             int code = 0;
             foreach (var (_, text) in Inputs(ctx, ctx.Args, () => code = 1)) WriteLines(ctx.Stdout, Enumerable.Reverse(SplitLines(text)));
             return code;
-        }, "Print lines in reverse order");
+        });
 
         shell.Register("paste", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "s", "d", "serial=s,delimiters=d");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("paste"));
             var delims = Unescape(a.Value('d') ?? "\t");
             if (delims.Length == 0) delims = "\0";
             char D(int i) => delims[i % delims.Length];
@@ -940,11 +941,11 @@ internal static partial class Builtins
                 for (int r = 0; r < rows; r++) ctx.Stdout.WriteLine(Join(columns.Select(c => r < c.Count ? c[r] : "").ToList()));
             }
             return code;
-        }, "Merge lines of files");
+        });
 
         shell.Register("column", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "tn", "so", "table=t,separator=s,output-separator=o");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("column"));
             int code = 0;
             var lines = Inputs(ctx, a.Positional, () => code = 1).SelectMany(i => SplitLines(i.Text)).ToList();
             if (!a.Has('t')) { WriteLines(ctx.Stdout, lines); return code; }
@@ -957,17 +958,17 @@ internal static partial class Builtins
             foreach (var r in rows)
                 ctx.Stdout.WriteLine(string.Join(outSep, r.Select((cell, i) => i == r.Length - 1 ? cell : cell.PadRight(widths[i]))));
             return code;
-        }, "Format input into aligned columns (-t)");
+        });
 
         shell.Register("base64", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "di", "w", "decode=d,ignore-garbage=i,wrap=w");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("base64"));
             int code = 0;
             var data = InputBytes(ctx, a.Positional, () => code = 1).SelectMany(i => i.Text).ToArray();
             if (a.Has('d'))
             {
                 try { ctx.Stdout.Write(ByteText.Decode(Convert.FromBase64String(string.Concat(Encoding.UTF8.GetString(data).Where(c => !char.IsWhiteSpace(c)))))); }
-                catch (FormatException) { throw new ShellException("invalid input"); }
+                catch (FormatException) { throw new ShellException(CommandSpec.Message("base64", "invalidInput")); }
                 return code;
             }
             var enc = Convert.ToBase64String(data);
@@ -975,7 +976,7 @@ internal static partial class Builtins
             if (wrap > 0) enc = string.Join('\n', enc.Chunk(wrap).Select(c => new string(c)));
             ctx.Stdout.WriteLine(enc);
             return code;
-        }, "Base64 encode/decode");
+        });
 
         foreach (var (name, hash) in new (string, Func<byte[], byte[]>)[] { ("md5sum", MD5.HashData), ("sha1sum", SHA1.HashData), ("sha256sum", SHA256.HashData), ("sha512sum", SHA512.HashData) })
         {
@@ -986,20 +987,20 @@ internal static partial class Builtins
                 foreach (var (n, data) in InputBytes(ctx, files, () => code = 1))
                     ctx.Stdout.WriteLine($"{Hex(hash(data))}  {(files.Count == 0 ? "-" : n)}");
                 return code;
-            }, $"Compute {name[..^3].ToUpperInvariant()} checksums");
+            });
         }
 
         shell.Register("mktemp", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "dqu", "pt", "directory=d,quiet=q,tmpdir=p");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("mktemp"));
             var template = a.Positional.FirstOrDefault() ?? "tmp.XXXXXXXXXX";
             const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
             var name = System.Text.RegularExpressions.Regex.Replace(template, "X{3,}$", m => new string(Enumerable.Range(0, m.Length).Select(_ => chars[ctx.Shell.NextRandom(chars.Length)]).ToArray()));
-            var path = template.Contains('/') && a.Value('p') == null ? ctx.ResolvePath(name) : VirtualFileSystem.Normalize(a.Value('p') ?? "/tmp", name);
+            var path = template.Contains('/') && a.Value('p') == null && !a.Has('t') ? ctx.ResolvePath(name) : VirtualFileSystem.Normalize(a.Value('p') ?? "/tmp", name);
             if (a.Has('d')) ctx.Fs.CreateDirectory(path); else ctx.Fs.WriteAllText(path, "");
             ctx.Stdout.WriteLine(path);
             return 0;
-        }, "Create a temporary file or directory");
+        });
 
         shell.Register("seq", ctx =>
         {
@@ -1013,18 +1014,18 @@ internal static partial class Builtins
                 var x = args[i];
                 if (double.TryParse(x, NumberStyles.Float, CultureInfo.InvariantCulture, out _)) nums.Add(x);
                 else if (x is "-w" or "--equal-width") equalWidth = true;
-                else if (x == "-s") sep = i + 1 < args.Count ? args[++i] : throw new ShellException("option requires an argument -- 's'");
+                else if (x == "-s") sep = i + 1 < args.Count ? args[++i] : throw new ShellException(CommandSpec.Message("seq", "optionRequiresArgument", ("option", "s")));
                 else if (x.StartsWith("-s")) sep = x[2..];
                 else if (x.StartsWith("--separator=")) sep = x[12..];
-                else if (x is "-f" or "--format") fmt = i + 1 < args.Count ? args[++i] : throw new ShellException("option requires an argument -- 'f'");
+                else if (x is "-f" or "--format") fmt = i + 1 < args.Count ? args[++i] : throw new ShellException(CommandSpec.Message("seq", "optionRequiresArgument", ("option", "f")));
                 else if (x.StartsWith("-f")) fmt = x[2..];
                 else if (x.StartsWith("--format=")) fmt = x[9..];
-                else throw new ShellException($"invalid option -- '{x.TrimStart('-')}'");
+                else throw new ShellException(CommandSpec.Message("seq", "invalidOption", ("option", x.TrimStart('-'))));
             }
-            if (nums.Count is 0 or > 3) throw new UsageException(nums.Count == 0 ? "missing operand" : $"extra operand {Builtins.QuoteL(nums[3])}");
+            if (nums.Count is 0 or > 3) throw new UsageException(nums.Count == 0 ? CommandSpec.Message("seq", "missingOperand") : CommandSpec.Message("seq", "extraOperand", ("operand", nums[3])));
             var v = nums.Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToList();
             double first = v.Count > 1 ? v[0] : 1, step = v.Count == 3 ? v[1] : 1, last = v[^1];
-            if (step == 0) throw new ShellException("invalid Zero increment value: '0'");
+            if (step == 0) throw new ShellException(CommandSpec.Message("seq", "zeroIncrement"));
             int decimals = nums.Max(x => x.Contains('.') ? x.Length - x.IndexOf('.') - 1 : 0);
             var items = new List<string>();
             for (long k = 0; ; k++)
@@ -1032,28 +1033,28 @@ internal static partial class Builtins
                 double x = first + k * step; // not a running sum, so 0.1 steps don't drift
                 if (!(step > 0 ? x <= last + 1e-9 : x >= last - 1e-9)) break;
                 items.Add(fmt != null ? Printf.Format(fmt, [x.ToString("R", CultureInfo.InvariantCulture)]) : x.ToString("F" + decimals, CultureInfo.InvariantCulture));
-                if (items.Count > 1_000_000) throw new ShellException("too many numbers");
+                if (items.Count > 1_000_000) throw new ShellException(CommandSpec.Message("seq", "tooManyNumbers"));
             }
             if (equalWidth && items.Count > 0) { int w = items.Max(s => s.Length); items = items.Select(s => s.PadLeft(w, '0')).ToList(); }
             if (items.Count > 0) ctx.Stdout.Write(string.Join(Unescape(sep), items) + "\n");
             return 0;
-        }, "Print a sequence of numbers");
+        });
 
-        shell.Register("diff", ctx => Diff.Run(ctx), "Compare files line by line (-u for unified)");
+        shell.Register("diff", ctx => Diff.Run(ctx));
 
         // ---------- fake system info ----------
         shell.Register("id", ctx =>
         {
             var u = ctx.Shell.Options.User;
-            var a = Args.Parse(ctx.Args, "ugnGr");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("id"));
             ctx.Stdout.WriteLine(a.Has('u') || a.Has('g') ? (a.Has('n') ? u : "1000") : $"uid=1000({u}) gid=1000({u}) groups=1000({u})");
             return 0;
-        }, "Print user and group IDs");
+        });
         shell.Register("uptime", ctx =>
         {
             ctx.Stdout.WriteLine(ctx.Args.Contains("-p") ? "up 3 days, 4 hours, 12 minutes" : $" {ctx.Shell.Now:HH:mm:ss} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01");
             return 0;
-        }, "Show how long the system has been running");
+        });
         shell.Register("free", ctx =>
         {
             bool h = ctx.Args.Any(x => x.Contains('h'));
@@ -1061,8 +1062,8 @@ internal static partial class Builtins
                 ? "               total        used        free      shared  buff/cache   available\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nSwap:          2.0Gi          0B       2.0Gi\n"
                 : "               total        used        free      shared  buff/cache   available\nMem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n");
             return 0;
-        }, "Display memory usage");
-        shell.Register("nproc", ctx => { ctx.Stdout.WriteLine("4"); return 0; }, "Print the number of processors");
+        });
+        shell.Register("nproc", ctx => { ctx.Stdout.WriteLine("4"); return 0; });
     }
 
     static bool LooksJson(string t)
@@ -1079,13 +1080,13 @@ internal static class Diff
 
     public static int Run(CommandContext ctx)
     {
-        var a = Args.Parse(ctx.Args, "uqsiwbBNr", "U", "unified=u,brief=q,report-identical-files=s,ignore-case=i,ignore-all-space=w,ignore-space-change=b,recursive=r");
-        if (a.Positional.Count != 2) throw new UsageException(a.Positional.Count < 2 ? $"missing operand after '{a.Positional.LastOrDefault() ?? "diff"}'" : $"extra operand '{a.Positional[2]}'");
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("diff"));
+        if (a.Positional.Count != 2) throw new UsageException(a.Positional.Count < 2 ? CommandSpec.Message("diff", "missingOperandAfter", ("operand", a.Positional.LastOrDefault() ?? "diff")) : CommandSpec.Message("diff", "extraOperand", ("operand", a.Positional[2])));
         string Read(string p)
         {
             if (p == "-") return ctx.StdinText;
             var abs = ctx.ResolvePath(p);
-            if (!ctx.Fs.Exists(abs)) throw new ShellException($"{p}: No such file or directory", 2);
+            if (!ctx.Fs.Exists(abs)) throw new ShellException(CommandSpec.Message("diff", "fileNotFound", ("file", p)), 2);
             if (ctx.Fs.IsDirectory(abs)) throw new ShellException($"{p}: Is a directory (directory diff is not supported)", 2);
             return ctx.Fs.ReadAllText(abs);
         }
@@ -1113,7 +1114,7 @@ internal static class Diff
     /// <summary>LCS diff. shortcut: O(n*m) memory; switch to Myers if agents diff large files.</summary>
     static List<(Op Op, int A, int B)> Compute(List<string> x, List<string> y)
     {
-        if ((long)x.Count * y.Count > 25_000_000) throw new ShellException("files too large to compare", 2);
+        if ((long)x.Count * y.Count > 25_000_000) throw new ShellException(CommandSpec.Message("diff", "tooLarge"), 2);
         var lcs = new int[x.Count + 1, y.Count + 1];
         for (int i = x.Count - 1; i >= 0; i--)
             for (int j = y.Count - 1; j >= 0; j--)
@@ -1196,20 +1197,20 @@ internal static class Chmod
             else if (arg is "-v" or "--verbose") verbose = true;
             else if (arg is "-c" or "--changes") changes = true;
             else if (arg is "-f" or "--silent" or "--quiet") quiet = true;
-            else if (arg.StartsWith("--") && arg.Length > 2) throw new UsageException($"unrecognized option '{arg}'");
+            else if (arg.StartsWith("--") && arg.Length > 2) throw new UsageException(CommandSpec.Message("chmod", "unrecognizedOption", ("option", arg)));
             else if (arg.Length > 1 && arg[0] == '-' && arg.FirstOrDefault(c => !"-rwxXstugoa+=,01234567".Contains(c)) is var bad and not '\0')
-                throw new UsageException($"invalid option -- '{bad}'");
+                throw new UsageException(CommandSpec.Message("chmod", "invalidOption", ("option", bad.ToString())));
             else if (spec == null) spec = arg; // may look like an option, e.g. -x or -w
             else files.Add(arg);
         }
-        if (spec == null || files.Count == 0) throw new UsageException(spec == null ? "missing operand" : $"missing operand after {Builtins.QuoteL(spec)}");
+        if (spec == null || files.Count == 0) throw new UsageException(spec == null ? CommandSpec.Message("chmod", "missingOperand") : CommandSpec.Message("chmod", "missingOperandAfter", ("operand", spec)));
         int code = 0;
         void Apply(string display, string path)
         {
             var st = ctx.Fs.Stat(path);
             var mode = Parse(spec, st.Mode, st.IsDirectory);
             try { ctx.Fs.Chmod(path, mode); }
-            catch (ShellException) { if (!quiet) ctx.Stderr.WriteLine($"chmod: changing permissions of '{display}': Operation not permitted"); code = 1; return; }
+            catch (ShellException) { if (!quiet) ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotChangePermissions", ("file", display))); code = 1; return; }
             string Fmt(int m) => $"{Convert.ToString(m, 8).PadLeft(4, '0')} ({VirtualFileSystem.FormatMode(st.IsDirectory, m)[1..]})";
             if (mode != st.Mode && (verbose || changes)) ctx.Stdout.WriteLine($"mode of '{display}' changed from {Fmt(st.Mode)} to {Fmt(mode)}");
             else if (mode == st.Mode && verbose) ctx.Stdout.WriteLine($"mode of '{display}' retained as {Fmt(mode)}");
@@ -1225,7 +1226,7 @@ internal static class Chmod
         foreach (var f in files)
         {
             var path = ctx.ResolvePath(f);
-            if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"chmod: cannot access '{f}': {ctx.Fs.WhyMissing(path)}"); code = 1; continue; }
+            if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotAccess", ("file", f), ("reason", ctx.Fs.WhyMissing(path)))); code = 1; continue; }
             Apply(f, path);
         }
         return Task.FromResult(code);
@@ -1237,7 +1238,7 @@ internal static class Chmod
         foreach (var clause in spec.Split(','))
         {
             var m = System.Text.RegularExpressions.Regex.Match(clause, "^([ugoa]*)([-+=])([rwxXt]*)$");
-            if (!m.Success) throw new ShellException($"invalid mode: '{spec}'");
+            if (!m.Success) throw new ShellException(CommandSpec.Message("chmod", "invalidMode", ("mode", spec)));
             var who = m.Groups[1].Value is "" or "a" ? "ugo" : m.Groups[1].Value.Replace("a", "ugo");
             int bits = 0;
             bool sticky = false;

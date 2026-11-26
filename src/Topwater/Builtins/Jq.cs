@@ -16,7 +16,7 @@ namespace Topwater;
 /// </summary>
 internal static class Jq
 {
-    public static void Register(Shell shell) => shell.Register("jq", Run, "Command-line JSON processor");
+    public static void Register(Shell shell) => shell.Register("jq", Run);
 
     // ---------- errors ----------
 

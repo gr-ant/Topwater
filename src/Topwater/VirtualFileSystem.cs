@@ -107,7 +107,7 @@ public sealed class VirtualFileSystem
         UsedBytes += delta;
     }
 
-    internal const string NoSpace = "No space left on device";
+    internal const string NoSpace = CommandSpec.Errno.ENOSPC;
 
     static long TreeSize(Node n) => n switch { FileNode f => f.Size, Dir d => d.Children.Values.Sum(TreeSize), _ => 0 };
 
@@ -176,7 +176,7 @@ public sealed class VirtualFileSystem
 
     /// <summary>Symbolic links followed in one lookup before it fails with <see cref="Loop"/>, as on Linux.</summary>
     const int MaxLinkHops = 40;
-    internal const string Loop = "Too many levels of symbolic links";
+    internal const string Loop = CommandSpec.Errno.ELOOP;
 
     /// <summary>Where a path leads: the directory holding (or that would hold) its last entry, that entry's name and node
     /// (null if absent), and its physical path. Parent is null when the path can't be reached (Why says why), and for "/".</summary>
@@ -203,14 +203,14 @@ public sealed class VirtualFileSystem
         while (todo.Count > 0)
         {
             var seg = todo.Pop();
-            if (onFile) return Fail("Not a directory");
+            if (onFile) return Fail(CommandSpec.Errno.ENOTDIR);
             if (seg is "" or ".") continue;
             var dir = chain[^1].Dir;
-            if (!Permits(dir, user, 1)) return Fail("Permission denied");
+            if (!Permits(dir, user, 1)) return Fail(CommandSpec.Errno.EACCES);
             if (seg == "..") { if (chain.Count > 1) chain.RemoveAt(chain.Count - 1); continue; }
             bool final = todo.All(t => t is "" or "."), bare = todo.Count == 0; // bare: no trailing slash, which would mean a directory
             if (!dir.Children.TryGetValue(seg, out var next))
-                return final ? new(bare ? dir : null, seg, null, Real(seg), "No such file or directory") : Fail("No such file or directory");
+                return final ? new(bare ? dir : null, seg, null, Real(seg), CommandSpec.Errno.ENOENT) : Fail(CommandSpec.Errno.ENOENT);
             if (next is LinkNode link && (!bare || follow))
             {
                 if (++hops > MaxLinkHops) return Fail(Loop);
@@ -229,13 +229,13 @@ public sealed class VirtualFileSystem
     Node? Find(string path, out string why, bool follow = true)
     {
         var spot = Walk(path, follow);
-        why = spot.Why is "" ? "No such file or directory" : spot.Why;
+        why = spot.Why is "" ? CommandSpec.Errno.ENOENT : spot.Why;
         return spot.Node;
     }
 
     /// <summary>Why <paramref name="path"/> can't be reached: "Permission denied", "Not a directory", "Too many levels of
     /// symbolic links" or "No such file or directory".</summary>
-    internal string WhyMissing(string path, bool follow = true) => Find(path, out var why, follow) == null ? why : "No such file or directory";
+    internal string WhyMissing(string path, bool follow = true) => Find(path, out var why, follow) == null ? why : CommandSpec.Errno.ENOENT;
 
     /// <summary>Where an entry is created, removed or renamed: its directory (which needs search permission) and name. The last
     /// name is not followed, so this is the link itself when it is one.</summary>
@@ -253,14 +253,14 @@ public sealed class VirtualFileSystem
 
     void Require(Node n, int bit, string path)
     {
-        if (!Allowed(n, bit)) throw new ShellException($"{path}: Permission denied");
+        if (!Allowed(n, bit)) throw new ShellException($"{path}: {CommandSpec.Errno.EACCES}");
     }
 
     /// <summary>In a sticky directory (/tmp) only the entry's owner or the directory's may remove or rename the entry.</summary>
     void RequireNotSticky(Dir dir, Node entry, string path)
     {
         if (User is { } u && (dir.Mode & 0x200) != 0 && entry.Owner != u && dir.Owner != u)
-            throw new ShellException($"{path}: Operation not permitted");
+            throw new ShellException($"{path}: {CommandSpec.Errno.EPERM}");
     }
 
     /// <param name="follow">false: a symbolic link counts itself (lstat), even one whose target is missing.</param>
@@ -298,7 +298,7 @@ public sealed class VirtualFileSystem
     public string? RealPath(string path, out string why, bool existing = true)
     {
         var spot = Walk(path);
-        why = spot.Why is "" ? "No such file or directory" : spot.Why;
+        why = spot.Why is "" ? CommandSpec.Errno.ENOENT : spot.Why;
         return spot.Node != null || (!existing && spot.Parent != null) ? spot.Real : null;
     }
 
@@ -323,9 +323,9 @@ public sealed class VirtualFileSystem
     /// <summary>Creates a symbolic link at <paramref name="path"/> holding <paramref name="target"/> (`ln -s`), which need not exist.</summary>
     public void CreateSymlink(string path, string target)
     {
-        if (target.Length == 0) throw new ShellException($"{path}: No such file or directory");
+        if (target.Length == 0) throw new ShellException($"{path}: {CommandSpec.Errno.ENOENT}");
         var spot = Place(path);
-        if (spot.Node != null) throw new ShellException($"{path}: File exists");
+        if (spot.Node != null) throw new ShellException($"{path}: {CommandSpec.Errno.EEXIST}");
         Require(spot.Parent!, 2, path);
         spot.Parent!.Children[spot.Name] = new LinkNode { Target = target, Owner = RunAs ?? spot.Parent.Owner, Mode = 0x1FF, Modified = Clock() };
         spot.Parent.Modified = Clock();
@@ -339,9 +339,9 @@ public sealed class VirtualFileSystem
         var node = Find(existing, out var why, follow) ?? throw new ShellException($"{existing}: {why}");
         if (node is Dir) throw new ShellException($"{existing}: hard link not allowed for directory");
         var spot = Place(path);
-        if (spot.Node != null) throw new ShellException($"{path}: File exists");
+        if (spot.Node != null) throw new ShellException($"{path}: {CommandSpec.Errno.EEXIST}");
         Require(spot.Parent!, 2, path);
-        if (Restricted && node.Owner != RunAs && !Allowed(node, 6)) throw new ShellException($"{path}: Operation not permitted");
+        if (Restricted && node.Owner != RunAs && !Allowed(node, 6)) throw new ShellException($"{path}: {CommandSpec.Errno.EPERM}");
         node.Nlink++;
         spot.Parent!.Children[spot.Name] = node;
         spot.Parent.Modified = Clock();
@@ -360,7 +360,7 @@ public sealed class VirtualFileSystem
         switch (Find(path, out var why))
         {
             case FileNode f: Require(f, 4, path); return f;
-            case Dir: throw new ShellException($"{path}: Is a directory");
+            case Dir: throw new ShellException($"{path}: {CommandSpec.Errno.EISDIR}");
             default: throw new ShellException($"{path}: {why}");
         }
     }
@@ -386,10 +386,10 @@ public sealed class VirtualFileSystem
         path = Normalize("/", path);
         if (path == "/dev/null" && Find(path) != null) return;
         var spot = Walk(path); // through a symbolic link, even a dangling one: its target is written or created
-        var dir = spot.Parent ?? throw new ShellException($"{path}: {(spot.Node != null ? "Is a directory" : spot.Why)}");
+        var dir = spot.Parent ?? throw new ShellException($"{path}: {(spot.Node != null ? CommandSpec.Errno.EISDIR : spot.Why)}");
         if (spot.Node is { } existing)
         {
-            if (existing is not FileNode f) throw new ShellException($"{path}: Is a directory");
+            if (existing is not FileNode f) throw new ShellException($"{path}: {CommandSpec.Errno.EISDIR}");
             Require(f, 2, path);
             f.Store(content, data, append, d => Reserve(d, path));
             f.Modified = Clock();
@@ -420,7 +420,7 @@ public sealed class VirtualFileSystem
     internal void SetModifiedTime(string path, DateTime when, bool follow = true)
     {
         var node = Find(path, out var why, follow) ?? throw new ShellException($"{path}: {why}");
-        if (Restricted && node.Owner != RunAs) throw new ShellException($"{path}: Operation not permitted");
+        if (Restricted && node.Owner != RunAs) throw new ShellException($"{path}: {CommandSpec.Errno.EPERM}");
         node.Modified = when;
     }
 
@@ -436,7 +436,7 @@ public sealed class VirtualFileSystem
             Require(n, 2, path);
             n.Modified = Clock();
         }
-        else if (why == "Permission denied") throw new ShellException($"{path}: Permission denied");
+        else if (why == CommandSpec.Errno.EACCES) throw new ShellException($"{path}: {CommandSpec.Errno.EACCES}");
         else WriteAllText(path, "");
     }
 
@@ -446,7 +446,7 @@ public sealed class VirtualFileSystem
         if (Find(path, follow: false) != null) // a symbolic link counts, even a dangling one
         {
             if (parents && Find(path) is Dir) return;
-            throw new ShellException($"cannot create directory '{path}': File exists");
+            throw new ShellException($"cannot create directory '{path}': {CommandSpec.Errno.EEXIST}");
         }
         if (parents && !Exists(GetParent(path))) CreateDirectory(GetParent(path), true);
         var spot = Place(path);
@@ -462,7 +462,7 @@ public sealed class VirtualFileSystem
         {
             case Dir d: Require(d, 4, path); return d.Children.Keys.ToList();
             case null: throw new ShellException($"{path}: {why}");
-            default: throw new ShellException($"{path}: Not a directory");
+            default: throw new ShellException($"{path}: {CommandSpec.Errno.ENOTDIR}");
         }
     }
 
@@ -473,7 +473,7 @@ public sealed class VirtualFileSystem
         path = Normalize("/", path);
         if (path == "/") throw new ShellException("it is dangerous to operate recursively on '/'");
         var node = Find(path, out var why, follow: false) ?? throw new ShellException($"{path}: {why}");
-        if (node is Dir d && d.Children.Count > 0 && !recursive) throw new ShellException($"{path}: Directory not empty");
+        if (node is Dir d && d.Children.Count > 0 && !recursive) throw new ShellException($"{path}: {CommandSpec.Errno.ENOTEMPTY}");
         var spot = Place(path);
         var parent = spot.Parent!;
         if (node is Dir tree) RequireTreeRemovable(tree, path);
@@ -498,7 +498,7 @@ public sealed class VirtualFileSystem
     }
 
     /// <summary>Copies a file or tree. While restricted, anything unreadable fails the whole copy; see the overload.</summary>
-    public void Copy(string source, string dest) => Copy(source, dest, (p, _) => throw new ShellException($"{p}: Permission denied"));
+    public void Copy(string source, string dest) => Copy(source, dest, (p, _) => throw new ShellException($"{p}: {CommandSpec.Errno.EACCES}"));
 
     /// <summary>Like `cp -r`: entries the user can't read are skipped and passed to <paramref name="denied"/> (path, is directory).</summary>
     /// <param name="followTop">Copy what <paramref name="source"/> leads to when it is a symbolic link (cp without -r, or -H),
@@ -517,7 +517,7 @@ public sealed class VirtualFileSystem
         if (node is Dir && (place.Real + "/").StartsWith(RealPath(source, out _) + "/"))
             throw new ShellException($"cannot copy a directory, '{source}', into itself, '{dest}'");
         var target = place.Node is LinkNode ? Find(dest) : place.Node; // a file is copied through a link onto its target
-        if (target is Dir && node is not Dir) throw new ShellException($"{dest}: Is a directory");
+        if (target is Dir && node is not Dir) throw new ShellException($"{dest}: {CommandSpec.Errno.EISDIR}");
         var parent = place.Parent!;
         if (target != null) Require(target, 2, dest); else Require(parent, 2, dest);
         var user = User;
@@ -578,7 +578,7 @@ public sealed class VirtualFileSystem
         // by real paths: through a link, a directory could otherwise be moved into itself and cut off from the tree
         if ((to.Real + "/").StartsWith(from.Real + "/")) throw new ShellException($"cannot move '{source}' to a subdirectory of itself, '{dest}'");
         var existing = to.Node;
-        if (existing is Dir) throw new ShellException($"{dest}: Is a directory");
+        if (existing is Dir) throw new ShellException($"{dest}: {CommandSpec.Errno.EISDIR}");
         if (ReferenceEquals(existing, node)) return; // two hard links of one file: rename(2) leaves both
         var target = to.Parent!;
         Require(from.Parent!, 2, source);
@@ -660,7 +660,7 @@ public sealed class VirtualFileSystem
         {
             if (Plain(e.HardLink) is not { } same || same is Dir) throw new ShellException($"{e.Path}: hard link to {e.HardLink}, which is not an earlier file");
             if (Plain(GetParent(e.Path)) is not Dir dir) throw new ShellException($"{e.Path}: parent is not a directory");
-            if (!dir.Children.TryAdd(GetName(e.Path), same)) throw new ShellException($"{e.Path}: File exists");
+            if (!dir.Children.TryAdd(GetName(e.Path), same)) throw new ShellException($"{e.Path}: {CommandSpec.Errno.EEXIST}");
             same.Nlink++;
             return;
         }
@@ -672,7 +672,7 @@ public sealed class VirtualFileSystem
         node.Modified = e.Modified;
         if (e.Path == "/") return;
         if (Plain(GetParent(e.Path)) is not Dir parent) throw new ShellException($"{e.Path}: parent is not a directory");
-        if (!parent.Children.TryAdd(GetName(e.Path), node)) throw new ShellException($"{e.Path}: File exists");
+        if (!parent.Children.TryAdd(GetName(e.Path), node)) throw new ShellException($"{e.Path}: {CommandSpec.Errno.EEXIST}");
         UsedBytes += TreeSize(node);
     }
 
@@ -680,7 +680,7 @@ public sealed class VirtualFileSystem
     public void Chmod(string path, int mode)
     {
         var node = Find(path, out var why) ?? throw new ShellException($"cannot access '{path}': {why}");
-        if (Restricted && node.Owner != RunAs) throw new ShellException($"changing permissions of '{path}': Operation not permitted");
+        if (Restricted && node.Owner != RunAs) throw new ShellException($"changing permissions of '{path}': {CommandSpec.Errno.EPERM}");
         node.Mode = mode & 0xFFF;
     }
 
@@ -688,7 +688,7 @@ public sealed class VirtualFileSystem
     public void SetOwner(string path, string owner, bool recursive = false)
     {
         var node = Find(path, out var why) ?? throw new ShellException($"cannot access '{path}': {why}");
-        if (Restricted) throw new ShellException($"changing ownership of '{path}': Operation not permitted");
+        if (Restricted) throw new ShellException($"changing ownership of '{path}': {CommandSpec.Errno.EPERM}");
         void Apply(Node n)
         {
             n.Owner = owner;

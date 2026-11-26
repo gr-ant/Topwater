@@ -40,11 +40,11 @@ public static class MarkdownConverter
     {
         var ext = Path.GetExtension(fileName.ToLowerInvariant());
         var fmt = ext switch { ".htm" or ".xhtml" => ".html", ".markdown" => ".md", _ => ext };
-        if (!Converters.ContainsKey(fmt)) fmt = Sniff(data) ?? throw new ShellException($"unsupported format '{(ext.Length > 0 ? ext : fileName)}' (supported: {Supported})");
+        if (!Converters.ContainsKey(fmt)) fmt = Sniff(data) ?? throw new ShellException(CommandSpec.Message("to-markdown", "unsupportedFormat", ("format", ext.Length > 0 ? ext : fileName), ("supported", Supported)));
         try { return Converters[fmt](data); }
         catch (Exception e) when (e is not ShellException) // corrupt zip/XML/encoding: report, never crash the host
         {
-            throw new ShellException($"not a valid {fmt[1..]} file ({e.Message})");
+            throw new ShellException(CommandSpec.Message("to-markdown", "invalidFile", ("format", fmt[1..]), ("detail", e.Message)));
         }
     }
 
@@ -108,7 +108,7 @@ public static class MarkdownConverter
             while ((n = s.Read(chunk, 0, chunk.Length)) > 0)
             {
                 buf.Write(chunk, 0, n);
-                if (buf.Length > _budget) throw new ShellException($"archive expands to more than {MaxUncompressedBytes / (1024 * 1024)} MB");
+                if (buf.Length > _budget) throw new ShellException(CommandSpec.Message("to-markdown", "archiveTooLarge", ("megabytes", (MaxUncompressedBytes / (1024 * 1024)).ToString())));
             }
             _budget -= buf.Length;
             return buf.ToArray();
@@ -120,7 +120,7 @@ public static class MarkdownConverter
             if (bytes == null) return null;
             var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
             try { using var reader = XmlReader.Create(new MemoryStream(bytes), settings); return XDocument.Load(reader).Root; }
-            catch (XmlException e) when (e.Message.Contains("DTD")) { throw new ShellException($"{name}: DTDs are not allowed"); }
+            catch (XmlException e) when (e.Message.Contains("DTD")) { throw new ShellException(CommandSpec.Message("to-markdown", "dtdNotAllowed", ("name", name))); }
         }
 
         /// <summary>Relationship id -> absolute part name (or external URL) for a part.</summary>
@@ -195,7 +195,7 @@ public static class MarkdownConverter
 
     static string Docx(Package pkg)
     {
-        var doc = pkg.Xml("word/document.xml") ?? throw new ShellException("not a valid docx file (word/document.xml is missing)");
+        var doc = pkg.Xml("word/document.xml") ?? throw new ShellException(CommandSpec.Message("to-markdown", "partMissing", ("format", "docx"), ("part", "word/document.xml")));
         var rels = pkg.Rels("word/document.xml");
         var styles = new Dictionary<string, (string Name, (string NumId, string Ilvl)? Num)>();
         foreach (var s in pkg.Xml("word/styles.xml")?.Elements(W + "style") ?? [])
@@ -328,7 +328,7 @@ public static class MarkdownConverter
 
     static string Xlsx(Package pkg)
     {
-        var wb = pkg.Xml("xl/workbook.xml") ?? throw new ShellException("not a valid xlsx file (xl/workbook.xml is missing)");
+        var wb = pkg.Xml("xl/workbook.xml") ?? throw new ShellException(CommandSpec.Message("to-markdown", "partMissing", ("format", "xlsx"), ("part", "xl/workbook.xml")));
         var rels = pkg.Rels("xl/workbook.xml");
         var shared = new List<string>();
         foreach (var si in pkg.Xml("xl/sharedStrings.xml")?.Elements() ?? [])
@@ -357,7 +357,7 @@ public static class MarkdownConverter
                 if (cells.Count > 0) rows.Add(cells);
             }
             int first = rows.Count == 0 ? 0 : rows.Min(r => r.Keys.Min()), last = rows.Count == 0 ? -1 : rows.Max(r => r.Keys.Max());
-            if ((long)(last - first + 1) * rows.Count > MaxSheetCells) throw new ShellException($"sheet '{(string?)sheet.Attribute("name")}' is too large");
+            if ((long)(last - first + 1) * rows.Count > MaxSheetCells) throw new ShellException(CommandSpec.Message("to-markdown", "sheetTooLarge", ("name", (string?)sheet.Attribute("name") ?? "")));
             var table = Table(rows.Select(r => Enumerable.Range(first, last - first + 1).Select(k => r.GetValueOrDefault(k, "")).ToList()).ToList());
             parts.Add($"## {(string?)sheet.Attribute("name") ?? ""}" + (table.Length > 0 ? "\n\n" + table : ""));
         }
@@ -379,7 +379,7 @@ public static class MarkdownConverter
 
     static string Pptx(Package pkg)
     {
-        var pres = pkg.Xml("ppt/presentation.xml") ?? throw new ShellException("not a valid pptx file (ppt/presentation.xml is missing)");
+        var pres = pkg.Xml("ppt/presentation.xml") ?? throw new ShellException(CommandSpec.Message("to-markdown", "partMissing", ("format", "pptx"), ("part", "ppt/presentation.xml")));
         var rels = pkg.Rels("ppt/presentation.xml");
         var parts = new List<string>();
         int n = 0;
@@ -667,7 +667,7 @@ public static class MarkdownConverter
             var opts = new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
             return "```json\n" + JsonSerializer.Serialize(doc.RootElement, opts) + "\n```\n";
         }
-        catch (JsonException e) { throw new ShellException($"not a valid json file ({e.Message})"); }
+        catch (JsonException e) { throw new ShellException(CommandSpec.Message("to-markdown", "invalidFile", ("format", "json"), ("detail", e.Message))); }
     }
 
     // no in-process PDF parser; running a native one on agent-supplied bytes would reach the host

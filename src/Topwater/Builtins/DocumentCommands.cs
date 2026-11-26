@@ -7,8 +7,8 @@ internal static partial class Builtins
     {
         shell.Register("to-markdown", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "", "o", "output=o");
-            if (a.Positional.Count == 0) throw new ShellException("missing file operand\nUsage: to-markdown [-o OUT.md] FILE...");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("to-markdown"));
+            if (a.Positional.Count == 0) throw new ShellException(CommandSpec.Message("to-markdown", "missingOperand"));
             int code = 0;
             var parts = new List<string>();
             foreach (var f in a.Positional)
@@ -19,7 +19,7 @@ internal static partial class Builtins
                 {
                     // filesystem errors carry the path ("/abs/x: No such file..."); show the name as typed instead
                     var msg = e.Message.StartsWith('/') ? e.Message[(e.Message.LastIndexOf(": ") + 2)..] : e.Message;
-                    ctx.Stderr.WriteLine($"{ctx.Name}: {f}: {msg}");
+                    ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message("to-markdown", "convertFailed", ("file", f), ("reason", msg)));
                     code = 1;
                     continue;
                 }
@@ -30,6 +30,6 @@ internal static partial class Builtins
             if (a.Value('o') is { } output) ctx.Fs.WriteAllText(ctx.ResolvePath(output), text);
             else ctx.Stdout.Write(text);
             return code;
-        }, "Convert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save)");
+        });
     }
 }

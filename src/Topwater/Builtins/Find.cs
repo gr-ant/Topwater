@@ -31,7 +31,7 @@ internal sealed class Find
         _args = _ctx.Args.Skip(options.Count + starts.Count).ToList();
         if (starts.Count == 0) starts.Add(".");
         Pred expr = _args.Count == 0 ? _ => Task.FromResult(true) : ParseOr();
-        if (_p < _args.Count) throw new ShellException($"unexpected `{_args[_p]}'");
+        if (_p < _args.Count) throw new ShellException(CommandSpec.Message("find", "unexpected", ("token", _args[_p])));
 
         int code = 0;
         var fs = _ctx.Fs;
@@ -44,7 +44,7 @@ internal sealed class Find
             var real = dir && follow ? fs.RealPath(abs, out _) ?? abs : abs;
             if (dir && follow && above.FirstOrDefault(a => a.Real == real) is { Display: { } loop })
             {
-                _ctx.Stderr.WriteLine($"find: File system loop detected; {Builtins.QuoteL(display)} is part of the same file system loop as {Builtins.QuoteL(loop)}.");
+                _ctx.Stderr.WriteLine("find: " + CommandSpec.Message("find", "loop", ("dir", display), ("loop", loop)));
                 code = 1;
                 return;
             }
@@ -53,7 +53,7 @@ internal sealed class Find
             if (_prune || depth >= _maxDepth || !dir) return;
             IReadOnlyList<string> names;
             try { names = fs.List(abs); }
-            catch (ShellException) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(display)}: Permission denied"); code = 1; return; }
+            catch (ShellException) { _ctx.Stderr.WriteLine("find: " + CommandSpec.Message("find", "cannotRead", ("file", display), ("errno", "Permission denied"))); code = 1; return; }
             above.Add((real, display));
             foreach (var name in names)
                 await Walk(VirtualFileSystem.Normalize(abs, name), display.EndsWith('/') ? display + name : display + "/" + name, depth + 1, start, mode == 'L');
@@ -65,7 +65,7 @@ internal sealed class Find
             {
                 var abs = _ctx.ResolvePath(s);
                 bool follow = mode != 'P' || s.EndsWith('/');
-                if (!fs.Exists(abs, follow) && !fs.Exists(abs, follow: false)) { _ctx.Stderr.WriteLine($"find: {Builtins.QuoteL(s)}: {fs.WhyMissing(abs, follow)}"); code = 1; continue; }
+                if (!fs.Exists(abs, follow) && !fs.Exists(abs, follow: false)) { _ctx.Stderr.WriteLine("find: " + CommandSpec.Message("find", "cannotRead", ("file", s), ("errno", fs.WhyMissing(abs, follow)))); code = 1; continue; }
                 await Walk(abs, s, 0, s, follow);
             }
         }
@@ -84,7 +84,7 @@ internal sealed class Find
         var l = ParseAnd();
         while (Is("-o") || Is("-or"))
         {
-            if (++_p >= _args.Count) throw new ShellException($"expected an expression after '{_args[_p - 1]}'");
+            if (++_p >= _args.Count) throw new ShellException(CommandSpec.Message("find", "expectedExpression", ("token", _args[_p - 1])));
             var left = l;
             var right = ParseAnd();
             l = async e => await left(e) || await right(e);
@@ -97,7 +97,7 @@ internal sealed class Find
         var l = ParseNot();
         while (_p < _args.Count && !Is("-o") && !Is("-or") && !Is(")"))
         {
-            if ((Is("-a") || Is("-and")) && ++_p >= _args.Count) throw new ShellException($"expected an expression after '{_args[_p - 1]}'");
+            if ((Is("-a") || Is("-and")) && ++_p >= _args.Count) throw new ShellException(CommandSpec.Message("find", "expectedExpression", ("token", _args[_p - 1])));
             var left = l;
             var right = ParseNot();
             l = async e => await left(e) && await right(e);
@@ -117,7 +117,7 @@ internal sealed class Find
         {
             _p++;
             var inner = ParseOr();
-            if (!Is(")")) throw new ShellException("invalid expression; expected `)'");
+            if (!Is(")")) throw new ShellException(CommandSpec.Message("find", "expectedParen"));
             _p++;
             return inner;
         }
@@ -205,7 +205,7 @@ internal sealed class Find
     Pred Primary()
     {
         var tok = _args[_p++];
-        string Arg() => _p < _args.Count ? _args[_p++] : throw new ShellException($"missing argument to `{tok}'");
+        string Arg() => _p < _args.Count ? _args[_p++] : throw new ShellException(CommandSpec.Message("find", "missingArgument", ("predicate", tok)));
         var fs = _ctx.Fs;
         switch (tok)
         {
@@ -227,7 +227,7 @@ internal sealed class Find
             case "-type" or "-xtype":
             {
                 var t = Arg();
-                if (t is not ("f" or "d" or "l")) throw new ShellException($"Unknown argument to {tok}: {t}");
+                if (t is not ("f" or "d" or "l")) throw new ShellException(CommandSpec.Message("find", "unknownType", ("predicate", tok), ("value", t)));
                 // -xtype: the other view of a link (what it leads to under -P, the link itself under -L)
                 return e => T(Type(Stat(tok == "-type" ? e : e with { Follow = !e.Follow })) == t[0]);
             }
@@ -237,7 +237,7 @@ internal sealed class Find
             {
                 var spec = Arg();
                 if (!double.TryParse(spec.Length > 0 && spec[0] is '+' or '-' ? spec[1..] : spec, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var n))
-                    throw new ShellException($"invalid argument `{spec}' to `{tok}'");
+                    throw new ShellException(CommandSpec.Message("find", "invalidArgument", ("value", spec), ("predicate", tok)));
                 double unit = tok == "-mmin" ? 1 : 1440;
                 return e =>
                 {
@@ -249,7 +249,7 @@ internal sealed class Find
             {
                 var reference = Arg();
                 var refAbs = _ctx.ResolvePath(reference);
-                if (!fs.Exists(refAbs)) throw new ShellException($"{Builtins.QuoteL(reference)}: {fs.WhyMissing(refAbs)}");
+                if (!fs.Exists(refAbs)) throw new ShellException(CommandSpec.Message("find", "cannotRead", ("file", reference), ("errno", fs.WhyMissing(refAbs))));
                 var refTime = fs.Stat(refAbs).Modified;
                 return e => T(Stat(e).Modified > refTime);
             }
@@ -257,8 +257,8 @@ internal sealed class Find
             {
                 var spec = Arg();
                 var m = Regex.Match(spec, @"^([+-]?)(\d+)([cwbkMG]?)$");
-                if (Regex.Match(spec, @"^[+-]?\d+(\D)") is { Success: true } bad && !m.Success) throw new ShellException($"invalid -size type `{bad.Groups[1].Value}'");
-                if (!m.Success) throw new ShellException($"invalid argument `{spec}' to `-size'");
+                if (Regex.Match(spec, @"^[+-]?\d+(\D)") is { Success: true } bad && !m.Success) throw new ShellException(CommandSpec.Message("find", "invalidSizeType", ("unit", bad.Groups[1].Value)));
+                if (!m.Success) throw new ShellException(CommandSpec.Message("find", "invalidArgument", ("value", spec), ("predicate", "-size")));
                 long unit = m.Groups[3].Value switch { "c" => 1, "w" => 2, "k" => 1024, "M" => 1 << 20, "G" => 1 << 30, _ => 512 };
                 long n = long.Parse(m.Groups[2].Value);
                 return e =>
@@ -293,8 +293,8 @@ internal sealed class Find
                 _hasAction = true;
                 var cmd = new List<string>();
                 while (_p < _args.Count && _args[_p] != ";" && !(_args[_p] == "+" && cmd.Count > 0 && cmd[^1] == "{}")) cmd.Add(_args[_p++]);
-                if (_p >= _args.Count) throw new ShellException($"missing argument to `{tok}'");
-                if (cmd.Count == 0) throw new ShellException($"invalid argument `{_args[_p]}' to `{tok}'");
+                if (_p >= _args.Count) throw new ShellException(CommandSpec.Message("find", "missingArgument", ("predicate", tok)));
+                if (cmd.Count == 0) throw new ShellException(CommandSpec.Message("find", "invalidArgument", ("value", _args[_p]), ("predicate", tok)));
                 if (_args[_p++] == "+")
                 {
                     var batch = (cmd, new List<string>());
@@ -304,7 +304,7 @@ internal sealed class Find
                 return async e => await _ctx.InvokeAsync(cmd.Select(x => x.Replace("{}", e.Display)).ToList()) == 0;
             }
             default:
-                throw new ShellException($"unknown predicate `{tok}'");
+                throw new ShellException(CommandSpec.Message("find", "unknownPredicate", ("predicate", tok)));
         }
     }
 }

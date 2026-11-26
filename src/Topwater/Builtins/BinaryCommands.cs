@@ -8,7 +8,7 @@ internal static partial class Builtins
     static int Num(string s)
     {
         try { return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? Convert.ToInt32(s[2..], 16) : int.Parse(s); }
-        catch (Exception e) when (e is FormatException or OverflowException or ArgumentException) { throw new ShellException($"invalid number '{s}'"); }
+        catch (Exception e) when (e is FormatException or OverflowException or ArgumentException) { throw new ShellException(CommandSpec.Message("xxd", "invalidNumber", ("value", s))); }
     }
 
     /// <summary>Python-style slice: a negative start counts from the end; out-of-range bounds are clamped.</summary>
@@ -48,14 +48,14 @@ internal static partial class Builtins
     {
         shell.Register("xxd", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "p", "lsc", "plain=p,len=l,seek=s,cols=c");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("xxd"));
             int code = 0;
             var data = ReadAll(ctx, a.Positional.Take(1).ToList(), () => code = 1); // a second operand is xxd's outfile; not supported
             int start = Num(a.Value('s') ?? "0");
             data = Slice(data, start, a.Value('l') is { } l ? Num(l) : null);
             start = Math.Max(0, start < 0 ? start + data.Length : start);
             int cols = Num(a.Value('c') ?? (a.Has('p') ? "30" : "16"));
-            if (cols <= 0) throw new ShellException("invalid number of columns");
+            if (cols <= 0) throw new ShellException(CommandSpec.Message("xxd", "invalidColumns"));
             for (int i = 0; i < data.Length; i += cols)
             {
                 var chunk = data[i..Math.Min(i + cols, data.Length)];
@@ -64,11 +64,11 @@ internal static partial class Builtins
                 ctx.Stdout.WriteLine($"{start + i:x8}: {hex.PadRight(cols * 2 + cols / 2)} {Printable(chunk)}");
             }
             return code;
-        }, "Make a hex dump (-p plain, -l LEN, -s OFFSET)");
+        });
 
         shell.Register("hexdump", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "Cv", "ns", "canonical=C,length=n,skip=s,no-squeezing=v");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("hexdump"));
             int code = 0;
             var data = Slice(ReadAll(ctx, a.Positional, () => code = 1), Num(a.Value('s') ?? "0"), a.Value('n') is { } n ? Num(n) : null);
             foreach (var (i, chunk) in Lines(data, 16, !a.Has('v')))
@@ -79,11 +79,11 @@ internal static partial class Builtins
             }
             if (data.Length > 0) ctx.Stdout.WriteLine($"{data.Length:x8}");
             return code;
-        }, "Display file contents in hexadecimal (-C canonical, -n LEN)");
+        });
 
         shell.Register("od", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "cxov", "ANtj", "address-radix=A,read-bytes=N,format=t,skip-bytes=j");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("od"));
             int code = 0;
             var data = Slice(ReadAll(ctx, a.Positional, () => code = 1), Num(a.Value('j') ?? "0"), a.Value('N') is { } n ? Num(n) : null);
             var fmt = a.Value('t') ?? (a.Has('c') ? "c" : a.Has('x') ? "x2" : "o2");
@@ -107,18 +107,18 @@ internal static partial class Builtins
                     return sb.ToString();
                 };
             }
-            else throw new ShellException($"invalid type string '{fmt}' (supported here: c, x1, x2, x4, x8, o1, o2, o4, o8)");
+            else throw new ShellException(CommandSpec.Message("od", "invalidType", ("type", fmt)));
             var radix = a.Value('A') ?? "o";
-            if (radix is not ("o" or "x" or "d" or "n")) throw new ShellException($"invalid output address radix '{radix}'; it must be one character from [doxn]");
+            if (radix is not ("o" or "x" or "d" or "n")) throw new ShellException(CommandSpec.Message("od", "invalidRadix", ("radix", radix)));
             string Addr(int v) => radix switch { "n" => "", "o" => Convert.ToString(v, 8).PadLeft(7, '0'), "x" => v.ToString("x6"), _ => v.ToString("D7") };
             foreach (var (i, chunk) in Lines(data, 16, !a.Has('v'))) ctx.Stdout.WriteLine(chunk == null ? "*" : Addr(i) + cells(chunk));
             if (radix != "n") ctx.Stdout.WriteLine(Addr(data.Length));
             return code;
-        }, "Dump files in octal and other formats (-c, -x, -t x1, -An, -N LEN)");
+        });
 
         shell.Register("strings", ctx =>
         {
-            var a = Args.Parse(Args.NumericShorthand(ctx.Args), "a", "n", "bytes=n,all=a");
+            var a = Args.Parse(Args.NumericShorthand(ctx.Args), CommandSpec.Of("strings"));
             int code = 0, minimum = Num(a.Value('n') ?? "4");
             foreach (var (_, data) in InputBytes(ctx, a.Positional, () => code = 1))
             {
@@ -131,6 +131,6 @@ internal static partial class Builtins
                 }
             }
             return code;
-        }, "Print printable character sequences in files (-n MIN)");
+        });
     }
 }

@@ -64,9 +64,7 @@ internal static partial class Builtins
         if (arg.StartsWith('+')) return arg;
         var hits = TimeStyles.Contains(arg) ? [arg] : TimeStyles.Where(s => s.StartsWith(arg, StringComparison.Ordinal)).ToArray();
         if (hits.Length != 1)
-            throw new ShellException($"{(hits.Length == 0 ? "invalid" : "ambiguous")} argument {QuoteL(arg)} for ‘time style’\nValid arguments are:\n"
-                + "  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n"
-                + "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.", 2);
+            throw new ShellException(CommandSpec.Message("ls", "badTimeStyle", ("problem", hits.Length == 0 ? "invalid" : "ambiguous"), ("value", arg)), 2);
         return hits[0].StartsWith("posix-", StringComparison.Ordinal) ? hits[0][6..] : hits[0];
     }
 
@@ -113,8 +111,7 @@ internal static partial class Builtins
         shell.Register("ls", ctx =>
         {
             // \u0001: --time-style=STYLE, \u0002: --full-time
-            var a = Args.Parse(ctx.Args, "alhA1dFrtRSZskLH\u0002", "\u0001",
-                "all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002,dereference=L,dereference-command-line=H");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("ls"));
             var paths = a.Positional.Count > 0 ? a.Positional : ["."];
             bool lng = a.Has('l') || a.Has('\u0002'), human = a.Has('h'), blocks = a.Has('s'), deref = a.Has('L');
             var style = a.Has('\u0002') ? "full-iso" : lng && a.Value('\u0001') is { } ts ? TimeStyle(ts) : null;
@@ -147,7 +144,7 @@ internal static partial class Builtins
                 return list;
             }
             var files = Ordered(paths.Where(p => Exists(p) && (a.Has('d') || !fs.IsDirectory(ctx.ResolvePath(p), FollowOperand(p)))));
-            foreach (var p in paths.Where(p => !Exists(p))) { ctx.Stderr.WriteLine($"ls: cannot access '{p}': {fs.WhyMissing(ctx.ResolvePath(p), deref || p.EndsWith('/'))}"); code = 2; }
+            foreach (var p in paths.Where(p => !Exists(p))) { ctx.Stderr.WriteLine("ls: " + CommandSpec.Message("ls", "cannotAccess", ("file", p), ("errno", fs.WhyMissing(ctx.ResolvePath(p), deref || p.EndsWith('/'))))); code = 2; }
             foreach (var group in files.GroupBy(p => deref || a.Has('H') || p.EndsWith('/')))
                 Show(group.Select(f => (ctx.ResolvePath(f), f)), group.Key, paths.Except(files).Where(Exists).Select(ctx.ResolvePath));
 
@@ -159,18 +156,18 @@ internal static partial class Builtins
                 abs = fs.RealPath(abs, out _) ?? abs; // where it really is, so "." and ".." are the directories themselves
                 if (a.Has('R') && deref && !listed.Add(abs))
                 {
-                    ctx.Stderr.WriteLine($"ls: {label}: not listing already-listed directory");
+                    ctx.Stderr.WriteLine("ls: " + CommandSpec.Message("ls", "alreadyListed", ("file", label)));
                     code = 2;
                     return;
                 }
                 if (paths.Count > 1 || a.Has('R')) ctx.Stdout.WriteLine((first ? "" : "\n") + label + ":");
                 first = false;
-                if (!fs.CanRead(abs)) { ctx.Stderr.WriteLine($"ls: cannot open directory '{label}': Permission denied"); code = 2; return; }
+                if (!fs.CanRead(abs)) { ctx.Stderr.WriteLine("ls: " + CommandSpec.Message("ls", "cannotOpenDirectory", ("file", label), ("errno", "Permission denied"))); code = 2; return; }
                 var entries = fs.List(abs).Where(n => a.Has('a') || a.Has('A') || !n.StartsWith('.')).ToList();
                 if (deref && (lng || blocks)) // a link leading nowhere: an error, then a row of question marks
                     foreach (var n in entries.Where(n => !fs.Exists(VirtualFileSystem.Normalize(abs, n))))
                     {
-                        ctx.Stderr.WriteLine($"ls: cannot access '{(label == "." ? "" : label.TrimEnd('/') + "/")}{n}': {fs.WhyMissing(VirtualFileSystem.Normalize(abs, n))}");
+                        ctx.Stderr.WriteLine("ls: " + CommandSpec.Message("ls", "cannotAccess", ("file", (label == "." ? "" : label.TrimEnd('/') + "/") + n), ("errno", fs.WhyMissing(VirtualFileSystem.Normalize(abs, n)))));
                         code = 1;
                     }
                 FileStat St(string n) => fs.Stat(VirtualFileSystem.Normalize(abs, n), deref && fs.Exists(VirtualFileSystem.Normalize(abs, n)));
@@ -193,11 +190,11 @@ internal static partial class Builtins
             }
             foreach (var d in dirs) ListDir(ctx.ResolvePath(d), d);
             return code;
-        }, "List directory contents");
+        });
 
         shell.Register("cat", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "nbsAETveu", longs: "number=n,number-nonblank=b,squeeze-blank=s,show-all=A,show-ends=E,show-tabs=T,show-nonprinting=v");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("cat"));
             bool ends = a.Has('A') || a.Has('E') || a.Has('e'), tabs = a.Has('A') || a.Has('T'), nonprint = a.Has('A') || a.Has('v') || a.Has('e');
             bool plain = !(a.Has('n') || a.Has('b') || a.Has('s') || ends || tabs || nonprint);
             int code = 0, lineNo = 0;
@@ -220,37 +217,37 @@ internal static partial class Builtins
                 ctx.Stdout.Write(sb.ToString());
             }
             return code;
-        }, "Print files");
+        });
 
         shell.Register("mkdir", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "pvZ", longs: "parents=p,verbose=v");
-            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("mkdir"));
+            if (a.Positional.Count == 0) throw new UsageException(CommandSpec.Message("mkdir", "missingOperand"));
             int code = 0;
             foreach (var p in a.Positional)
             {
                 try { ctx.Fs.CreateDirectory(ctx.ResolvePath(p), a.Has('p')); }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"mkdir: cannot create directory {QuoteL(p)}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}"); code = 1; }
+                catch (ShellException e) { ctx.Stderr.WriteLine("mkdir: " + CommandSpec.Message("mkdir", "cannotCreateDirectory", ("file", p), ("reason", e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]))); code = 1; }
             }
             return code;
-        }, "Create directories");
+        });
 
         shell.Register("touch", ctx =>
         {
             // shortcut: one modification time per file; -a and -m both set it
-            var a = Args.Parse(ctx.Args, "acmhf", "dtr", "no-create=c,date=d,reference=r,time=f,no-dereference=h");
-            if (a.Positional.Count == 0) throw new UsageException("missing file operand");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("touch"));
+            if (a.Positional.Count == 0) throw new UsageException(CommandSpec.Message("touch", "missingFileOperand"));
             DateTime? when = null;
             if (a.Value('r') is { } reference)
             {
                 var abs = ctx.ResolvePath(reference);
-                if (!ctx.Fs.Exists(abs)) throw new ShellException($"failed to get attributes of {QuoteAlways(reference)}: {ctx.Fs.WhyMissing(abs)}");
+                if (!ctx.Fs.Exists(abs)) throw new ShellException(CommandSpec.Message("touch", "failedToGetAttributes", ("file", reference), ("reason", ctx.Fs.WhyMissing(abs))));
                 when = ctx.Fs.Stat(abs).Modified;
             }
             if (a.Value('d') is { } d)
                 try { when = ParseDate(d, when ?? ctx.Fs.Clock()); }
-                catch (ShellException) { throw new ShellException($"invalid date format {QuoteL(d)}"); }
-            if (a.Value('t') is { } t) when = TouchStamp(t, ctx.Fs.Clock()) ?? throw new ShellException($"invalid date format {QuoteL(t)}");
+                catch (ShellException) { throw new ShellException(CommandSpec.Message("touch", "invalidDateFormat", ("value", d))); }
+            if (a.Value('t') is { } t) when = TouchStamp(t, ctx.Fs.Clock()) ?? throw new ShellException(CommandSpec.Message("touch", "invalidDateFormat", ("value", t)));
             int code = 0;
             foreach (var p in a.Positional)
             {
@@ -258,29 +255,29 @@ internal static partial class Builtins
                 if (a.Has('c') && !ctx.Fs.Exists(path)) continue;
                 // an explicit time needs ownership, not write permission
                 try { if (a.Has('h') && ctx.Fs.IsSymlink(path)) ctx.Fs.SetModifiedTime(path, when ?? ctx.Fs.Clock(), follow: false); else if (when is { } w) { if (!ctx.Fs.Exists(path)) ctx.Fs.Touch(path); ctx.Fs.SetModifiedTime(path, w); } else ctx.Fs.Touch(path); }
-                catch (ShellException e) { ctx.Stderr.WriteLine($"touch: cannot touch {QuoteAlways(p)}: {Typed(e, p, path).Reason}"); code = 1; }
+                catch (ShellException e) { ctx.Stderr.WriteLine("touch: " + CommandSpec.Message("touch", "cannotTouch", ("file", p), ("reason", Typed(e, p, path).Reason))); code = 1; }
             }
             return code;
-        }, "Create empty files / update timestamps");
+        });
 
         shell.Register("rm", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "rRfvd", longs: "recursive=r,force=f");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("rm"));
             bool recursive = a.Has('r') || a.Has('R');
-            if (a.Positional.Count == 0 && !a.Has('f')) throw new UsageException("missing operand");
+            if (a.Positional.Count == 0 && !a.Has('f')) throw new UsageException(CommandSpec.Message("rm", "missingOperand"));
             int code = 0;
             foreach (var p in a.Positional)
             {
                 var abs = ctx.ResolvePath(p);
                 if (!ctx.Fs.Exists(abs, follow: false))
                 {
-                    if (!a.Has('f') || ctx.Fs.WhyMissing(abs, follow: false) != "No such file or directory") { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': {ctx.Fs.WhyMissing(abs, follow: false)}"); code = 1; }
+                    if (!a.Has('f') || ctx.Fs.WhyMissing(abs, follow: false) != "No such file or directory") { ctx.Stderr.WriteLine("rm: " + CommandSpec.Message("rm", "cannotRemove", ("file", p), ("reason", ctx.Fs.WhyMissing(abs, follow: false)))); code = 1; }
                     continue;
                 }
-                if (ctx.Fs.IsDirectory(abs, follow: p.EndsWith('/')) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Is a directory"); code = 1; continue; }
+                if (ctx.Fs.IsDirectory(abs, follow: p.EndsWith('/')) && !recursive && !a.Has('d')) { ctx.Stderr.WriteLine("rm: " + CommandSpec.Message("rm", "cannotRemove", ("file", p), ("reason", "Is a directory"))); code = 1; continue; }
                 if (p.EndsWith('/') && ctx.Fs.IsSymlink(abs) && !ctx.Fs.IsDirectory(abs)) // "link/" names what it leads to, which is no directory
                 {
-                    if (!a.Has('f')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Not a directory"); code = 1; }
+                    if (!a.Has('f')) { ctx.Stderr.WriteLine("rm: " + CommandSpec.Message("rm", "cannotRemove", ("file", p), ("reason", "Not a directory"))); code = 1; }
                     continue;
                 }
                 if (recursive && p.EndsWith('/') && ctx.Fs.IsSymlink(abs) && ctx.Fs.IsDirectory(abs))
@@ -288,24 +285,24 @@ internal static partial class Builtins
                     // like GNU rm: "link/" is the directory it leads to, which is emptied; the link itself is no directory to remove
                     foreach (var n in ctx.Fs.List(abs))
                         try { ctx.Fs.Delete(abs + "/" + n, recursive: true); }
-                        catch (ShellException e) { var (path, why) = Typed(e, p.TrimEnd('/') + "/" + n, abs + "/" + n); ctx.Stderr.WriteLine($"rm: cannot remove '{path}': {why}"); }
-                    if (!a.Has('f')) { ctx.Stderr.WriteLine($"rm: cannot remove '{p}': Not a directory"); code = 1; }
+                        catch (ShellException e) { var (path, why) = Typed(e, p.TrimEnd('/') + "/" + n, abs + "/" + n); ctx.Stderr.WriteLine("rm: " + CommandSpec.Message("rm", "cannotRemove", ("file", path), ("reason", why))); }
+                    if (!a.Has('f')) { ctx.Stderr.WriteLine("rm: " + CommandSpec.Message("rm", "cannotRemove", ("file", p), ("reason", "Not a directory"))); code = 1; }
                     continue;
                 }
                 try { ctx.Fs.Delete(abs, recursive); }
-                catch (ShellException e) { var (path, why) = Typed(e, p, abs); ctx.Stderr.WriteLine($"rm: cannot remove '{path}': {why}"); code = 1; }
+                catch (ShellException e) { var (path, why) = Typed(e, p, abs); ctx.Stderr.WriteLine("rm: " + CommandSpec.Message("rm", "cannotRemove", ("file", path), ("reason", why))); code = 1; }
             }
             return code;
-        }, "Remove files or directories");
+        });
 
         shell.Register("rmdir", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "pv", longs: "parents=p,verbose=v");
-            if (a.Positional.Count == 0) throw new UsageException("missing operand");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("rmdir"));
+            if (a.Positional.Count == 0) throw new UsageException(CommandSpec.Message("rmdir", "missingOperand"));
             int code = 0;
             foreach (var arg in a.Positional)
             {
-                if (arg.EndsWith('/') && ctx.Fs.IsSymlink(ctx.ResolvePath(arg))) { ctx.Stderr.WriteLine($"rmdir: failed to remove {QuoteAlways(arg)}: Symbolic link not followed"); code = 1; continue; }
+                if (arg.EndsWith('/') && ctx.Fs.IsSymlink(ctx.ResolvePath(arg))) { ctx.Stderr.WriteLine("rmdir: " + CommandSpec.Message("rmdir", "failedToRemove", ("file", arg), ("reason", "Symbolic link not followed"))); code = 1; continue; }
                 // -p: a/b/c, then a/b, then a
                 for (var p = arg.TrimEnd('/'); p.Length > 0; p = a.Has('p') && p.LastIndexOf('/') is var i and > 0 ? p[..i].TrimEnd('/') : "")
                 {
@@ -314,62 +311,61 @@ internal static partial class Builtins
                     if (why == null)
                         try { ctx.Fs.Delete(abs); if (a.Has('v')) ctx.Stdout.WriteLine($"rmdir: removing directory, {QuoteAlways(p)}"); }
                         catch (ShellException e) { why = Typed(e, p, abs).Reason; }
-                    if (why != null) { ctx.Stderr.WriteLine($"rmdir: failed to remove {QuoteAlways(p)}: {why}"); code = 1; break; }
+                    if (why != null) { ctx.Stderr.WriteLine("rmdir: " + CommandSpec.Message("rmdir", "failedToRemove", ("file", p), ("reason", why))); code = 1; break; }
                 }
             }
             return code;
-        }, "Remove empty directories");
+        });
 
         CommandHandler copyOrMove = ctx =>
         {
             bool move = ctx.Name == "mv";
-            var a = Args.Parse(ctx.Args, move ? "fvniZ" : "rRfvanpZLPHd", longs: "recursive=r,force=f,dereference=L,no-dereference=P");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of(ctx.Name));
             // cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
             bool followTop = !move && !(a.Has('P') || a.Has('d') || a.Has('a')) && (a.Has('L') || a.Has('H') || !(a.Has('r') || a.Has('R')));
-            if (a.Positional.Count < 2) throw new UsageException(a.Positional.Count == 0 ? "missing file operand" : $"missing destination file operand after {QuoteAlways(a.Positional[0])}");
+            if (a.Positional.Count < 2) throw new UsageException(a.Positional.Count == 0 ? CommandSpec.Message(ctx.Name, "missingFileOperand") : CommandSpec.Message(ctx.Name, "missingDestination", ("file", a.Positional[0])));
             var sources = a.Positional.Take(a.Positional.Count - 1).ToList();
             var destArg = a.Positional[^1];
             var dest = ctx.ResolvePath(destArg);
             bool destIsDir = ctx.Fs.IsDirectory(dest);
             if ((sources.Count > 1 || destArg.EndsWith('/') && !ctx.Fs.IsDirectory(ctx.ResolvePath(sources[0]))) && !destIsDir)
             {
-                if (sources.Count == 1 && !ctx.Fs.Exists(ctx.ResolvePath(sources[0]))) throw new ShellException($"cannot stat '{sources[0]}': No such file or directory");
+                if (sources.Count == 1 && !ctx.Fs.Exists(ctx.ResolvePath(sources[0]))) throw new ShellException(CommandSpec.Message(ctx.Name, "cannotStat", ("file", sources[0]), ("errno", "No such file or directory")));
                 if (sources.Count > 1)
-                    throw new ShellException($"target '{destArg}': {(ctx.Fs.Exists(dest) ? "Not a directory" : "No such file or directory")}");
-                throw new ShellException(move ? $"cannot move '{sources[0]}' to '{destArg}': Not a directory" : $"cannot create regular file '{destArg}': Not a directory");
+                    throw new ShellException(CommandSpec.Message(ctx.Name, "targetFailed", ("file", destArg), ("errno", ctx.Fs.Exists(dest) ? "Not a directory" : "No such file or directory")));
+                throw new ShellException(move ? CommandSpec.Message("mv", "cannotMove", ("source", sources[0]), ("dest", destArg), ("errno", "Not a directory")) : CommandSpec.Message("cp", "cannotCreate", ("kind", "regular file"), ("file", destArg), ("errno", "Not a directory")));
             }
             int code = 0;
             foreach (var s in sources)
             {
                 var src = ctx.ResolvePath(s);
-                if (!ctx.Fs.Exists(src, followTop)) { ctx.Stderr.WriteLine($"{ctx.Name}: cannot stat '{s}': {ctx.Fs.WhyMissing(src, followTop)}"); code = 1; continue; }
+                if (!ctx.Fs.Exists(src, followTop)) { ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message(ctx.Name, "cannotStat", ("file", s), ("errno", ctx.Fs.WhyMissing(src, followTop)))); code = 1; continue; }
                 if (!move && ctx.Fs.IsDirectory(src, followTop) && !(a.Has('r') || a.Has('R') || a.Has('a')))
-                { ctx.Stderr.WriteLine($"cp: -r not specified; omitting directory '{s}'"); code = 1; continue; }
+                { ctx.Stderr.WriteLine("cp: " + CommandSpec.Message("cp", "omittingDirectory", ("file", s))); code = 1; continue; }
                 var target = destIsDir ? VirtualFileSystem.Normalize(dest, VirtualFileSystem.GetName(src)) : dest;
                 if (target != src && !move && followTop && ctx.Fs.SameFile(src, target)) // through a link or another hard link; the plain case is a clash below
-                { ctx.Stderr.WriteLine($"cp: {QuoteAlways(s)} and {QuoteAlways(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)} are the same file"); code = 1; continue; }
+                { ctx.Stderr.WriteLine("cp: " + CommandSpec.Message("cp", "sameFile", ("source", s), ("dest", destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg))); code = 1; continue; }
                 if (!move && ctx.Fs.IsFile(src, followTop) && ctx.Fs.IsSymlink(target) && !ctx.Fs.Exists(target))
-                { ctx.Stderr.WriteLine($"cp: not writing through dangling symlink '{(destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg)}'"); code = 1; continue; }
+                { ctx.Stderr.WriteLine("cp: " + CommandSpec.Message("cp", "danglingSymlink", ("file", destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg))); code = 1; continue; }
                 if (target == "/dev/null" && !move) continue; // copying to /dev/null discards the data
                 var shown = destIsDir ? destArg.TrimEnd('/') + "/" + VirtualFileSystem.GetName(src) : destArg;
                 bool srcDir = ctx.Fs.IsDirectory(src, followTop);
                 // mv onto another name of the same file, or onto the file a link names, loses it; mv refuses as GNU mv does
                 bool sameFile = target == src || move && (ctx.Fs.SameFile(src, target, follow: false) || ctx.Fs.IsSymlink(src) && !ctx.Fs.IsSymlink(target) && ctx.Fs.SameFile(src, target));
-                string? clash = sameFile ? $"{QuoteAlways(s)} and {QuoteAlways(shown)} are the same file"
-                    : srcDir && target.StartsWith(src + "/", StringComparison.Ordinal)
-                        ? move ? $"cannot move {QuoteAlways(s)} to a subdirectory of itself, {QuoteAlways(shown)}"
-                            : $"cannot copy a directory, {QuoteAlways(s)}, into itself, {QuoteAlways(shown)}"
+                string? clashKey = sameFile ? "sameFile"
+                    : srcDir && target.StartsWith(src + "/", StringComparison.Ordinal) ? "intoItself"
                     : !ctx.Fs.Exists(target) ? null
-                    : srcDir && !ctx.Fs.IsDirectory(target) ? $"cannot overwrite non-directory {QuoteAlways(shown)} with directory {QuoteAlways(s)}"
-                    : !srcDir && ctx.Fs.IsDirectory(target) ? $"cannot overwrite directory {QuoteAlways(shown)} with non-directory"
-                    : move && srcDir && ctx.Fs.List(target).Count > 0 ? $"cannot overwrite {QuoteAlways(shown)}: Directory not empty"
+                    : srcDir && !ctx.Fs.IsDirectory(target) ? "overwriteNonDirectory"
+                    : !srcDir && ctx.Fs.IsDirectory(target) ? "overwriteDirectory"
+                    : move && srcDir && ctx.Fs.List(target).Count > 0 ? "notEmpty"
                     : null;
+                string? clash = clashKey == null ? null : CommandSpec.Message(ctx.Name, clashKey, ("source", s), ("dest", shown));
                 if (clash != null)
                 {
                     ctx.Stderr.WriteLine($"{ctx.Name}: {clash}");
                     code = 1;
                     // cp creates the copy and fills it until it reaches the copy itself
-                    if (!move && clash.StartsWith("cannot copy", StringComparison.Ordinal)) CopyIntoItself(ctx, src, target, []);
+                    if (!move && clashKey == "intoItself") CopyIntoItself(ctx, src, target, []);
                     continue;
                 }
                 if (move && srcDir && ctx.Fs.IsDirectory(target)) ctx.Fs.Delete(target); // an empty directory is replaced
@@ -379,32 +375,32 @@ internal static partial class Builtins
                     else ctx.Fs.Copy(src, target, (abs, dir) =>
                     {
                         var p = Typed(new ShellException(abs + ": "), s, src).Path;
-                        ctx.Stderr.WriteLine(dir ? $"cp: cannot access '{p}': Permission denied" : $"cp: cannot open '{p}' for reading: Permission denied");
+                        ctx.Stderr.WriteLine("cp: " + CommandSpec.Message("cp", dir ? "cannotAccess" : "cannotOpen", ("file", p), ("errno", "Permission denied")));
                         code = 1;
                     }, followTop, a.Has('L'), (abs, why) =>
                     {
                         var p = Typed(new ShellException(abs + ": "), s, src).Path;
-                        ctx.Stderr.WriteLine(why == "cyclic" ? $"cp: cannot copy cyclic symbolic link '{p}'" : $"cp: cannot stat '{p}': {why}");
+                        ctx.Stderr.WriteLine("cp: " + (why == "cyclic" ? CommandSpec.Message("cp", "cyclicLink", ("file", p)) : CommandSpec.Message("cp", "cannotStat", ("file", p), ("errno", why))));
                         code = 1;
                     }, ctx.CancellationToken.ThrowIfCancellationRequested);
                 }
                 catch (ShellException e) when (e.Message.Contains(" into itself, ") || e.Message.Contains(" to a subdirectory of itself, "))
                 {
-                    ctx.Stderr.WriteLine(move ? $"mv: cannot move '{s}' to a subdirectory of itself, '{shown}'" : $"cp: cannot copy a directory, '{s}', into itself, '{shown}'");
+                    ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message(ctx.Name, "intoItselfPlain", ("source", s), ("dest", shown)));
                     code = 1;
                     continue;
                 }
                 catch (ShellException e) when (e.Message.EndsWith(VirtualFileSystem.NoSpace))
                 {
-                    ctx.Stderr.WriteLine($"{ctx.Name}: error writing '{shown}': {VirtualFileSystem.NoSpace}");
+                    ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message(ctx.Name, "errorWriting", ("file", shown), ("errno", VirtualFileSystem.NoSpace)));
                     code = 1;
                     continue;
                 }
                 catch (ShellException e) when (e.Message.EndsWith("Permission denied") || e.Message.EndsWith("Operation not permitted"))
                 {
                     var why = Typed(e, s, src).Reason;
-                    ctx.Stderr.WriteLine(move ? $"mv: cannot move '{s}' to '{shown}': {why}"
-                        : $"cp: cannot create {(ctx.Fs.IsDirectory(src) ? "directory" : "regular file")} '{shown}': {why}");
+                    ctx.Stderr.WriteLine(move ? "mv: " + CommandSpec.Message("mv", "cannotMove", ("source", s), ("dest", shown), ("errno", why))
+                        : "cp: " + CommandSpec.Message("cp", "cannotCreate", ("kind", ctx.Fs.IsDirectory(src) ? "directory" : "regular file"), ("file", shown), ("errno", why)));
                     code = 1;
                     continue;
                 }
@@ -412,7 +408,7 @@ internal static partial class Builtins
             }
             return Task.FromResult(code);
         };
-        shell.Register("cp", copyOrMove, "Copy files and directories");
+        shell.Register("cp", copyOrMove);
 
         // cp -r d d/x copies d into d/x, entry by entry, until it meets a directory this copy created; there it stops.
         // Returns false once stopped. shortcut: entries go in name order, where GNU goes in the directory's own order.
@@ -428,22 +424,22 @@ internal static partial class Builtins
             }
             return true;
         }
-        shell.Register("mv", copyOrMove, "Move or rename files");
+        shell.Register("mv", copyOrMove);
 
         shell.Register("ln", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "sfnvTrLPb", "t", "symbolic=s,force=f,no-dereference=n,no-target-directory=T,target-directory=t,verbose=v,relative=r,logical=L,physical=P");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("ln"));
             var fs = ctx.Fs;
             bool sym = a.Has('s');
             var ops = a.Positional;
             var into = a.Value('t');
             if (into == null && !a.Has('T') && (ops.Count > 2 || ops.Count == 2 && fs.IsDirectory(ctx.ResolvePath(ops[^1]), !a.Has('n')))) into = ops[^1];
             if (ops.Count == 0 || (ops.Count == 1 && a.Has('T') && into == null))
-                throw new UsageException(ops.Count == 0 ? "missing file operand" : $"missing destination file operand after {QuoteAlways(ops[0])}");
+                throw new UsageException(ops.Count == 0 ? CommandSpec.Message("ln", "missingFileOperand") : CommandSpec.Message("ln", "missingDestination", ("file", ops[0])));
             if (into != null && a.Value('t') == null) ops = ops.Take(ops.Count - 1).ToList();
             if (into != null && !fs.IsDirectory(ctx.ResolvePath(into)))
-                throw new ShellException(a.Value('t') != null && !fs.Exists(ctx.ResolvePath(into)) ? $"failed to access {QuoteAlways(into)}: {fs.WhyMissing(ctx.ResolvePath(into))}"
-                    : fs.Exists(ctx.ResolvePath(into)) ? $"target {QuoteAlways(into)} is not a directory" : $"target {QuoteAlways(into)}: No such file or directory");
+                throw new ShellException(a.Value('t') != null && !fs.Exists(ctx.ResolvePath(into)) ? CommandSpec.Message("ln", "failedToAccess", ("file", into), ("errno", fs.WhyMissing(ctx.ResolvePath(into))))
+                    : fs.Exists(ctx.ResolvePath(into)) ? CommandSpec.Message("ln", "targetNotDirectory", ("file", into)) : CommandSpec.Message("ln", "targetFailed", ("file", into), ("errno", "No such file or directory")));
             // (what the link points to, the link's name): `ln f` links into ".", `ln f d` into d when it is a directory
             var pairs = into != null || ops.Count == 1
                 ? ops.Select(t => (t, (into == null ? "" : into.TrimEnd('/') + "/") + VirtualFileSystem.GetName(t))).ToList()
@@ -455,17 +451,17 @@ internal static partial class Builtins
                 var abs = ctx.ResolvePath(name);
                 var src = ctx.ResolvePath(target);
                 string Fail(string why, bool arrow = true) =>
-                    $"ln: failed to create {(sym ? "symbolic" : "hard")} link {QuoteAlways(shownName)}{(!arrow ? "" : sym ? (target.Length == 0 ? " -> ''" : "") : " => " + QuoteAlways(target))}: {why}";
+                    "ln: " + CommandSpec.Message("ln", "createFailed", ("kind", sym ? "symbolic" : "hard"), ("file", shownName), ("arrow", !arrow ? "" : sym ? (target.Length == 0 ? " -> ''" : "") : " => " + QuoteAlways(target)), ("errno", why));
                 try
                 {
-                    if (!sym && !fs.Exists(src, a.Has('L'))) { ctx.Stderr.WriteLine($"ln: failed to access {QuoteAlways(target)}: {fs.WhyMissing(src, a.Has('L'))}"); code = 1; continue; }
-                    if (!sym && fs.IsDirectory(src)) { ctx.Stderr.WriteLine($"ln: {target}: hard link not allowed for directory"); code = 1; continue; }
+                    if (!sym && !fs.Exists(src, a.Has('L'))) { ctx.Stderr.WriteLine("ln: " + CommandSpec.Message("ln", "failedToAccess", ("file", target), ("errno", fs.WhyMissing(src, a.Has('L'))))); code = 1; continue; }
+                    if (!sym && fs.IsDirectory(src)) { ctx.Stderr.WriteLine("ln: " + CommandSpec.Message("ln", "hardLinkDirectory", ("file", target))); code = 1; continue; }
                     if (fs.Exists(abs, follow: false))
                     {
                         if (!a.Has('f')) { ctx.Stderr.WriteLine(Fail("File exists", arrow: false)); code = 1; continue; }
-                        if (fs.IsDirectory(abs, follow: false)) { ctx.Stderr.WriteLine($"ln: {name}: cannot overwrite directory"); code = 1; continue; }
+                        if (fs.IsDirectory(abs, follow: false)) { ctx.Stderr.WriteLine("ln: " + CommandSpec.Message("ln", "overwriteDirectory", ("file", name))); code = 1; continue; }
                         if (fs.SameFile(abs, sym ? VirtualFileSystem.Normalize(VirtualFileSystem.GetParent(abs), target) : src))
-                        { ctx.Stderr.WriteLine($"ln: {QuoteAlways(target)} and {QuoteAlways(name)} are the same file"); code = 1; continue; }
+                        { ctx.Stderr.WriteLine("ln: " + CommandSpec.Message("ln", "sameFile", ("source", target), ("dest", name))); code = 1; continue; }
                         fs.Delete(abs);
                     }
                     if (!sym) fs.CreateHardLink(src, abs, a.Has('L'));
@@ -490,17 +486,17 @@ internal static partial class Builtins
                 catch (ShellException e) { ctx.Stderr.WriteLine(Fail(Reason(e), arrow: Reason(e) != "File exists")); code = 1; }
             }
             return code;
-        }, "Make links between files (-s symbolic, -f replace)");
+        });
 
-        shell.Register("find", Find.RunAsync, "Search for files");
+        shell.Register("find", Find.RunAsync);
 
         shell.Register("tree", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "ad", valued: "L");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("tree"));
             int maxDepth = a.Value('L') is { } l ? int.Parse(l) : int.MaxValue;
             var root = a.Positional.FirstOrDefault() ?? ".";
             var abs = ctx.ResolvePath(root);
-            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{root} [error opening dir]");
+            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException(CommandSpec.Message("tree", "errorOpeningDir", ("dir", root)));
             int dirs = 0, files = 0;
             var sb = new StringBuilder(root + "\n");
             void Walk(string dir, string prefix, int depth)
@@ -524,6 +520,6 @@ internal static partial class Builtins
             sb.Append($"\n{dirs} director{(dirs == 1 ? "y" : "ies")}").Append(a.Has('d') ? "\n" : $", {files} file{(files == 1 ? "" : "s")}\n");
             ctx.Stdout.Write(sb.ToString());
             return 0;
-        }, "Show a directory tree");
+        });
     }
 }

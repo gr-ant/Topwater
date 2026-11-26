@@ -20,12 +20,12 @@ internal static partial class Builtins
 
         public void Entry()
         {
-            if (--_entries < 0) throw new ShellException($"archive exceeds the {o.MaxExtractEntries}-entry extraction limit; stopping", exitCode);
+            if (--_entries < 0) throw new ShellException(CommandSpec.Message("tar", "entryLimit", ("limit", o.MaxExtractEntries.ToString(CultureInfo.InvariantCulture))), exitCode);
         }
 
         public void Charge(long n)
         {
-            if ((_bytes -= n) < 0) throw new ShellException($"output exceeds the {o.MaxExtractBytes}-byte extraction limit; stopping", exitCode);
+            if ((_bytes -= n) < 0) throw new ShellException(CommandSpec.Message("tar", "byteLimit", ("limit", o.MaxExtractBytes.ToString(CultureInfo.InvariantCulture))), exitCode);
         }
 
         public byte[] Read(Stream s)
@@ -119,18 +119,13 @@ internal static partial class Builtins
 
     static void RegisterArchiveCommands(Shell shell)
     {
-        shell.Register("tar", Tar, "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components)");
+        shell.Register("tar", Tar);
 
         foreach (var name in new[] { "gzip", "gunzip", "zcat" })
-            shell.Register(name, Gzip, name switch
-            {
-                "gzip" => "Compress or decompress files (-c -d -k -f -l -t -v -1..-9)",
-                "gunzip" => "Decompress .gz files (gzip -d)",
-                _ => "Decompress .gz files to stdout (gzip -dc)",
-            });
+            shell.Register(name, Gzip);
 
-        shell.Register("zip", Zip, "Package files into a zip archive (-r, -q)");
-        shell.Register("unzip", Unzip, "List or extract a zip archive (-l -o -n -d -p -q)");
+        shell.Register("zip", Zip);
+        shell.Register("unzip", Unzip);
     }
 
     static int Tar(CommandContext ctx)
@@ -146,34 +141,34 @@ internal static partial class Builtins
             {
                 args.Add("-" + c);
                 if (c is not ('f' or 'C')) continue;
-                if (rest.Count == 0) throw new ShellException($"Old option '{c}' requires an argument.\nTry 'tar --help' or 'tar --usage' for more information.", 2);
+                if (rest.Count == 0) throw new ShellException(CommandSpec.Message("tar", "oldOptionNeedsArgument", ("option", c.ToString())) + "\n" + CommandSpec.Of("tar").TryHelp.TrimEnd('\n'), 2);
                 args.Add(rest[0]);
                 rest.RemoveAt(0);
             }
             args.AddRange(rest);
         }
-        const string Usage = "\nTry 'tar --help' or 'tar --usage' for more information.";
-        var a = Args.Parse(args, "cxtzvOpo", "fC\u0001", "create=c,extract=x,get=x,list=t,gzip=z,gunzip=z,ungzip=z,verbose=v,to-stdout=O,file=f,directory=C,strip-components=\u0001,preserve-permissions=p,no-same-owner=o");
+        var Usage = "\n" + CommandSpec.Of("tar").TryHelp.TrimEnd('\n');
+        var a = Args.Parse(args, CommandSpec.Of("tar"));
         var modes = "cxt".Count(a.Has);
-        if (modes == 0) throw new ShellException("You must specify one of the '-Acdtrux', '--delete' or '--test-label' options" + Usage, 2);
-        if (modes > 1) throw new ShellException("You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option" + Usage, 2);
+        if (modes == 0) throw new ShellException(CommandSpec.Message("tar", "noMode") + Usage, 2);
+        if (modes > 1) throw new ShellException(CommandSpec.Message("tar", "manyModes") + Usage, 2);
         int strip = a.Value('\u0001') is { } s ? int.Parse(s, CultureInfo.InvariantCulture) : 0;
         var archive = a.Value('f') ?? "-";
         var fs = ctx.Fs;
-        string Fatal(string msg) => msg + "\ntar: Error is not recoverable: exiting now";
+        string Fatal(string msg) => msg + "\ntar: " + CommandSpec.Message("tar", "unrecoverable");
         var dir = ctx.ResolvePath(a.Value('C') ?? ".");
-        if (!fs.IsDirectory(dir)) throw new ShellException(Fatal($"{a.Value('C')}: Cannot open: {(fs.Exists(dir) ? "Not a directory" : fs.WhyMissing(dir))}"), 2);
+        if (!fs.IsDirectory(dir)) throw new ShellException(Fatal(CommandSpec.Message("tar", "cannotOpen", ("file", a.Value('C') ?? ""), ("errno", fs.Exists(dir) ? "Not a directory" : fs.WhyMissing(dir)))), 2);
         int code = 0;
         void Fail(string msg) { ctx.Stderr.WriteLine("tar: " + msg); code = 2; }
         int Done()
         {
-            if (code != 0) ctx.Stderr.WriteLine("tar: Exiting with failure status due to previous errors");
+            if (code != 0) ctx.Stderr.WriteLine("tar: " + CommandSpec.Message("tar", "previousErrors"));
             return code;
         }
 
         if (a.Has('c'))
         {
-            if (a.Positional.Count == 0) throw new ShellException("Cowardly refusing to create an empty archive" + Usage, 2);
+            if (a.Positional.Count == 0) throw new ShellException(CommandSpec.Message("tar", "emptyArchive") + Usage, 2);
             var archivePath = archive == "-" ? null : ctx.ResolvePath(archive);
             var verbose = archive == "-" ? ctx.Stderr : ctx.Stdout;
             var ms = new MemoryStream();
@@ -208,13 +203,13 @@ internal static partial class Builtins
                         }
                         foreach (var child in children) Add(name.TrimEnd('/') + "/" + child, path.TrimEnd('/') + "/" + child);
                     }
-                    catch (ShellException e) { Fail($"{name}: Cannot open: {Reason(e)}"); }
+                    catch (ShellException e) { Fail(CommandSpec.Message("tar", "cannotOpen", ("file", name), ("errno", Reason(e)))); }
                 }
                 foreach (var f in a.Positional)
                 {
-                    if (f.StartsWith('/') && !stripped) { stripped = true; ctx.Stderr.WriteLine("tar: Removing leading `/' from member names"); }
+                    if (f.StartsWith('/') && !stripped) { stripped = true; ctx.Stderr.WriteLine(CommandSpec.Message("tar", "removingLeading", ("prefix", "/"))); }
                     var path = VirtualFileSystem.Normalize(dir, f);
-                    if (!fs.Exists(path, follow: false)) Fail($"{f}: Cannot stat: {fs.WhyMissing(path, follow: false)}");
+                    if (!fs.Exists(path, follow: false)) Fail(CommandSpec.Message("tar", "cannotStat", ("file", f), ("errno", fs.WhyMissing(path, follow: false))));
                     else Add(f, path);
                 }
             }
@@ -230,23 +225,23 @@ internal static partial class Builtins
         else
         {
             var path = ctx.ResolvePath(archive);
-            if (!fs.IsFile(path)) throw new ShellException(Fatal($"{archive}: Cannot open: {(fs.IsDirectory(path) ? "Is a directory" : fs.WhyMissing(path))}"), 2);
+            if (!fs.IsFile(path)) throw new ShellException(Fatal(CommandSpec.Message("tar", "cannotOpen", ("file", archive), ("errno", fs.IsDirectory(path) ? "Is a directory" : fs.WhyMissing(path)))), 2);
             data = fs.ReadAllBytes(path);
         }
         if (IsGzip(data))
         {
-            if (!a.Has('z') && archive == "-") throw new ShellException(Fatal("Archive is compressed. Use -z option"), 2);
+            if (!a.Has('z') && archive == "-") throw new ShellException(Fatal(CommandSpec.Message("tar", "compressedArchive")), 2);
             if (GunzipBytes(data, new ExtractBudget(ctx.Shell.Options, 2), out var error) is not { } plain)
             {
-                ctx.Stderr.Write($"\ngzip: stdin: {error}\ntar: Child returned status 1\n");
-                throw new ShellException("Error is not recoverable: exiting now", 2);
+                ctx.Stderr.WriteLine(CommandSpec.Message("tar", "gzipChildFailed", ("error", error)));
+                throw new ShellException(CommandSpec.Message("tar", "unrecoverable"), 2);
             }
             data = plain;
         }
         else if (a.Has('z'))
         {
-            ctx.Stderr.Write("\ngzip: stdin: not in gzip format\ntar: Child returned status 1\n");
-            throw new ShellException("Error is not recoverable: exiting now", 2);
+            ctx.Stderr.WriteLine(CommandSpec.Message("tar", "gzipChildFailed", ("error", "not in gzip format")));
+            throw new ShellException(CommandSpec.Message("tar", "unrecoverable"), 2);
         }
 
         var budget = new ExtractBudget(ctx.Shell.Options, 2);
@@ -269,7 +264,7 @@ internal static partial class Builtins
             try { e = reader.GetNextEntry(); }
             catch (Exception ex) when (ex is InvalidDataException or FormatException or EndOfStreamException or ArgumentException)
             {
-                Fail(first ? "This does not look like a tar archive" : "Unexpected EOF in archive");
+                Fail(first ? CommandSpec.Message("tar", "notTar") : CommandSpec.Message("tar", "unexpectedEof"));
                 break;
             }
             if (e == null) break;
@@ -284,9 +279,9 @@ internal static partial class Builtins
                 if (i < 0) continue;
                 found[i] = true;
             }
-            if (prefix.Length > 0 && announced.Add(prefix)) ctx.Stderr.WriteLine($"tar: Removing leading `{prefix}' from member names");
+            if (prefix.Length > 0 && announced.Add(prefix)) ctx.Stderr.WriteLine(CommandSpec.Message("tar", "removingLeading", ("prefix", prefix)));
             var linkPrefix = e.EntryType == TarEntryType.HardLink ? TarPrefix(e.LinkName) : "";
-            if (linkPrefix.Length > 0 && announced.Add("link:" + linkPrefix)) ctx.Stderr.WriteLine($"tar: Removing leading `{linkPrefix}' from hard link targets");
+            if (linkPrefix.Length > 0 && announced.Add("link:" + linkPrefix)) ctx.Stderr.WriteLine(CommandSpec.Message("tar", "removingLeadingLink", ("prefix", linkPrefix)));
             bool isFile = e.EntryType is TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.ContiguousFile;
             if (a.Has('t'))
             {
@@ -304,7 +299,7 @@ internal static partial class Builtins
                 ctx.Stdout.WriteLine($"{type}{VirtualFileSystem.FormatMode(false, (int)e.Mode)[1..]} {ug}{size.PadLeft(ugWidth - ug.Length)} {e.ModificationTime.UtcDateTime:yyyy-MM-dd HH:mm} {name}{link}");
                 continue;
             }
-            if (HasDotDot(prefix)) { Fail($"{name}: Member name contains '..'"); continue; }
+            if (HasDotDot(prefix)) { Fail(CommandSpec.Message("tar", "memberDotDot", ("name", name))); continue; }
             var parts = rel.Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length <= strip) continue;
             var target = VirtualFileSystem.Normalize(dir, string.Join('/', parts.Skip(strip)));
@@ -341,7 +336,7 @@ internal static partial class Builtins
                         // only to a file this archive (or the target dir) already holds, never through a link it made
                         if (linkParts.Length <= strip || !fs.Exists(linkTarget, follow: false) || fs.IsDirectory(linkTarget, follow: false) || linkTarget == target || ThroughMadeLink(linkTarget))
                         {
-                            Fail($"{name}: Cannot hard link to ‘{string.Join('/', linkParts)}’: No such file or directory");
+                            Fail(CommandSpec.Message("tar", "cannotHardLink", ("name", name), ("target", string.Join('/', linkParts))));
                             break;
                         }
                         fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
@@ -354,25 +349,25 @@ internal static partial class Builtins
                         fs.SetModifiedTime(target, e.ModificationTime.UtcDateTime, follow: false);
                         break;
                     default:
-                        Fail($"{name}: Cannot mknod: Operation not permitted");
+                        Fail(CommandSpec.Message("tar", "cannotMknod", ("name", name)));
                         break;
                 }
             }
-            catch (ShellException ex) when (!ex.Message.Contains("extraction limit")) { Fail($"{name}: Cannot open: {Reason(ex)}"); }
+            catch (ShellException ex) when (!ex.Message.Contains("extraction limit")) { Fail(CommandSpec.Message("tar", "cannotOpen", ("file", name), ("errno", Reason(ex)))); }
             catch (EndOfStreamException)
             {
-                Fail("Unexpected EOF in archive");
+                Fail(CommandSpec.Message("tar", "unexpectedEof"));
                 break;
             }
         }
         for (int i = 0; i < wanted.Count; i++)
-            if (!found[i]) Fail($"{a.Positional[i]}: Not found in archive");
+            if (!found[i]) Fail(CommandSpec.Message("tar", "notFound", ("file", a.Positional[i])));
         return Done();
     }
 
     static int Gzip(CommandContext ctx)
     {
-        var a = Args.Parse(ctx.Args, "cdkflvqtn123456789", "", "stdout=c,to-stdout=c,decompress=d,uncompress=d,keep=k,force=f,list=l,verbose=v,quiet=q,test=t,no-name=n,fast=1,best=9");
+        var a = Args.Parse(ctx.Args, CommandSpec.Of(ctx.Name));
         bool decompress = ctx.Name != "gzip" || a.Has('d') || a.Has('t') || a.Has('l'), toStdout = ctx.Name == "zcat" || a.Has('c');
         var level = a.Has('1') || a.Has('2') || a.Has('3') ? CompressionLevel.Fastest : a.Has('7') || a.Has('8') || a.Has('9') ? CompressionLevel.SmallestSize : CompressionLevel.Optimal;
         var fs = ctx.Fs;
@@ -380,7 +375,7 @@ internal static partial class Builtins
         int code = 0;
         void Error(string msg) { ctx.Stderr.WriteLine("gzip: " + msg); code = 1; }
         void Warn(string msg) { if (!a.Has('q')) ctx.Stderr.WriteLine("gzip: " + msg); if (code == 0) code = 2; }
-        void NotGzip(string name) { ctx.Stderr.WriteLine($"\ngzip: {name}: not in gzip format"); code = 1; }
+        void NotGzip(string name) { ctx.Stderr.WriteLine(CommandSpec.Message("gzip", "notGzip", ("file", name))); code = 1; }
         var files = a.Positional.Count == 0 ? ["-"] : a.Positional;
         long totalC = 0, totalU = 0, totalH = 0;
         bool header = false;
@@ -391,8 +386,8 @@ internal static partial class Builtins
             if (decompress && f != "-" && !fs.Exists(path) && !f.EndsWith(".gz", StringComparison.Ordinal)) { f += ".gz"; path += ".gz"; }
             byte[] data;
             if (f == "-") data = ByteText.Encode(ctx.StdinText);
-            else if (fs.IsDirectory(path)) { Warn($"{f} is a directory -- ignored"); continue; }
-            else if (!fs.IsFile(path)) { Error($"{f}: {fs.WhyMissing(path)}"); continue; }
+            else if (fs.IsDirectory(path)) { Warn(CommandSpec.Message("gzip", "isDirectory", ("file", f))); continue; }
+            else if (!fs.IsFile(path)) { Error(CommandSpec.Message("gzip", "fileError", ("file", f), ("errno", fs.WhyMissing(path)))); continue; }
             else data = fs.ReadAllBytes(path);
             var shown = f == "-" ? "stdin" : f;
 
@@ -400,10 +395,10 @@ internal static partial class Builtins
             {
                 var packed = GzipBytes(data, level);
                 if (f == "-" || toStdout) { WriteBytes(ctx.Stdout, packed); continue; }
-                if (f.EndsWith(".gz", StringComparison.Ordinal)) { if (!a.Has('q')) ctx.Stderr.WriteLine($"gzip: {f} already has .gz suffix -- unchanged"); continue; }
-                if (fs.Exists(path + ".gz") && !a.Has('f')) { Warn($"{f}.gz already exists;\tnot overwritten"); continue; }
+                if (f.EndsWith(".gz", StringComparison.Ordinal)) { if (!a.Has('q')) ctx.Stderr.WriteLine("gzip: " + CommandSpec.Message("gzip", "alreadySuffix", ("file", f))); continue; }
+                if (fs.Exists(path + ".gz") && !a.Has('f')) { Warn(CommandSpec.Message("gzip", "alreadyExists", ("file", f + ".gz"))); continue; }
                 Replace(path, path + ".gz", packed);
-                if (a.Has('v')) ctx.Stderr.WriteLine($"{f}:\t{Ratio(packed.Length - GzipOverhead(packed), data.Length)}% -- {(a.Has('k') ? "created" : "replaced with")} {f}.gz");
+                if (a.Has('v')) ctx.Stderr.WriteLine(CommandSpec.Message("gzip", "ratio", ("file", f), ("ratio", Ratio(packed.Length - GzipOverhead(packed), data.Length)), ("action", a.Has('k') ? "created" : "replaced with"), ("target", f + ".gz")));
                 continue;
             }
 
@@ -411,7 +406,7 @@ internal static partial class Builtins
             if (f != "-" && !toStdout && !a.Has('t') && !a.Has('l'))
             {
                 var suffix = new[] { ".gz", "-gz", ".z", "_z", ".tgz" }.FirstOrDefault(x => f.EndsWith(x, StringComparison.Ordinal) && f.Length > x.Length);
-                if (suffix == null) { Warn($"{f}: unknown suffix -- ignored"); continue; }
+                if (suffix == null) { Warn(CommandSpec.Message("gzip", "unknownSuffix", ("file", f))); continue; }
                 outName = f[..^suffix.Length] + (suffix == ".tgz" ? ".tar" : "");
             }
             if (!IsGzip(data))
@@ -431,16 +426,16 @@ internal static partial class Builtins
             }
             if (GunzipBytes(data, budget, out var error) is not { } plain)
             {
-                ctx.Stderr.WriteLine($"\ngzip: {shown}: {error}");
+                ctx.Stderr.WriteLine(CommandSpec.Message("gzip", "corrupt", ("file", shown), ("error", error)));
                 code = 1;
                 continue;
             }
             if (a.Has('t')) continue;
             if (outName == null) { WriteBytes(ctx.Stdout, plain); continue; }
             var outPath = ctx.ResolvePath(outName);
-            if (fs.Exists(outPath) && !a.Has('f')) { Warn($"{outName} already exists;\tnot overwritten"); continue; }
+            if (fs.Exists(outPath) && !a.Has('f')) { Warn(CommandSpec.Message("gzip", "alreadyExists", ("file", outName))); continue; }
             Replace(path, outPath, plain);
-            if (a.Has('v')) ctx.Stderr.WriteLine($"{f}:\t{Ratio(data.Length - GzipOverhead(data), plain.Length)}% -- replaced with {outName}");
+            if (a.Has('v')) ctx.Stderr.WriteLine(CommandSpec.Message("gzip", "ratio", ("file", f), ("ratio", Ratio(data.Length - GzipOverhead(data), plain.Length)), ("action", "replaced with"), ("target", outName)));
         }
         if (header && files.Count > 1)
             ctx.Stdout.WriteLine($"{totalC,19} {totalU,19} {Ratio(totalC - totalH, totalU),5}% (totals)");
@@ -459,9 +454,9 @@ internal static partial class Builtins
 
     static int Zip(CommandContext ctx)
     {
-        var a = Args.Parse(ctx.Args, "rq", "", "recurse-paths=r,quiet=q");
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("zip"));
         var fs = ctx.Fs;
-        if (a.Positional.Count == 0) throw new ShellException("\nzip error: Nothing to do! (no archive given)", 12);
+        if (a.Positional.Count == 0) throw new ShellException(CommandSpec.Message("zip", "noArchive"), 12);
         var archive = a.Positional[0];
         if (archive != "-" && !VirtualFileSystem.GetName(archive).Contains('.')) archive += ".zip";
         var archivePath = archive == "-" ? null : ctx.ResolvePath(archive);
@@ -503,15 +498,15 @@ internal static partial class Builtins
             }
             var names = a.Positional.Skip(1).ToList();
             foreach (var f in names)
-                if (!fs.Exists(ctx.ResolvePath(f)) && !a.Has('q')) info.WriteLine($"\tzip warning: name not matched: {f}");
+                if (!fs.Exists(ctx.ResolvePath(f)) && !a.Has('q')) info.WriteLine(CommandSpec.Message("zip", "nameNotMatched", ("file", f)));
             foreach (var f in names)
                 if (fs.Exists(ctx.ResolvePath(f))) Add(f, ctx.ResolvePath(f));
         }
-        catch (InvalidDataException) { throw new ShellException($"\nzip error: Zip file structure invalid ({archive})", 3); }
+        catch (InvalidDataException) { throw new ShellException(CommandSpec.Message("zip", "badStructure", ("archive", archive)), 3); }
         if (added == 0)
         {
             var hint = a.Has('r') ? $"try: zip -r {archive} . -i {string.Join(' ', a.Positional.Skip(1))}" : archive;
-            info.WriteLine($"\nzip error: Nothing to do! ({hint})");
+            info.WriteLine(CommandSpec.Message("zip", "nothingToDo", ("hint", hint)));
             return 12;
         }
         if (archivePath == null) WriteBytes(ctx.Stdout, ms.ToArray());
@@ -528,7 +523,7 @@ internal static partial class Builtins
 
     static int Unzip(CommandContext ctx)
     {
-        var a = Args.Parse(ctx.Args, "lopqn", "d");
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("unzip"));
         var fs = ctx.Fs;
         if (a.Positional.Count == 0)
         {
@@ -539,7 +534,7 @@ internal static partial class Builtins
         var path = new[] { name, name + ".zip", name + ".ZIP" }.Select(ctx.ResolvePath).FirstOrDefault(p => fs.IsFile(p));
         if (path == null)
         {
-            ctx.Stderr.WriteLine($"unzip:  cannot find or open {name}, {name}.zip or {name}.ZIP.");
+            ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "cannotFind", ("name", name)));
             return 9;
         }
         bool quiet = a.Has('q'), pipe = a.Has('p');
@@ -548,8 +543,8 @@ internal static partial class Builtins
         catch (InvalidDataException)
         {
             if (!quiet) ctx.Stdout.WriteLine($"Archive:  {name}");
-            ctx.Stderr.WriteLine("  End-of-central-directory signature not found.  Either this file is not\n  a zipfile, or it constitutes one disk of a multi-part archive.  In the\n  latter case the central directory and zipfile comment will be found on\n  the last disk(s) of this archive.");
-            ctx.Stderr.WriteLine($"unzip:  cannot find zipfile directory in one of {name} or\n        {name}.zip, and cannot find {name}.ZIP, period.");
+            ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "noEndSignature"));
+            ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "noDirectory", ("name", name)));
             return 9;
         }
         using var _ = zip;
@@ -595,8 +590,8 @@ internal static partial class Builtins
                     continue;
                 }
                 var parts = entryName.Split('/');
-                if (parts.Contains("..")) { if (!quiet) ctx.Stdout.WriteLine($"warning:  skipped \"../\" path component(s) in {entryName}"); code = 1; }
-                if (entryName.StartsWith('/')) { ctx.Stderr.WriteLine($"warning:  stripped absolute path spec from {entryName}"); code = 1; }
+                if (parts.Contains("..")) { if (!quiet) ctx.Stdout.WriteLine(CommandSpec.Message("unzip", "skippedDotDot", ("name", entryName))); code = 1; }
+                if (entryName.StartsWith('/')) { ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "strippedAbsolute", ("name", entryName))); code = 1; }
                 var rel = string.Join('/', parts.Where(p => p is not ("" or "." or "..")));
                 if (rel == "") continue;
                 var target = VirtualFileSystem.Normalize(dest, rel);
@@ -614,7 +609,7 @@ internal static partial class Builtins
                     {
                         if (a.Has('n') || none) continue;
                         // shortcut: no interactive stdin, so the prompt always reads EOF, as unzip does with </dev/null
-                        ctx.Stderr.WriteLine($"replace {shown}? [y]es, [n]o, [A]ll, [N]one, [r]ename:  NULL\n(EOF or read error, treating as \"[N]one\" ...)");
+                        ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "replacePrompt", ("file", shown)));
                         none = true;
                         code = Math.Max(code, 1);
                         continue;
@@ -628,13 +623,13 @@ internal static partial class Builtins
                 }
                 catch (ShellException ex) when (!ex.Message.Contains("extraction limit"))
                 {
-                    ctx.Stderr.WriteLine($"error:  cannot create {shown}\n        {Reason(ex)}");
+                    ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "cannotCreate", ("file", shown), ("errno", Reason(ex))));
                     code = Math.Max(code, 1);
                 }
             }
         }
         for (int i = 0; i < patterns.Count; i++)
-            if (!found[i]) { if (!a.Has('l')) ctx.Stderr.WriteLine($"caution: filename not matched:  {a.Positional[i + 1]}"); code = 11; }
+            if (!found[i]) { if (!a.Has('l')) ctx.Stderr.WriteLine(CommandSpec.Message("unzip", "filenameNotMatched", ("pattern", a.Positional[i + 1]))); code = 11; }
         return code;
 
         byte[] Inflate(ZipArchiveEntry e)

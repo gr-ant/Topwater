@@ -29,8 +29,8 @@ internal sealed class Args
                 var name = a[2..];
                 string? inline = null;
                 if (name.IndexOf('=') is var eq and > 0) { inline = name[(eq + 1)..]; name = name[..eq]; }
-                if (!map.TryGetValue(name, out var c)) throw new UsageException($"unrecognized option '{a}'");
-                if (valued.Contains(c)) r.Values[c] = inline ?? (i + 1 < args.Count ? args[++i] : throw new UsageException($"option '--{name}' requires an argument"));
+                if (!map.TryGetValue(name, out var c)) throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.UnrecognizedOption, ("option", a)));
+                if (valued.Contains(c)) r.Values[c] = inline ?? (i + 1 < args.Count ? args[++i] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingLongArgument, ("option", name))));
                 else r.Flags.Add(c);
                 continue;
             }
@@ -40,14 +40,21 @@ internal sealed class Args
                 char c = a[k];
                 if (valued.Contains(c))
                 {
-                    r.Values[c] = k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Count ? args[++i] : throw new UsageException($"option requires an argument -- '{c}'");
+                    r.Values[c] = k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Count ? args[++i] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingShortArgument, ("option", c.ToString())));
                     break;
                 }
-                if (!flags.Contains(c)) throw new UsageException($"invalid option -- '{c}'");
+                if (!flags.Contains(c)) throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.InvalidOption, ("option", c.ToString())));
                 r.Flags.Add(c);
             }
         }
         return r;
+    }
+
+    /// <summary>Parses with the command's option table from spec/.</summary>
+    public static Args Parse(IReadOnlyList<string> args, CommandSpec.Entry spec)
+    {
+        var (flags, valued, longs) = spec.Options ?? throw new InvalidOperationException($"{spec.Name} parses its own arguments");
+        return Parse(args, flags, valued, longs);
     }
 
     /// <summary>Rewrites "-5" into "-n 5" (head/tail/xargs style).</summary>
@@ -82,25 +89,11 @@ internal static partial class Builtins
         RegisterArchiveCommands(shell);
     }
 
-    static readonly Dictionary<string, string> Versions = new()
-    {
-        ["grep"] = "grep (GNU grep) 3.11", ["sed"] = "sed (GNU sed) 4.9", ["find"] = "find (GNU findutils) 4.9.0",
-        ["xargs"] = "xargs (GNU findutils) 4.9.0", ["diff"] = "diff (GNU diffutils) 3.10", ["jq"] = "jq-1.7.1", ["tree"] = "tree v2.1.1",
-        ["bash"] = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)", ["sh"] = "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
-        ["file"] = "file-5.45", ["sudo"] = "Sudo version 1.9.15p5", ["less"] = "less 590 (GNU regular expressions)", ["ps"] = "ps from procps-ng 4.0.4",
-        ["free"] = "free from procps-ng 4.0.4", ["uptime"] = "uptime from procps-ng 4.0.4", ["column"] = "column from util-linux 2.39.3",
-        ["rev"] = "rev from util-linux 2.39.3", ["more"] = "more from util-linux 2.39.3", ["egrep"] = "grep (GNU grep) 3.11", ["fgrep"] = "grep (GNU grep) 3.11",
-        ["tar"] = "tar (GNU tar) 1.35", ["gzip"] = "gzip 1.12", ["gunzip"] = "gzip 1.12", ["zcat"] = "gzip 1.12",
-        ["bc"] = "bc 1.07.1",
-    };
-
-    static readonly HashSet<string> NoStandardOptions = ["sudo", "su", "echo", "printf", "test", "[", "true", "false", ":", "awk", "help", "exit", "return", "break", "continue", "set", "eval", "command", "type", "alias", "export", "local", "declare", "read", "cd"];
-
     /// <summary>`tool --version` / `tool --help` for built-ins, so probing them looks like a real system.</summary>
     internal static bool StandardOption(CommandContext ctx, RegisteredCommand cmd, string arg)
     {
-        if (arg is not ("--version" or "--help") || NoStandardOptions.Contains(cmd.Name)) return false;
-        if (arg == "--version") ctx.Stdout.WriteLine(Versions.GetValueOrDefault(cmd.Name, $"{cmd.Name} (GNU coreutils) 9.4"));
+        if (arg is not ("--version" or "--help") || !CommandSpec.Commands.TryGetValue(cmd.Name, out var spec) || !spec.StandardOptions) return false;
+        if (arg == "--version") ctx.Stdout.WriteLine(spec.Version);
         else ctx.Stdout.Write(cmd.Usage ?? $"Usage: {cmd.Name} [OPTION]... [ARG]...\n{cmd.Description}.\n");
         return true;
     }
@@ -141,29 +134,15 @@ internal static partial class Builtins
     }
 
     /// <summary>A bad command line the way GNU tools report one: the problem, then a pointer to --help.</summary>
-    internal static string UsageError(string cmd, string message) =>
-        (message.Length > 0 ? $"{cmd}: {message}\n" : "") + cmd switch
-        {
-            "grep" => "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n",
-            "diff" => "diff: Try 'diff --help' for more information.\n",
-            _ => $"Try '{cmd} --help' for more information.\n",
-        };
+    internal static string UsageError(string cmd, string message)
+    {
+        var (shown, tryHelp) = CommandSpec.Commands.TryGetValue(cmd, out var spec) ? (spec.ReportsAs, spec.TryHelp) : (cmd, $"Try '{cmd} --help' for more information.\n");
+        return (message.Length > 0 ? $"{shown}: {message}\n" : "") + tryHelp;
+    }
 
     /// <summary>The message after "NAME: " when an input file can't be read, worded the way each GNU tool words it.</summary>
-    internal static string CannotRead(string cmd, string f, string why) => (cmd, why == "Is a directory") switch
-    {
-        ("sed", false) => $"can't read {f}: {why}",
-        ("sed", true) => $"read error on {f}: {why}",
-        ("grep" or "egrep" or "fgrep", _) => $"{f}: {why}", // grep shows names as given
-        ("head" or "tail", false) => $"cannot open {QuoteAlways(f)} for reading: {why}",
-        ("head" or "tail" or "uniq", true) => $"error reading {QuoteAlways(f)}: {why}",
-        ("tac", false) => $"failed to open {QuoteAlways(f)} for reading: {why}",
-        ("tac", true) => $"{Quote(f)}: read error: Invalid argument",
-        ("sort", false) => $"cannot read: {Quote(f)}: {why}",
-        ("sort", true) => $"read failed: {Quote(f)}: {why}",
-        ("base64", true) => $"read error: {why}",
-        _ => $"{Quote(f)}: {why}",
-    };
+    internal static string CannotRead(string cmd, string f, string why) =>
+        CommandSpec.Message(cmd, why == "Is a directory" && CommandSpec.Of(cmd).Messages.ContainsKey("readDirectory") ? "readDirectory" : "openFailed", ("file", f), ("errno", why));
 
     /// <summary>A file name in a GNU message: as is when plain, else shell-quoted like <see cref="QuoteAlways"/>.</summary>
     internal static string Quote(string s) =>
@@ -225,22 +204,14 @@ internal static partial class Builtins
         return sb.ToString();
     }
 
-    /// <summary>Commands that are part of bash itself rather than programs in /usr/bin (for `type` and `command -v`).</summary>
-    static readonly HashSet<string> ShellBuiltins =
-    [
-        "cd", "echo", "printf", "read", "export", "unset", "alias", "unalias", "set", "shift", "local", "declare", "typeset",
-        "eval", "exit", "return", "break", "continue", "source", ".", "test", "[", "true", "false", "pwd", "type", "command",
-        "let", "history", "help", "exec", "wait", "trap", "umask", "readonly", "getopts", "hash", "jobs", "kill", "shopt", ":",
-        "pushd", "popd", "dirs", "mapfile", "readarray", "ulimit", "builtin", "caller", "times", "disown",
-    ];
-
-    internal static bool IsShellBuiltin(Shell shell, string name) => ShellBuiltins.Contains(name) && shell.IsBuiltin(name);
+    /// <summary>Part of bash itself rather than a program in /usr/bin (for `type`, `command -v` and the "bash: " error prefix).</summary>
+    internal static bool IsShellBuiltin(Shell shell, string name) => CommandSpec.Commands.TryGetValue(name, out var c) && c.ShellBuiltin && shell.IsBuiltin(name);
 
     static void RegisterShellCommands(Shell shell)
     {
-        shell.Register("true", _ => 0, "Do nothing, successfully");
-        shell.Register(":", _ => 0, "Do nothing, successfully (the null command)");
-        shell.Register("false", _ => 1, "Do nothing, unsuccessfully");
+        shell.Register("true", _ => 0);
+        shell.Register(":", _ => 0);
+        shell.Register("false", _ => 1);
 
         shell.Register("echo", ctx =>
         {
@@ -258,7 +229,7 @@ internal static partial class Builtins
             ctx.Stdout.Write(escapes ? Unescape(text, keepUnknown: true, echo: true) : text);
             if (newline) ctx.Stdout.Write('\n');
             return 0;
-        }, "Print arguments");
+        });
 
         shell.Register("printf", ctx =>
         {
@@ -266,21 +237,21 @@ internal static partial class Builtins
             string? variable = null;
             if (args.Count >= 2 && args[0] == "-v") { variable = args[1]; args.RemoveRange(0, 2); }
             if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
-            if (args.Count == 0) throw new ShellException("usage: printf [-v var] format [arguments]", 2);
+            if (args.Count == 0) throw new ShellException(CommandSpec.Message("printf", "usage"), 2);
             var errors = new List<string>();
             var text = Printf.Format(args[0], args.Skip(1).ToList(), errors, ctx.Shell.Now);
             foreach (var e in errors) ctx.Stderr.WriteLine(ctx.Shell.ErrPrefix + e); // bash reports them as it goes, then writes the text
             if (variable == null) ctx.Stdout.Write(text);
             else ctx.Shell.SetVar(variable, text);
             return errors.Count > 0 ? 1 : 0;
-        }, "Format and print data");
+        });
 
         shell.Register("cd", ctx =>
         {
             var flags = ctx.Args.TakeWhile(x => x is "-L" or "-P" or "-e" or "-@").ToList();
             var args = ctx.Args.Skip(flags.Count).ToList();
             if (args.Count > 0 && args[0] == "--") args.RemoveAt(0);
-            if (args.Count > 1) throw new ShellException("too many arguments");
+            if (args.Count > 1) throw new ShellException(CommandSpec.Message("cd", "tooManyArguments"));
             var target = args.Count == 0 ? ctx.Shell.Environment.GetValueOrDefault("HOME", "/")
                 : args[0] == "-" ? ctx.Shell.Environment.GetValueOrDefault("OLDPWD", ctx.Shell.Cwd) : args[0];
             // like bash: the new directory is the old one's logical path plus the operand, ".." removing a name (-L, the
@@ -288,15 +259,15 @@ internal static partial class Builtins
             bool physical = flags.LastOrDefault(f => f is "-L" or "-P") == "-P";
             var abs = VirtualFileSystem.Normalize(ctx.Shell.Cwd, target);
             if (physical || !ctx.Fs.IsDirectory(abs)) abs = ctx.ResolvePath(target);
-            if (!ctx.Fs.Exists(abs)) throw new ShellException($"{target}: {ctx.Fs.WhyMissing(abs)}");
-            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException($"{target}: Not a directory");
-            if (!ctx.Fs.CanExecute(abs)) throw new ShellException($"{target}: Permission denied");
+            if (!ctx.Fs.Exists(abs)) throw new ShellException(CommandSpec.Message("cd", "failed", ("dir", target), ("errno", ctx.Fs.WhyMissing(abs))));
+            if (!ctx.Fs.IsDirectory(abs)) throw new ShellException(CommandSpec.Message("cd", "failed", ("dir", target), ("errno", "Not a directory")));
+            if (!ctx.Fs.CanExecute(abs)) throw new ShellException(CommandSpec.Message("cd", "failed", ("dir", target), ("errno", "Permission denied")));
             if (physical) abs = ctx.Fs.RealPath(abs, out _) ?? abs;
             ctx.Shell.Environment["OLDPWD"] = ctx.Shell.Cwd;
             ctx.Shell.Cwd = abs;
             if (args is ["-"]) ctx.Stdout.WriteLine(abs);
             return 0;
-        }, "Change the working directory");
+        });
 
         shell.Register("pwd", ctx =>
         {
@@ -304,7 +275,7 @@ internal static partial class Builtins
             bool physical = ctx.Args.LastOrDefault(x => x is "-L" or "-P") == "-P";
             ctx.Stdout.WriteLine(physical ? ctx.Fs.RealPath(ctx.Shell.Cwd, out _) ?? ctx.Shell.Cwd : ctx.Shell.Cwd);
             return 0;
-        }, "Print the working directory");
+        });
 
         shell.Register("export", ctx =>
         {
@@ -332,7 +303,7 @@ internal static partial class Builtins
                 var name = eq > 0 ? a[..(append ? eq - 1 : eq)] : a;
                 try
                 {
-                    if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException($"`{a}': not a valid identifier");
+                    if (!Topwater.Parsing.Parser.IsName(name)) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.NotValidIdentifier, ("name", a)));
                     if (eq > 0) sh.SetVar(name, a[(eq + 1)..], append);
                     else if (!sh.Arrays.ContainsKey(sh.Resolve(name)) && !sh.Environment.ContainsKey(sh.Resolve(name))) { sh.MarkShellVariable(sh.Resolve(name)); sh.Environment[sh.Resolve(name)] = ""; }
                     if (remove) sh.Unexport(sh.Resolve(name)); else sh.SetAttrs(sh.Resolve(name), "x");
@@ -340,7 +311,7 @@ internal static partial class Builtins
                 catch (ShellException e) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}export: {e.Message}"); code = 1; }
             }
             return code;
-        }, "Set environment variables");
+        });
 
         shell.Register("unset", async ctx =>
         {
@@ -352,7 +323,7 @@ internal static partial class Builtins
                 {
                     if (!flags.Contains('f') && !Topwater.Parsing.Parser.IsName(arg.Split('[')[0]))
                     {
-                        if (flags.Contains('v')) throw new ShellException($"`{arg}': not a valid identifier");
+                        if (flags.Contains('v')) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.NotValidIdentifier, ("name", arg)));
                         continue; // plain unset passes over what can be neither a variable nor a function, silently
                     }
                     var a = await ctx.Shell.ExpandSubscriptAsync(arg, ctx.Io, ctx.CancellationToken);
@@ -363,13 +334,41 @@ internal static partial class Builtins
                 catch (ShellException e) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}unset: {e.Message}"); code = 1; }
             }
             return code;
-        }, "Remove variables or functions (-f)");
+        });
 
-        shell.Register("env", ctx =>
+        shell.Register("env", async ctx =>
         {
-            foreach (var (k, v) in ctx.Shell.Environment.OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}");
-            return 0;
-        }, "Print the environment");
+            // env [-i] [-u NAME] [NAME=VALUE]... [COMMAND [ARG]...]: the exported variables, or COMMAND run with changed ones
+            var sh = ctx.Shell;
+            var args = ctx.Args.ToList();
+            var sets = new List<(string Name, string Value)>();
+            var unsets = new List<string>();
+            bool clear = false;
+            while (args.Count > 0)
+            {
+                if (args[0] is "-i" or "-") { clear = true; args.RemoveAt(0); continue; }
+                if (args[0] == "-u" && args.Count > 1) { unsets.Add(args[1]); args.RemoveRange(0, 2); continue; }
+                if (args[0] == "--") { args.RemoveAt(0); break; }
+                if (args[0].IndexOf('=') is var eq and > 0) { sets.Add((args[0][..eq], args[0][(eq + 1)..])); args.RemoveAt(0); continue; }
+                break;
+            }
+            void Print() { foreach (var (k, v) in sh.Environment.Where(e => sh.IsExported(e.Key)).OrderBy(e => e.Key, StringComparer.Ordinal)) ctx.Stdout.WriteLine($"{k}={v}"); }
+            if (args.Count == 0 && sets.Count == 0 && !clear && unsets.Count == 0) { Print(); return 0; }
+            var (savedEnv, savedAttrs) = (sh.Environment, sh.VarAttrs);
+            sh.Environment = clear ? new(StringComparer.Ordinal)
+                : savedEnv.Where(e => sh.IsExported(e.Key) && !unsets.Contains(e.Key)).ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal);
+            sh.VarAttrs = sh.Environment.Keys.ToDictionary(k => k, _ => "x", StringComparer.Ordinal);
+            foreach (var (k, v) in sets) { sh.Environment[k] = v; sh.VarAttrs[k] = "x"; }
+            try
+            {
+                if (args.Count == 0) { Print(); return 0; }
+                // with no PATH, env searches /bin and /usr/bin, as execvp does
+                if (!sh.Environment.ContainsKey("PATH") && !args[0].Contains('/') && new[] { "/bin/", "/usr/bin/" }.FirstOrDefault(d => ctx.Fs.IsFile(d + args[0])) is { } dir)
+                    args[0] = dir + args[0];
+                return await sh.InvokeAsync(args, ctx.Io, ctx.CancellationToken, skipFunctions: true);
+            }
+            finally { (sh.Environment, sh.VarAttrs) = (savedEnv, savedAttrs); }
+        });
 
         shell.Register("alias", ctx =>
         {
@@ -381,19 +380,26 @@ internal static partial class Builtins
                 int eq = a.IndexOf('=');
                 if (eq > 0) ctx.Shell.Aliases[a[..eq]] = a[(eq + 1)..];
                 else if (ctx.Shell.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"alias {a}='{v}'");
-                else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}alias: {a}: not found"); code = 1; }
+                else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}alias: " + CommandSpec.Message("alias", "notFound", ("name", a))); code = 1; }
             }
             return code;
-        }, "Define or list aliases");
+        });
 
-        shell.Register("unalias", ctx => { foreach (var a in ctx.Args) ctx.Shell.Aliases.Remove(a); return 0; }, "Remove aliases");
+        shell.Register("unalias", ctx =>
+        {
+            if (ctx.Args.Contains("-a")) { ctx.Shell.Aliases.Clear(); return 0; }
+            int code = 0;
+            foreach (var a in ctx.Args)
+                if (!ctx.Shell.Aliases.Remove(a)) { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}unalias: " + CommandSpec.Message("unalias", "notFound", ("name", a))); code = 1; }
+            return code;
+        });
 
         shell.Register("history", ctx =>
         {
             var h = ctx.Shell.History;
             for (int i = 0; i < h.Count; i++) ctx.Stdout.WriteLine($"{i + 1,5}  {h[i]}");
             return 0;
-        }, "Show command history");
+        });
 
         shell.Register("which", ctx =>
         {
@@ -406,12 +412,12 @@ internal static partial class Builtins
                 foreach (var p in all ? found : found.Take(1)) ctx.Stdout.WriteLine(p);
             }
             return code;
-        }, "Locate a command");
+        });
 
         shell.Register("type", ctx =>
         {
             int code = 0;
-            var opts = Args.Parse(ctx.Args, "atpPf");
+            var opts = Args.Parse(ctx.Args, CommandSpec.Of("type"));
             foreach (var a in opts.Positional)
             {
                 if (opts.Has('t') || opts.Has('p') || opts.Has('P'))
@@ -428,14 +434,14 @@ internal static partial class Builtins
                 if (!Describe(ctx, a, opts.Has('a'))) code = 1;
             }
             return code;
-        }, "Describe a command");
+        });
 
-        shell.Register("test", ctx => Test.Evaluate(ctx, ctx.Args.ToList()) ? 0 : 1, "Evaluate a conditional expression");
+        shell.Register("test", ctx => Test.Evaluate(ctx, ctx.Args.ToList()) ? 0 : 1);
         shell.Register("[", ctx =>
         {
-            if (ctx.Args.Count == 0 || ctx.Args[^1] != "]") throw new ShellException("missing `]'", 2);
+            if (ctx.Args.Count == 0 || ctx.Args[^1] != "]") throw new ShellException(CommandSpec.Message("[", "missingBracket"), 2);
             return Test.Evaluate(ctx, ctx.Args.Take(ctx.Args.Count - 1).ToList()) ? 0 : 1;
-        }, "Evaluate a conditional expression");
+        });
 
         CommandHandler runScript = async ctx =>
         {
@@ -462,12 +468,12 @@ internal static partial class Builtins
             void Setup() { foreach (var (name, on) in options) sh.SetOption(name, on); }
             if (command)
             {
-                if (args.Count == 0) throw new ShellException("-c: option requires an argument", 2);
+                if (args.Count == 0) throw new ShellException(CommandSpec.Message(ctx.Name, "cOptionArgument"), 2);
                 return await sh.RunScriptTextAsync(args[0], io, subshell: true, ctx.CancellationToken, args.Skip(2).ToList(), new(args.ElementAtOrDefault(1) ?? ctx.Name, null, Setup));
             }
             if (args.Count == 0)
             {
-                if (!isBash) throw new ShellException("filename argument required", 2);
+                if (!isBash) throw new ShellException(CommandSpec.Message(ctx.Name, "filenameRequired"), 2);
                 return await sh.RunScriptTextAsync(ctx.StdinText, io with { Stdin = new StdinBuffer("") }, subshell: true, ctx.CancellationToken, [], new(ctx.Name, null, Setup));
             }
             string text;
@@ -484,16 +490,16 @@ internal static partial class Builtins
             catch (ReturnSignal r) { return r.Code; }   // `return` in a sourced file ends that file only
             finally { sh.SourceDepth--; }
         };
-        shell.Register("bash", runScript, "Run a command string (-c) or script file");
-        shell.Register("sh", runScript, "Run a command string (-c) or script file");
-        shell.Register("source", runScript, "Run a script in the current shell");
-        shell.Register(".", runScript, "Run a script in the current shell");
+        shell.Register("bash", runScript);
+        shell.Register("sh", runScript);
+        shell.Register("source", runScript);
+        shell.Register(".", runScript);
 
         shell.Register("help", ctx =>
         {
             if (ctx.Args.Count > 0)
             {
-                if (!ctx.Shell.Commands.TryGetValue(ctx.Args[0], out var c)) throw new ShellException($"no help topics match '{ctx.Args[0]}'");
+                if (!ctx.Shell.Commands.TryGetValue(ctx.Args[0], out var c)) throw new ShellException(CommandSpec.Message("help", "noTopics", ("topic", ctx.Args[0])));
                 ctx.Stdout.WriteLine(c.Usage ?? $"{c.Name}: {c.Description}");
                 return 0;
             }
@@ -502,17 +508,17 @@ internal static partial class Builtins
             ctx.Stdout.WriteLine("Available commands (run '<command> --help' for details on non-standard ones):");
             foreach (var c in cmds) ctx.Stdout.WriteLine($"  {c.Name.PadRight(width)}{c.Description}");
             return 0;
-        }, "List available commands");
+        });
     }
 
     static void RegisterSystemCommands(Shell shell)
     {
-        shell.Register("whoami", ctx => { ctx.Stdout.WriteLine(ctx.Shell.Options.User); return 0; }, "Print the current user");
-        shell.Register("hostname", ctx => { ctx.Stdout.WriteLine(ctx.Shell.Options.Hostname); return 0; }, "Print the host name");
+        shell.Register("whoami", ctx => { ctx.Stdout.WriteLine(ctx.Shell.Options.User); return 0; });
+        shell.Register("hostname", ctx => { ctx.Stdout.WriteLine(ctx.Shell.Options.Hostname); return 0; });
 
         shell.Register("uname", ctx =>
         {
-            var a = Args.Parse(ctx.Args, "asnrvmo", longs: "all=a");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("uname"));
             var host = ctx.Shell.Options.Hostname;
             var parts = new List<string>();
             bool all = a.Has('a');
@@ -524,25 +530,25 @@ internal static partial class Builtins
             if (all || a.Has('o')) parts.Add("GNU/Linux");
             ctx.Stdout.WriteLine(string.Join(' ', parts));
             return 0;
-        }, "Print system information");
+        });
 
         shell.Register("date", ctx =>
         {
             // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
-            var a = Args.Parse(ctx.Args, "uIR", "dr", "utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R");
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("date"));
             var now = ctx.Shell.Now;
             if (a.Value('d') is { } d) now = ParseDate(d, now);
             else if (a.Value('r') is { } r) now = ctx.Fs.Stat(ctx.ResolvePath(r)).Modified.ToUniversalTime();
             var fmt = a.Positional.FirstOrDefault(p => p.StartsWith('+'));
             ctx.Stdout.WriteLine(Strftime(now, a.Has('I') ? "%Y-%m-%d" : a.Has('R') ? "%a, %d %b %Y %H:%M:%S +0000" : fmt != null ? fmt[1..] : "%a %b %e %H:%M:%S %Z %Y"));
             return 0;
-        }, "Print the date and time", DateUsage);
+        });
 
         shell.Register("ps", ctx =>
         {
             ctx.Stdout.Write("    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n");
             return 0;
-        }, "List processes");
+        });
     }
 
     static readonly string[] DayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -592,31 +598,6 @@ internal static partial class Builtins
         ["second"] = 1, ["sec"] = 1, ["minute"] = 60, ["min"] = 60, ["hour"] = 3600, ["day"] = 86400, ["week"] = 604800, ["fortnight"] = 1209600,
     };
 
-    // our own summary of what this date supports (not GNU's help text)
-    const string DateUsage = """
-        Usage: date [OPTION]... [+FORMAT]
-        Print the current date and time, or the one given with -d, in UTC.
-
-          -d, --date=STRING        show the time described by STRING instead of now
-          -r, --reference=FILE     show FILE's last modification time
-          -u, --utc, --universal   use UTC (the clock is already UTC)
-          -I, --iso-8601           print the date as YYYY-MM-DD
-          -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000
-
-        STRING can combine, in any order:
-          dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120
-          times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)
-          zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)
-          weekdays   Monday, fri   (moves forward to that day)
-          words      now  today  yesterday  tomorrow
-          relative   3 days ago   +2 hours   next week   last month   1 year
-          epoch      @1795168800
-
-        FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,
-        and %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s
-
-        """;
-
     static readonly string[] MonthAbbr = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
     static readonly string[] DayAbbr = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
     static readonly Dictionary<string, int> ZoneHours = new()
@@ -634,7 +615,7 @@ internal static partial class Builtins
     internal static DateTime ParseDate(string text, DateTime now)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var bad = new ShellException($"invalid date {QuoteL(text)}");
+        var bad = new ShellException(CommandSpec.Message("date", "invalidDate", ("value", text)));
         var s = text.Trim().ToLowerInvariant();
         var epoch = System.Text.RegularExpressions.Regex.Match(s, @"^@(-?\d+(?:\.\d+)?)$");
         if (epoch.Success) return DateTime.UnixEpoch.AddSeconds(double.Parse(epoch.Groups[1].Value, inv));
@@ -769,7 +750,7 @@ internal static class Test
             "-O" or "-G" or "-N" => fs.Exists(path),
             "-v" => shell.IsVariableSet(arg),
             "-o" => shell.OptionList.Any(o => o.Name == arg && o.On),
-            _ => throw new ShellException($"{op}: unary operator expected", 2),
+            _ => throw new ShellException(CommandSpec.Message("test", "unaryExpected", ("op", op)), 2),
         };
     }
 
@@ -795,7 +776,7 @@ internal static class Test
             case "-ef": return sh.Fs.SameFile(sh.ResolvePath(left), sh.ResolvePath(right));
         }
         bool okL = long.TryParse(left.Trim(), out var l), okR = long.TryParse(right.Trim(), out var r);
-        if (!okL || !okR) throw new ShellException($"{(okL ? right : left)}: integer expression expected", 2);
+        if (!okL || !okR) throw new ShellException(CommandSpec.Message("test", "integerExpected", ("value", okL ? right : left)), 2);
         return op switch { "-eq" => l == r, "-ne" => l != r, "-lt" => l < r, "-le" => l <= r, "-gt" => l > r, _ => l >= r };
     }
 
@@ -813,7 +794,7 @@ internal static class Test
                 if (a[1] is "-a" or "-o") return a[1] == "-a" ? a[0].Length > 0 && a[2].Length > 0 : a[0].Length > 0 || a[2].Length > 0;
                 if (a[0] == "!") return !Evaluate(ctx, a.Skip(1).ToList());
                 if (a[0] == "(" && a[2] == ")") return a[1].Length > 0;
-                throw new ShellException($"{a[1]}: binary operator expected", 2);
+                throw new ShellException(CommandSpec.Message("test", "binaryExpected", ("op", a[1])), 2);
             case 4 when a[0] == "!": return !Evaluate(ctx, a.Skip(1).ToList());
         }
         int pos = 0;
@@ -837,12 +818,12 @@ internal static class Test
         }
         bool Primary()
         {
-            var t = Peek() ?? throw new ShellException("argument expected", 2);
+            var t = Peek() ?? throw new ShellException(CommandSpec.Message("test", "argumentExpected"), 2);
             if (t == "(")
             {
                 pos++;
                 var v = Or();
-                if (Peek() != ")") throw new ShellException("`)' expected", 2);
+                if (Peek() != ")") throw new ShellException(CommandSpec.Message("test", "parenExpected"), 2);
                 pos++;
                 return v;
             }
@@ -852,7 +833,7 @@ internal static class Test
             return t.Length > 0;
         }
         var result = Or();
-        if (pos < n) throw new ShellException("too many arguments", 2);
+        if (pos < n) throw new ShellException(CommandSpec.Message("test", "tooManyArguments"), 2);
         return result;
     }
 }
