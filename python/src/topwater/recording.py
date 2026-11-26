@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import inspect
+import io
 import json
 import math
 import os
@@ -19,8 +20,8 @@ from datetime import datetime
 
 from .shell import Shell, ShellResult
 from .snapshot import (_HOST, _USER, ShellSnapshot, SnapshotError, SnapshotVersionError, _check_entry_count, _dumps,
-                       _is_int, _max_archive, _open, _open_zip, _put, _read, _read_manifest, _save_zip, format_time,
-                       parse_time)
+                       _check_header, _is_int, _manifest_bytes, _manifest_json, _max_archive, _open, _open_zip, _put, _read, _read_manifest,
+                       _read_outline, _save_zip, format_time, parse_time)
 from .vfs import utc_now
 
 HISTORY_VERSION = 1
@@ -195,9 +196,9 @@ class ShellRecorder:
 
     def __init__(self, shell: Shell, snapshot_every: int = 0, metadata: dict | None = None):
         self._shell, self._every = shell, snapshot_every
-        self._last = shell.snapshot()
+        self._changes = shell.fs.change_tracker()  # the paths each call changed, without a snapshot per call
         self._marked = False  # snapshot_now() asked to keep the last call's checkpoint
-        self.recording = Recording(self._last, {k: getattr(shell, k) for k in _DEFAULTS})
+        self.recording = Recording(shell.snapshot(), {k: getattr(shell, k) for k in _DEFAULTS})
         self.recording.metadata = dict(metadata or {})
         builtins = shell._builtin_names or set()
         self.recording.app_commands = sorted(n for n in shell.commands if n not in builtins)
@@ -207,28 +208,32 @@ class ShellRecorder:
         if calls and not self._marked and not (self._every > 0 and len(calls) % self._every == 0):
             calls[-1].snapshot = None  # it was only kept as the end state, and the end moved on
         self._marked = False
-        # a snapshot after every call: it is the end state, and comparing it with the one before gives the files changed
-        snap = self._shell.snapshot()
-        before = {e[0]: e[1:] for e in self._last.entries}
-        after = {e[0]: e[1:] for e in snap.entries}
-        files = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
-        self._last = snap
+        # the last call always has a snapshot, so a saved recording holds the end state; it is taken when first used (or at
+        # stop()), since the next call usually replaces it, unless snapshot_every keeps this one.
+        # shortcut: a change made to the shell outside run() after the last call, before then, is in it too; snapshot every
+        # call again if a host needs that
+        sh = self._shell
+        keep = self._every > 0 and (len(calls) + 1) % self._every == 0
+        snap = sh.snapshot() if keep else ShellSnapshot._lazy(sh.snapshot, sh.user, sh.hostname, utc_now())
         calls.append(RecordedCall(len(calls), command, result.stdout, result.stderr, result.exit_code, result.trailer,
-                                  elapsed_ms, started, files, snap))
+                                  elapsed_ms, started, self._changes.changes(), snap))
 
     def snapshot_now(self) -> None:
         """Keeps a checkpoint of the machine now: after the last call (or as the start, before any)."""
-        self._last = self._shell.snapshot()
+        now = self._shell.snapshot()
+        self._changes.changes()  # the next call's files are measured from here
         if self.recording.calls:
-            self.recording.calls[-1].snapshot = self._last
+            self.recording.calls[-1].snapshot = now
             self._marked = True
         else:
-            self.recording.start = self._last
+            self.recording.start = now
 
     def stop(self) -> None:
         """Stops recording; later calls are not added."""
         if self._shell._recorder is self:
             self._shell._recorder = None
+            if self.recording.calls and self.recording.calls[-1].snapshot is not None:
+                self.recording.calls[-1].snapshot.entries  # noqa: B018  build the deferred end state now
 
     def save(self, file) -> None:
         self.recording.save(file)
@@ -265,7 +270,7 @@ def _options(rec_options: dict, o: dict) -> tuple[dict, datetime | None, int | N
         out[k] = o[k] if v is None else min(max(v, 0), o[k])
     start_time = rec_options.get("startTime")
     seed = rec_options.get("randomSeed")
-    if seed is not None and not _is_int(seed):
+    if seed is not None and not (_is_int(seed) and -2**31 <= seed < 2**31):
         raise _bad("bad randomSeed")
     return out, None if start_time is None else parse_time(start_time, "startTime"), seed
 
@@ -310,16 +315,17 @@ def _call(line: str, number: int, index: int) -> tuple[RecordedCall, dict]:
         raise _bad(f"line {number} is not JSON") from None
     if not isinstance(e, dict):
         raise _bad(f"line {number} is not an object")
-    if "index" in e and not _is_int(e["index"]):
+    if "index" in e and not (_is_int(e["index"]) and e["index"] >= 0):
         raise _bad(f"line {number}: bad index")
     index = e.get("index", index)  # checkpoints follow the line's position; the index is the file's own label
     command, stdout, stderr, trailer = e.get("command"), e.get("stdout", ""), e.get("stderr", ""), e.get("trailer")
     if not all(isinstance(s, str) for s in (command, stdout, stderr)) or not (trailer is None or isinstance(trailer, str)):
         raise _bad(f"line {number}: command, stdout, stderr and trailer must be strings")
-    code, elapsed, files = e.get("exitCode", 0), e.get("elapsedMs", 0), e.get("files") or []
+    code, elapsed, files = e.get("exitCode", 0), e.get("elapsedMs", 0), e.get("files")
+    files = [] if files is None else files
     if not _is_int(code):
         raise _bad(f"line {number}: bad exitCode")
-    if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or not elapsed >= 0:
+    if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or not 0 <= elapsed <= 1e12:
         raise _bad(f"line {number}: bad elapsedMs")
     if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
         raise _bad(f"line {number}: files is not a list of paths")
@@ -359,6 +365,7 @@ def _file_budget(o: dict, what: str):
 
 def _read_topwater(src, o: dict) -> Recording:
     _check_entry_count(src, o)
+    at = src.tell()
     with _open_zip(src) as zf:
         names = set(zf.namelist())
         if "history.jsonl" not in names:  # a snapshot: a recording without calls
@@ -383,14 +390,46 @@ def _read_topwater(src, o: dict) -> Recording:
             raise _bad("checkpoints/0.json is missing")
         if len(found) > MAX_CHECKPOINTS:
             raise _bad(f"more than {MAX_CHECKPOINTS} checkpoints")
-        total, cap, cache = 0, MAX_CHECKPOINTS_FILE_SYSTEMS * o["max_file_system_bytes"], {}
-        snaps, count_files = {}, _file_budget(o, "checkpoints")
-        for n in sorted(found):
-            snaps[n], size = _read_manifest(zf, names, found[n], o, cache, count_files)
+        # the machine of the file is the one after the last checkpoint: a reader of either must see the same
+        last_n = max(found)
+        last = _manifest_bytes(zf, names, found[last_n], o)
+        manifest = _manifest_bytes(zf, names, "manifest.json", o)
+        if manifest != last:  # the same machine may still be written another way
+            m = _manifest_json(manifest, "manifest.json")
+            _check_header(m, "manifest.json")
+            if m != _manifest_json(last, found[last_n]):
+                raise _bad(f"manifest.json is not the machine of {found[last_n]}, the last checkpoint")
+        total, cap = 0, MAX_CHECKPOINTS_FILE_SYSTEMS * o["max_file_system_bytes"]
+        count_files = _file_budget(o, "checkpoints")
+
+        def charge(size: int) -> None:
+            nonlocal total
             total += size
             if total > cap:
                 raise _bad(f"the checkpoints hold more than {cap} bytes of files together "
                            f"({MAX_CHECKPOINTS_FILE_SYSTEMS} x MaxFileSystemBytes)")
+
+        snaps = {0: _read_manifest(zf, names, found[0], o, None, count_files)}
+        charge(snaps[0][1])
+        snaps[0] = snaps[0][0]
+        # the other checkpoints are checked against the limits now and built when a replay needs one; the file stays in
+        # memory for that, compressed, instead of every machine in it built
+        if len(found) > 1:
+            src.seek(at)
+            data, kept, reread = src.read(), [], []
+            for n in sorted(found)[1:]:
+                def load(name=found[n]):
+                    try:
+                        if not reread:
+                            reread.append(zipfile.ZipFile(io.BytesIO(data)))
+                        return _read_manifest(reread[0], names, name, o)[0]
+                    except (SnapshotError, SnapshotVersionError, MemoryError, KeyboardInterrupt):
+                        raise
+                    except Exception as e:  # anything else wrong with the bytes
+                        raise RecordingError(str(e) or type(e).__name__) from e
+                raw = last if n == last_n else _manifest_bytes(zf, names, found[n], o)
+                snaps[n], size = _read_outline(raw, found[n], o, count_files, load, kept)
+                charge(size)
         rec = _new_recording(h, snaps[0], o)
         for i, c in enumerate(calls):
             c.snapshot = snaps.get(i + 1)

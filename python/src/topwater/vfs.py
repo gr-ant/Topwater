@@ -1,6 +1,7 @@
 """In-memory Unix-style filesystem with owners and permission bits."""
 from __future__ import annotations
 
+import itertools
 import posixpath
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -59,16 +60,76 @@ DEFAULT_FILE_MODE = 0o644
 DEFAULT_DIR_MODE = 0o755
 
 
-@dataclass
-class _Dir:
+_CLOCK = itertools.count(1)  # counts changes to every filesystem's nodes, so a ChangeTracker visits only what moved
+
+
+class _Node:
+    """Any attribute set marks the node changed (`changed`, on _CLOCK)."""
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+        object.__setattr__(self, "changed", next(_CLOCK))
+
+
+class _Names(dict):
+    """A directory's names; adding, removing or replacing one marks its list changed (`listed`)."""
+    __slots__ = ("owner",)
+
+    def __init__(self, owner, items=()):
+        super().__init__(items)
+        self.owner = owner
+
+    def _mark(self):
+        object.__setattr__(self.owner, "listed", next(_CLOCK))
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        self._mark()
+
+    def __delitem__(self, k):
+        super().__delitem__(k)
+        self._mark()
+
+    def pop(self, *a):
+        r = super().pop(*a)
+        self._mark()
+        return r
+
+    def clear(self):
+        super().clear()
+        self._mark()
+
+    def update(self, *a, **k):
+        super().update(*a, **k)
+        self._mark()
+
+    def setdefault(self, k, v=None):
+        r = super().setdefault(k, v)
+        self._mark()
+        return r
+
+    def popitem(self):
+        r = super().popitem()
+        self._mark()
+        return r
+
+
+@dataclass(eq=False)
+class _Dir(_Node):
     children: dict = field(default_factory=dict)
     modified: datetime = field(default_factory=utc_now)
     owner: str = "root"
     mode: int = DEFAULT_DIR_MODE
 
+    def __setattr__(self, name, value):
+        if name == "children":
+            value = _Names(self, value)
+            object.__setattr__(self, "listed", next(_CLOCK))
+        _Node.__setattr__(self, name, value)
 
-@dataclass
-class _File:
+
+@dataclass(eq=False)
+class _File(_Node):
     content: str = ""
     modified: datetime = field(default_factory=utc_now)
     owner: str = "root"
@@ -109,8 +170,8 @@ class _File:
         self.size = size
 
 
-@dataclass
-class _Link:
+@dataclass(eq=False)
+class _Link(_Node):
     target: str = ""
     modified: datetime = field(default_factory=utc_now)
     owner: str = "root"
@@ -715,15 +776,13 @@ class VirtualFileSystem:
             hard = None
             if not isinstance(n, _Dir) and n.nlink > 1 and first.setdefault(id(n), path) != path:
                 hard = first[id(n)]
-            if isinstance(n, _File):
-                yield path, False, n.mode, n.owner, n.modified, n.text() if n.data is None else None, n.data, n.reported_size, None, hard
-                continue
-            if isinstance(n, _Link):
-                yield path, False, n.mode, n.owner, n.modified, None, None, None, n.target, hard
-                continue
-            yield path, True, n.mode, n.owner, n.modified, None, None, None, None, None
-            for name in reversed(list(n.children)):
-                stack.append(("/" + name if path == "/" else f"{path}/{name}", n.children[name]))
+            yield _entry(n, path, hard)
+            if isinstance(n, _Dir):
+                for name in reversed(list(n.children)):
+                    stack.append(("/" + name if path == "/" else f"{path}/{name}", n.children[name]))
+
+    def change_tracker(self) -> "ChangeTracker":
+        return ChangeTracker(self)
 
     def replace_all(self, entries) -> None:
         """Replaces every file with `entries` (as entries() gives them, parents first): a snapshot restore. An entry's parent
@@ -766,3 +825,77 @@ class VirtualFileSystem:
                 raise ShellError(f"{path}: {ERRNO['EEXIST']}")
             parent.children[name] = node
         self._root, self.used_bytes = root, used
+
+
+def _entry(n, path: str, hard: str | None) -> tuple:
+    if isinstance(n, _File):
+        return path, False, n.mode, n.owner, n.modified, n.text() if n.data is None else None, n.data, n.reported_size, None, hard
+    if isinstance(n, _Link):
+        return path, False, n.mode, n.owner, n.modified, None, None, None, n.target, hard
+    return path, True, n.mode, n.owner, n.modified, None, None, None, None, None
+
+
+class ChangeTracker:
+    """The paths whose entry (as entries() gives it) changed since the tracker last looked, sorted: the same list as comparing
+    two snapshots' entries, without copying the tree. Each look walks the nodes but builds entries only for nodes changed
+    since (`changed`), names a directory gained or replaced, and hard-linked files, whose first name can move when another
+    name changes."""
+
+    def __init__(self, fs: VirtualFileSystem):
+        self._fs = fs
+        self._seen = None  # the first look sees everything as new
+        self._known: dict[str, tuple] = {}  # path -> (entry, node)
+        self._names: dict[str, dict] = {}  # each directory's names (name -> node) when last looked at
+        self.changes()
+
+    def changes(self) -> list[str]:
+        now = next(_CLOCK)
+        changed, gone, first = [], set(), {}  # gone: what was below a removed or replaced name, until seen again
+        root = self._fs._root
+        self._visit(root, "/", self._seen is None or self._known["/"][1] is not root, changed, gone, first)
+        for p in gone:
+            self._known.pop(p, None)
+            self._names.pop(p, None)
+        changed += gone
+        self._seen = now
+        changed.sort()
+        return changed
+
+    def _visit(self, n, path: str, moved: bool, changed: list, gone: set, first: dict) -> None:
+        seen = self._seen or 0
+        hard = None
+        linked = not isinstance(n, _Dir) and n.nlink > 1
+        if linked and first.setdefault(id(n), path) != path:
+            hard = first[id(n)]
+        if moved or n.changed > seen or linked:
+            e = _entry(n, path, hard)
+            old = self._known.get(path)
+            if old is None or old[0] != e:
+                changed.append(path)
+            self._known[path] = (e, n)
+            gone.discard(path)
+        if not isinstance(n, _Dir):
+            if moved:
+                self._names.pop(path, None)  # it may have been a directory
+            return
+        prefix = "/" if path == "/" else path + "/"
+        if not moved and n.listed <= seen:
+            for name, child in n.children.items():
+                if isinstance(child, _Dir) or child.changed > seen or child.nlink > 1:
+                    self._visit(child, prefix + name, False, changed, gone, first)
+            return
+        # names gained, lost or replaced
+        before = self._names.get(path, {})
+        for name, old in before.items():
+            if moved or n.children.get(name) is not old:
+                self._gone(prefix + name, gone)  # removed or replaced: what was below it is gone unless seen again
+        for name, child in n.children.items():
+            fresh = moved or before.get(name) is not child
+            if fresh or isinstance(child, _Dir) or child.changed > seen or child.nlink > 1:
+                self._visit(child, prefix + name, fresh, changed, gone, first)
+        self._names[path] = dict(n.children)
+
+    def _gone(self, path: str, gone: set) -> None:
+        gone.add(path)
+        for name in self._names.get(path, ()):
+            self._gone(path + "/" + name, gone)

@@ -236,8 +236,13 @@ class HostileFiles(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn("bad checkpoint", self.rejected(with_entries(lambda e: e.update({name: e["checkpoints/1.json"]}))))
         self.assertIn("checkpoints/0.json is missing", self.rejected(with_entries(lambda e: e.pop("checkpoints/0.json"))))
-        self.assertIn("not a valid Topwater snapshot: bad path",
-                      self.rejected(with_entries(lambda e: e.update({"checkpoints/1.json": e["checkpoints/1.json"].replace(b'"/home/agent/a"', b'"/../a"')})), error=SnapshotError))
+        # the start is checked on load, every other checkpoint when it is first built
+        self.assertIn("not a valid Topwater snapshot: bad cwd",
+                      self.rejected(with_entries(lambda e: e.update({"checkpoints/0.json": e["checkpoints/0.json"].replace(b'"cwd":"/home/agent"', b'"cwd":"../x"')})), error=SnapshotError))
+        later = Recording.load(with_entries(lambda e: e.update({"checkpoints/1.json": e["checkpoints/1.json"].replace(b'"/home/agent/a"', b'"/../a"')})))
+        with self.assertRaises(SnapshotError) as e:
+            later.shell_at(0)
+        self.assertIn("not a valid Topwater snapshot: bad path", str(e.exception))
 
     def test_at_most_1000_checkpoints_holding_4_file_systems(self):
         def calls(n):
@@ -347,6 +352,22 @@ class HostileFiles(unittest.TestCase):
         self.assertIn("must be strings", self.rejected(line(lambda c: c.update(command=None))))
         self.assertIn("bad exitCode", self.rejected(line(lambda c: c.update(exitCode=False))))
         self.assertIn("bad elapsedMs", self.rejected(line(lambda c: c.update(elapsedMs=-1))))
+        # the same rules in every port: an index is a whole number from 0, elapsedMs at most 1e12, files a list of paths
+        for index in (-1, 1.5, "1"):
+            self.assertIn("bad index", self.rejected(line(lambda c: c.update(index=index))))
+        self.assertIn("bad elapsedMs", self.rejected(line(lambda c: c.update(elapsedMs=1e300))))
+        for files in ({}, "", [None]):
+            self.assertIn("files is not a list of paths", self.rejected(line(lambda c: c.update(files=files))))
+        self.assertEqual([], Recording.load(line(lambda c: c.update(files=None))).calls[1].files)
+
+        def seed(e):
+            lines = e["history.jsonl"].split(b"\n")
+            h = json.loads(lines[0])
+            h["options"]["randomSeed"] = 2 ** 31
+            e["history.jsonl"] = b"\n".join([json.dumps(h).encode()] + lines[1:])
+        self.assertIn("bad randomSeed", self.rejected(rezip(saved(rec), seed)))
+        self.assertIn("the header is not JSON", self.rejected(rezip(saved(rec), lambda e: e.update({"history.jsonl": b"\xef\xbb\xbf" + e["history.jsonl"]}))))
+        self.assertIn("bad line 3: time", self.rejected(line(lambda c: c.update(time="2026")), error=SnapshotError))
         self.assertIn("bad line 3: time", self.rejected(line(lambda c: c.update(time="2026-١١-25T09:00:00Z")), error=SnapshotError))
 
     def test_old_recordings_side_car_names_are_an_allow_list(self):
@@ -452,3 +473,77 @@ class LoadThenSave(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LazyCheckpointsAndChanges(unittest.TestCase):
+    def test_checkpoints_are_built_only_when_shell_at_needs_one(self):
+        # 60 checkpoints of 1,500 directories: each is checked against the limits on load, none is built
+        sh = Shell()
+        self.assertEqual(0, sh.run("mkdir d && cd d && for i in $(seq 1500); do mkdir d$i; done").exit_code)
+        with sh.start_recording(snapshot_every=1) as r:
+            for i in range(60):
+                sh.run(f"echo {i} > /home/agent/f{i}")
+        data = saved(r.recording)
+        started = time.monotonic()
+        loaded = Recording.load(data)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertTrue(all(c.snapshot is not None and c.snapshot._entries is None for c in loaded.calls))
+        for i in range(60):  # every checkpoint built in turn, at most a few kept
+            self.assertEqual(f"{i}\n", loaded.shell_at(i).run(f"cat /home/agent/f{i}").stdout)
+            self.assertLessEqual(sum(c.snapshot._entries is not None for c in loaded.calls), 4)
+        self.assertEqual(zipfile.ZipFile(io.BytesIO(data)).read("checkpoints/31.json"),
+                         zipfile.ZipFile(io.BytesIO(saved(loaded))).read("checkpoints/31.json"))
+
+        # so a checkpoint that is wrong inside (a blob that doesn't match) fails when it is built
+        m = json.loads(zipfile.ZipFile(io.BytesIO(data)).read("checkpoints/30.json"))
+        blob = next(f["blob"] for f in m["files"] if f["path"] == "/home/agent/f29")
+        tampered = Recording.load(rezip(data, lambda e: e.update({"blobs/" + blob: b"XX\n"})))
+        with self.assertRaises(SnapshotError) as e:
+            tampered.shell_at(40)
+        self.assertIn("doesn't match its hash", str(e.exception))
+
+    def test_manifest_must_be_the_last_checkpoint(self):
+        data = saved(recorded("echo 1 > a", "echo 2 > a", "echo 3 > a", "echo 4 > a", every=2))
+
+        def rejected(edit) -> str:
+            with self.assertRaises(SnapshotError) as e:
+                Recording.load(rezip(data, edit))
+            return str(e.exception)
+        self.assertIn("manifest.json is not the machine of checkpoints/4.json, the last checkpoint",
+                      rejected(lambda e: e.update({"manifest.json": e["checkpoints/2.json"]})))
+        self.assertIn("manifest.json is missing", rejected(lambda e: e.pop("manifest.json")))
+        self.assertIn("manifest.json is not a Topwater snapshot manifest", rejected(lambda e: e.update({"manifest.json": b"{}"})))
+        # the same machine written another way (key order, spacing) is the same machine
+        flipped = json.dumps(dict(reversed(json.loads(zipfile.ZipFile(io.BytesIO(data)).read("manifest.json")).items())), indent=2)
+        self.assertEqual(4, len(Recording.load(rezip(data, lambda e: e.update({"manifest.json": flipped.encode()}))).calls))
+
+    def test_a_recording_opens_as_a_snapshot_up_to_the_recording_cap(self):
+        # three checkpoints of 1.5 MB each, all different: larger than one snapshot may be, as large as a recording may be
+        sh = Shell()
+        sh.fs.write_bytes("/home/agent/r", os.urandom(1_500_000))
+        with sh.start_recording(snapshot_every=1) as r:
+            for _ in range(2):
+                sh.fs.write_bytes("/home/agent/r", os.urandom(1_500_000))
+                sh.run("true")
+        data = saved(r.recording)
+        limits = L(max_file_system_bytes=1_600_000, max_string_bytes=1 << 10, max_extract_entries=300)
+        self.assertGreater(len(data), 2 * 1_600_000 + 4 * 1024 + 1024 * 300)
+        Recording.load(data, limits=limits)
+        self.assertEqual(1_500_000, len({e[0]: e for e in ShellSnapshot.load(data, limits).entries}["/home/agent/r"][6]))
+
+    def test_changed_files_come_from_the_filesystem_and_match_comparing_snapshots(self):
+        sh = Shell()
+        sh.run("mkdir -p a/b c && echo 1 > a/b/x && echo 2 > a/y && ln a/y c/h && ln -s ../a c/s")
+        rec = sh.start_recording()
+        for command in ("cat a/y; ls -R", "echo 3 > a/b/x", "mkdir n && cp -r a n/", "mv a/b c/b", "mv n/a c/b2 && rm -r n",
+                        "mkdir -p m/b && mv c/b m/ 2>&1; mv -T c/b2 m/b 2>&1; ls m/b", "ln a/y a/z && rm c/h", "mv a/y a/zz",
+                        "echo 4 >> a/z", "chmod 700 c && touch c/s", "rm -r m && mkdir m && echo q > m/b",
+                        "cd c && rm -rf ../a && mkdir ../a", "true", "rm -rf /home/agent/* && mkdir a",
+                        "for i in 1 2 3; do echo $i > f$i; done; mv f1 f4; ln f2 f5; rm f2", "cat f4; cat f5 >> f4"):
+            before = {e[0]: e[1:] for e in sh.snapshot().entries}
+            sh.run(command)
+            after = {e[0]: e[1:] for e in sh.snapshot().entries}
+            with self.subTest(command):
+                self.assertEqual(sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p)), rec.recording.calls[-1].files)
+        rec.stop()
+        self.assertIn("/home/agent/a/zz", rec.recording.calls[7].files)

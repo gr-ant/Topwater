@@ -11,6 +11,7 @@ import os
 import re
 import struct
 import tempfile
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,8 @@ from .vfs import normalize
 FORMAT_VERSION = 2
 _FORMAT = "topwater-snapshot"
 _INVALID = "not a valid Topwater snapshot: "
+_LAZY = threading.RLock()  # builds lazily read snapshots one at a time
+_KEPT = 4  # lazily read checkpoints of one file that stay built
 _DEFAULT_LIMITS = {"max_file_system_bytes": 128 << 20, "max_string_bytes": 32 << 20, "max_extract_entries": 100_000}
 
 
@@ -46,15 +49,41 @@ class ShellSnapshot:
         self._entries, self._state = tuple(entries), state
         self.user, self.hostname = user, hostname
         self.created = created  # UTC, naive
+        self._load = self._kept = None
+
+    @classmethod
+    def _lazy(cls, load, user: str, hostname: str, created: datetime, kept: list | None = None) -> "ShellSnapshot":
+        """A snapshot whose machine load() builds when first used: a recording's checkpoint, read from the file when a replay
+        needs it (and dropped again when `kept`, the built ones of that file, holds too many), or a recorder's last call."""
+        snap = cls.__new__(cls)
+        snap._entries = snap._state = None
+        snap.user, snap.hostname, snap.created = user, hostname, created
+        snap._load, snap._kept = load, kept
+        return snap
+
+    def _built(self) -> "ShellSnapshot":
+        with _LAZY:
+            if self._entries is not None:
+                return self
+            built = self._load()
+            self._entries, self._state = built._entries, built._state
+            if self._kept is None:
+                self._load = None  # built once for good
+            else:
+                self._kept.append(self)
+                while len(self._kept) > _KEPT:
+                    old = self._kept.pop(0)
+                    old._entries = old._state = None
+            return built
 
     @property
     def entries(self) -> tuple:
         """The files, parents first: (path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link)."""
-        return self._entries
+        return self._entries if self._entries is not None else self._built()._entries
 
     @property
     def state(self) -> dict:
-        return self._state
+        return self._state if self._state is not None else self._built()._state
 
     # ---------- saving ----------
 
@@ -66,7 +95,7 @@ class ShellSnapshot:
         """Writes this machine as the manifest `name` and the blobs not in `written` yet (a .topwater file shares them)."""
         files = []
         links = False
-        for path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link in self._entries:
+        for path, is_dir, mode, owner, modified, text, data, reported_size, link_target, hard_link in self.entries:
             kind = "dir" if is_dir else "file" if link_target is None else "symlink"
             entry = {"path": path, "type": kind, "mode": f"{mode:04o}", "owner": owner, "mtime": format_time(modified)}
             _put(entry, target=link_target, link=hard_link)
@@ -89,7 +118,7 @@ class ShellSnapshot:
         zf.writestr(name, _dumps(self._manifest(files, 2 if links else 1)))
 
     def _manifest(self, files: list, version: int) -> dict:
-        st = self._state
+        st = self.state
         variables = []
         for n in sorted(set(st["variables"]) | set(st["arrays"]) | set(st["attributes"])):
             v = {"name": n}
@@ -284,7 +313,7 @@ def _open_zip(src) -> zipfile.ZipFile:
 
 
 def _read(file, o: dict, count_files=None) -> tuple[ShellSnapshot, int]:
-    src = _open(file, _max_archive(o))
+    src = _open(file, 4 * _max_archive(o))  # any .topwater file a recording may be; the machine is still bounded by o
     try:
         _check_entry_count(src, o)
         with _open_zip(src) as zf:
@@ -298,15 +327,33 @@ def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: d
                    count_files=None) -> tuple[ShellSnapshot, int]:
     """Reads and checks the manifest (or checkpoint) `name`; returns the machine and the bytes its files hold. `cache` shares
     identical contents between the manifests of one file; count_files(n) is told how many entries it lists before any is built."""
+    m = _manifest_json(_manifest_bytes(zf, names, name, o), name)
+    user, hostname, created = _check_header(m, name)
+    files = _list(m.get("files"), "files")
+    if count_files is not None:
+        count_files(len(files))
+    entries, total = _read_files(zf, names, files, o, {} if cache is None else cache)
+    state = _read_state(m, o)
+    return ShellSnapshot(entries, state, user, hostname, created), total
+
+
+def _manifest_bytes(zf: zipfile.ZipFile, names: set, name: str, o: dict) -> bytes:
     if name not in names:
         raise SnapshotError(f"{name} is missing")
     with zf.open(name) as f:
-        raw = _read_capped(f, _max_manifest(o), name)
+        return _read_capped(f, _max_manifest(o), name)
+
+
+def _manifest_json(raw: bytes, name: str):
     try:
-        m = json.loads(raw.decode("utf-8"))
+        return json.loads(raw.decode("utf-8"))
     except ValueError:
         raise SnapshotError(f"{name} is not JSON") from None
-    # the version first, so a newer format fails with that, not with whatever it changed
+
+
+def _check_header(m, name: str) -> tuple[str, str, datetime]:
+    """Format and version (the version first, so a newer format fails with that, not with whatever it changed), user,
+    hostname and time."""
     if not isinstance(m, dict) or m.get("format") != _FORMAT:
         raise SnapshotError(f"{name} is not a Topwater snapshot manifest")
     version = _int(m.get("version"), "format version")
@@ -315,20 +362,15 @@ def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: d
                                    f"({FORMAT_VERSION}); upgrade Topwater to load it")
     if version < 1:
         raise SnapshotError(f"unknown format version {version}")
-    user = _check(m.get("user"), _USER, "user")
-    hostname = _check(m.get("hostname"), _HOST, "hostname")
-    files = _list(m.get("files"), "files")
-    if count_files is not None:
-        count_files(len(files))
-    entries, total = _read_files(zf, names, files, o, {} if cache is None else cache)
-    state = _read_state(m, o)
-    return ShellSnapshot(entries, state, user, hostname, parse_time(m.get("created"), "created")), total
+    return _check(m.get("user"), _USER, "user"), _check(m.get("hostname"), _HOST, "hostname"), parse_time(m.get("created"), "created")
 
 
-def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict, cache: dict) -> tuple[list, int]:
+def _check_sizes(files: list, o: dict) -> tuple[int, int]:
+    """Checks a manifest's entry count and file bytes against the limits; returns all files' bytes and the bytes held once
+    (another name of a file shares its first name's)."""
     if len(files) > o["max_extract_entries"]:
         raise SnapshotError(f"more than {o['max_extract_entries']} files and directories (MaxExtractEntries)")
-    total = 0
+    total = held = 0
     for f in files:
         if not isinstance(f, dict):
             raise SnapshotError("a file entry is not an object")
@@ -337,8 +379,25 @@ def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict, cache: di
             if size < 0:
                 raise SnapshotError(f"{f.get('path')}: negative size")
             total += size
+            held += size if f.get("link") is None else 0
         if total > o["max_file_system_bytes"]:
             raise SnapshotError(f"the files hold more than {o['max_file_system_bytes']} bytes (MaxFileSystemBytes)")
+    return total, held
+
+
+def _read_outline(raw: bytes, name: str, o: dict, count_files, load, kept: list) -> tuple[ShellSnapshot, int]:
+    """A checkpoint checked without building it: format, version, user, hostname, time, and its entries and bytes against
+    the limits (count_files charges the entries to the file's budget). The rest (each entry, blob and the session) is checked
+    when load() first builds it. Returns it and the bytes its files hold once."""
+    m = _manifest_json(raw, name)
+    user, hostname, created = _check_header(m, name)
+    files = _list(m.get("files"), "files")
+    count_files(len(files))
+    return ShellSnapshot._lazy(load, user, hostname, created, kept), _check_sizes(files, o)[1]
+
+
+def _read_files(zf: zipfile.ZipFile, names: set, files: list, o: dict, cache: dict) -> tuple[list, int]:
+    total = _check_sizes(files, o)[0]
     entries, seen, dirs, earlier = [], set(), {"/"}, set()  # earlier: the files and links so far, which a hard link may name
     # cache: identical contents load once and are shared, as in memory
     for f in files:
