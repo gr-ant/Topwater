@@ -2,15 +2,16 @@
   "$schema": "../command.schema.json",
   "name": "git",
   "category": "utility",
-  "summary": "Version control in local repositories: init, add, commit, log, diff, branch, merge, stash (no network or remotes)",
+  "summary": "Version control in local repositories: init, add, commit, log, diff, branch, merge, stash (no network)",
   "version": "git version 2.43.0",
   "help": [
     "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]",
     "",
     "Version control for the files in this machine. Repositories are ordinary .git",
     "directories in the format real git uses, so they can be copied out and used",
-    "elsewhere. There is no network: clone, fetch, pull, push and remotes are not",
-    "available.",
+    "elsewhere, and repositories copied in (packed by git clone or git gc) can be",
+    "read and extended. There is no network: clone, fetch, pull and push are not",
+    "available, and git here writes no packs (gc, repack).",
     "",
     "Start and save work:",
     "   init       create a repository",
@@ -81,7 +82,14 @@
     "missingObject": "fatal: object {object} is missing from the repository",
     "corruptObject": "fatal: object {object} is corrupt",
     "wrongType": "fatal: object {object} is not a {kind}",
-    "packedObjects": "fatal: this repository's history is packed (.git/objects/pack), which git here cannot read yet; the work tree files are intact, so do not delete .git (object {object})",
+    "badPack": "fatal: packfile {path} is corrupt: {why}",
+    "packBadSignature": "bad signature",
+    "packBadVersion": "version {version} is not supported",
+    "packBadChecksum": "checksum mismatch",
+    "packNoMatch": "it does not match its index",
+    "packTruncated": "truncated or malformed index",
+    "packNotSorted": "object names out of order",
+    "packBadOffset": "object offset out of range",
     "badIndex": "fatal: index file corrupt ({why})",
     "indexBadSignature": "bad signature",
     "indexBadVersion": "index version {version} is not supported",
@@ -131,6 +139,7 @@
       "messages": {
         "onBranch": "On branch {branch}",
         "detachedAt": "HEAD detached at {commit}",
+        "detachedFrom": "HEAD detached from {commit}",
         "noCommitsYet": "No commits yet",
         "initialCommit": "Initial commit",
         "unmergedHeader": "You have unmerged paths.\n  (fix conflicts and run \"git commit\")\n  (use \"git merge --abort\" to abort the merge)",
@@ -151,6 +160,16 @@
         "nothingToCommitInitial": "nothing to commit (create/copy files and use \"git add\" to track)",
         "nothingToCommitClean": "nothing to commit, working tree clean",
         "noCommitsOnBranch": "No commits yet on {branch}",
+        "upToDate": "Your branch is up to date with '{upstream}'.",
+        "ahead": "Your branch is ahead of '{upstream}' by {count}.\n  (use \"git push\" to publish your local commits)",
+        "behind": "Your branch is behind '{upstream}' by {count}, and can be fast-forwarded.\n  (use \"git pull\" to update your local branch)",
+        "diverged": "Your branch and '{upstream}' have diverged,\nand have {ahead} and {behind} different commits each, respectively.\n  (use \"git pull\" if you want to integrate the remote branch with yours)",
+        "upstreamGone": "Your branch is based on '{upstream}', but the upstream is gone.\n  (use \"git branch --unset-upstream\" to fixup)",
+        "oneCommit": "1 commit",
+        "commits": "{n} commits",
+        "trackAhead": "ahead {n}",
+        "trackBehind": "behind {n}",
+        "trackGone": "gone",
         "labelNew": "new file:",
         "labelModified": "modified:",
         "labelDeleted": "deleted:",
@@ -345,9 +364,9 @@
       ],
       "options": [
         {"long": ["list"], "key": "\u0002", "description": "list branches (those matching the patterns, if given)"},
-        {"short": "a", "long": ["all"], "description": "list all branches (there are no remote ones)"},
-        {"short": "r", "long": ["remotes"], "description": "list remote-tracking branches (there are none)"},
-        {"short": "v", "long": ["verbose"], "description": "also show each branch's commit and subject"},
+        {"short": "a", "long": ["all"], "description": "list local and remote-tracking branches"},
+        {"short": "r", "long": ["remotes"], "description": "list remote-tracking branches (refs/remotes, as a copied clone has)"},
+        {"short": "v", "long": ["verbose"], "description": "also show each branch's commit and subject; twice: and its upstream"},
         {"short": "d", "long": ["delete"], "description": "delete branches that are merged into HEAD"},
         {"short": "D", "description": "delete branches even when not merged"},
         {"short": "m", "long": ["move"], "description": "rename a branch (the current one when only <new> is given)"},
@@ -369,7 +388,8 @@
         "tooManyArguments": "fatal: too many arguments",
         "forceCurrent": "fatal: cannot force update the current branch.",
         "notValidObject": "fatal: not a valid object name: '{name}'",
-        "detachedLabel": "(HEAD detached at {commit})"
+        "detachedLabel": "(HEAD detached at {commit})",
+        "detachedFromLabel": "(HEAD detached from {commit})"
       }
     },
     "checkout": {
@@ -392,6 +412,7 @@
         "switchedNewBranch": "Switched to a new branch '{branch}'",
         "switchedResetBranch": "Switched to and reset branch '{branch}'",
         "alreadyOn": "Already on '{branch}'",
+        "trackingSetUp": "branch '{branch}' set up to track '{upstream}'.",
         "headNowAt": "HEAD is now at {commit}",
         "previousPosition": "Previous HEAD position was {commit}",
         "localChanges": "error: Your local changes to the following files would be overwritten by {verb}:\n{paths}\n{advice}\nAborting",
@@ -711,10 +732,10 @@
       "unsupported": true
     },
     "remote": {
-      "summary": "List remotes (there are none: this machine has no network)",
+      "summary": "List the remotes a copied clone names (this machine has no network to reach them)",
       "usage": ["git remote [-v]"],
       "options": [
-        {"short": "v", "long": ["verbose"], "description": "also show each remote's address (there are none)"}
+        {"short": "v", "long": ["verbose"], "description": "also show each remote's address"}
       ],
       "messages": {
         "noRemotes": "fatal: remotes are not available: this machine has no network. Commits stay in this machine's repository."
@@ -859,8 +880,13 @@
       "unsupported": true
     },
     "gc": {
-      "summary": "Pack and clean up the repository (not available)",
+      "summary": "Pack and clean up the repository (not available; packs written by real git can be read)",
       "usage": ["git gc"],
+      "unsupported": true
+    },
+    "repack": {
+      "summary": "Pack loose objects (not available; packs written by real git can be read)",
+      "usage": ["git repack"],
       "unsupported": true
     },
     "fsck": {

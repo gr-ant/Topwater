@@ -1,9 +1,20 @@
 """git: identity, and hostile repositories (corrupt or oversized objects, bad indexes, links inside .git, tree entries
 that point outside the work tree). The everyday behaviour is pinned by tests/corpus/git.jsonl."""
+import base64
+import gzip
 import hashlib
+import json
+import sys
+import time
 import zlib
+from pathlib import Path
+
+import pytest
 
 from bashcompat import Shell
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "git"))
+import make_packs  # noqa: E402
 
 IDENT = ("export GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@example.com GIT_COMMITTER_NAME=A GIT_COMMITTER_EMAIL=a@example.com "
          "GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' GIT_COMMITTER_DATE='2026-01-02T03:04:05Z'")
@@ -122,14 +133,61 @@ def test_a_long_history_walk_respects_the_call_time_limit():
     assert r.exit_code in (0, 124)
 
 
-def test_packed_repositories_get_a_clear_message():
+PACKS = json.loads((Path(__file__).resolve().parents[2] / "tests" / "git" / "packs.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", PACKS, ids=[c["name"] for c in PACKS])
+def test_packfiles_good_and_hostile(case):
+    """tests/git/packs.json (made by tests/git/make_packs.py), shared with the other ports."""
+    sh = repo(max_call_duration=10)
+    sh.fs.mkdir("/tmp/w/.git/objects/pack", parents=True)
+    for name, data in case["files"].items():
+        sh.fs.write_bytes(f"/tmp/w/.git/objects/pack/{name}", gzip.decompress(base64.b64decode(data)))
+    start = time.monotonic()
+    r = sh.run(case["script"])
+    assert time.monotonic() - start < 5
+    assert r.exit_code == case["exitCode"], r.stderr
+    if "stdout" in case:
+        assert r.stdout == case["stdout"]
+    if "stderr" in case:
+        assert case["stderr"] in r.stderr and r.stderr.startswith("fatal: ")
+
+
+def test_packed_repositories_take_new_loose_objects():
     sh = repo()
-    sh.run("mkdir -p .git/objects/pack && touch .git/objects/pack/pack-1.pack .git/objects/pack/pack-1.idx")
-    r = sh.run("git cat-file -p 0123456789012345678901234567890123456789")
-    assert r.exit_code == 128
-    sh.run("rm -rf .git/objects/$(git rev-parse HEAD | cut -c1-2)")
-    r = sh.run("git log")
-    assert r.exit_code == 128 and "do not delete .git" in r.stderr
+    sh.run("echo b > g && git add g && git commit -qm two")
+    # pack everything the way git gc would leave it: objects only in a pack, refs in packed-refs
+    names = sh.run("find .git/objects -type f | cut -d/ -f3,4 | tr -d /").stdout.split()
+    objs = []
+    for sha in names:
+        raw = zlib.decompress(sh.fs.read_bytes(f"/tmp/w/.git/objects/{sha[:2]}/{sha[2:]}"))
+        kind, _, rest = raw.partition(b" ")
+        objs.append({"kind": kind.decode(), "data": rest.partition(b"\0")[2], "name": sha})
+    pack, idx = make_packs.build(objs)
+    sh.run("rm -rf .git/objects/?? && mkdir -p .git/objects/pack")
+    sh.fs.write_bytes("/tmp/w/.git/objects/pack/pack-1.pack", pack)
+    sh.fs.write_bytes("/tmp/w/.git/objects/pack/pack-1.idx", idx)
+    r = sh.run("git log --oneline && git status -s && echo c > h && git add h && git commit -qm three && git log --oneline | wc -l"
+               " && find .git/objects -type f | grep -vc pack && git rev-parse --short HEAD~2 | wc -c")
+    assert r.exit_code == 0, r.stderr
+    assert r.stdout.split("\n")[-4:] == ["3", "3", "8", ""]
+    r = sh.run("git gc; git repack")
+    assert r.exit_code == 128 and "not available" in r.stderr
+
+
+def test_a_5000_object_pack_reads_quickly():
+    sh = repo()
+    objs, text = [], b""
+    for n in range(5000):
+        text += b"line %d\n" % n
+        objs.append({"kind": "blob", "data": text[-2000:], "name": make_packs.oid("blob", text[-2000:])})
+    pack, idx = make_packs.build(objs)
+    sh.fs.mkdir("/tmp/w/.git/objects/pack", parents=True)
+    sh.fs.write_bytes("/tmp/w/.git/objects/pack/pack-1.pack", pack)
+    sh.fs.write_bytes("/tmp/w/.git/objects/pack/pack-1.idx", idx)
+    start = time.monotonic()
+    r = sh.run(f"git cat-file -s {objs[4999]['name']}; git cat-file -t {objs[10]['name'][:8]}")
+    assert r.stdout == "2000\nblob\n" and time.monotonic() - start < 2
 
 
 def test_odd_revisions_and_patterns_fail_cleanly():

@@ -10,6 +10,7 @@ from .. import bytetext
 from .._spec import COMMANDS
 from ..vfs import ShellError, normalize, utc_now
 from . import spec_format, spec_message, spec_sub_message
+from .gitpack import MAX_PACKS, Corrupt, Pack
 from .gitcore import (EMPTY_TREE, timed, HEX, MAX_DEPTH, MAX_WALK, Commit, Config, Entry, GitError, IgnoreRules, c_quote, canonical_key,
                       check_path, config_bool, count_changes, fatal, format_date, glob_regex, is_binary, local_time, merge_lines,
                       msg, myers, object_id, parse_date, parse_ident, parse_tree, read_index, split_lines, tree_bytes, unified,
@@ -120,6 +121,7 @@ class Repo:
         self.top, self.git = top, gitdir
         self.limit = g.ctx.shell.max_string_bytes
         self._objects: dict[str, tuple[str, bytes]] = {}
+        self._packs: list[Pack] | None = None
         self._commits: dict[str, Commit] = {}
         self._config = None
         self._ignores: dict[str, IgnoreRules | None] = {}
@@ -169,9 +171,7 @@ class Repo:
             return self._objects[sha]
         raw = self.gread(f"objects/{sha[:2]}/{sha[2:]}") if re.fullmatch(r"[0-9a-f]{40}", sha) else None
         if raw is None:
-            if self.gexists("objects/pack") and any(n.endswith(".pack") for n in self.fs.listdir(self._gpath("objects/pack"))):
-                raise fatal("packedObjects", object=sha)
-            raise fatal("missingObject", object=sha)
+            return self._packed(sha)
         try:
             d = zlib.decompressobj()
             data = d.decompress(raw, self.limit + 64)
@@ -190,14 +190,41 @@ class Repo:
             self._objects[sha] = result
         return result
 
+    def packs(self) -> list[Pack]:
+        """The packs under objects/pack that have an index, loaded and verified on first use."""
+        if self._packs is None:
+            self._packs = []
+            d = "objects/pack"
+            names = sorted(n for n in self.fs.listdir(self._gpath(d)) if n.endswith(".idx")) if self.fs.is_dir(self._gpath(d), follow=False) else []
+            if len(names) > MAX_PACKS:
+                raise fatal("tooLarge", what=self._gpath(d))
+            for name in names:
+                pack = self.gread(f"{d}/{name[:-4]}.pack")
+                if pack is not None:  # like git, an index without its pack is skipped
+                    self._packs.append(Pack(self._gpath(f"{d}/{name[:-4]}.pack"), self.gread(f"{d}/{name}") or b"", pack, self.limit, self.ctx.check_time))
+        return self._packs
+
+    def _packed(self, sha: str) -> tuple[str, bytes]:
+        for pack in self.packs():
+            if sha in pack.offsets:
+                try:
+                    result = pack.read(sha)
+                except Corrupt:
+                    raise fatal("corruptObject", object=sha) from None
+                if object_id(*result) != sha:
+                    raise fatal("corruptObject", object=sha)
+                if len(self._objects) < 4096:
+                    self._objects[sha] = result
+                return result
+        raise fatal("missingObject", object=sha)
+
     def has(self, sha: str) -> bool:
-        return self.gexists(f"objects/{sha[:2]}/{sha[2:]}")
+        return self.gexists(f"objects/{sha[:2]}/{sha[2:]}") or any(sha in p.offsets for p in self.packs())
 
     def put(self, kind: str, data: bytes) -> str:
         sha = object_id(kind, data)
-        rel = f"objects/{sha[:2]}/{sha[2:]}"
-        if not self.gexists(rel):
-            self.gwrite(rel, zlib.compress(f"{kind} {len(data)}\0".encode() + data))
+        if not self.has(sha):
+            self.gwrite(f"objects/{sha[:2]}/{sha[2:]}", zlib.compress(f"{kind} {len(data)}\0".encode() + data))
         return sha
 
     def typed(self, sha: str, kind: str) -> bytes:
@@ -659,7 +686,11 @@ def resolve_base(repo: Repo, name: str) -> str | None:
     if m:
         b = previous_branch(repo, int(m.group(1)))
         return repo.read_ref("refs/heads/" + b) if b else None
-    for r in (name, "refs/" + name, "refs/tags/" + name, "refs/heads/" + name, "refs/remotes/" + name):
+    m = re.fullmatch(r"(.*)@\{(?:u|upstream)\}", name)
+    if m:
+        up = upstream(repo, m.group(1) or repo.branch() or "")
+        return repo.read_ref(up[1]) if up else None
+    for r in (name, "refs/" + name, "refs/tags/" + name, "refs/heads/" + name, "refs/remotes/" + name, "refs/remotes/" + name + "/HEAD"):
         if r == name and not (name.isupper() or name.startswith("refs/")):
             continue
         sha = repo.read_ref(r)
@@ -674,12 +705,30 @@ def resolve_base(repo: Repo, name: str) -> str | None:
 
 def unique_prefix(repo: Repo, prefix: str) -> str | None:
     d = repo._gpath(f"objects/{prefix[:2]}")
-    if not repo.fs.is_dir(d, follow=False):
-        return None
-    hits = [prefix[:2] + n for n in repo.fs.listdir(d) if (prefix[:2] + n).startswith(prefix) and len(n) == 38]
+    hits = {prefix[:2] + n for n in repo.fs.listdir(d) if (prefix[:2] + n).startswith(prefix) and len(n) == 38} if repo.fs.is_dir(d, follow=False) else set()
+    for pack in repo.packs():
+        hits.update(pack.with_prefix(prefix))
+    hits = sorted(hits)
     if len(hits) > 1:
         raise fatal("ambiguousPrefix", prefix=prefix)
     return hits[0] if hits else None
+
+
+def detached_name(repo: Repo) -> tuple[bool, str]:
+    """(HEAD is still there, what to call it) for a detached HEAD: the ref the last checkout named, else the commit it
+    went to, from the HEAD reflog; git says 'detached at' while HEAD has not moved since and 'detached from' after."""
+    head = repo.head() or ""
+    for line in reversed((repo.gtext("logs/HEAD") or "").split("\n")):
+        m = re.fullmatch(r"[0-9a-f]{40} ([0-9a-f]{40}) [^\t]*\tcheckout: moving from \S+ to (\S+)", line)
+        if not m:
+            continue
+        for ref in (m.group(2), "refs/tags/" + m.group(2), "refs/heads/" + m.group(2), "refs/remotes/" + m.group(2)):
+            sha = repo.read_ref(ref) if ref.startswith("refs/") else None
+            if sha:
+                short = re.sub(r"^refs/(heads|tags|remotes)/", "", ref)
+                return peel(repo, sha, "commit") == head, short
+        return m.group(1) == head, abbrev(m.group(1))
+    return True, abbrev(head)
 
 
 def previous_branch(repo: Repo, n: int) -> str | None:
@@ -759,6 +808,76 @@ def merge_base(repo: Repo, a: str, b: str, check) -> str | None:
         return None
     best = common - ancestors(repo, [p for c in common for p in repo.commit(c).parents], check)
     return walk_order(repo, sorted(best), check)[0] if best else None
+
+
+def upstream(repo: Repo, branch: str) -> tuple[str, str] | None:
+    """(name to show, ref) of a branch's upstream, from branch.<name>.remote and .merge (as git clone sets them)."""
+    cfg = repo.config()
+    remote, merge = cfg.get(f"branch.{branch}.remote"), cfg.get(f"branch.{branch}.merge")
+    if not remote or not merge or not merge.startswith("refs/heads/"):
+        return None
+    if remote == ".":
+        return merge[11:], merge
+    # shortcut: assumes the default fetch refspec (refs/remotes/<remote>/*) that clone writes; read remote.<name>.fetch if others show up
+    return f"{remote}/{merge[11:]}", f"refs/remotes/{remote}/{merge[11:]}"
+
+
+def tracking(repo: Repo, branch: str, check) -> tuple[str, int, int, bool] | None:
+    """(upstream name, commits ahead, commits behind, upstream gone) for a branch with an upstream."""
+    up = upstream(repo, branch)
+    ours = repo.read_ref("refs/heads/" + branch)
+    if up is None or ours is None:
+        return None
+    theirs = repo.read_ref(up[1])
+    if theirs is None:
+        return up[0], 0, 0, True
+    a, b = ancestors(repo, [ours], check), ancestors(repo, [theirs], check)
+    return up[0], len(a - b), len(b - a), False
+
+
+def tracking_text(repo: Repo, branch: str, check) -> str | None:
+    """The 'Your branch is ...' lines git status and checkout print."""
+    t = tracking(repo, branch, check)
+    if t is None:
+        return None
+    name, ahead, behind, gone = t
+    M = lambda key, **v: sub_msg("status", key, **v)
+    count = lambda n: M("oneCommit") if n == 1 else M("commits", n=str(n))
+    if gone:
+        return M("upstreamGone", upstream=name)
+    if ahead and behind:
+        return M("diverged", upstream=name, ahead=str(ahead), behind=str(behind))
+    if ahead:
+        return M("ahead", upstream=name, count=count(ahead))
+    if behind:
+        return M("behind", upstream=name, count=count(behind))
+    return M("upToDate", upstream=name)
+
+
+def tracking_brief(repo: Repo, branch: str, check) -> tuple[str, str] | None:
+    """(upstream name, 'ahead 1, behind 2' or 'gone' or '') for status -sb and branch -vv."""
+    t = tracking(repo, branch, check)
+    if t is None:
+        return None
+    name, ahead, behind, gone = t
+    M = lambda key, **v: sub_msg("status", key, **v)
+    if gone:
+        return name, M("trackGone")
+    return name, ", ".join(([M("trackAhead", n=str(ahead))] if ahead else []) + ([M("trackBehind", n=str(behind))] if behind else []))
+
+
+def remote_branches(repo: Repo) -> list[tuple[str, str | None, str | None]]:
+    """[(name below refs/remotes/, commit, symbolic target below refs/remotes/ or None)] sorted by name."""
+    rows = [(name[13:], sha, None) for name, sha in repo.refs("refs/remotes/")]
+    base = "refs/remotes"
+    if repo.fs.is_dir(repo._gpath(base), follow=False):
+        for remote in repo.fs.listdir(repo._gpath(base)):
+            rel = f"{base}/{remote}/HEAD"
+            if repo.fs.is_dir(repo._gpath(f"{base}/{remote}"), follow=False) and repo.fs.is_file(repo._gpath(rel), follow=False):
+                text = (repo.gtext(rel) or "").strip()
+                if text.startswith("ref: refs/remotes/"):
+                    rows.append((f"{remote}/HEAD", repo.read_ref(rel), text[18:]))
+    return sorted(rows, key=lambda r: r[0].encode())
 
 
 def walk_order(repo: Repo, starts: list[str], check, limit_set=None) -> list[str]:
@@ -1428,7 +1547,10 @@ def branch_line(repo: Repo) -> str:
     b = repo.branch()
     if b is None:
         return "HEAD (no branch)"
-    return b if repo.head() else sub_msg("status", "noCommitsOnBranch", branch=b)
+    if not repo.head():
+        return sub_msg("status", "noCommitsOnBranch", branch=b)
+    t = tracking_brief(repo, b, repo.ctx.check_time)
+    return b if t is None else f"{b}...{t[0]}" + (f" [{t[1]}]" if t[1] else "")
 
 
 UNMERGED_CODES = {(1, 2, 3): "UU", (2, 3): "AA", (1,): "DD", (1, 2): "UD", (1, 3): "DU", (2,): "AU", (3,): "UA"}
@@ -1458,9 +1580,13 @@ def long_status(repo: Repo, s: Status, committing: bool = False) -> str:
     out = []
     b = repo.branch()
     if b is None:
-        out.append(M("detachedAt", commit=abbrev(s.head or "")))
+        at, name = detached_name(repo)
+        out.append(M("detachedAt" if at else "detachedFrom", commit=name))
     else:
         out.append(M("onBranch", branch=b))
+        t = tracking_text(repo, b, repo.ctx.check_time) if s.head else None
+        if t:
+            out += [t, ""]
     merging = repo.gexists("MERGE_HEAD")
     if s.head is None:
         out += ["", M("initialCommit") if committing else M("noCommitsYet"), ""]
@@ -1850,12 +1976,12 @@ def commit_summary(g: Git, repo: Repo, c: Commit, root: bool, amend: bool = Fals
 def decorations(repo: Repo) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     head_ref = repo.head_ref()
-    refs = repo.refs("refs/heads/") + repo.refs("refs/tags/")
+    refs = repo.refs("refs/heads/") + repo.refs("refs/tags/") + [("refs/remotes/" + n, sha) for n, sha, _ in remote_branches(repo) if sha]
     for name, sha in sorted(refs, key=lambda kv: kv[0].encode(), reverse=True):
         if name == head_ref:
             continue
         target = peel(repo, sha, "commit") if name.startswith("refs/tags/") else sha
-        label = ("tag: " + name[10:]) if name.startswith("refs/tags/") else name[11:]
+        label = ("tag: " + name[10:]) if name.startswith("refs/tags/") else name[13:] if name.startswith("refs/remotes/") else name[11:]
         out.setdefault(target or sha, []).append(label)
     head = repo.head()
     if head:
@@ -2298,13 +2424,14 @@ def subject_of(repo: Repo, sha: str) -> str:
 
 
 def move_head(g: Git, repo: Repo, target_ref: str | None, target_sha: str | None, label: str, force: bool, quiet: bool,
-              new_branch: str | None = None, reset_branch: bool = False, stay: bool = False) -> int:
+              new_branch: str | None = None, reset_branch: bool = False, stay: bool = False, track: str | None = None) -> int:
     old = repo.head()
     old_branch = repo.branch()
     M = lambda key, **v: sub_msg("checkout", key, **v)
     if target_ref is not None and target_ref == repo.head_ref() and new_branch is None and not stay:
         if not quiet:
             g.err(M("alreadyOn", branch=label) + "\n")
+            report_tracking(g, repo)
         return 0
     carried = switch_trees(g, repo, old, target_sha, force)
     if force:
@@ -2318,6 +2445,8 @@ def move_head(g: Git, repo: Repo, target_ref: str | None, target_sha: str | None
     if new_branch is not None:
         if target_sha:
             repo.update_ref("refs/heads/" + new_branch, target_sha, f"branch: Created from {label}")
+        if track:
+            set_tracking(g, repo, new_branch, track, quiet)
     from_name = old_branch if old_branch is not None else (old or "")
     if target_ref is not None:
         repo.set_head(target_ref, f"checkout: moving from {from_name} to {new_branch or label}")
@@ -2335,7 +2464,44 @@ def move_head(g: Git, repo: Repo, target_ref: str | None, target_sha: str | None
         g.err(M("switchedBranch", branch=label) + "\n")
     for line in carried:
         g.out(line + "\n")
+    if target_ref is not None and new_branch is None:
+        report_tracking(g, repo)
     return 0
+
+
+def report_tracking(g: Git, repo: Repo) -> None:
+    t = tracking_text(repo, repo.branch() or "", g.ctx.check_time) if repo.branch() else None
+    if t:
+        g.out(t + "\n")
+
+
+def remote_start(repo: Repo, start: str | None) -> str | None:
+    """The remote-tracking branch a start point names (origin/x or refs/remotes/origin/x), for setting up tracking."""
+    if start is None or try_resolve(repo, start) is None:
+        return None
+    for ref in (start, "refs/" + start, "refs/remotes/" + start):
+        if ref.startswith("refs/remotes/") and not ref.endswith("/HEAD") and repo.read_ref(ref) and not repo.read_ref("refs/heads/" + start):
+            return ref
+    return None
+
+
+def set_tracking(g: Git, repo: Repo, branch: str, ref: str, quiet: bool) -> None:
+    """Records ref (refs/remotes/<remote>/<name>) as branch's upstream, as git does for a branch started from it."""
+    remote, _, name = ref[13:].partition("/")
+    cfg = repo.config()
+    cfg.set(f"branch.{branch}.remote", remote)
+    cfg.set(f"branch.{branch}.merge", "refs/heads/" + name)
+    repo.save_config()
+    if not quiet:
+        g.out(sub_msg("checkout", "trackingSetUp", branch=branch, upstream=ref[13:]) + "\n")
+
+
+def guess_remote(repo: Repo, name: str) -> str | None:
+    """refs/remotes/<remote>/<name> when exactly one remote has a branch called name (git checkout <name> then creates it)."""
+    if not valid_branch_name(name):
+        return None
+    hits = [n for n, sha, sym in remote_branches(repo) if sym is None and n.partition("/")[2] == name]
+    return "refs/remotes/" + hits[0] if len(hits) == 1 else None
 
 
 def checkout_paths(g: Git, repo: Repo, source: str | None, items: list[str], sub: str, staged: bool = False, worktree: bool = True,
@@ -2412,7 +2578,8 @@ def git_checkout(g: Git, args) -> int:
             if not quiet:
                 g.err(sub_msg("checkout", "switchedNewBranch", branch=new) + "\n")
             return 0
-        return move_head(g, repo, "refs/heads/" + new, start, target or "HEAD", force, quiet, new_branch=new, reset_branch=exists)
+        return move_head(g, repo, "refs/heads/" + new, start, target or "HEAD", force, quiet, new_branch=new, reset_branch=exists,
+                         track=remote_start(repo, target))
     if target is None:
         if o.has("\x01"):
             return move_head(g, repo, None, repo.head(), "HEAD", force, quiet)
@@ -2429,6 +2596,9 @@ def git_checkout(g: Git, args) -> int:
         return move_head(g, repo, None, c, target, force, quiet)
     if o.has("\x01"):
         raise fatal("badRevision", rev=target)
+    guess = guess_remote(repo, target) if len(o.args) == 1 and not o.dashdash else None
+    if guess:
+        return move_head(g, repo, "refs/heads/" + target, repo.read_ref(guess), guess[13:], force, quiet, new_branch=target, track=guess)
     return checkout_paths(g, repo, None, o.args, "checkout", quiet=quiet)
 
 
@@ -2456,7 +2626,8 @@ def git_switch(g: Git, args) -> int:
             if not quiet:
                 g.err(sub_msg("checkout", "switchedNewBranch", branch=new) + "\n")
             return 0
-        return move_head(g, repo, "refs/heads/" + new, start, target or "HEAD", force, quiet, new_branch=new, reset_branch=exists)
+        return move_head(g, repo, "refs/heads/" + new, start, target or "HEAD", force, quiet, new_branch=new, reset_branch=exists,
+                         track=remote_start(repo, target))
     if o.has("d"):
         c = commit_of(repo, target or "HEAD")
         return move_head(g, repo, None, c, target or "HEAD", force, quiet)
@@ -2468,6 +2639,9 @@ def git_switch(g: Git, args) -> int:
         raise sub_fatal("switch", "expectedBranchRef", rev=repo.head_ref())
     if try_resolve(repo, target):
         raise sub_fatal("switch", "expectedBranch", rev=target)
+    guess = guess_remote(repo, target)
+    if guess:
+        return move_head(g, repo, "refs/heads/" + target, repo.read_ref(guess), guess[13:], force, quiet, new_branch=target, track=guess)
     raise sub_fatal("switch", "invalidReference", rev=target)
 
 
@@ -2636,22 +2810,33 @@ def git_branch(g: Git, args) -> int:
         return 0
     listing = o.has("\x02") or o.has("a") or o.has("r") or o.has("v") or not o.args
     if listing:
-        if o.has("r") and not o.has("a"):
-            return 0
         pattern = [timed(glob_regex(p, False) + r"\Z", re.S) for p in o.args] if o.has("\x02") and o.args else None
-        rows = []
-        head_ref = repo.head_ref()
-        if head_ref is None and repo.head():
-            rows.append(("*", M("detachedLabel", commit=abbrev(repo.head())), repo.head()))
-        for name, sha in repo.refs("refs/heads/"):
-            short = name[11:]
-            if pattern and not any(p.match(short) for p in pattern):
-                continue
-            rows.append(("*" if name == head_ref else " ", short, sha))
+        rows = []  # (mark, name, commit, symbolic target, local branch)
+        if not o.has("r") or o.has("a"):
+            head_ref = repo.head_ref()
+            if head_ref is None and repo.head():
+                at, label = detached_name(repo)
+                if not pattern:
+                    rows.append(("*", M("detachedLabel" if at else "detachedFromLabel", commit=label), repo.head(), None, None))
+            for name, sha in repo.refs("refs/heads/"):
+                short = name[11:]
+                if pattern and not any(p.match(short) for p in pattern):
+                    continue
+                rows.append(("*" if name == head_ref else " ", short, sha, None, short))
+        if o.has("r") or o.has("a"):
+            prefix = "remotes/" if o.has("a") else ""
+            for short, sha, sym in remote_branches(repo):
+                if pattern and not any(p.match(short) or p.match(prefix + short) for p in pattern):
+                    continue
+                rows.append((" ", prefix + short, sha, sym, None))
         width = max((len(r[1]) for r in rows), default=0)
-        for mark, name, sha in rows:
-            if o.has("v"):
-                g.out(f"{mark} {name.ljust(width)} {abbrev(sha)} {repo.commit(sha).subject}\n")
+        for mark, name, sha, sym, local in rows:
+            if sym is not None:
+                g.out(f"{mark} {name.ljust(width)} -> {sym}\n" if o.has("v") else f"{mark} {name} -> {sym}\n")
+            elif o.has("v") and sha:
+                up = tracking_brief(repo, local, g.ctx.check_time) if local and o.flags.get("v", 0) > 1 else None
+                track = "" if up is None else f"[{up[0]}{': ' + up[1] if up[1] else ''}] "
+                g.out(f"{mark} {name.ljust(width)} {abbrev(sha)} {track}{repo.commit(sha).subject}\n")
             else:
                 g.out(f"{mark} {name}\n")
         return 0
@@ -2672,6 +2857,9 @@ def git_branch(g: Git, args) -> int:
     if sha is None:
         raise sub_fatal("branch", "notValidObject", name=repo.branch() or "HEAD" if start == "HEAD" else start)
     repo.update_ref("refs/heads/" + name, sha, f"branch: Created from {start}")
+    track = remote_start(repo, start)
+    if track:
+        set_tracking(g, repo, name, track, False)
     return 0
 
 
@@ -3197,13 +3385,19 @@ def git_rev_parse(g: Git, args) -> int:
             if prev and abbrev_ref:
                 outputs.append(previous_branch(r, int(prev.group(1))) or a)
                 continue
-            if a in ("HEAD", "@"):
+            up_of = re.fullmatch(r"(.*)@\{(?:u|upstream)\}", a)
+            if up_of:
+                up = upstream(r, up_of.group(1) or r.branch() or "")
+                name = (up[0] if abbrev_ref else up[1]) if up else None
+            elif a in ("HEAD", "@"):
                 ref = r.head_ref()
                 name = (ref[11:] if abbrev_ref and ref and ref.startswith("refs/heads/") else ref) if ref else "HEAD"
             elif r.read_ref("refs/heads/" + a):
                 name = a if abbrev_ref else "refs/heads/" + a
             elif r.read_ref("refs/tags/" + a):
                 name = ("tags/" + a if abbrev_ref and r.read_ref("refs/heads/" + a) else a) if abbrev_ref else "refs/tags/" + a
+            elif r.read_ref("refs/remotes/" + a):
+                name = a if abbrev_ref else "refs/remotes/" + a
             outputs.append(name if name is not None else (a if abbrev_ref else ""))
             continue
         outputs.append(sha[:short] if short else sha)
@@ -3430,10 +3624,20 @@ def config_write(g: Git, scope, key: str, value) -> int:
 
 def git_remote(g: Git, args) -> int:
     o = parse("remote", args)
-    g.repo()
+    repo = g.repo()
     if o.args:
         raise sub_fatal("remote", "noRemotes")
-    return 0  # there are no remotes to list
+    remotes: dict[str, dict[str, str]] = {}  # the remotes a copied clone names, in config order
+    for key, value, _ in repo.config().items():
+        if key.startswith("remote.") and key.count(".") >= 2:
+            name, _, field = key[7:].rpartition(".")
+            remotes.setdefault(name, {}).setdefault(field, value)
+    for name, fields in remotes.items():
+        if o.has("v"):
+            g.out(f"{name}\t{fields.get('url', '')} (fetch)\n{name}\t{fields.get('pushurl', fields.get('url', ''))} (push)\n")
+        else:
+            g.out(name + "\n")
+    return 0
 
 
 HANDLERS = {

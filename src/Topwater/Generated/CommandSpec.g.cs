@@ -237,7 +237,7 @@ internal static partial class CommandSpec
             ["illegalOption"] = "{script}: illegal option -- {option}",
             ["missingArgument"] = "{script}: option requires an argument -- {option}",
         }),
-        ["git"] = new("git", "Version control in local repositories: init, add, commit, log, diff, branch, merge, stash (no network or remotes)", "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]\n\nVersion control for the files in this machine. Repositories are ordinary .git\ndirectories in the format real git uses, so they can be copied out and used\nelsewhere. There is no network: clone, fetch, pull, push and remotes are not\navailable.\n\nStart and save work:\n   init       create a repository\n   add        stage changes; rm, mv remove and rename tracked files\n   commit     record the staged changes\n   status     show what changed\n   diff       show changes as patches or statistics\n   restore    put back files from the index or a commit\n   reset      move the branch or unstage files\n   stash      set changes aside\n   clean      delete untracked files\n\nHistory and branches:\n   log, show  look at commits\n   branch     list, create, rename, delete branches\n   switch     change branch (checkout also restores files)\n   merge      join histories (fast-forward or three-way with conflict markers)\n   tag        name a commit\n\nPlumbing: rev-parse, rev-list, ls-files, cat-file, config.\n\n'git help <command>' or 'git <command> --help' describes one command.\n", "git version 2.43.0", true, false, true, "git", 1, "Try 'git --help' for more information.\n", null, new Dictionary<string, string>
+        ["git"] = new("git", "Version control in local repositories: init, add, commit, log, diff, branch, merge, stash (no network)", "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]\n\nVersion control for the files in this machine. Repositories are ordinary .git\ndirectories in the format real git uses, so they can be copied out and used\nelsewhere, and repositories copied in (packed by git clone or git gc) can be\nread and extended. There is no network: clone, fetch, pull and push are not\navailable, and git here writes no packs (gc, repack).\n\nStart and save work:\n   init       create a repository\n   add        stage changes; rm, mv remove and rename tracked files\n   commit     record the staged changes\n   status     show what changed\n   diff       show changes as patches or statistics\n   restore    put back files from the index or a commit\n   reset      move the branch or unstage files\n   stash      set changes aside\n   clean      delete untracked files\n\nHistory and branches:\n   log, show  look at commits\n   branch     list, create, rename, delete branches\n   switch     change branch (checkout also restores files)\n   merge      join histories (fast-forward or three-way with conflict markers)\n   tag        name a commit\n\nPlumbing: rev-parse, rev-list, ls-files, cat-file, config.\n\n'git help <command>' or 'git <command> --help' describes one command.\n", "git version 2.43.0", true, false, true, "git", 1, "Try 'git --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["notRepo"] = "fatal: not a git repository (or any of the parent directories): .git",
             ["unknownCommand"] = "git: '{name}' is not a git command. See 'git --help'.",
@@ -276,7 +276,14 @@ internal static partial class CommandSpec
             ["missingObject"] = "fatal: object {object} is missing from the repository",
             ["corruptObject"] = "fatal: object {object} is corrupt",
             ["wrongType"] = "fatal: object {object} is not a {kind}",
-            ["packedObjects"] = "fatal: this repository's history is packed (.git/objects/pack), which git here cannot read yet; the work tree files are intact, so do not delete .git (object {object})",
+            ["badPack"] = "fatal: packfile {path} is corrupt: {why}",
+            ["packBadSignature"] = "bad signature",
+            ["packBadVersion"] = "version {version} is not supported",
+            ["packBadChecksum"] = "checksum mismatch",
+            ["packNoMatch"] = "it does not match its index",
+            ["packTruncated"] = "truncated or malformed index",
+            ["packNotSorted"] = "object names out of order",
+            ["packBadOffset"] = "object offset out of range",
             ["badIndex"] = "fatal: index file corrupt ({why})",
             ["indexBadSignature"] = "bad signature",
             ["indexBadVersion"] = "index version {version} is not supported",
@@ -320,7 +327,7 @@ internal static partial class CommandSpec
             {
                 ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git log -p -- <file>",
             }),
-            ["branch"] = new("branch", "Show, add, rename or remove branches", "usage: git branch [<options>] [--list] [<pattern>...]\n   or: git branch [-f] <name> [<start-point>]\n   or: git branch (-m | -M) [<old>] <new>\n   or: git branch (-d | -D) <name>...\n\nShow, add, rename or remove branches.\n\n    --list          list branches (those matching the patterns, if given)\n    -a, --all       list all branches (there are no remote ones)\n    -r, --remotes   list remote-tracking branches (there are none)\n    -v, --verbose   also show each branch's commit and subject\n    -d, --delete    delete branches that are merged into HEAD\n    -D              delete branches even when not merged\n    -m, --move      rename a branch (the current one when only <new> is given)\n    -M              rename a branch even over an existing one\n    -f, --force     with a name: reset the branch to <start-point> if it exists; with -d: delete unmerged\n    --show-current  print the current branch name (nothing when detached)\n", false, ("arvdDmMf", "", "list=\u0002,all=a,remotes=r,verbose=v,delete=d,move=m,force=f,show-current=\u0001"), new Dictionary<string, string>
+            ["branch"] = new("branch", "Show, add, rename or remove branches", "usage: git branch [<options>] [--list] [<pattern>...]\n   or: git branch [-f] <name> [<start-point>]\n   or: git branch (-m | -M) [<old>] <new>\n   or: git branch (-d | -D) <name>...\n\nShow, add, rename or remove branches.\n\n    --list          list branches (those matching the patterns, if given)\n    -a, --all       list local and remote-tracking branches\n    -r, --remotes   list remote-tracking branches (refs/remotes, as a copied clone has)\n    -v, --verbose   also show each branch's commit and subject; twice: and its upstream\n    -d, --delete    delete branches that are merged into HEAD\n    -D              delete branches even when not merged\n    -m, --move      rename a branch (the current one when only <new> is given)\n    -M              rename a branch even over an existing one\n    -f, --force     with a name: reset the branch to <start-point> if it exists; with -d: delete unmerged\n    --show-current  print the current branch name (nothing when detached)\n", false, ("arvdDmMf", "", "list=\u0002,all=a,remotes=r,verbose=v,delete=d,move=m,force=f,show-current=\u0001"), new Dictionary<string, string>
             {
                 ["exists"] = "fatal: a branch named '{name}' already exists",
                 ["invalidName"] = "fatal: '{name}' is not a valid branch name",
@@ -336,6 +343,7 @@ internal static partial class CommandSpec
                 ["forceCurrent"] = "fatal: cannot force update the current branch.",
                 ["notValidObject"] = "fatal: not a valid object name: '{name}'",
                 ["detachedLabel"] = "(HEAD detached at {commit})",
+                ["detachedFromLabel"] = "(HEAD detached from {commit})",
             }),
             ["cat-file"] = new("cat-file", "Print a repository object's type, size or contents", "usage: git cat-file (-t | -s | -p | -e) <object>\n   or: git cat-file <type> <object>\n\nPrint a repository object's type, size or contents.\n\n    -t  print the object's type\n    -s  print the object's size in bytes\n    -p  print the object's contents, readably\n    -e  exit 0 when the object exists, 1 otherwise, printing nothing\n", false, ("tspe", "", ""), new Dictionary<string, string>
             {
@@ -354,6 +362,7 @@ internal static partial class CommandSpec
                 ["switchedNewBranch"] = "Switched to a new branch '{branch}'",
                 ["switchedResetBranch"] = "Switched to and reset branch '{branch}'",
                 ["alreadyOn"] = "Already on '{branch}'",
+                ["trackingSetUp"] = "branch '{branch}' set up to track '{upstream}'.",
                 ["headNowAt"] = "HEAD is now at {commit}",
                 ["previousPosition"] = "Previous HEAD position was {commit}",
                 ["localChanges"] = "error: Your local changes to the following files would be overwritten by {verb}:\n{paths}\n{advice}\nAborting",
@@ -425,7 +434,7 @@ internal static partial class CommandSpec
             }),
             ["format-patch"] = new("format-patch", "Write commits as patch files (not available)", "usage: git format-patch\n\nWrite commits as patch files (not available).\n", true, ("", "", ""), Empty),
             ["fsck"] = new("fsck", "Verify the object database (not available)", "usage: git fsck\n\nVerify the object database (not available).\n", true, ("", "", ""), Empty),
-            ["gc"] = new("gc", "Pack and clean up the repository (not available)", "usage: git gc\n\nPack and clean up the repository (not available).\n", true, ("", "", ""), Empty),
+            ["gc"] = new("gc", "Pack and clean up the repository (not available; packs written by real git can be read)", "usage: git gc\n\nPack and clean up the repository (not available; packs written by real git can be read).\n", true, ("", "", ""), Empty),
             ["grep"] = new("grep", "Search tracked files (not available)", "usage: git grep\n\nSearch tracked files (not available).\n", true, ("", "", ""), new Dictionary<string, string>
             {
                 ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use grep -rn <pattern> $(git ls-files)",
@@ -502,10 +511,11 @@ internal static partial class CommandSpec
             {
                 ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; read .git/logs/HEAD",
             }),
-            ["remote"] = new("remote", "List remotes (there are none: this machine has no network)", "usage: git remote [-v]\n\nList remotes (there are none: this machine has no network).\n\n    -v, --verbose  also show each remote's address (there are none)\n", false, ("v", "", "verbose=v"), new Dictionary<string, string>
+            ["remote"] = new("remote", "List the remotes a copied clone names (this machine has no network to reach them)", "usage: git remote [-v]\n\nList the remotes a copied clone names (this machine has no network to reach them).\n\n    -v, --verbose  also show each remote's address\n", false, ("v", "", "verbose=v"), new Dictionary<string, string>
             {
                 ["noRemotes"] = "fatal: remotes are not available: this machine has no network. Commits stay in this machine's repository.",
             }),
+            ["repack"] = new("repack", "Pack loose objects (not available; packs written by real git can be read)", "usage: git repack\n\nPack loose objects (not available; packs written by real git can be read).\n", true, ("", "", ""), Empty),
             ["reset"] = new("reset", "Move the current branch to a commit, or unstage paths", "usage: git reset [--soft | --mixed | --hard] [-q] [<commit>]\n   or: git reset [-q] [<commit>] [--] <pathspec>...\n\nMove the current branch to a commit, or unstage paths.\n\n    --soft       move the branch only; keep the index and work tree\n    --mixed      move the branch and reset the index (the default)\n    --hard       move the branch and reset the index and work tree, discarding local changes\n    -q, --quiet  print nothing\n", false, ("q", "", "soft=\u0001,mixed=\u0002,hard=\u0003,quiet=q"), new Dictionary<string, string>
             {
                 ["headNowAt"] = "HEAD is now at {commit}",
@@ -576,6 +586,7 @@ internal static partial class CommandSpec
             {
                 ["onBranch"] = "On branch {branch}",
                 ["detachedAt"] = "HEAD detached at {commit}",
+                ["detachedFrom"] = "HEAD detached from {commit}",
                 ["noCommitsYet"] = "No commits yet",
                 ["initialCommit"] = "Initial commit",
                 ["unmergedHeader"] = "You have unmerged paths.\n  (fix conflicts and run \"git commit\")\n  (use \"git merge --abort\" to abort the merge)",
@@ -596,6 +607,16 @@ internal static partial class CommandSpec
                 ["nothingToCommitInitial"] = "nothing to commit (create/copy files and use \"git add\" to track)",
                 ["nothingToCommitClean"] = "nothing to commit, working tree clean",
                 ["noCommitsOnBranch"] = "No commits yet on {branch}",
+                ["upToDate"] = "Your branch is up to date with '{upstream}'.",
+                ["ahead"] = "Your branch is ahead of '{upstream}' by {count}.\n  (use \"git push\" to publish your local commits)",
+                ["behind"] = "Your branch is behind '{upstream}' by {count}, and can be fast-forwarded.\n  (use \"git pull\" to update your local branch)",
+                ["diverged"] = "Your branch and '{upstream}' have diverged,\nand have {ahead} and {behind} different commits each, respectively.\n  (use \"git pull\" if you want to integrate the remote branch with yours)",
+                ["upstreamGone"] = "Your branch is based on '{upstream}', but the upstream is gone.\n  (use \"git branch --unset-upstream\" to fixup)",
+                ["oneCommit"] = "1 commit",
+                ["commits"] = "{n} commits",
+                ["trackAhead"] = "ahead {n}",
+                ["trackBehind"] = "behind {n}",
+                ["trackGone"] = "gone",
                 ["labelNew"] = "new file:",
                 ["labelModified"] = "modified:",
                 ["labelDeleted"] = "deleted:",
