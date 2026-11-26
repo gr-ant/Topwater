@@ -4,11 +4,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { Shell } from '../src/index.js';
+import { COMMANDS } from '../src/spec.generated.js';
 
 type Option = { short?: string; long?: string[]; arg?: string; ports?: string[] };
 type Spec = {
   name: string; summary: string; parser: string; ports?: string[]; help?: string[]; version?: string; standardOptions?: boolean;
   shellBuiltin?: boolean; reportsAs?: string; usageExitCode?: number; tryHelp?: string[]; options?: Option[];
+  subcommands?: Record<string, { summary: string; unsupported?: boolean; options?: Option[]; ports?: string[] }>;
 };
 const dir = new URL('../../spec/', import.meta.url).pathname;
 const defaults = JSON.parse(readFileSync(dir + 'shell.json', 'utf8')).defaults as { version: string; help: string[]; tryHelp: string[] };
@@ -77,6 +79,34 @@ describe('options outside the spec are rejected', () => {
         const r = await sh.run(`cd /tmp && ${q(name)} ${arg} </dev/null`);
         expect(r.stderr, `${name} ${arg}`).toMatch(/invalid option|unrecognized option/);
       }
+    }, 60_000);
+  }
+});
+
+describe('subcommands come from the spec', () => {
+  // summary and help come from the table; every option listed for this port is accepted, others are refused
+  for (const [name, c] of specs) for (const [sub, s] of Object.entries(c.subcommands ?? {})) {
+    if (!(s.ports ?? ['ts']).includes('ts')) continue;
+    it(`${name} ${sub}`, async () => {
+      const table = COMMANDS.get(name)!.subcommands!.get(sub)!;
+      expect(table.summary).toBe(s.summary);
+      const sh = new Shell();
+      expect((await sh.run(`${name} help ${sub}`)).stdout).toBe(table.help);
+      expect((await sh.run(`${name} ${sub} --help`)).stdout).toBe(table.help);
+      if (s.unsupported) {
+        const r = await sh.run(`${name} ${sub}`);
+        expect(r.exitCode).toBe(128);
+        expect(r.stderr.startsWith('fatal: ')).toBe(true);
+        return;
+      }
+      for (const [arg, valued] of options(s as Spec)) {
+        const r = await new Shell().run(`cd /tmp && ${name} init -q r && cd r && ${name} ${sub} ${arg}${valued ? ' 1' : ''} </dev/null`);
+        expect(r.stderr, `${sub} ${arg}`).not.toMatch(/unknown option|unknown switch/);
+      }
+      if (['help', 'version', 'rev-parse', 'stash'].includes(sub)) return; // these read their own arguments
+      const r = await new Shell().run(`cd /tmp && ${name} init -q r && cd r && ${name} ${sub} --no-such-option </dev/null`);
+      expect(r.stderr).toBe(`error: unknown option \`no-such-option'\n${table.help}`);
+      expect(r.exitCode).toBe(129);
     }, 60_000);
   }
 });
