@@ -9,7 +9,7 @@ namespace Topwater;
 
 /// <summary>
 /// The web access a shell's <c>curl</c> and <c>wget</c> get through <see cref="Shell.AllowWeb"/>. Without one the machine has
-/// no network: every host fails to resolve. See "Web access" in docs/reference.md.
+/// no network: every host fails to resolve. See docs/web.md.
 /// </summary>
 public sealed class WebPolicy
 {

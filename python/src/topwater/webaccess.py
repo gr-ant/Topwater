@@ -1,5 +1,5 @@
 """The web access a shell's curl and wget get through Shell.allow_web(WebPolicy(...)). Without one the machine has no
-network: every host fails to resolve. See "Web access" in docs/reference.md.
+network: every host fails to resolve. See docs/web.md.
 
     shell.allow_web(WebPolicy(domains=["api.github.com", "*.wikipedia.org"], credentials={"api.github.com": lambda: "Bearer " + token}))
 
