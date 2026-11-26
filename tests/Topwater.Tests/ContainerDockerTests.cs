@@ -194,8 +194,12 @@ public class ContainerDockerTests(ITestOutputHelper output)
             var built = time.Elapsed;
             var result = await ContainerImport.FromImageAsync(tag);
             var size = long.Parse((await Docker("image", "inspect", "-f", "{{.Size}}", tag)).Trim());
-            var baseSize = long.Parse((await Docker("image", "inspect", "-f", "{{.Size}}", ContainerExport.DefaultBaseImage)).Trim());
-            output.WriteLine($"build {built.TotalSeconds:F1}s, import {(time.Elapsed - built).TotalSeconds:F1}s, image {size / 1e6:F1} MB ({(size - baseSize) / 1e3:F0} KB over {ContainerExport.DefaultBaseImage}), layer {context.Layer.Length / 1e3:F0} KB");
+            // diagnostics only: a BuildKit build pulls the base image without keeping a local copy, so it may not be there
+            long? baseSize = null;
+            try { baseSize = long.Parse((await Docker("image", "inspect", "-f", "{{.Size}}", ContainerExport.DefaultBaseImage)).Trim()); }
+            catch (Exception) { }
+            var over = baseSize is { } b ? $"{(size - b) / 1e3:F0} KB over {ContainerExport.DefaultBaseImage}" : $"{ContainerExport.DefaultBaseImage} not stored locally";
+            output.WriteLine($"build {built.TotalSeconds:F1}s, import {(time.Elapsed - built).TotalSeconds:F1}s, image {size / 1e6:F1} MB ({over}), layer {context.Layer.Length / 1e3:F0} KB");
 
             var back = new Shell(new ShellOptions { User = result.Snapshot.User });
             back.Restore(result.Snapshot);
