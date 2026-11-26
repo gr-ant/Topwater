@@ -1,12 +1,14 @@
 # Third-party notices
 
-Topwater is written from scratch (see the clean-room note in [spec/README.md](spec/README.md)). The text below is the
-one place where it reproduces material from another project.
+Topwater is written from scratch (see the clean-room note in
+[spec/README.md](https://github.com/gr-ant/Topwater/blob/main/spec/README.md)). The text below is the one place where
+it reproduces material from another project.
 
 ## jq
 
 `jq --help` in Topwater prints the opening of jq 1.7.1's own help text (the usage lines, the description and the
-example), kept in [spec/commands/jq.json](spec/commands/jq.json). jq is distributed under the MIT license:
+example), kept in [spec/commands/jq.json](https://github.com/gr-ant/Topwater/blob/main/spec/commands/jq.json). jq is
+distributed under the MIT license:
 
 ```
 Copyright (C) 2012 Stephen Dolan
