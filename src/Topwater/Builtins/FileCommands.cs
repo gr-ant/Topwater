@@ -423,7 +423,7 @@ internal static partial class Builtins
                     code = 1;
                     continue;
                 }
-                catch (ShellException e) when (e.Message.EndsWith("Permission denied") || e.Message.EndsWith("Operation not permitted"))
+                catch (ShellException e)
                 {
                     var why = Typed(e, s, src).Reason;
                     ctx.Stderr.WriteLine(move ? "mv: " + CommandSpec.Message("mv", "cannotMove", ("source", s), ("dest", shown), ("errno", why))

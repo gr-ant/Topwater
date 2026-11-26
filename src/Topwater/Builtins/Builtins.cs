@@ -182,14 +182,14 @@ internal static partial class Builtins
             {
                 int j = echo ? i + 2 : i + 1, k = j;
                 while (k < s.Length && k < j + 3 && IsOct(s[k])) k++;
-                sb.Append((char)((k > j ? Convert.ToInt32(s[j..k], 8) : 0) & 0xFF));
+                sb.Append(ByteChar((k > j ? Convert.ToInt32(s[j..k], 8) : 0) & 0xFF));
                 i = k - 1;
             }
             else if (n == 'x' && i + 2 < s.Length && Uri.IsHexDigit(s[i + 2]))
             {
                 int k = i + 2;
                 while (k < s.Length && k < i + 4 && Uri.IsHexDigit(s[k])) k++;
-                sb.Append((char)Convert.ToInt32(s[(i + 2)..k], 16));
+                sb.Append(ByteChar(Convert.ToInt32(s[(i + 2)..k], 16)));
                 i = k - 1;
             }
             else
@@ -205,6 +205,9 @@ internal static partial class Builtins
         }
         return sb.ToString();
     }
+
+    /// <summary>A byte value as a character: ASCII as is, 0x80-0xff as the escaped raw byte (<see cref="ByteText"/>), so <c>printf '\xd5'</c> writes one byte.</summary>
+    static char ByteChar(int b) => b < 0x80 ? (char)b : (char)(0xDC00 + b);
 
     /// <summary>Part of bash itself rather than a program in /usr/bin (for `type`, `command -v` and the "bash: " error prefix).</summary>
     internal static bool IsShellBuiltin(Shell shell, string name) => CommandSpec.Commands.TryGetValue(name, out var c) && c.ShellBuiltin && shell.IsBuiltin(name);

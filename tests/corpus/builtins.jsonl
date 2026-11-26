@@ -113,3 +113,4 @@
 {"id":"builtins-113","script":"local x=1; echo \"rc=$?\"","stdout":"rc=1\n","exitCode":0,"quiet":false}
 {"id":"builtins-114","script":"return 2>/dev/null; echo \"after return rc=$?\"","stdout":"after return rc=2\n","exitCode":0,"quiet":true}
 {"id":"builtins-115","script":"break; echo \"rc=$?\"","stdout":"rc=0\n","exitCode":0,"quiet":false}
+{"id":"builtins-116","script":"printf '\\x00\\x01\\xd5' > a; od -An -tx1 a; printf '\\101\\325\\377' | od -An -tx1; echo -e 'x\\0351' | od -An -tx1; printf '%b' '\\xc3\\xa9\\n'; v=$'\\xd5'; printf %s \"$v\" | wc -c","stdout":" 00 01 d5\n 41 d5 ff\n 78 e9 0a\né\n1\n","exitCode":0,"quiet":true,"tags":["printf","bytes"],"notes":"numeric escapes from 0x80 write that one byte, not its UTF-8 encoding (027-F7)"}

@@ -429,7 +429,8 @@ internal sealed class Lexer(string s, int firstLine = 1)
                 case >= '0' and <= '7':
                     int j = i - 1;
                     while (j < s.Length && j < i + 2 && IsOct(s[j])) j++;
-                    sb.Append((char)(Convert.ToInt32(s[(i - 1)..j], 8) & 0xFF));
+                    int b = Convert.ToInt32(s[(i - 1)..j], 8) & 0xFF;
+                    sb.Append(b < 0x80 ? (char)b : (char)(0xDC00 + b)); // a raw byte (ByteText), as \xHH
                     i = j;
                     if (sb[^1] == '\0') SkipToQuote(ref i, sb);
                     break;
@@ -438,7 +439,8 @@ internal sealed class Lexer(string s, int firstLine = 1)
                     while (k < s.Length && k < i + limit && Uri.IsHexDigit(s[k])) k++;
                     if (k == i) { sb.Append('\\').Append(n); break; }
                     long code = Convert.ToInt64(s[i..k], 16);
-                    sb.Append(code <= 0x10FFFF && code is < 0xD800 or > 0xDFFF ? char.ConvertFromUtf32((int)code) : "\uFFFD");
+                    sb.Append(n == 'x' && code >= 0x80 ? ((char)(0xDC00 + code)).ToString() // \xHH is a byte, not a character (ByteText)
+                        : code <= 0x10FFFF && code is < 0xD800 or > 0xDFFF ? char.ConvertFromUtf32((int)code) : "\uFFFD");
                     i = k;
                     if (code == 0) SkipToQuote(ref i, sb);
                     break;

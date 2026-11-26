@@ -205,6 +205,11 @@ def inputs(ctx, files, on_error, raw: bool = False, quiet: bool = False):
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "a": "\a", "b": "\b", "f": "\f", "v": "\v", "e": "\x1b", '"': '"'}
 
 
+def _byte_char(b: int) -> str:
+    """A byte value as a character: ASCII as is, 0x80-0xff as the escaped raw byte (bytetext), so `printf '\\xd5'` writes one byte."""
+    return chr(b) if b < 0x80 else chr(0xDC00 + b)
+
+
 def unescape(s: str, keep_unknown: bool = False, echo: bool = False) -> str:
     """Backslash escapes: \\n \\t ..., \\xHH, and octal (\\NNN, or \\0NNN for echo -e)."""
     out = []
@@ -220,13 +225,13 @@ def unescape(s: str, keep_unknown: bool = False, echo: bool = False) -> str:
             k = j
             while k < len(s) and k < j + 3 and s[k] in "01234567":
                 k += 1
-            out.append(chr(int(s[j:k] or "0", 8) & 0xFF))
+            out.append(_byte_char(int(s[j:k] or "0", 8) & 0xFF))
             i = k
         elif n == "x" and i + 2 < len(s) and s[i + 2] in "0123456789abcdefABCDEF":
             k = i + 2
             while k < len(s) and k < i + 4 and s[k] in "0123456789abcdefABCDEF":
                 k += 1
-            out.append(chr(int(s[i + 2:k], 16)))
+            out.append(_byte_char(int(s[i + 2:k], 16)))
             i = k
         else:
             out.append(_ESCAPES.get(n, ("\\" + n) if keep_unknown else n))

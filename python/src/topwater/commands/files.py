@@ -534,8 +534,6 @@ def _copy_or_move(ctx):
                 ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "errorWriting", file=shown, errno=NO_SPACE))
                 code = 1
                 continue
-            if not (str(e).endswith("Permission denied") or str(e).endswith("Operation not permitted")):
-                raise
             why = typed(str(e), s, src)[1]
             ctx.error("mv: " + spec_message("mv", "cannotMove", source=s, dest=shown, errno=why) if move
                       else "cp: " + spec_message("cp", "cannotCreate", kind="directory" if ctx.fs.is_dir(src) else "regular file", file=shown, errno=why))

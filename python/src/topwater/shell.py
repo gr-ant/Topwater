@@ -1380,8 +1380,11 @@ class Shell:
             raise ShellError(f"{target}: Is a directory")
         if self.noclobber and r.op in (">", "&>") and self.fs.is_file(path):
             raise ShellError(diagnostic("noclobber", target=target))
-        if not r.op.endswith(">>") or not self.fs.exists(path):
-            self.fs.write_text(path, "")  # truncate on open, like bash
+        try:
+            if not r.op.endswith(">>") or not self.fs.exists(path):
+                self.fs.write_text(path, "")  # truncate on open, like bash
+        except ShellError as e:
+            raise ShellError(f"{target}: {str(e).rsplit(': ', 1)[-1]}") from None
         return open_(path)
 
     def _descriptor(self, n: int, io_: _Io):

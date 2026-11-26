@@ -573,7 +573,8 @@ class Lexer:
                 j = i - 1
                 while j < len(s) and j < i + 2 and s[j] in "01234567":
                     j += 1
-                out.append(chr(int(s[i - 1:j], 8) & 0xFF))
+                b = int(s[i - 1:j], 8) & 0xFF
+                out.append(chr(b) if b < 0x80 else chr(0xDC00 + b))  # a raw byte (bytetext), as \xHH
                 i = j
                 if out[-1] == "\0":
                     i = self._skip_to_quote(i, out)
@@ -586,7 +587,8 @@ class Lexer:
                     out.append("\\" + n)
                 else:
                     code = int(s[i:j], 16)
-                    out.append(chr(code) if code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd")
+                    out.append(chr(0xDC00 + code) if n == "x" and code >= 0x80  # \xHH is a byte, not a character (bytetext)
+                               else chr(code) if code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd")
                     i = j
                     if code == 0:
                         i = self._skip_to_quote(i, out)
