@@ -2525,7 +2525,7 @@ def guess_remote(repo: Repo, name: str) -> str | None:
     """refs/remotes/<remote>/<name> when exactly one remote has a branch called name (git checkout <name> then creates it)."""
     if not valid_branch_name(name):
         return None
-    configured = {k[7:].rpartition(".")[0] for k, _, _ in repo.config().items() if k.startswith("remote.") and k.endswith((".url", ".fetch"))}
+    configured = {k[7:].rpartition(".")[0] for k, _, _ in repo.config().items() if k.startswith("remote.") and k.endswith(".fetch")}
     hits = [n for n, sha, sym in remote_branches(repo) if sym is None and n.partition("/")[2] == name and n.partition("/")[0] in configured]
     if len(hits) > 1:
         raise sub_fatal("checkout", "matchedMultiple", name=name, count=str(len(hits)))

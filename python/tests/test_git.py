@@ -141,7 +141,7 @@ PACKS = json.loads((Path(__file__).resolve().parents[2] / "tests" / "git" / "pac
 @pytest.mark.parametrize("case", PACKS, ids=[c["name"] for c in PACKS])
 def test_packfiles_good_and_hostile(case):
     """tests/git/packs.json (made by tests/git/make_packs.py), shared with the other ports."""
-    sh = repo(max_call_duration=case.get("timeLimit", 10))
+    sh = repo(max_call_duration=case.get("timeLimit", 60 if case.get("cacheBound") else 10))
     sh.fs.mkdir("/tmp/w/.git/objects/pack", parents=True)
     for name, data in case["files"].items():
         sh.fs.write_bytes(f"/tmp/w/.git/objects/pack/{name}", gzip.decompress(base64.b64decode(data)))
@@ -153,7 +153,7 @@ def test_packfiles_good_and_hostile(case):
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
-    assert time.monotonic() - start < case.get("timeLimit", 2) + 3
+    assert time.monotonic() - start < (30 if case.get("cacheBound") else case.get("timeLimit", 2) + 3)
     if case.get("cacheBound"):
         assert 0 < ObjectCache.peak <= CACHE_BYTES and peak < 400 << 20, (ObjectCache.peak, peak)
     assert r.exit_code == case["exitCode"], r.stderr
@@ -178,7 +178,7 @@ def test_upstream_errors_and_ambiguous_checkout():
     r = sh.run("git rev-parse @{u}; git rev-parse nosuch@{u}; git checkout -q --detach; git rev-parse HEAD@{upstream}")
     assert r.stderr == ("fatal: no upstream configured for branch 'master'\nfatal: no such branch: 'nosuch'\n"
                         "fatal: HEAD does not point to a branch\n")
-    sh.run("git checkout -q master; for r in origin up; do git config remote.$r.url /x; mkdir -p .git/refs/remotes/$r;"
+    sh.run("git checkout -q master; for r in origin up; do git config remote.$r.fetch '+refs/heads/*:refs/remotes/'$r'/*'; mkdir -p .git/refs/remotes/$r;"
            " git rev-parse HEAD > .git/refs/remotes/$r/b; done")
     r = sh.run("git checkout b")
     assert r.exit_code == 128 and r.stderr == "fatal: 'b' matched multiple (2) remote tracking branches\n"

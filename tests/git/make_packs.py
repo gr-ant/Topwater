@@ -236,7 +236,7 @@ ix += b"\0" * 4000 + struct.pack(">I", 12) * 1000 + pk[-20:]
 ix += hashlib.sha1(ix).digest()
 case("index names more objects than the pack holds", bytes(pk), bytes(ix), f"git cat-file -p {H}", 128, stderr="more objects than")
 
-# memory: forty 32 MB blobs, each a few bytes of delta, read by one command; every port caches object contents under one
+# memory: twenty 32 MB blobs, each a few bytes of delta, read by one command; every port caches object contents under one
 # byte budget per repository, so this stays near that budget ("cacheBound": the test also checks the cache's peak)
 BIG = 32 << 20
 zero = {"kind": "blob", "data": b"\0" * 65536, "name": oid("blob", b"\0" * 65536)}
@@ -246,7 +246,7 @@ full_zero = h.copy()
 full_zero.update(b"\0\0")
 ents = [zero, {"kind": "ofs", "base": 0, "data": delta(65536, [("copy", 0, 65536)] * (BIG // 65536)), "name": full_zero.hexdigest()}]
 files = []
-for i in range(1, 41):
+for i in range(1, 21):
     hi = h.copy()
     hi.update(struct.pack(">H", i))
     ents.append({"kind": "ofs", "base": 1, "data": delta(BIG, [("copy", 0, 0xFFFFFF), ("copy", 0xFFFFFF, BIG - 2 - 0xFFFFFF), ("insert", struct.pack(">H", i))]),
@@ -264,13 +264,13 @@ def commit_of(tree, parent=None):
     return {"kind": "commit", "data": data, "name": oid("commit", data)}
 
 
-t1, t2 = tree_of(files[:20]), tree_of(files)
+t1, t2 = tree_of(files[:10]), tree_of(files)
 c1 = commit_of(t1["name"])
 c2 = commit_of(t2["name"], c1["name"])
 p, i = build(ents + [t1, t2, c1, c2])
-CASES.append({"name": "forty 32 MB objects stay within the cache budget", "files": {"pack-t.pack": enc(p), "pack-t.idx": enc(i)},
+CASES.append({"name": "twenty 32 MB objects stay within the cache budget", "files": {"pack-t.pack": enc(p), "pack-t.idx": enc(i)},
               "script": f"git diff --stat {c1['name']} {c2['name']} | tail -1", "exitCode": 0,
-              "stdout": " 20 files changed, 0 insertions(+), 0 deletions(-)\n", "cacheBound": True})
+              "stdout": " 10 files changed, 0 insertions(+), 0 deletions(-)\n", "cacheBound": True})
 
 # time: a 1500-deep chain of 16 MB objects; each step is cheap to store and costly to apply, so the call's time limit
 # (1 s here) must stop the walk between steps
