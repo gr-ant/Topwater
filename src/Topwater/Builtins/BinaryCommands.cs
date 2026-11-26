@@ -141,8 +141,9 @@ internal static partial class Builtins
         shell.Register("od", ctx =>
         {
             var a = Args.Parse(ctx.Args, CommandSpec.Of("od"));
-            int code = 0;
-            var data = Slice(ReadAll(ctx, a.Positional, () => code = 1), Num(a.Value('j') ?? "0"), a.Value('N') is { } n ? Num(n) : null);
+            int code = 0, failed = 0;
+            var data = Slice(ReadAll(ctx, a.Positional, () => { code = 1; failed++; }), Num(a.Value('j') ?? "0"), a.Value('N') is { } n ? Num(n) : null);
+            if (failed > 0 && failed == a.Positional.Count) return 1; // no input could be read: GNU od prints no offset either
             var fmt = a.Value('t') ?? (a.Has('c') ? "c" : a.Has('x') ? "x2" : "o2");
             fmt = fmt switch { "x" => "x4", "o" => "o4", _ => fmt };
             Func<byte[], string> cells;
