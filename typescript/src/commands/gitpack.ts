@@ -8,8 +8,26 @@ import { GitError, fatal, msg, type Values } from './gitcore.js';
 
 export const MAX_CHAIN = 4096; // deltas on top of one base (real git refuses to write deeper than 4095)
 export const MAX_PACKS = 256;
-const CACHE_BYTES = 32 << 20; // inflated objects kept for reuse as delta bases
+export const MAX_NAMES = 1_000_000; // objects named by all the packs of one repository
+export const CACHE_BYTES = 64 << 20; // object contents one repository keeps for reuse, all caches together
 const KINDS: Record<number, string> = { 1: 'commit', 2: 'tree', 3: 'blob', 4: 'tag' };
+
+/** Objects, commits and delta bases one command keeps for reuse, under a single byte budget per repository: an entry
+ * over a quarter of it is not kept, and the whole cache is dropped when the next entry would not fit. */
+export class ObjectCache {
+  static peak = 0; // the most any cache has held, for tests
+  private items = new Map<string, unknown>();
+  private used = 0;
+  constructor(readonly budget = CACHE_BYTES) {}
+  get<T>(key: string): T | undefined { return this.items.get(key) as T | undefined; }
+  put(key: string, value: unknown, size: number): void {
+    if (size > this.budget / 4) return;
+    if (this.used + size > this.budget) { this.items.clear(); this.used = 0; }
+    this.items.set(key, value);
+    this.used += size;
+    if (this.used > ObjectCache.peak) ObjectCache.peak = this.used;
+  }
+}
 
 /** A broken object entry; the caller names the object it was looking for. */
 export class Corrupt extends Error {}
@@ -21,10 +39,8 @@ const sameBytes = (x: Uint8Array, y: Uint8Array) => x.length === y.length && x.e
 export class Pack {
   readonly names: string[] = [];
   readonly offsets = new Map<string, number>();
-  private cache = new Map<number, [string, Uint8Array]>();
-  private cached = 0;
-
-  constructor(readonly path: string, idx: Uint8Array, readonly pack: Uint8Array, readonly limit: number, readonly check: () => void) {
+  constructor(readonly path: string, idx: Uint8Array, readonly pack: Uint8Array, readonly limit: number, readonly check: () => void,
+    private readonly cache: ObjectCache) {
     const ipath = path.slice(0, -5) + '.idx';
     const iv = new DataView(idx.buffer, idx.byteOffset, idx.byteLength);
     if (idx.length < 1072 || idx[0] !== 0xff || idx[1] !== 0x74 || idx[2] !== 0x4f || idx[3] !== 0x63) throw badPack(ipath, 'packBadSignature');
@@ -41,6 +57,7 @@ export class Pack {
     if (version !== 2 && version !== 3) throw badPack(path, 'packBadVersion', { version: String(version) });
     if (sha1(pack.subarray(0, pack.length - 20)) !== hex(pack.subarray(pack.length - 20))) throw badPack(path, 'packBadChecksum');
     if (count !== n || !sameBytes(idx.subarray(idx.length - 40, idx.length - 20), pack.subarray(pack.length - 20))) throw badPack(path, 'packNoMatch');
+    if (n * 2 > pack.length - 32) throw badPack(ipath, 'packTooMany'); // every entry takes at least two bytes
     const nbig = large / 8, end = pack.length - 20;
     for (let i = 0; i < n; i++) {
       if ((i & 1023) === 0) check();
@@ -84,7 +101,7 @@ export class Pack {
     let kind: string, data: Uint8Array;
     for (;;) {
       this.check();
-      const hit = this.cache.get(off);
+      const hit = this.cache.get<[string, Uint8Array]>(`${this.path}:${off}`);
       if (hit) { [kind, data] = hit; break; }
       if (seen.has(off) || chain.length >= MAX_CHAIN) throw new Corrupt();
       seen.add(off);
@@ -127,6 +144,7 @@ export class Pack {
     }
     for (let i = chain.length - 1; i >= 0; i--) {
       const [entry, pos, size] = chain[i];
+      this.check(); // each step can copy up to the string limit
       data = applyDelta(data, this.inflate(pos, size), this.limit, this.check);
       this.remember(entry, kind, data);
     }
@@ -148,8 +166,7 @@ export class Pack {
   }
 
   private remember(off: number, kind: string, data: Uint8Array): void {
-    if (this.cached + data.length > CACHE_BYTES) { this.cache.clear(); this.cached = 0; }
-    if (data.length <= CACHE_BYTES) { this.cache.set(off, [kind, data]); this.cached += data.length; }
+    this.cache.put(`${this.path}:${off}`, [kind, data], data.length);
   }
 }
 

@@ -14,7 +14,7 @@ import {
   lstripChars, mergeLines, msg, objectId, parseDate, parseIdent, parseTree, partition, readIndex, rjust, rstripChars, sortCp,
   sortPaths, splitLines, stripChars, treeBytes, unified, validKey, writeIndex, type TreeEntry, type Values,
 } from './gitcore.js';
-import { MAX_PACKS, Corrupt, Pack } from './gitpack.js';
+import { MAX_NAMES, MAX_PACKS, Corrupt, ObjectCache, Pack } from './gitpack.js';
 
 const SPEC = (): CommandSpec => COMMANDS.get('git')!;
 const subSpec = (sub: string): SubcommandSpec => SPEC().subcommands!.get(sub)!;
@@ -103,13 +103,17 @@ function parse(sub: string, args: string[]): Opts {
 
 // ---------- the repository ----------
 
+/** A packed-refs name git could have written: under refs/, the characters loose refs allow, no empty, '.'-led or
+ * '..' component and no .lock name, so nothing read from the file can name a path outside refs/. */
+const packedNameOk = (name: string) => name.startsWith('refs/') && /^[A-Za-z0-9_./-]+$/.test(name)
+  && name.split('/').every(c => c !== '' && !c.startsWith('.') && !c.endsWith('.lock'));
+
 class Repo {
   readonly ctx: CommandContext;
   readonly fs: VirtualFileSystem;
   readonly limit: number;
-  private objects = new Map<string, [string, Uint8Array]>();
+  private cache = new ObjectCache(); // objects, commits and pack delta bases, under one byte budget
   private packList: Pack[] | null = null;
-  private commits = new Map<string, Commit>();
   private cfg: Config | null = null;
   private ignores = new Map<string, IgnoreRules | null>();
   private excludes: IgnoreRules[] | null = null;
@@ -149,7 +153,7 @@ class Repo {
 
   // --- objects ---
   obj(sha: string): [string, Uint8Array] {
-    const known = this.objects.get(sha);
+    const known = this.cache.get<[string, Uint8Array]>(sha);
     if (known) return known;
     if (this.packs().some(p => p.offsets.has(sha))) return this.packed(sha);
     const raw = SHA.test(sha) ? this.gread(`objects/${sha.slice(0, 2)}/${sha.slice(2)}`) : null;
@@ -168,7 +172,7 @@ class Repo {
       throw fatal('corruptObject', { object: sha });
     const result: [string, Uint8Array] = [head[0], data.subarray(nul + 1)];
     if (objectId(...result) !== sha) throw fatal('corruptObject', { object: sha });
-    if (this.objects.size < 4096) this.objects.set(sha, result);
+    this.cache.put(sha, result, result[1].length);
     return result;
   }
   /** The packs under objects/pack that have an index, loaded and verified on first use. */
@@ -181,7 +185,9 @@ class Repo {
       for (const name of names) {
         const pack = this.gread(`${d}/${name.slice(0, -4)}.pack`);
         // like git, an index without its pack is skipped
-        if (pack !== null) list.push(new Pack(this.gpath(`${d}/${name.slice(0, -4)}.pack`), this.gread(`${d}/${name}`) ?? new Uint8Array(0), pack, this.limit, () => this.ctx.checkTime()));
+        if (pack === null) continue;
+        list.push(new Pack(this.gpath(`${d}/${name.slice(0, -4)}.pack`), this.gread(`${d}/${name}`) ?? new Uint8Array(0), pack, this.limit, () => this.ctx.checkTime(), this.cache));
+        if (list.reduce((n, p) => n + p.names.length, 0) > MAX_NAMES) throw fatal('tooLarge', { what: this.gpath(d) });
       }
       this.packList = list;
     }
@@ -198,7 +204,7 @@ class Repo {
         throw e;
       }
       if (objectId(...result) !== sha) throw fatal('corruptObject', { object: sha });
-      if (this.objects.size < 4096) this.objects.set(sha, result);
+      this.cache.put(sha, result, result[1].length);
       return result;
     }
     throw fatal('missingObject', { object: sha });
@@ -217,7 +223,7 @@ class Repo {
     return data;
   }
   commit(sha: string): Commit {
-    const c = this.commits.get(sha);
+    const c = this.cache.get<Commit>('commit:' + sha);
     if (c) return c;
     const data = decodeBytes(this.typed(sha, 'commit'));
     const [head, , message] = partition(data, '\n\n');
@@ -232,7 +238,7 @@ class Repo {
     }
     if (!tree || !SHA.test(tree) || parents.some(p => !SHA.test(p))) throw fatal('corruptObject', { object: sha });
     const made = new Commit(sha, tree, parents, author, committer, message);
-    this.commits.set(sha, made);
+    this.cache.put('commit:' + sha, made, data.length + 200);
     return made;
   }
   tree(sha: string): TreeEntry[] { return parseTree(this.typed(sha, 'tree'), sha); }
@@ -289,7 +295,7 @@ class Repo {
     const out = new Map<string, string>();
     for (const line of (this.gtext('packed-refs') ?? '').split('\n')) {
       const parts = line.split(' ');
-      if (parts.length === 2 && SHA.test(parts[0])) out.set(parts[1], parts[0]);
+      if (parts.length === 2 && SHA.test(parts[0]) && packedNameOk(parts[1])) out.set(parts[1], parts[0]);
     }
     return out;
   }
@@ -603,7 +609,7 @@ function resolveBase(repo: Repo, name: string): string | null {
   }
   const up = /^(.*)@\{(?:u|upstream)\}$/s.exec(name);
   if (up) {
-    const u = upstream(repo, up[1] || repo.branch() || '');
+    const u = upstream(repo, upstreamBranch(repo, up[1]));
     return u ? repo.readRef(u[1]) : null;
   }
   for (const r of [name, 'refs/' + name, 'refs/tags/' + name, 'refs/heads/' + name, 'refs/remotes/' + name, 'refs/remotes/' + name + '/HEAD']) {
@@ -722,6 +728,21 @@ function upstream(repo: Repo, branch: string): [string, string] | null {
   if (remote === '.') return [merge.slice(11), merge];
   // shortcut: assumes the default fetch refspec (refs/remotes/<remote>/*) that clone writes; read remote.<name>.fetch if others show up
   return [`${remote}/${merge.slice(11)}`, `refs/remotes/${remote}/${merge.slice(11)}`];
+}
+
+/** The branch <name>@{u} asks about (HEAD and '' mean the current one); refuses as git does when there is none. */
+function upstreamBranch(repo: Repo, name: string): string {
+  let b: string;
+  if (name === '' || name === 'HEAD' || name === '@') {
+    const cur = repo.branch();
+    if (cur === null) throw fatal('headNotBranch');
+    b = cur;
+  } else {
+    b = name;
+    if (repo.readRef('refs/heads/' + b) === null) throw fatal('noSuchBranch', { name: b });
+  }
+  if (upstream(repo, b) === null) throw fatal('noUpstream', { branch: b });
+  return b;
 }
 
 /** [upstream name, commits ahead, commits behind, upstream gone] for a branch with an upstream. */
@@ -2233,8 +2254,18 @@ function setTracking(g: Git, repo: Repo, branch: string, ref: string, quiet: boo
 /** refs/remotes/<remote>/<name> when exactly one remote has a branch called name (git checkout <name> then creates it). */
 function guessRemote(repo: Repo, name: string): string | null {
   if (!validBranchName(name)) return null;
-  const hits = remoteBranches(repo).filter(([n, , sym]) => sym === null && partition(n, '/')[2] === name).map(r => r[0]);
-  return hits.length === 1 ? 'refs/remotes/' + hits[0] : null;
+  const configured = new Set(repo.config().items().map(([k]) => k).filter(k => k.startsWith('remote.') && k.endsWith('.fetch'))
+    .map(k => k.slice(7, k.lastIndexOf('.'))));
+  const hits = remoteBranches(repo).filter(([n, , sym]) => sym === null && partition(n, '/')[2] === name && configured.has(partition(n, '/')[0])).map(r => r[0]);
+  if (hits.length > 1) throw subFatal('checkout', 'matchedMultiple', { name, count: String(hits.length) });
+  return hits.length ? 'refs/remotes/' + hits[0] : null;
+}
+
+/** name is a file in the work tree or the index, so 'git checkout name' could mean it. */
+function isWorkPath(repo: Repo, name: string): boolean {
+  let rel: string;
+  try { rel = repo.fromUser(name); } catch (e) { if (e instanceof GitError) return false; throw e; }
+  return repo.stage0().has(rel) || repo.fs.exists(repo.wt(rel), false);
 }
 
 /** checkout [tree-ish] -- paths / restore: copies paths from a commit (or the index) into the index and/or work tree. */
@@ -2324,6 +2355,7 @@ function gitCheckout(g: Git, args: string[]): number {
   }
   if (o.has('\x01')) throw fatal('badRevision', { rev: target });
   const guess = o.args.length === 1 && !o.dashdash ? guessRemote(repo, target) : null;
+  if (guess && isWorkPath(repo, target)) throw subFatal('checkout', 'fileOrBranch', { name: target, upstream: guess.slice(13) });
   if (guess) return moveHead(g, repo, 'refs/heads/' + target, repo.readRef(guess), guess.slice(13), force, quiet, target, false, false, guess);
   return checkoutPaths(g, repo, null, o.args, 'checkout', false, true, quiet);
 }
@@ -3006,7 +3038,7 @@ function gitRevParse(g: Git, args: string[]): number {
       let name: string | null = null;
       const upOf = /^(.*)@\{(?:u|upstream)\}$/s.exec(a);
       if (upOf) {
-        const up = upstream(r, upOf[1] || r.branch() || '');
+        const up = upstream(r, upstreamBranch(r, upOf[1]));
         name = up ? (abbrevRef ? up[0] : up[1]) : null;
       } else if (a === 'HEAD' || a === '@') {
         const ref = r.headRef();

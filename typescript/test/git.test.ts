@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { Shell, type ShellOptions } from '../src/index.js';
 import { sha1 } from '../src/sha1.js';
 import { zlibSync } from '../src/compress.js';
+import { CACHE_BYTES, ObjectCache } from '../src/commands/gitpack.js';
 
 const IDENT = 'export GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@example.com GIT_COMMITTER_NAME=A GIT_COMMITTER_EMAIL=a@example.com ' +
   "GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' GIT_COMMITTER_DATE='2026-01-02T03:04:05Z'";
@@ -63,26 +64,61 @@ function buildPack(objs: PackObject[]): [Uint8Array, Uint8Array] {
   return [pack, idx];
 }
 
-const PACKS: { name: string; files: Record<string, string>; script: string; exitCode: number; stdout?: string; stderr?: string }[] =
+const PACKS: { name: string; files: Record<string, string>; script: string; exitCode: number; stdout?: string; stderr?: string;
+  timeLimit?: number; cacheBound?: boolean }[] =
   JSON.parse(readFileSync(new URL('../../tests/git/packs.json', import.meta.url), 'utf8'));
 
 describe('packfiles (tests/git/packs.json, shared with the other ports)', () => {
   for (const c of PACKS) {
     it(c.name, async () => {
-      const sh = await repo({ maxCallDurationMs: 10_000 });
+      const sh = await repo({ maxCallDurationMs: (c.cacheBound ? 60 : c.timeLimit ?? 10) * 1000 });
       sh.fs.mkdir('/tmp/w/.git/objects/pack', true);
       for (const [name, data] of Object.entries(c.files)) sh.fs.writeBytes(`/tmp/w/.git/objects/pack/${name}`, zlib.gunzipSync(Buffer.from(data, 'base64')));
+      ObjectCache.peak = 0;
       const start = Date.now();
       const r = await sh.run(c.script);
-      expect(Date.now() - start).toBeLessThan(5000);
+      // the cache-budget case hashes hundreds of MB of objects: slow under load, and plain JavaScript SHA-1 runs about 200 MB/s
+      expect(Date.now() - start).toBeLessThan(c.cacheBound ? 30_000 : ((c.timeLimit ?? 2) + 3) * 1000);
+      if (c.cacheBound) {
+        expect(ObjectCache.peak).toBeGreaterThan(0);
+        expect(ObjectCache.peak).toBeLessThanOrEqual(CACHE_BYTES);
+      }
       expect(r.exitCode, r.stderr).toBe(c.exitCode);
       if (c.stdout !== undefined) expect(r.stdout).toBe(c.stdout);
       if (c.stderr !== undefined) {
         expect(r.stderr).toContain(c.stderr);
         expect(r.stderr.startsWith('fatal: ')).toBe(true);
       }
-    });
+    }, 60_000);
   }
+});
+
+describe('packed-refs and upstreams', () => {
+  it('ignores packed-refs names that leave refs/', async () => {
+    const sh = await repo();
+    await sh.run("s=$(git rev-parse HEAD); printf '%s refs/heads/../../outside\\n%s refs/remotes/../x\\n%s refs/remotes/o/cr\\r\\n"
+      + "%s refs/tags/.hidden\\n%s refs/heads/ok\\n' $s $s $s $s $s > .git/packed-refs");
+    let r = await sh.run('git branch -a; git log --oneline --decorate -1; git tag');
+    expect(r.exitCode).toBe(0);
+    for (const bad of ['..', 'hidden', '\r']) expect(r.stdout).not.toContain(bad);
+    expect(r.stdout).toContain('ok');
+    r = await sh.run('git checkout x; echo $?; cat .git/config');
+    expect(r.stdout.startsWith('1\n')).toBe(true);
+    expect(r.stdout).not.toContain('remote = ..');
+  });
+
+  it('explains @{u} failures and refuses ambiguous remote branch names', async () => {
+    const sh = await repo();
+    let r = await sh.run('git rev-parse @{u}; git rev-parse nosuch@{u}; git checkout -q --detach; git rev-parse HEAD@{upstream}');
+    expect(r.stderr).toBe("fatal: no upstream configured for branch 'master'\nfatal: no such branch: 'nosuch'\nfatal: HEAD does not point to a branch\n");
+    await sh.run('git checkout -q master; for r in origin up; do git config remote.$r.fetch "+refs/heads/*:refs/remotes/$r/*"; mkdir -p .git/refs/remotes/$r; git rev-parse HEAD > .git/refs/remotes/$r/b; done');
+    r = await sh.run('git checkout b');
+    expect([r.exitCode, r.stderr]).toEqual([128, "fatal: 'b' matched multiple (2) remote tracking branches\n"]);
+    await sh.run('rm -r .git/refs/remotes/up; echo f > b');
+    r = await sh.run('git checkout b');
+    expect(r.exitCode).toBe(128);
+    expect(r.stderr).toContain('could be both a local file and a tracking branch');
+  });
 });
 
 const commitBody = (tree: string) => Buffer.from(`tree ${tree}\nauthor A <a@b> 1 +0000\ncommitter A <a@b> 1 +0000\n\nx\n`);
