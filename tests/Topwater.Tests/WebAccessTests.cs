@@ -300,6 +300,32 @@ public class WebAccessTests
         Assert.Equal("curl: (7) Topwater replay: GET http://api.test/hello is not in the recording\n", r.Stderr);
     }
 
+    /// <summary>The calls in recordings/web-from-csharp.topwater, which the Python and TypeScript ports load and replay too.</summary>
+    internal static readonly string[] WebScenario =
+    [
+        "curl -s http://api.test/json",
+        "curl -sL -o page http://api.test/redirect; wget -q http://api.test/gzip; cat page; wc -c < gzip",
+        "curl -sS http://nope.test/; echo $?",
+    ];
+
+    [Fact]
+    public async Task ARecordingFromThisPortReplays()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "recordings", "web-from-csharp.topwater");
+        if (Environment.GetEnvironmentVariable("TOPWATER_WRITE_FIXTURES") != null)
+        {
+            var sh = new Shell(new ShellOptions { StartTime = new DateTimeOffset(2026, 11, 25, 9, 0, 0, TimeSpan.Zero), RandomSeed = 3 }).AllowWeb(FixturePolicy(new FixtureHandler()));
+            var recorder = sh.StartRecording(new RecordingOptions { Metadata = { ["source"] = "csharp port", ["task"] = "web fixture" } });
+            foreach (var c in WebScenario) await sh.RunAsync(c);
+            recorder.Stop();
+            recorder.Save(path);
+        }
+        var rec = Recording.Load(path);
+        Assert.Equal(WebScenario, rec.Calls.Select(c => c.Command));
+        var report = await rec.ReplayAsync();
+        Assert.True(report.Matches, report.ToString());
+    }
+
     [Fact]
     public async Task ARecordingKeepsNoCredential()
     {
