@@ -41,6 +41,7 @@ sealed class Machine
     public static Machine Open(MachineOptions options, TextWriter log)
     {
         var shell = new Shell(options.ToShellOptions());
+        RefuseHistory(options.State, shell.Options);
         var start = options.State is { } s && File.Exists(s) ? s : options.From;
         if (start is { } state)
         {
@@ -56,6 +57,28 @@ sealed class Machine
         }
         foreach (var (host, vfs) in options.Imports) Import(shell, host, vfs);
         return new Machine(options, shell, log);
+    }
+
+    /// <summary>
+    /// A state file is rewritten after every command as the machine alone, so a recording there would lose its history
+    /// and checkpoints: refused, pointing at the ways that leave it as it is.
+    /// </summary>
+    public static void RefuseHistory(string? state, ShellOptions limits)
+    {
+        if (state == null || !File.Exists(state)) return;
+        bool history;
+        try
+        {
+            using var file = File.OpenRead(state);
+            history = ShellSnapshot.HasHistory(file, limits);
+        }
+        catch (Exception e) when (e is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException)
+        {
+            throw new CliException($"{state}: {e.Message}");
+        }
+        if (history)
+            throw new CliException($"{state} is a recording; --state would overwrite it with the machine alone and lose its history. " +
+                $"Start from it with --from {state} (never written), or copy its machine into a new state file with: topwater import {state} --state NEW");
     }
 
     /// <summary>Writes the state file, if there is one. Called after every command so a killed process loses at most one.</summary>

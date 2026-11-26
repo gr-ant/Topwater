@@ -215,7 +215,7 @@ public sealed class CliTests : IDisposable
         Assert.Contains("history   6 calls, 3 checkpoints", (await Cli("snapshot", "info", P("basics.topwater"))).Out);
         Assert.Equal(0, (await Cli("import", Recordings("basics.jsonl"), "--state", P("b.topwater"))).Code);
         Assert.Equal("north 220.00\n", (await Cli("run", "--state", P("b.topwater"), "head -1 ~/report.txt")).Out);
-        Assert.Contains("has history; --import", (await Cli("export", "--from", P("basics.topwater"), "--import", $"{_dir}:/x", P("y.topwater"))).Err);
+        Assert.Contains("has history, which is written as it is", (await Cli("export", "--from", P("basics.topwater"), "--import", $"{_dir}:/x", P("y.topwater"))).Err);
 
         // replay: exit 0 when every call matches, 1 with the report when one doesn't
         var replay = await Cli("replay", P("basics.topwater"));
@@ -229,6 +229,17 @@ public sealed class CliTests : IDisposable
         Assert.Equal(1, bad.Code);
         Assert.Contains("5/6 calls match", bad.Out);
         Assert.Contains("stdout line 1: expected \"changed\"", bad.Out);
+        // a recording as --state would be rewritten as the machine alone: refused, the file untouched
+        var before = File.ReadAllBytes(P("basics.topwater"));
+        var run = await Cli("run", "--state", P("basics.topwater"), "echo hi");
+        Assert.Equal(2, run.Code);
+        Assert.Contains("--from", run.Err);
+        Assert.Equal(2, (await Cli("import", P("basics.topwater"), "--state", P("basics.topwater"))).Code);
+        Assert.Equal(before, File.ReadAllBytes(P("basics.topwater")));
+        Assert.Equal("hi\n", (await Cli("run", "--from", P("basics.topwater"), "echo hi")).Out);
+        // a snapshot has nothing to replay; a header with a bad user is a bad file, exit 2
+        Assert.Contains("no recorded calls", (await Cli("replay", P("m.topwater"))).Err);
+        Assert.Equal(2, (await Cli("replay", P("m.topwater"))).Code);
         File.WriteAllText(P("junk.topwater"), "PK junk");
         Assert.Contains("not a valid Topwater recording", (await Cli("replay", P("junk.topwater"))).Err);
     }

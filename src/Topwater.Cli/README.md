@@ -70,5 +70,6 @@ Cursor, VS Code and other clients take the same `command` and `args`.
 Options, for every command: `--state FILE`, `--from FILE` (start from FILE when there is no state yet; never written),
 `--import HOST:PATH` (repeatable), `--export PATH:HOST` (repeatable), `--timeout SECONDS`, `--disk MB`.
 
-State files, snapshots and recordings are all `.topwater` files (older `.zip` snapshots load as they are). Container
+State files, snapshots and recordings are all `.topwater` files (older `.zip` snapshots load as they are). A
+recording is refused as `--state`, since the state file is rewritten as the machine alone: use `--from` or `import`. Container
 images are not made here: that is `Topwater.Containers`, from code, and nothing the model runs can reach it.

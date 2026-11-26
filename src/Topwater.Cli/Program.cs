@@ -284,7 +284,7 @@ static class Cli
         var source = o.State is { } s && File.Exists(s) ? s : o.From;
         if (source != null && LoadRecording(source, o.ToShellOptions()) is { Calls.Count: > 0 } recording)
         {
-            if (o.Imports.Count > 0) throw new CliException($"export: {source} has history; --import would change the machine without it");
+            if (o.Imports.Count + o.Exports.Count > 0) throw new CliException($"export: {source} has history, which is written as it is; --import and --export don't apply");
             Write(file, recording.Save);
             io.Out.WriteLine($"exported {file} ({recording.Calls.Count} calls)");
             return Task.FromResult(0);
@@ -302,6 +302,7 @@ static class Cli
         if (rest is not [var file]) throw new CliException("import: expected one FILE, e.g. topwater import run.topwater --state machine.topwater");
         if (o.State is not { } state) throw new CliException("import: --state STATE is required: the file to write the machine to");
         if (o.From != null || o.Imports.Count + o.Exports.Count > 0) throw new CliException("import: only --state, --timeout and --disk apply");
+        Machine.RefuseHistory(state, o.ToShellOptions());
         var snapshot = await MachineOf(file, o.ToShellOptions(), ct);
         Write(state, snapshot.Save);
         io.Out.WriteLine($"imported {file} into {state}");
@@ -315,6 +316,7 @@ static class Cli
         if (rest is not [var file]) throw new CliException("replay: expected one FILE, e.g. topwater replay run.topwater");
         if (o.State != null || o.From != null || o.Imports.Count + o.Exports.Count > 0) throw new CliException("replay: only --timeout and --disk apply");
         var recording = LoadRecording(file, o.ToShellOptions());
+        if (recording.Calls.Count == 0) throw new CliException($"replay: {file} holds a machine but no recorded calls");
         // a deterministic run must match exactly; another differs in times and random names, which are normalised away
         var report = await recording.ReplayAsync(new ReplayOptions { Normalize = recording.IsDeterministic ? null : ReplayNormalizers.Volatile }, cancellationToken: ct);
         io.Out.Write(report.ToString());
