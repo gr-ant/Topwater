@@ -5,7 +5,7 @@ try:
 except ImportError as e:
     raise ImportError('Claude Agent SDK support needs claude-agent-sdk: pip install "topwater[claude-agent-sdk]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, TOOL_NAME, Shell
+from .. import TOOL_INPUT_SCHEMA, TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
@@ -15,7 +15,7 @@ def bash_tool(shell: Shell | None = None, description: str | None = None) -> Sdk
     async def handler(args: dict) -> dict:
         return {"content": [{"type": "text", "text": await arun(args["command"])}]}
 
-    return tool(TOOL_NAME, description or TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA)(handler)
+    return tool(TOOL_NAME, description or tool_description(shell), TOOL_INPUT_SCHEMA)(handler)
 
 
 def bash_options(shell: Shell | None = None, description: str | None = None, **options) -> ClaudeAgentOptions:

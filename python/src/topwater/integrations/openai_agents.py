@@ -7,7 +7,7 @@ try:
 except ImportError as e:
     raise ImportError('OpenAI Agents support needs openai-agents: pip install "topwater[openai-agents]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, TOOL_NAME, Shell
+from .. import TOOL_INPUT_SCHEMA, TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
@@ -25,5 +25,5 @@ def bash_tool(shell: Shell | None = None, description: str | None = None) -> Fun
         return await arun(command)
 
     # strict mode (the SDK's default) needs additionalProperties: false
-    return FunctionTool(name=TOOL_NAME, description=description or TOOL_DESCRIPTION,
+    return FunctionTool(name=TOOL_NAME, description=description or tool_description(shell),
                         params_json_schema={**TOOL_INPUT_SCHEMA, "additionalProperties": False}, on_invoke_tool=invoke)

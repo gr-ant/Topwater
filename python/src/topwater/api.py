@@ -20,7 +20,7 @@ from typing import Callable, Mapping, Sequence
 from urllib.parse import quote, unquote, urlsplit
 
 from .vfs import ShellError
-from .webaccess import secrets_of
+from .webaccess import decode_body, secrets_of
 
 # headers that cannot carry a credential, change the destination or smuggle a second request
 ALLOWED_HEADERS = ("Accept", "Accept-Language", "Content-Type", "If-Match", "If-None-Match")
@@ -217,6 +217,15 @@ def register_api(shell, program: str, endpoints: Mapping[str, ApiEndpoint], tran
             ctx.stderr.write(scrub(f"{program}: {method} {alias} {_printable(path)} failed: {' '.join(why.splitlines())}") + "\n")
             return 1
 
+        encoding = next((v for k, v in resp_headers if k.lower() == "content-encoding"), "").strip().lower()
+        if encoding not in ("", "identity"):
+            # a compressed body would hide the credential from the scrub: decode it first, within the same cap
+            decoded = decode_body(raw, encoding, limit + 1)
+            if decoded is None:
+                ctx.stderr.write(scrub(f"{program}: {method} {alias} {_printable(path)} failed: unsupported content encoding "
+                                       f"{_printable(encoding)}") + "\n")
+                return 1
+            raw = decoded
         truncated = len(raw) > ep.max_response_bytes
         text = scrub(raw[: limit].decode("utf-8", "replace"))
         if truncated and len(text) > ep.max_response_bytes:

@@ -60,7 +60,7 @@ class Fixture:
 
 
 def fixture_policy(fixture, **more):
-    return WebPolicy(**{"domains": ["api.test"], "allow_http": True, "methods": ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    return WebPolicy(**{"domains": ["api.test"], "allow_http": True, "explain_blocked": False, "methods": ["GET", "POST", "PUT", "DELETE", "PATCH"],
                         "transport": fixture, **more})
 
 
@@ -89,9 +89,9 @@ def test_without_a_policy_there_is_no_network():
 
 def test_blocked_hosts_can_be_explained():
     sh, fx = make()
-    explain = Shell().allow_web(WebPolicy(domains=["api.test"], explain_blocked=True, transport=Fixture()))
+    explain = Shell().allow_web(WebPolicy(domains=["api.test"], transport=Fixture()))  # explaining is the default
     r = explain.run("curl -sS https://evil.test/; curl -sS http://api.test/; curl -sS https://127.0.0.1/; curl -sS -X POST https://api.test/")
-    assert r.stderr == ("curl: (6) Blocked by the web policy: evil.test is not an allowed host\n"
+    assert r.stderr == ("curl: (6) Blocked by the web policy: evil.test is not an allowed host (allowed: api.test)\n"
                         "curl: (1) Blocked by the web policy: only https:// URLs are allowed\n"
                         "curl: (7) Blocked by the web policy: 127.0.0.1 is a private or reserved address\n"
                         "curl: (1) Blocked by the web policy: POST requests are not allowed\n")
@@ -100,9 +100,52 @@ def test_blocked_hosts_can_be_explained():
     assert r.stderr == "curl: (1) Blocked by the web policy: PROPFIND requests are not allowed\n"
     assert fx.requests == []
 
+    many = Shell().allow_web(WebPolicy(domains=[f"h{i}.test" for i in range(12)] + ["*.Wild.test:8080"], transport=Fixture()))
+    r = many.run("curl -sS https://evil.test:8443/x; wget -q https://[2606:4700::1]/; echo $?")
+    assert r.stdout == "4\n"
+    assert r.stderr == (
+        "curl: (6) Blocked by the web policy: evil.test:8443 is not an allowed host (allowed: h0.test, h1.test, h2.test, h3.test, "
+        "h4.test, h5.test, h6.test, h7.test, h8.test, h9.test, and 3 more)\n"
+        "wget: blocked by the web policy: [2606:4700::1] is not an allowed host (allowed: h0.test, h1.test, h2.test, h3.test, "
+        "h4.test, h5.test, h6.test, h7.test, h8.test, h9.test, and 3 more)\n")
+    none = Shell().allow_web(WebPolicy(transport=Fixture()))
+    assert none.run("curl -sS https://a.test/").stderr == "curl: (6) Blocked by the web policy: a.test is not an allowed host (allowed: none)\n"
+
+
+def test_ports_are_part_of_the_policy():
+    fx = Fixture()
+    sh = Shell().allow_web(WebPolicy(domains=["api.test", "alt.test:8443", "*.wild.test:8080"], allow_http=True, explain_blocked=False,
+                                     transport=fx, credentials={"api.test": lambda: "Bearer " + TOKEN, "alt.test:8443": lambda: "Bearer alt-secret-1"}))
+    r = sh.run("curl -s https://api.test/hello; curl -s http://api.test/hello; curl -s http://alt.test:8443/hello; "
+               "curl -s https://x.wild.test:8080/hello")
+    assert r.stdout == "hello\n" * 4
+    assert [h.get("authorization") for h in fx.seen] == ["Bearer " + TOKEN, "Bearer " + TOKEN, "Bearer alt-secret-1", None]
+    r = sh.run("curl -sS http://api.test:22/; echo $?; curl -sS https://alt.test/; echo $?; curl -sS https://x.wild.test/; echo $?; "
+               "wget -q http://api.test:8080/; echo $?; curl -sS http://127.0.0.1:22/; echo $?")
+    assert r.stdout == "7\n7\n7\n4\n7\n"
+    assert r.stderr == ("curl: (7) Failed to connect to api.test port 22 after 0 ms: Couldn't connect to server\n"
+                        "curl: (7) Failed to connect to alt.test port 443 after 0 ms: Couldn't connect to server\n"
+                        "curl: (7) Failed to connect to x.wild.test port 443 after 0 ms: Couldn't connect to server\n"
+                        "curl: (7) Failed to connect to 127.0.0.1 port 22 after 0 ms: Couldn't connect to server\n")
+    assert len(fx.requests) == 4
+    assert Shell().allow_web(WebPolicy(domains=["*.2.3.4"], transport=fx)).run("curl -s https://1.2.3.4/; echo $?").stdout == "7\n"
+    explain = Shell().allow_web(WebPolicy(domains=["api.test"], allow_http=True, transport=fx))
+    r = explain.run("curl -sS http://api.test:22/; echo $?; wget -q http://api.test:22/; echo $?")
+    assert r.stdout == "7\n4\n"
+    assert r.stderr == ("curl: (7) Blocked by the web policy: api.test:22 is not an allowed host (allowed: api.test)\n"
+                        "wget: blocked by the web policy: api.test:22 is not an allowed host (allowed: api.test)\n")
+    for domains, credentials in ((["api.test:0"], {}), (["api.test:x"], {}), (["*.wild.test"], {"a.wild.test": lambda: "x"}),
+                                 (["api.test"], {"api.test:99999": lambda: "x"})):
+        with pytest.raises(ValueError):
+            WebSessionFor(domains, credentials)
+
+
+def WebSessionFor(domains, credentials):
+    return Shell().allow_web(WebPolicy(domains=domains, credentials=credentials))
+
 
 def test_https_only_by_default():
-    sh = Shell().allow_web(WebPolicy(domains=["api.test"], transport=Fixture()))
+    sh = Shell().allow_web(WebPolicy(domains=["api.test"], explain_blocked=False, transport=Fixture()))
     r = sh.run("curl -sS http://api.test/hello; echo $?; curl -s https://api.test/hello")
     assert r.stdout == "1\nhello\n"
     assert r.stderr == 'curl: (1) Protocol "http" not supported or disabled in libcurl\n'
@@ -123,7 +166,10 @@ def test_address_ranges():
     blocked = ["0.0.0.0", "10.1.2.3", "100.64.0.1", "127.0.0.1", "169.254.169.254", "172.16.0.1", "172.31.255.255", "192.168.1.1",
                "224.0.0.1", "255.255.255.255", "::", "::1", "::ffff:10.0.0.1", "::7f00:1", "64:ff9b::a9fe:a9fe", "2002:7f00:1::",
                "fc00::1", "fe80::1", "fec0::1", "ff02::1", "2001::1", "2001:db8::1"]
-    open_ = ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "2002:808:808::"]
+    blocked += ["168.63.129.16", "192.88.99.1", "::ffff:0:7f00:1", "::ffff:0:808:808", "100::1", "100::ffff:ffff:ffff:ffff",
+                "2001:20::1", "2001:2f:ffff::1", "3fff::1", "3fff:fff::1", "5f00::1", "5f00:ffff::1"]
+    open_ = ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "2002:808:808::", "168.63.129.17", "192.88.98.1",
+             "100:0:0:1::1", "2001:30::1", "2001:1f::1", "3fff:1000::1", "5f01::1", "::fffe:0:808:808"]
     for a in blocked:
         assert is_blocked(ipaddress.ip_address(a).packed), a
     for a in open_:
@@ -156,6 +202,17 @@ def test_the_credential_is_the_hosts_and_never_shown():
     assert r.stdout == "ok\n"
     assert fx.seen[0]["authorization"] == "Bearer " + TOKEN
     assert "authorization" not in fx.seen[1]
+
+    # the agent's own Authorization and Cookie stay with the first URL's origin: scheme, host and port
+    sh = Shell().allow_web(WebPolicy(domains=["api.test", "api.test:8080"], allow_http=True, transport=fx))
+    fx.override = None
+    for target in ("https://api.test/x", "http://api.test:8080/x", "http://api.test/x"):
+        fx.seen.clear()
+        fx.override = lambda m, url, h, b, target=target: ((302, "Found", [("Location", target)], b"") if url.endswith("/go")
+                                                          else (200, "OK", [], b"ok\n"))
+        sh.run("curl -sL -H 'Authorization: Bearer mine' -H 'Cookie: k=v' http://api.test/go")
+        kept = target == "http://api.test/x"
+        assert ("authorization" in fx.seen[-1], "cookie" in fx.seen[-1]) == (kept, kept), target
 
 
 def test_responses_are_cut_at_the_cap():
@@ -405,7 +462,8 @@ def test_names_resolve_once_and_connect_to_the_checked_address(hooks):
         os.environ["http_proxy"] = "http://127.0.0.1:1"  # the host's proxy settings are never used
         webaccess._resolve_for_tests = resolve
         webaccess._allow_loopback_for_tests = True
-        sh = Shell().allow_web(WebPolicy(domains=["pinned.test", "meta.test"], allow_http=True))
+        sh = Shell().allow_web(WebPolicy(domains=[f"pinned.test:{port}", f"pinned.test:{port + 1}", "meta.test"], allow_http=True,
+                                         explain_blocked=False))
         r = sh.run(f"curl -sS http://pinned.test:{port}/")
         assert (r.stdout, r.stderr) == ("ok\n", "")
         assert seen["host"] == f"pinned.test:{port}"
@@ -417,9 +475,137 @@ def test_names_resolve_once_and_connect_to_the_checked_address(hooks):
 
         webaccess._allow_loopback_for_tests = False  # without the hook, loopback is refused like any internal address
         assert sh.run(f"curl -sS http://pinned.test:{port + 1}/").stderr == "curl: (6) Could not resolve host: pinned.test\n"
-        sh = Shell().allow_web(WebPolicy(domains=["meta.test"], allow_http=True, explain_blocked=True))
+        sh = Shell().allow_web(WebPolicy(domains=["meta.test"], allow_http=True))
         assert sh.run("curl -sS http://meta.test/").stderr == \
             "curl: (6) Blocked by the web policy: meta.test resolves to a private or reserved address\n"
     finally:
+        listener.close()
+    server.join(5)
+
+
+def test_the_credential_does_not_leave_through_an_encoding_or_a_range():
+    fx = Fixture()
+    sh = Shell().allow_web(WebPolicy(domains=["api.test"], allow_http=True, transport=fx, credentials={"api.test": lambda: "Bearer " + TOKEN}))
+    sh.run("mkdir -p /tmp/w && cd /tmp/w")
+    import zlib
+
+    def compressing(method, url, headers, body):
+        h = {k.lower(): v for k, v in headers}
+        echo = "".join(f"{k}: {v}\n" for k, v in headers).encode()
+        if "range" in h:
+            start, end = map(int, h["range"][6:].split("-"))
+            return 206, "Partial Content", [], echo[start:end + 1]
+        if "gzip" in h.get("accept-encoding", ""):
+            data = gzip.compress(echo)
+            return 200, "OK", [("Content-Encoding", "gzip"), ("Content-Length", str(len(data)))], data
+        if "deflate" in h.get("accept-encoding", ""):
+            return 200, "OK", [("Content-Encoding", "Deflate ")], zlib.compress(echo)
+        return 200, "OK", [], echo
+    fx.override = compressing
+    recorder = sh.start_recording()
+    r = sh.run("curl -s --compressed http://api.test/echo; curl -s -H 'Accept-Encoding: gzip' http://api.test/echo | gunzip; "
+               "curl -s -H 'Accept-Encoding: gzip' -o f http://api.test/echo; zcat f; cat f; "
+               "curl -s -H 'Accept-Encoding: deflate' http://api.test/echo; wget -q -O - --header 'Accept-Encoding: gzip' http://api.test/echo; "
+               "curl -si -H 'Accept-Encoding: gzip' http://api.test/echo; "
+               "curl -s -H 'Range: bytes=0-40' http://api.test/echo; curl -s -H 'Range: bytes=41-200' -H 'If-Range: x' http://api.test/echo")
+    recorder.stop()
+    assert TOKEN not in r.stdout + r.stderr
+    # what comes back is already decoded (gunzip and zcat find no gzip); a Range is not sent, so each gets the whole body
+    assert r.stdout.count("Authorization: [REDACTED]") == 7
+    assert r.stderr.count("not in gzip format") == 2
+    assert "Content-Encoding" not in r.stdout and "Content-Length" not in r.stdout
+    assert all("range" not in h and "if-range" not in h for h in fx.seen)
+    _, raw = save_and_load(recorder.recording)
+    import zipfile
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    for n in z.namelist():
+        data = z.read(n)
+        assert TOKEN.encode() not in data and TOKEN.encode() not in (gzip.decompress(data) if data[:2] == b"\x1f\x8b" else b""), n
+
+    # an encoding that cannot be decoded, or a corrupt one, fails the request; the cap still holds on the decoded body
+    for headers, data in (([("Content-Encoding", "br")], b"x"), ([("Content-Encoding", "gzip")], b"not gzip"), ([("Content-Encoding", "br")], b"")):
+        fx.override = lambda *_, headers=headers, data=data: (200, "OK", headers, data)
+        assert sh.run("curl -sS http://api.test/echo; echo $?").stdout == "56\n"
+    sh.allow_web(WebPolicy(domains=["api.test"], allow_http=True, transport=fx, max_response_bytes=1000, credentials={"api.test": lambda: "Bearer " + TOKEN}))
+    fx.override = lambda *_: (200, "OK", [("Content-Encoding", "gzip")], gzip.compress(bytes(1_000_000)))
+    assert sh.run("curl -s http://api.test/echo | wc -c; echo ${PIPESTATUS[0]}").stdout == "1000\n63\n"
+
+
+def test_a_replay_never_goes_live():
+    sh = Shell()
+    recorder = sh.start_recording()
+    sh.run("curl -sS https://api.test/hello; echo $?")
+    recorder.stop()
+    rec, _ = save_and_load(recorder.recording)
+    assert rec.web is None
+    fx = Fixture()
+    replay = rec.create_shell(lambda s: s.allow_web(WebPolicy(domains=["api.test"], transport=fx, credentials={"api.test": lambda: TOKEN})))
+    r = replay.run("curl -sS https://api.test/hello; echo $?")
+    assert (r.stdout, r.stderr) == ("6\n", "curl: (6) Could not resolve host: api.test\n")
+    assert fx.requests == []
+    assert rec.replay(replay).matches
+
+
+def test_the_tool_description_names_the_sites():
+    import topwater
+    sh = Shell()
+    assert topwater.tool_description(sh) == topwater.tool_description(None) == topwater.TOOL_DESCRIPTION
+    domains = [f"s{i}.test" for i in range(22)]
+    topwater.allow_web(sh, WebPolicy(domains=domains, methods=["get", "Post"]))
+    expected = topwater.TOOL_DESCRIPTION.replace(
+        "Python, network access and package installation are not. ",
+        "Python and package installation are not; `curl` and `wget` reach only these sites (methods: GET, POST): "
+        + ", ".join(domains[:20]) + ", and 2 more. ")
+    assert expected != topwater.TOOL_DESCRIPTION
+    assert topwater.tool_description(sh) == expected
+    rec = Recording(sh.snapshot(), {})
+    rec.web = sh._web.policy
+    assert topwater.tool_description(rec.create_shell()) == topwater.TOOL_DESCRIPTION  # a replay reaches nothing live
+    pytest.importorskip("langchain_core")
+    from topwater.integrations.langchain import bash_tool
+    assert bash_tool(sh).description == expected
+    assert bash_tool(sh, description="custom").description == "custom"
+
+
+def test_a_dripping_server_is_stopped_at_the_timeout(hooks):
+    """The real connection path: a server that sends one byte every 0.1 s inside each read's timeout is cut off at the
+    request's timeout, and no thread is left reading."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    stop = threading.Event()
+
+    def serve():
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            with conn:
+                f = conn.makefile("rb")
+                while f.readline() not in (b"\r\n", b""):
+                    pass
+                try:
+                    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n")
+                    while not stop.is_set():
+                        conn.sendall(b"x")
+                        time.sleep(0.1)
+                except OSError:
+                    pass
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    try:
+        webaccess._resolve_for_tests = lambda name: ["127.0.0.1"]
+        webaccess._allow_loopback_for_tests = True
+        sh = Shell().allow_web(WebPolicy(domains=[f"drip.test:{port}"], allow_http=True, timeout=1.0))
+        threads = threading.active_count()
+        started = time.monotonic()
+        r = sh.run(f"curl -sS http://drip.test:{port}/; echo $?")
+        assert time.monotonic() - started < 2.0
+        assert r.stdout == "28\n"
+        assert threading.active_count() == threads
+    finally:
+        stop.set()
         listener.close()
     server.join(5)

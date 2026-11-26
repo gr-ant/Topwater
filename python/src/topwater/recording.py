@@ -109,11 +109,12 @@ class Recording:
         shell = Shell(**self.options)
         if configure is not None:
             configure(shell)
-        if self.web is not None:  # the recorded responses, never the network, and no credential is looked up
-            w = self.web
-            policy = WebPolicy(w.domains, w.methods, w.allow_http, w.max_response_bytes, w.max_requests_per_call, w.max_requests,
-                               w.timeout, w.max_redirects, {h: (lambda: "") for h in w.credentials}, w.explain_blocked)
-            shell._web = WebSession(policy, [x for c in self.calls[first_call:] for x in (c.web or [])])
+        # the recorded responses, never the network (even if configure allowed it), and no credential is looked up
+        w = self.web
+        policy = WebPolicy(explain_blocked=False) if w is None else WebPolicy(
+            w.domains, w.methods, w.allow_http, w.max_response_bytes, w.max_requests_per_call, w.max_requests,
+            w.timeout, w.max_redirects, {h: (lambda: "") for h in w.credentials}, w.explain_blocked)
+        shell._web = WebSession(policy, [x for c in self.calls[first_call:] for x in (c.web or [])])
         shell.restore(start or self.start)
         return shell
 

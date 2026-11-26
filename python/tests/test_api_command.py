@@ -173,6 +173,22 @@ def test_a_credential_cut_by_the_size_cap_is_still_scrubbed():
     assert "truncated at 100 bytes" in r.stderr
 
 
+def test_a_compressed_echo_of_the_credential_is_scrubbed():
+    import gzip
+    import zlib
+    sh, stub = make()
+    echo = f'{{"you_sent":"Bearer {TOKEN}"}}'.encode()
+    for encoding, data in (("gzip", gzip.compress(echo)), ("deflate", zlib.compress(echo))):
+        stub.respond = lambda: (200, "OK", [("Content-Encoding", encoding), ("Content-Length", str(len(data)))], data)
+        r = sh.run("api get jira /issue/1 -i")
+        assert (r.exit_code, r.stderr) == (0, "")
+        assert r.stdout.startswith("HTTP 200 OK\n") and r.stdout.endswith('\n\n{"you_sent":"[REDACTED]"}\n')
+    for encoding, data in (("br", b"\x0b\x02\x80"), ("gzip", b"not gzip")):
+        stub.respond = lambda: (200, "OK", [("Content-Encoding", encoding)], data)
+        r = sh.run("api get jira /issue/1")
+        assert (r.exit_code, r.stdout, r.stderr) == (1, "", f"api: GET jira /issue/1 failed: unsupported content encoding {encoding}\n")
+
+
 def test_errors_and_redirects_exit_one_with_the_body_kept():
     sh, stub = make()
     stub.respond = lambda: (404, "Not Found", [], b'{"error":"no such issue"}')

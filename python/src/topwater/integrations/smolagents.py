@@ -4,7 +4,7 @@ try:
 except ImportError as e:
     raise ImportError('smolagents support needs smolagents: pip install "topwater[smolagents]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, TOOL_NAME, Shell
+from .. import TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
@@ -17,8 +17,7 @@ class BashTool(Tool):
     def __init__(self, shell: Shell | None = None, description: str | None = None):
         super().__init__()
         self._run, _ = _runners(shell)
-        if description:
-            self.description = description
+        self.description = description or tool_description(shell)
 
     def forward(self, command: str) -> str:
         return self._run(command)

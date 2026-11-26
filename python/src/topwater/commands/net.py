@@ -12,7 +12,7 @@ from ..vfs import ShellError, utc_now
 from ..webaccess import WebFailure, WebPolicy, WebSession, WebUrl
 from . import spec_message
 
-_NO_NETWORK = WebSession(WebPolicy())
+_NO_NETWORK = WebSession(WebPolicy(explain_blocked=False))
 _FLOAT = re.compile(r"\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*")
 
 
@@ -543,7 +543,7 @@ async def _wget(ctx):
                 code = 8
             else:
                 length, ctype = r.header("Content-Length"), r.header("Content-Type")
-                say(spec_message("wget", "length", length=(length or "unspecified") + (f" [{ctype}]" if ctype is not None else "")))
+                say(spec_message("wget", "length", length=(length or spec_message("wget", "lengthUnspecified")) + (f" [{ctype}]" if ctype is not None else "")))
                 file = document
                 if file is None:
                     name = _remote_name(url)
@@ -574,7 +574,7 @@ async def _wget(ctx):
                     code = 1
         except WebFailure as f:
             code, message = _wget_error(f, web.policy.explain_blocked)
-            if message and (not quiet or f.kind in ("policy", "replay", "bad_header")):
+            if message and (not quiet or f.blocked is not None and web.policy.explain_blocked or f.kind in ("policy", "replay", "bad_header")):
                 ctx.stderr.write(message + "\n")
         if code:
             exit_code = code

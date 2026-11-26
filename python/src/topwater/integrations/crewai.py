@@ -7,7 +7,7 @@ try:
 except ImportError as e:
     raise ImportError('CrewAI support needs crewai: pip install "topwater[crewai]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_NAME, Shell
+from .. import TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
@@ -23,4 +23,4 @@ class BashTool(Tool):
 
 def bash_tool(shell: Shell | None = None, description: str | None = None) -> BashTool:
     run, _ = _runners(shell)
-    return BashTool(name=TOOL_NAME, description=description or TOOL_DESCRIPTION, func=run, args_schema=BashInput)
+    return BashTool(name=TOOL_NAME, description=description or tool_description(shell), func=run, args_schema=BashInput)

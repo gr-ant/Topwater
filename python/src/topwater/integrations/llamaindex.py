@@ -4,10 +4,10 @@ try:
 except ImportError as e:
     raise ImportError('LlamaIndex support needs llama-index-core: pip install "topwater[llamaindex]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_NAME, Shell
+from .. import TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
 def bash_tool(shell: Shell | None = None, description: str | None = None) -> FunctionTool:
     run, arun = _runners(shell)
-    return FunctionTool.from_defaults(fn=run, async_fn=arun, name=TOOL_NAME, description=description or TOOL_DESCRIPTION)
+    return FunctionTool.from_defaults(fn=run, async_fn=arun, name=TOOL_NAME, description=description or tool_description(shell))

@@ -5,7 +5,7 @@ try:
 except ImportError as e:
     raise ImportError('LangChain support needs langchain-core: pip install "topwater[langchain]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_NAME, Shell
+from .. import TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
@@ -16,4 +16,4 @@ class BashInput(BaseModel):
 def bash_tool(shell: Shell | None = None, description: str | None = None) -> StructuredTool:
     run, arun = _runners(shell)
     return StructuredTool.from_function(func=run, coroutine=arun, name=TOOL_NAME,
-                                        description=description or TOOL_DESCRIPTION, args_schema=BashInput)
+                                        description=description or tool_description(shell), args_schema=BashInput)

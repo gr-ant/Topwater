@@ -14,8 +14,10 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import threading
 import time
 import unicodedata
+import zlib
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Sequence
 
@@ -30,13 +32,13 @@ ERROR_KINDS = ("resolve", "blocked", "connect", "timeout", "tls", "recv")
 @dataclass
 class WebPolicy:
     """What the agent's curl and wget may reach. domains: "api.github.com" exactly, or "*.wikipedia.org" for its
-    subdomains (not the name itself). methods: GET also allows HEAD. max_response_bytes: a body is cut there and the
-    command fails. max_requests_per_call / max_requests: requests (each redirect counts) in one tool call / over the
+    subdomains (not the name itself), on the scheme's default port; "name:8443" allows that port only. methods: GET also
+    allows HEAD. max_response_bytes: a body is cut there and the command fails. max_requests_per_call / max_requests: requests (each redirect counts) in one tool call / over the
     shell's life. timeout: seconds per request (the call's own limit still applies). credentials: the Authorization header
-    for a host (exact name, one of domains), called in host code for every request to it; the agent never sees it, cannot
-    replace it, and it is scrubbed from what comes back. explain_blocked: say "blocked by the web policy" instead of failing
-    like an unknown host. transport: sends the requests instead of the network (tests, proxies); it must not follow
-    redirects, and the private-address check happens where the name is resolved, so one that connects itself must do it."""
+    for "host" (the scheme's default port) or "host:port" (host an exact name in domains), called in host code for every
+    request to it; the agent never sees it, cannot replace it, and it is scrubbed from what comes back (decoded first).
+    explain_blocked: say "blocked by the web policy" and why; False fails like an unknown host. transport: sends the
+    requests instead of the network (tests, proxies); it must not follow redirects, and the private-address check happens where the name is resolved, so one that connects itself must do it."""
     domains: Sequence[str] = ()
     methods: Sequence[str] = ("GET",)
     allow_http: bool = False
@@ -46,7 +48,7 @@ class WebPolicy:
     timeout: float = 30.0
     max_redirects: int = 10
     credentials: Mapping[str, Callable[[], str]] = field(default_factory=dict)
-    explain_blocked: bool = False
+    explain_blocked: bool = True
     transport: Transport | None = None
 
 
@@ -79,6 +81,16 @@ class WebFailure(Exception):
     def __init__(self, kind: str, host: str = "", port: int = 0, blocked: str | None = None, detail: str = ""):
         super().__init__(kind)
         self.kind, self.host, self.port, self.blocked, self.detail = kind, host, port, blocked, detail
+
+
+def _reason(key: str, **values: str) -> str:
+    from .commands import spec_message
+    return spec_message("curl", key, **values)
+
+
+def some(items: Sequence[str], n: int) -> str:
+    """The first n items joined with ", ", then ", and N more"."""
+    return ", ".join(items[:n]) + (f", and {len(items) - n} more" if len(items) > n else "")
 
 
 def _alnum(c: str) -> bool:
@@ -219,19 +231,22 @@ def is_blocked(a: bytes) -> bool:
         x, y = a[0], a[1]
         return (x in (0, 10, 127) or x >= 224 or x == 100 and (y & 0xC0) == 64 or x == 169 and y == 254 or x == 172 and (y & 0xF0) == 16
                 or x == 192 and y == 168 or x == 192 and y == 0 and a[2] in (0, 2) or x == 198 and (y & 0xFE) == 18
-                or x == 198 and y == 51 and a[2] == 100 or x == 203 and y == 0 and a[2] == 113)
+                or x == 198 and y == 51 and a[2] == 100 or x == 203 and y == 0 and a[2] == 113 or x == 192 and y == 88 and a[2] == 99
+                or a == b"\xa8\x3f\x81\x10")  # 192.88.99.0/24 6to4 relay, 168.63.129.16 Azure host endpoint
     if len(a) != 16:
         return True
     if not any(a[:10]) and a[10] == 0xFF and a[11] == 0xFF:
         return is_blocked(a[12:])  # ::ffff:a.b.c.d
-    if not any(a[:12]):
-        return True  # ::, ::1, ::a.b.c.d
+    if not any(a[:12]) or not any(a[:8]) and a[8:10] == b"\xff\xff" and not any(a[10:12]):
+        return True  # ::, ::1, ::a.b.c.d, ::ffff:0:a.b.c.d (IPv4-translated)
     if a[:4] == b"\x00\x64\xff\x9b":
         return is_blocked(a[12:])  # 64:ff9b::/96 NAT64
     if a[:2] == b"\x20\x02":
         return is_blocked(a[2:6])  # 2002::/16 6to4
-    if a[:2] == b"\x20\x01" and (a[2:4] == b"\x00\x00" or a[2:4] == b"\x0d\xb8"):
-        return True  # Teredo, documentation
+    if a[:2] == b"\x20\x01" and (a[2:4] == b"\x00\x00" or a[2:4] == b"\x0d\xb8" or a[2] == 0 and (a[3] & 0xF0) == 0x20):
+        return True  # Teredo, documentation, ORCHIDv2
+    if a[:2] == b"\x01\x00" and not any(a[2:8]) or a[:2] == b"\x3f\xff" and a[2] < 0x10 or a[:2] == b"\x5f\x00":
+        return True  # discard-only 100::/64, documentation 3fff::/20, SRv6 5f00::/16
     return (a[0] & 0xFE) == 0xFC or a[0] == 0xFE and (a[1] & 0xC0) in (0x80, 0xC0) or a[0] == 0xFF  # ULA, link/site-local, multicast
 
 
@@ -271,18 +286,14 @@ class WebSession:
 
     def __init__(self, policy: WebPolicy, replay: list | None = None):
         self.policy = policy
-        self._exact: set[str] = set()
-        self._suffixes: list[str] = []
+        self._domains: list[tuple[str, bool, int | None]] = []  # (name, wildcard, port; None: the scheme's default)
         for d in policy.domains:
-            name = d.strip().rstrip(".").lower()
+            name, port = _host_port(d, "a domain is a host name, or *.name for its subdomains, with an optional :port")
             wild = name.startswith("*.")
             bare = name[2:] if wild else name
             if not bare or not all(_alnum(c) or c in "-._" for c in bare):
-                raise ValueError(f"{d}: a domain is a host name, or *.name for its subdomains")
-            if wild:
-                self._suffixes.append("." + bare)
-            else:
-                self._exact.add(bare)
+                raise ValueError(f"{d}: a domain is a host name, or *.name for its subdomains, with an optional :port")
+            self._domains.append((bare, wild, port))
         self._methods: set[str] = set()
         for m in policy.methods:
             if not m or not (m.isascii() and m.isalpha()):
@@ -290,12 +301,12 @@ class WebSession:
             self._methods.add(m.upper())
         if "GET" in self._methods:
             self._methods.add("HEAD")
-        self._credentials: dict[str, Callable[[], str]] = {}
-        for host, auth in policy.credentials.items():
-            h = host.strip().rstrip(".").lower()
-            if h not in self._exact:
-                raise ValueError(f"{host}: credentials need the exact host name in domains")
-            self._credentials[h] = auth
+        self._credentials: dict[tuple[str, int | None], Callable[[], str]] = {}
+        for key, auth in policy.credentials.items():
+            h, port = _host_port(key, "credentials need the exact host name in domains")
+            if not any(name == h and not wild for name, wild, _ in self._domains):
+                raise ValueError(f"{key}: credentials need the exact host name in domains")
+            self._credentials[(h, port)] = auth
         if min(policy.max_redirects, policy.max_requests, policy.max_requests_per_call, policy.max_response_bytes) < 0:
             raise ValueError("limits cannot be negative")
         self._send = policy.transport or pinned_transport
@@ -312,47 +323,59 @@ class WebSession:
         log, self._log = self._log, []
         return log
 
-    def host_allowed(self, host: str) -> bool:
-        return host in self._exact or any(host.endswith(s) for s in self._suffixes)
+    def _allows(self, url: WebUrl) -> tuple[bool, bool]:
+        """Whether the host is listed, and whether it is listed with this port."""
+        listed = False
+        for name, wild, port in self._domains:
+            if url.host.endswith("." + name) and url.ip is None if wild else url.host == name:
+                listed = True
+                if url.default_port if port is None else url.port == port:
+                    return True, True
+        return listed, False
+
+    def _credential(self, url: WebUrl) -> Callable[[], str] | None:
+        auth = self._credentials.get((url.host, url.port))
+        return auth if auth is not None or not url.default_port else self._credentials.get((url.host, None))
 
     async def send(self, url: WebUrl, method: str, headers: list, body: bytes | None, timeout: float, deadline: float) -> WebResponse:
         """Checks the URL against the policy, then sends one request (no redirects). Raises WebFailure."""
         p = self.policy
         explain = (lambda why: why) if p.explain_blocked else (lambda why: None)
-        if url.ip is not None:
-            if is_blocked(url.ip):
-                raise WebFailure("connect", url.host, url.port, explain(f"{url.host} is a private or reserved address"))
-            if url.host not in self._exact:
-                raise WebFailure("connect", url.host, url.port, explain(f"{url.host} is not an allowed host"))
-        elif not self.host_allowed(url.host):
-            raise WebFailure("resolve", url.host, url.port, explain(f"{url.host} is not an allowed host"))
+        if url.ip is not None and is_blocked(url.ip):
+            raise WebFailure("connect", url.host, url.port, explain(_reason("reasonPrivate", host=url.host)))
+        listed, port_listed = self._allows(url)
+        if not port_listed:  # a listed name on another port fails like an address: it was found, but not reachable
+            where = url.host_for_url + ("" if url.default_port else f":{url.port}")
+            raise WebFailure("connect" if url.ip is not None or listed else "resolve", url.host, url.port,
+                             explain(_reason("reasonHost", host=where, allowed=some([d.strip() for d in p.domains], 10) or "none")))
         if url.scheme == "http" and not p.allow_http:
-            raise WebFailure("protocol", "http", blocked=explain("only https:// URLs are allowed"))
+            raise WebFailure("protocol", "http", blocked=explain(_reason("reasonHttps")))
         if method not in self._methods:
-            raise WebFailure("policy", blocked=f"{method} requests are not allowed")
+            raise WebFailure("policy", blocked=_reason("reasonMethod", method=method))
         if body is not None and len(body) > MAX_REQUEST_BYTES:
-            raise WebFailure("policy", blocked=f"the request body is larger than {MAX_REQUEST_BYTES} bytes")
+            raise WebFailure("policy", blocked=_reason("reasonBody", limit=str(MAX_REQUEST_BYTES)))
         if (any(not k or not all(" " < c < "\x7f" and c != ":" for c in k) or any(c in "\r\n\0" for c in v) for k, v in headers)
                 or sum(len(k) + len(v) + 4 for k, v in headers) > 16 * 1024):
             raise WebFailure("bad_header")
         if self._this_call >= p.max_requests_per_call:
-            raise WebFailure("policy", blocked=f"the limit of {p.max_requests_per_call} requests in one call was reached")
+            raise WebFailure("policy", blocked=_reason("reasonCallLimit", limit=str(p.max_requests_per_call)))
         if self._total >= p.max_requests:
-            raise WebFailure("policy", blocked=f"the limit of {p.max_requests} requests for this session was reached")
+            raise WebFailure("policy", blocked=_reason("reasonSessionLimit", limit=str(p.max_requests)))
         self._this_call += 1
         self._total += 1
 
         sent = [(k, v) for k, v in headers if k.lower() not in _DROPPED and not k.lower().startswith("proxy-")]
         secrets: list[str] = []
-        auth = self._credentials.get(url.host)
+        auth = self._credential(url)
         if auth is not None:
-            sent = [(k, v) for k, v in sent if k.lower() != "authorization"]  # the agent cannot replace it
+            # the agent cannot replace it, nor fetch the body in pieces that each slip past the scrub
+            sent = [(k, v) for k, v in sent if k.lower() not in ("authorization", "range", "if-range")]
             try:
                 credential = auth() or ""
             except Exception:  # the message may describe the secret
-                raise WebFailure("policy", blocked=f"the credentials for {url.host} are not available") from None
+                raise WebFailure("policy", blocked=_reason("reasonNoCredential", host=url.host)) from None
             if any(_is_control(c) for c in credential):
-                raise WebFailure("policy", blocked=f"the credentials for {url.host} are not a valid header value")
+                raise WebFailure("policy", blocked=_reason("reasonBadCredential", host=url.host))
             if credential:
                 sent.append(("Authorization", credential))
             secrets = secrets_of(credential)
@@ -360,12 +383,12 @@ class WebSession:
         if self._replay is not None:
             exchange = self._next_recorded(method, str(url))
         else:
-            exchange = await self._exchange(url, method, sent, body, timeout, secrets, deadline)
+            exchange = await self._exchange(url, method, sent, body, timeout, secrets, deadline, auth is not None)
         self._log.append(exchange)
         if exchange.error is not None:
             blocked = exchange.error == "blocked"
             raise WebFailure("resolve" if blocked else exchange.error, url.host, url.port,
-                             explain(f"{url.host} resolves to a private or reserved address") if blocked else None,
+                             explain(_reason("reasonResolvesPrivate", host=url.host)) if blocked else None,
                              detail=str(int(timeout * 1000)) if exchange.error == "timeout" else "")
         truncated = len(exchange.body) > p.max_response_bytes
         return WebResponse(url, method, exchange.status, exchange.reason, list(exchange.headers),
@@ -380,7 +403,7 @@ class WebSession:
         raise WebFailure("replay", detail=f"{method} {url}")
 
     async def _exchange(self, url: WebUrl, method: str, headers: list, body: bytes | None, timeout: float, secrets: list[str],
-                        deadline: float) -> WebExchange:
+                        deadline: float, decode: bool) -> WebExchange:
         from .shell import CallTimeout
 
         def failed(kind: str) -> WebExchange:
@@ -393,7 +416,7 @@ class WebSession:
             raise CallTimeout()
         try:
             status, reason, raw_headers, data = await asyncio.wait_for(
-                asyncio.to_thread(self._send, method, str(url), list(headers), body, timeout, cap), wait)
+                asyncio.to_thread(self._send, method, str(url), list(headers), body, wait, cap), wait)
         except (asyncio.TimeoutError, TimeoutError):
             if time.monotonic() >= deadline:
                 raise CallTimeout() from None
@@ -412,6 +435,13 @@ class WebSession:
         if sum(len(k) + len(v) + 4 for k, v in resp_headers) > MAX_HEADER_BYTES:
             return failed("recv")
         data = b"" if method == "HEAD" else bytes(data[:cap + 1])
+        encoding = next((v for k, v in resp_headers if k.lower() == "content-encoding"), "").strip().lower()
+        if decode and encoding not in ("", "identity"):
+            # the scrub must see the credential as the agent will, so a compressed echo cannot carry it out
+            data = decode_body(data, encoding, cap + 1)
+            if data is None:
+                return failed("recv")
+            resp_headers = [(k, v) for k, v in resp_headers if k.lower() not in ("content-encoding", "content-length")]
         return WebExchange(method, str(url), int(status), reason or "", [(k, _scrub(v, secrets)) for k, v in resp_headers],
                            _scrub_bytes(data, secrets))
 
@@ -420,10 +450,10 @@ class WebSession:
         """Sends method to url, following redirects when follow (up to max_redirects, never more than the policy's), each
         hop checked again. on_hop sees every response, the final one included. Raises WebFailure."""
         limit = self.policy.max_redirects if max_redirects < 0 else min(max_redirects, self.policy.max_redirects)
-        first_host = url.host
+        first_origin = url.origin
         redirects = 0
         while True:
-            hop_headers = headers if url.host == first_host else [(k, v) for k, v in headers if k.lower() not in ("authorization", "cookie")]
+            hop_headers = headers if url.origin == first_origin else [(k, v) for k, v in headers if k.lower() not in ("authorization", "cookie")]
             response = await self.send(url, forced or method, hop_headers, body, timeout, deadline)
             if on_hop:
                 on_hop(response)
@@ -437,6 +467,35 @@ class WebSession:
                 method, body = "GET", None
                 headers = [(k, v) for k, v in headers if k.lower() != "content-type"]
             redirects += 1
+
+
+def _host_port(text: str, why: str) -> tuple[str, int | None]:
+    """ "name" or "name:port", lower case, without a trailing dot. Raises ValueError."""
+    name, colon, port = text.strip().lower().rpartition(":")
+    if not colon:
+        name = port
+    if colon and not (port.isascii() and port.isdigit() and len(port) <= 5 and 1 <= int(port) <= 65535):
+        raise ValueError(f"{text}: {why}")
+    return name.rstrip("."), int(port) if colon else None
+
+
+def decode_body(data: bytes, encoding: str, max_out: int) -> bytes | None:
+    """A gzip, x-gzip or (zlib-wrapped) deflate body, at most max_out bytes of it; None for another encoding or corrupt data."""
+    if encoding not in ("gzip", "x-gzip", "deflate"):
+        return None
+    if not data:
+        return b""
+    z = zlib.decompressobj(15 if encoding == "deflate" else 31)
+    try:
+        out = z.decompress(data, max_out)
+    except zlib.error:
+        return None
+    return out
+
+
+def allow_web(shell, policy: WebPolicy):
+    """Shell.allow_web(policy) as a function, like register_api."""
+    return shell.allow_web(policy)
 
 
 def _scrub(s: str, secrets: list[str]) -> str:
@@ -458,7 +517,15 @@ def blob_name(data: bytes) -> str:
 def pinned_transport(method, url, headers, body, timeout, limit):
     """The network: resolves the name once, refuses it if any address is internal, and connects to an address it checked.
     The TLS handshake and Host header still use the name, and nothing resolves it a second time (DNS rebinding). No
-    proxies (the environment's proxy settings are never read), no cookies, no redirects."""
+    proxies (the environment's proxy settings are never read), no cookies, no redirects. timeout is for the whole request:
+    when it passes the socket is shut, so a server that drips bytes cannot hold the thread."""
+    deadline = time.monotonic() + timeout
+
+    def left() -> float:
+        t = deadline - time.monotonic()
+        if t <= 0:
+            raise TimeoutError()
+        return t
     u = WebUrl.parse(url)
     try:
         found = _resolve_for_tests(u.host) if _resolve_for_tests else [ai[4][0] for ai in socket.getaddrinfo(u.host, u.port, type=socket.SOCK_STREAM)]
@@ -474,8 +541,8 @@ def pinned_transport(method, url, headers, body, timeout, limit):
     sock = None
     for a in addresses:
         s = socket.socket(socket.AF_INET6 if a.version == 6 else socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
         try:
+            s.settimeout(left())
             s.connect((str(a), u.port))
             sock = s
             break
@@ -486,10 +553,16 @@ def pinned_transport(method, url, headers, body, timeout, limit):
             s.close()
     if sock is None:
         raise TransportError("connect")
+    # a server dripping bytes keeps every single read inside the time left; at the deadline the socket is shut (http.client
+    # closes the socket object after the headers when the server will close, so its timeout cannot be set again for the body)
+    killer = threading.Timer(left(), _shutdown, (sock.fileno(),))
+    killer.daemon = True
+    killer.start()
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         if u.scheme == "https":
             try:
+                sock.settimeout(left())
                 sock = ssl.create_default_context().wrap_socket(sock, server_hostname=u.host)
             except (ssl.SSLError, ssl.CertificateError):
                 raise TransportError("tls") from None
@@ -501,16 +574,39 @@ def pinned_transport(method, url, headers, body, timeout, limit):
             conn.putheader(k, v)
         if body is not None:
             conn.putheader("Content-Length", str(len(body)))
+        sock.settimeout(left())
         conn.endheaders(body)
         resp = conn.getresponse()  # http.client caps a header line at 64 KB and the count at 100
         data = bytearray()
         if method != "HEAD":
-            while len(data) <= limit and (chunk := resp.read(min(65536, limit + 1 - len(data)))):
+            while len(data) <= limit:
+                chunk = resp.read1(min(65536, limit + 1 - len(data)))
+                if not chunk:
+                    break
                 data += chunk
+        left()  # the socket was shut at the deadline: what was read is not the whole body
         return resp.status, resp.reason or "", resp.getheaders(), bytes(data)
     except (TransportError, TimeoutError):
         raise
     except (http.client.HTTPException, OSError):
+        if time.monotonic() >= deadline:
+            raise TimeoutError() from None
         raise TransportError("recv") from None
     finally:
+        killer.cancel()
+        killer.join()
         sock.close()
+
+
+def _shutdown(fd: int) -> None:
+    """Shuts the connection by its descriptor: wrapping it in TLS detaches the socket object, not the descriptor."""
+    try:
+        s = socket.socket(fileno=fd)
+    except OSError:
+        return
+    try:
+        s.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    finally:
+        s.detach()

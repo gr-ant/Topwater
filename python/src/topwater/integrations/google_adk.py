@@ -7,7 +7,7 @@ try:
 except ImportError as e:
     raise ImportError('Google ADK support needs google-adk: pip install "topwater[google-adk]"') from e
 
-from .. import TOOL_DESCRIPTION, TOOL_NAME, Shell
+from .. import TOOL_NAME, Shell, tool_description
 from . import _runners
 
 
@@ -18,5 +18,5 @@ def bash_tool(shell: Shell | None = None, description: str | None = None) -> Fun
     async def bash(command: Annotated[str, Field(description="The bash command to run.")]) -> str:
         return await arun(command)
 
-    bash.__name__, bash.__doc__ = TOOL_NAME, description or TOOL_DESCRIPTION
+    bash.__name__, bash.__doc__ = TOOL_NAME, description or tool_description(shell)
     return FunctionTool(bash)
