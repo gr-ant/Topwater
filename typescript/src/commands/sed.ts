@@ -1,5 +1,6 @@
 import type { Shell } from '../shell.js';
-import { ShellError, cannotRead, splitLines, reason, tooLarge, type CommandContext } from '../command.js';
+import { ShellError, cannotRead, specFormat, specMessage, specOf, splitLines, reason, tooLarge, type CommandContext } from '../command.js';
+import { GETOPT } from '../spec.generated.js';
 import { CLASS_SYNTAX, posixRegexError, posixToJs } from '../regex.js';
 
 type Addr =
@@ -25,32 +26,8 @@ interface Cmd {
 const STEP_LIMIT = 10_000_000;
 const fail = (msg: string) => new ShellError(msg, 1);
 
-// our own summary of the options this sed takes (not GNU's help text); also printed after a usage error
-const USAGE = [
-  "Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...",
-  "Run a script of editing commands over each line of the input and print the result.",
-  "",
-  "  -n, --quiet, --silent    print only what the script prints (p, s///p, ...)",
-  "  -e script, --expression=script",
-  "                           add the commands in script",
-  "  -f script-file, --file=script-file",
-  "                           add the commands in a file",
-  "  -i[SUFFIX], --in-place[=SUFFIX]",
-  "                           write the result back into each file; with SUFFIX,",
-  "                           keep the original under the name FILE+SUFFIX",
-  "  -E, -r, --regexp-extended",
-  "                           read regular expressions as POSIX extended ones",
-  "  -s, --separate           treat each file as its own input, not one stream",
-  "  -u, --unbuffered         accepted, no effect",
-  "      --debug, --posix, --sandbox, --follow-symlinks",
-  "                           accepted, no effect",
-  "      --help               show this help",
-  "      --version            show the version",
-  "",
-  "Without -e or -f, the first operand is the script. The other operands are",
-  "input files; with none, sed reads standard input.",
-].join('\n') + '\n';
-const HELP = USAGE;
+// spec/commands/sed.json; also printed after a usage error
+const USAGE = specOf('sed').help!;
 
 /** Parses a sed script into a flat command list; { } blocks and b/t/T labels become jump targets.
  * `parts` are each -e expression and -f file, with where GNU says an error is ("-e expression #2", "file x.sed"). */
@@ -116,17 +93,17 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
       i++;
     }
     if (i >= n || script[i] !== delim)
-      throw err(what === 'addr' ? 'unterminated address regex' : what === 'y' ? "unterminated `y' command" : "unterminated `s' command", i);
+      throw err(what === 'addr' ? specMessage('sed', 'unterminatedAddress') : what === 'y' ? specMessage('sed', 'unterminatedY') : specMessage('sed', 'unterminatedS'), i);
     i++;
     return sb;
   }
 
   function compile(text: string, flags: string, errorAt: number): RegExp {
-    if (text.length === 0) { if (!lastRe) throw err('no previous regular expression', errorAt); return lastRe; }
+    if (text.length === 0) { if (!lastRe) throw err(specMessage('sed', 'noPreviousRegex'), errorAt); return lastRe; }
     const error = posixRegexError(text, extended, false);
     if (error !== null) throw error === CLASS_SYNTAX ? new ShellError(error, 4) : err(error, errorAt);
     try { return lastRe = new RegExp(posixToJs(text, extended), 'gs' + flags); } catch (e) {
-      throw err(`invalid regular expression: ${(e as Error).message.replace(/^Invalid regular expression: /, '')}`, errorAt);
+      throw err(specMessage('sed', 'invalidRegex', { detail: (e as Error).message.replace(/^Invalid regular expression: /, '') }), errorAt);
     }
   }
 
@@ -175,7 +152,7 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
   // text for a/i/c: `a text` or `a\` NEWLINE text, where a trailing backslash continues the text
   function readText(): string {
     skipBlanks();
-    if (i >= n) throw err("expected \\ after `a', `c' or `i'", i);
+    if (i >= n) throw err(specMessage('sed', 'expectedBackslash'), i);
     if (script[i] === '\\') {
       i++;
       if (script[i] === '\n') i++;
@@ -200,27 +177,27 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
       i++;
       skipBlanks();
       c.a2 = readAddr(true);
-      if (!c.a2) throw err("unexpected `,'", Math.min(i + 1, n));
+      if (!c.a2) throw err(specMessage('sed', 'unexpectedComma'), Math.min(i + 1, n));
     }
-    if (c.a1?.k === 'zero' && c.a2?.k !== 're') throw err('invalid usage of line address 0', Math.min(i + 1, n));
+    if (c.a1?.k === 'zero' && c.a2?.k !== 're') throw err(specMessage('sed', 'lineZero'), Math.min(i + 1, n));
     skipBlanks();
     if (script[i] === '!') {
       c.negate = true;
       i++;
       skipBlanks();
-      if (script[i] === '!') throw err("multiple `!'s", i + 1);
+      if (script[i] === '!') throw err(specMessage('sed', 'multipleBang'), i + 1);
     }
-    if (i >= n) throw err('missing command', i);
+    if (i >= n) throw err(specMessage('sed', 'missingCommand'), i);
     const op = c.op = script[i++];
     switch (op) {
       case '{': blocks.push({ cmd: cmds.length, at: i }); break;
       case '}':
-        if (blocks.length === 0) throw err("unexpected `}'", i);
-        if (c.a1) throw err("} doesn't want any addresses", i);
+        if (blocks.length === 0) throw err(specMessage('sed', 'unexpectedBrace'), i);
+        if (c.a1) throw err(specMessage('sed', 'braceAddresses'), i);
         cmds[blocks.pop()!.cmd].target = cmds.length + 1;
         break;
       case 's': {
-        if (i >= n) throw err("unterminated `s' command", i);
+        if (i >= n) throw err(specMessage('sed', 'unterminatedS'), i);
         const delim = script[i++];
         const find = readDelimited(delim, 'regex');
         c.repl = parseReplacement(readDelimited(delim, 'replacement'));
@@ -230,50 +207,50 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
           const f = script[i];
           if (isDigit(f)) {
             c.nth = readNumber();
-            if (numbered) throw err("multiple number options to `s' command", i);
-            if (c.nth === 0) throw err("number option to `s' command may not be zero", i);
+            if (numbered) throw err(specMessage('sed', 'multipleNumbers'), i);
+            if (c.nth === 0) throw err(specMessage('sed', 'zeroNumber'), i);
             numbered = true;
             continue;
           }
           if (!'gpiImMew'.includes(f)) break;
           i++;
-          if (f === 'g') { if (c.global) throw err("multiple `g' options to `s' command", i); c.global = true; }
-          else if (f === 'p') { if (c.print) throw err("multiple `p' options to `s' command", i); c.print = true; }
+          if (f === 'g') { if (c.global) throw err(specMessage('sed', 'multipleG'), i); c.global = true; }
+          else if (f === 'p') { if (c.print) throw err(specMessage('sed', 'multipleP'), i); c.print = true; }
           else if (f === 'i' || f === 'I') flags += 'i';
           else if (f === 'm' || f === 'M') flags += 'm';
           else if (f === 'w') {
             c.wfile = readToEol();
-            if (c.wfile.trim().length === 0) throw err('missing filename in r/R/w/W commands', i);
+            if (c.wfile.trim().length === 0) throw err(specMessage('sed', 'missingFilename'), i);
             break;
-          } else throw err(`the \`${f}' flag of \`s' is not supported`, i);
+          } else throw err(specMessage('sed', 'flagNotSupported', { flag: f }), i);
         }
         skipBlanks();
-        if (i < n && !';\n}#'.includes(script[i])) throw err("unknown option to `s'", i + 1);
+        if (i < n && !';\n}#'.includes(script[i])) throw err(specMessage('sed', 'unknownSOption'), i + 1);
         // GNU compiles the regex once it has read the character that ends the command
         const compiledAt = i < n && (script[i] === ';' || script[i] === '\n') ? i + 1 : i;
         c.re = compile(find, flags, compiledAt);
         const groups = new RegExp(c.re.source + '|').exec('')!.length - 1;
         const maxRef = Math.max(0, ...c.repl.map(p => (p.k === 'group' ? p.n : 0)));
-        if (maxRef > groups) throw err(`invalid reference \\${maxRef} on \`s' command's RHS`, compiledAt);
+        if (maxRef > groups) throw err(specMessage('sed', 'invalidReference', { number: String(maxRef) }), compiledAt);
         break;
       }
       case 'y': {
         const yd = script[i++] ?? '\0';
         const src = [...unescapeY(readDelimited(yd, 'y'))];
         const dst = [...unescapeY(readDelimited(yd, 'y'))];
-        if (src.length !== dst.length) throw err("strings for `y' command are different lengths", i);
+        if (src.length !== dst.length) throw err(specMessage('sed', 'yLengths'), i);
         src.forEach((s, k) => c.table.set(s, dst[k]));
         break;
       }
       case 'a': case 'i': case 'c': c.text = readText(); break;
       case 'r': case 'w':
         c.text = readToEol();
-        if (!c.text) throw err('missing filename in r/R/w/W commands', i);
+        if (!c.text) throw err(specMessage('sed', 'missingFilename'), i);
         break;
       case ':': {
-        if (c.a1) throw err(": doesn't want any addresses", i);
+        if (c.a1) throw err(specMessage('sed', 'colonAddresses'), i);
         const label = readLabel();
-        if (!label) throw err('":" lacks a label', i);
+        if (!label) throw err(specMessage('sed', 'colonLabel'), i);
         labels.set(label, cmds.length);
         break;
       }
@@ -285,16 +262,16 @@ function parse(parts: { text: string; where: string }[], extended: boolean): Cmd
         break;
       case 'l': skipBlanks(); if (isDigit(script[i])) readNumber(); break;
       default:
-        if (!'=dDgGhHnNpPxz'.includes(op)) throw err(`unknown command: \`${op}'`, i);
+        if (!'=dDgGhHnNpPxz'.includes(op)) throw err(specMessage('sed', 'unknownCommand', { op }), i);
     }
     cmds.push(c);
     skipBlanks();
-    if (op !== '{' && i < n && !';\n}#'.includes(script[i])) throw err('extra characters after command', i + 1);
+    if (op !== '{' && i < n && !';\n}#'.includes(script[i])) throw err(specMessage('sed', 'extraCharacters'), i + 1);
   }
-  if (blocks.length > 0) throw err("unmatched `{'", blocks[blocks.length - 1].at, true);
+  if (blocks.length > 0) throw err(specMessage('sed', 'unmatchedBrace'), blocks[blocks.length - 1].at, true);
   for (const c of cmds) {
     if (c.op !== 'b' && c.op !== 't' && c.op !== 'T') continue;
-    if (c.label && !labels.has(c.label)) throw new ShellError(`can't find label for jump to \`${c.label}'`, 4);
+    if (c.label && !labels.has(c.label)) throw new ShellError(specMessage('sed', 'missingLabel', { label: c.label }), 4);
     c.target = c.label ? labels.get(c.label)! : cmds.length;
   }
   return cmds;
@@ -435,7 +412,7 @@ function execute(ctx: CommandContext, cmds: Cmd[], text: string, out: Sink, quie
     const appends: [string, boolean][] = [];
     let tflag = false, autoprint = !quiet;
     for (let pc = 0; pc < cmds.length;) {
-      if (++steps > STEP_LIMIT) throw fail('too many steps (a branch loops forever?)');
+      if (++steps > STEP_LIMIT) throw fail(specMessage('sed', 'tooManySteps'));
       if ((steps & 1023) === 0) ctx.checkTime();
       if (ps.length > maxString || hold.length > maxString) throw tooLarge('sed: pattern space', maxString, 'process the input in smaller pieces');
       const c = cmds[pc++];
@@ -523,7 +500,7 @@ function run(ctx: CommandContext): number {
     let text: string;
     try { text = value === '-' ? ctx.stdinText : ctx.fs.readText(ctx.resolvePath(value)); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      throw new ShellError(`couldn't open file ${value}: ${reason(e)}`, 4);
+      throw new ShellError(specMessage('sed', 'cannotOpenScript', { file: value, errno: reason(e) }), 4);
     }
     scripts.push({ text, where: `file ${value}` });
   };
@@ -545,12 +522,12 @@ function run(ctx: CommandContext): number {
         case 'separate': separate = true; break;
         case 'in-place': inPlace = true; suffix = value ?? ''; break;
         case 'expression': case 'file':
-          if (value === undefined) { if (i >= args.length) return bad(`option '--${name}' requires an argument`); value = args[i++]; }
+          if (value === undefined) { if (i >= args.length) return bad(specFormat(GETOPT.missingLongArgument, { option: name })); value = args[i++]; }
           addScript(name[0], value);
           break;
         case 'posix': case 'debug': case 'sandbox': case 'follow-symlinks': case 'unbuffered': break;
-        case 'help': ctx.stdout.write(HELP); return 0;
-        default: return bad(`unrecognized option '${arg}'`);
+        case 'help': ctx.stdout.write(USAGE); return 0;
+        default: return bad(specFormat(GETOPT.unrecognizedOption, { option: arg }));
       }
       continue;
     }
@@ -564,10 +541,10 @@ function run(ctx: CommandContext): number {
       else if (f === 'i') { inPlace = true; suffix = arg.slice(k + 1); break; } // like GNU, -i takes the rest of the word as a backup suffix
       else if (f === 'e' || f === 'f') {
         let value = arg.slice(k + 1);
-        if (value.length === 0) { if (i >= args.length) return bad(`option requires an argument -- '${f}'`); value = args[i++]; }
+        if (value.length === 0) { if (i >= args.length) return bad(specFormat(GETOPT.missingShortArgument, { option: f })); value = args[i++]; }
         addScript(f, value);
         break;
-      } else return bad(`invalid option -- '${f}'`);
+      } else return bad(specFormat(GETOPT.invalidOption, { option: f }));
     }
   }
   if (scripts.length === 0) {
@@ -581,14 +558,14 @@ function run(ctx: CommandContext): number {
   }
 
   if (inPlace) {
-    if (files.length === 0) throw fail('no input files');
+    if (files.length === 0) throw fail(specMessage('sed', 'noInputFiles'));
     let code = 0;
     for (const f of files) {
       const path = ctx.resolvePath(f);
       let original: string;
       try { original = ctx.fs.readText(path); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        if (ctx.fs.isDirectory(path)) { ctx.stderr.write(`sed: couldn't edit ${f}: not a regular file\n`); code = 4; continue; }
+        if (ctx.fs.isDirectory(path)) { ctx.stderr.write(`sed: ${specMessage('sed', 'notRegularFile', { file: f })}\n`); code = 4; continue; }
         ctx.stderr.write(`sed: ${cannotRead('sed', f, reason(e))}\n`);
         code = 2;
         continue;
@@ -622,5 +599,5 @@ function run(ctx: CommandContext): number {
 }
 
 export function registerSed(shell: Shell): void {
-  shell.register('sed', run, 'Stream editor', HELP);
+  shell.register('sed', run);
 }

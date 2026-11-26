@@ -1,6 +1,8 @@
 // Parser for the shell language: a hand-written recursive-descent parser that reads characters directly (no separate
 // token stream), because how bash splits text into tokens depends on where the parser is ([[ ]], (( )), case, =~).
 
+import { DIAGNOSTICS, diagnostic } from './spec.generated.js';
+
 export class ParseError extends Error {}
 
 /** One piece of a word. `q` is true for quoted text (no splitting or globbing). */
@@ -91,7 +93,7 @@ export function parseWords(text: string): Word[] {
     p.skipBlankAndNewlines();
     if (p.atEnd()) return words;
     const w = p.readWord();
-    if (!w) throw new ParseError(`syntax error near unexpected token \`${text[p.pos]}'`);
+    if (!w) throw new ParseError(diagnostic('unexpectedToken', { token: text[p.pos] }));
     words.push(w);
   }
 }
@@ -146,9 +148,9 @@ class Parser {
   }
 
   private fail(token?: string): never {
-    if (this.atEnd() && token === undefined) throw new ParseError('syntax error: unexpected end of file');
+    if (this.atEnd() && token === undefined) throw new ParseError(DIAGNOSTICS.unexpectedEof);
     const t = token ?? (this.ch() === '\n' ? 'newline' : this.peekTokenText());
-    throw new ParseError(`syntax error near unexpected token \`${t}'`);
+    throw new ParseError(diagnostic('unexpectedToken', { token: t }));
   }
 
   private peekTokenText(): string {
@@ -200,7 +202,7 @@ class Parser {
   private expectKeyword(word: string) {
     this.skipSeparators();
     if (this.peekKeyword() !== word) {
-      if (this.atEnd()) throw new ParseError(`syntax error: unexpected end of file (expected \`${word}')`);
+      if (this.atEnd()) throw new ParseError(diagnostic('unexpectedEofExpecting', { word: word }));
       this.fail();
     }
     this.pos += word.length;
@@ -290,7 +292,7 @@ class Parser {
   }
 
   private parseCommand(): Command {
-    if (++this.depth > MAX_DEPTH) throw new ParseError('command is nested too deeply');
+    if (++this.depth > MAX_DEPTH) throw new ParseError(DIAGNOSTICS.nestedTooDeeply);
     try {
       this.skipBlank();
       const start = this.line();
@@ -315,7 +317,7 @@ class Parser {
       this.pos++;
       const body = this.parseList(new Set(), true);
       this.skipSeparators();
-      if (this.ch() !== ')') { if (this.atEnd()) throw new ParseError("unexpected EOF while looking for matching `)'"); this.fail(); }
+      if (this.ch() !== ')') { if (this.atEnd()) throw new ParseError(DIAGNOSTICS.eofParen); this.fail(); }
       this.pos++;
       return { k: 'group', body, subshell: true, redirects: [] };
     }
@@ -350,7 +352,7 @@ class Parser {
         return this.functionBody(m[0]);
       }
       case '[[': return this.parseCond();
-      case 'coproc': throw new ParseError("'coproc' is not supported by this shell");
+      case 'coproc': throw new ParseError(DIAGNOSTICS.coproc);
       case 'then': case 'elif': case 'else': case 'fi': case 'do': case 'done': case 'esac': case '}': case 'in': case ']]':
         this.fail(kw);
     }
@@ -412,9 +414,9 @@ class Parser {
     this.skipBlank();
     if (!select && this.startsWith('((')) {
       const end = this.matchArith(this.pos + 2);
-      if (end < 0) throw new ParseError('syntax error: expected `for (( init; cond; step ))\'');
+      if (end < 0) throw new ParseError(DIAGNOSTICS.forArithmetic);
       const parts = splitTopLevel(this.src.slice(this.pos + 2, end), ';');
-      if (parts.length !== 3) throw new ParseError('syntax error: expected `for (( init; cond; step ))\'');
+      if (parts.length !== 3) throw new ParseError(DIAGNOSTICS.forArithmetic);
       this.pos = end + 2;
       this.skipBlank();
       if (this.ch() === ';') this.pos++;
@@ -468,7 +470,7 @@ class Parser {
     const clauses: CaseClause[] = [];
     for (;;) {
       this.skipSeparators();
-      if (this.atEnd()) throw new ParseError('syntax error: unexpected end of file (expected `esac\')');
+      if (this.atEnd()) throw new ParseError(DIAGNOSTICS.eofEsac);
       if (this.peekKeyword() === 'esac') { this.pos += 4; break; }
       if (this.ch() === '(') this.pos++;
       const patterns: Word[] = [];
@@ -504,7 +506,7 @@ class Parser {
     let afterRegexOp = false;
     for (;;) {
       this.skipBlankAndNewlines();
-      if (this.atEnd()) throw new ParseError("syntax error: unexpected end of file (expected `]]')");
+      if (this.atEnd()) throw new ParseError(DIAGNOSTICS.eofDoubleBracket);
       if (this.startsWith(']]') && (META.includes(this.ch(2)) || this.ch(2) === '')) { this.pos += 2; break; }
       let w: Word | null = null;
       if (!afterRegexOp) {
@@ -569,7 +571,7 @@ class Parser {
     if (!m) return false;
     const op = m[2];
     if ((op === '<' || op === '>') && this.src[this.pos + m[0].length] === '(' && !m[1]) {
-      if (op === '>') throw new ParseError('process substitution >(...) is not supported by this shell (write to a file, then read it)');
+      if (op === '>') throw new ParseError(DIAGNOSTICS.processSubstitution);
       return false; // <(cmd) is a word
     }
     let fd = op[0] === '<' ? 0 : 1;
@@ -666,7 +668,7 @@ class Parser {
           }
         } else if (META.includes(c)) {
           if ((c === '<' || c === '>') && this.ch(1) === '(' && this.pos === start) {
-            if (c === '>') throw new ParseError('process substitution >(...) is not supported by this shell (write to a file, then read it)');
+            if (c === '>') throw new ParseError(DIAGNOSTICS.processSubstitution);
             const end = this.matchParen(this.pos + 1);
             parts.push({ k: 'proc', src: this.src.slice(this.pos + 2, end), q: true });
             this.pos = end + 1;
@@ -723,7 +725,7 @@ class Parser {
     }
     if (c === "'" && !opts.inDq) {
       const end = this.src.indexOf("'", this.pos + 1);
-      if (end < 0) throw new ParseError("unexpected EOF while looking for matching `''");
+      if (end < 0) throw new ParseError(DIAGNOSTICS.eofSingleQuote);
       parts.push({ k: 'lit', text: this.src.slice(this.pos + 1, end), q: true });
       this.pos = end + 1;
       return;
@@ -736,7 +738,7 @@ class Parser {
     }
     if (c === '$' && this.ch(1) === "'" && (!opts.inDq || opts.paramWord)) {
       const end = findAnsiEnd(this.src, this.pos + 2);
-      if (end < 0) throw new ParseError("unexpected EOF while looking for matching `''");
+      if (end < 0) throw new ParseError(DIAGNOSTICS.eofSingleQuote);
       parts.push({ k: 'lit', text: ansiC(this.src.slice(this.pos + 2, end)), q: true });
       this.pos = end + 1;
       return;
@@ -773,7 +775,7 @@ class Parser {
     for (;;) {
       if (this.atEnd()) {
         if (toEnd) break;
-        throw new ParseError('unexpected EOF while looking for matching `"\'');
+        throw new ParseError(diagnostic('eofMatching', { terminator: '"' }));
       }
       const c = this.ch();
       if (c === '"' && !heredoc) { this.pos++; break; }
@@ -804,7 +806,7 @@ class Parser {
         if (this.src[i] === '\\' && '`$\\'.includes(this.src[i + 1] ?? '')) { src += this.src[++i]; continue; }
         src += this.src[i];
       }
-      if (i >= this.src.length) throw new ParseError("unexpected EOF while looking for matching ``'");
+      if (i >= this.src.length) throw new ParseError(DIAGNOSTICS.eofBacktick);
       this.pos = i + 1;
       return { k: 'cmd', src, q };
     }
@@ -825,7 +827,7 @@ class Parser {
     }
     if (n === '[') {
       const end = matchBracket(this.src, this.pos + 1);
-      if (end < 0) throw new ParseError("unexpected EOF while looking for matching `]'");
+      if (end < 0) throw new ParseError(DIAGNOSTICS.eofBracket);
       const expr = this.src.slice(this.pos + 2, end);
       this.pos = end + 1;
       return { k: 'arith', expr, q };
@@ -861,21 +863,21 @@ class Parser {
       if (c === '`') { const e = this.src.indexOf('`', i + 1); if (e < 0) break; i = e; continue; }
       if (c === '}' && --depth === 0) return i;
     }
-    throw new ParseError("unexpected EOF while looking for matching `}'");
+    throw new ParseError(DIAGNOSTICS.eofBrace);
   }
 
   /** Index of the `)` matching the `(` at i, parsing the inside as shell code so quotes, case and comments count. */
   private matchParen(i: number): number {
     const sub = new Parser(this.src, i + 1);
     sub.depth = this.depth + 1;
-    if (sub.depth > MAX_DEPTH) throw new ParseError('command is nested too deeply');
+    if (sub.depth > MAX_DEPTH) throw new ParseError(DIAGNOSTICS.nestedTooDeeply);
     // extglob groups and array literals are plain text with balanced parens
     const before = this.src[i - 1] ?? '';
     if (/[@*+?!=]/.test(before) && this.src[i - 2] !== '$') return matchPlainParen(this.src, i);
     sub.parseList(new Set(), true);
     sub.skipSeparators();
     if (sub.ch() !== ')') {
-      if (sub.atEnd()) throw new ParseError("unexpected EOF while looking for matching `)'");
+      if (sub.atEnd()) throw new ParseError(DIAGNOSTICS.eofParen);
       sub.fail();
     }
     return sub.pos;
@@ -905,7 +907,7 @@ function matchPlainParen(s: string, i: number): number {
     if (c === '(') depth++;
     else if (c === ')' && --depth === 0) return i;
   }
-  throw new ParseError("unexpected EOF while looking for matching `)'");
+  throw new ParseError(DIAGNOSTICS.eofParen);
 }
 
 function splitTopLevel(s: string, sep: string): string[] {

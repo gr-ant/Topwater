@@ -1,5 +1,5 @@
 // File commands: ls cat mkdir touch rm rmdir cp mv find tree stat du df chmod chown file mktemp realpath ...
-import { Args, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, type CommandContext, type CommandHandler } from '../command.js';
+import { Args, specOf, specMessage, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, type CommandContext, type CommandHandler } from '../command.js';
 import { VirtualFileSystem, NO_SPACE, type FileStat } from '../vfs.js';
 import { globRegex } from '../glob.js';
 import { strftime } from '../format.js';
@@ -66,9 +66,7 @@ function timeStyle(arg: string): string {
   if (arg.startsWith('+')) return arg;
   const hits = TIME_STYLES.includes(arg) ? [arg] : TIME_STYLES.filter(s => s.startsWith(arg));
   if (hits.length !== 1)
-    throw new ShellError(`${hits.length === 0 ? 'invalid' : 'ambiguous'} argument ${quoteL(arg)} for ‘time style’\nValid arguments are:\n` +
-      '  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n' +
-      "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\nTry 'ls --help' for more information.", 2);
+    throw new ShellError(specMessage('ls', 'badTimeStyle', { problem: hits.length === 0 ? 'invalid' : 'ambiguous', value: arg }), 2);
   return hits[0].startsWith('posix-') ? hits[0].slice(6) : hits[0];
 }
 
@@ -126,7 +124,7 @@ export function parseMode(spec: string, mode: number, isDir: boolean): number {
   if (/^[0-7]{1,4}$/.test(spec)) return parseInt(spec, 8);
   for (const clause of spec.split(',')) {
     const m = /^([ugoa]*)([-+=])([rwxXt]*)$/.exec(clause);
-    if (!m) throw new ShellError(`invalid mode: '${spec}'`);
+    if (!m) throw new ShellError(specMessage('chmod', 'invalidMode', { mode: spec }));
     const who = m[1] === '' || m[1] === 'a' ? 'ugo' : m[1].replace('a', 'ugo');
     let bits = 0, sticky = false;
     for (const c of m[3]) {
@@ -184,7 +182,7 @@ class Find {
     this.args = ctx.args.slice(k);
     if (starts.length === 0) starts.push('.');
     const expr: Pred = this.args.length === 0 ? () => true : this.parseOr();
-    if (this.p < this.args.length) throw new ShellError(`unexpected \`${this.args[this.p]}'`);
+    if (this.p < this.args.length) throw new ShellError(specMessage('find', 'unexpected', { token: this.args[this.p] }));
     let code = 0;
     const above: { real: string; display: string }[] = []; // directories being walked, so -L stops at a link back up
     const walk = async (abs: string, display: string, depth: number, start: string, follow: boolean): Promise<void> => {
@@ -194,14 +192,14 @@ class Find {
       const real = dir && follow ? fs.realPath(abs) ?? abs : abs;
       const loop = dir && follow ? above.find(x => x.real === real) : undefined;
       if (loop) {
-        ctx.stderr.write(`find: File system loop detected; ${quoteL(display)} is part of the same file system loop as ${quoteL(loop.display)}.\n`);
+        ctx.stderr.write(`find: ${specMessage('find', 'loop', { dir: display, loop: loop.display })}\n`);
         code = 1;
         return;
       }
       if (depth >= this.minDepth && (await expr({ abs, name: nameOf(abs), display, depth, start, follow })) && !this.hasAction) line(ctx, display);
       if (this.prune || depth >= this.maxDepth || !dir) return;
       let names: string[];
-      try { names = fs.list(abs); } catch { ctx.stderr.write(`find: ${quoteL(display)}: Permission denied\n`); code = 1; return; }
+      try { names = fs.list(abs); } catch { ctx.stderr.write(`find: ${specMessage('find', 'cannotRead', { file: display, errno: 'Permission denied' })}\n`); code = 1; return; }
       above.push({ real, display });
       for (const name of names) await walk(norm(abs, name), display.endsWith('/') ? display + name : display + '/' + name, depth + 1, start, mode === 'L');
       above.pop();
@@ -210,7 +208,7 @@ class Find {
       for (const s of starts) {
         const abs = ctx.resolvePath(s);
         const follow = mode !== 'P' || s.endsWith('/');
-        if (!fs.exists(abs, follow) && !fs.exists(abs, false)) { ctx.stderr.write(`find: ${quoteL(s)}: ${fs.whyMissing(abs, follow)}\n`); code = 1; continue; }
+        if (!fs.exists(abs, follow) && !fs.exists(abs, false)) { ctx.stderr.write(`find: ${specMessage('find', 'cannotRead', { file: s, errno: fs.whyMissing(abs, follow) })}\n`); code = 1; continue; }
         await walk(abs, s, 0, s, follow);
       }
     } catch (e) { if (!(e instanceof Quit)) throw e; }
@@ -231,7 +229,7 @@ class Find {
   private parseOr(): Pred {
     let l = this.parseAnd();
     while (this.is('-o') || this.is('-or')) {
-      if (++this.p >= this.args.length) throw new ShellError(`expected an expression after '${this.args[this.p - 1]}'`);
+      if (++this.p >= this.args.length) throw new ShellError(specMessage('find', 'expectedExpression', { token: this.args[this.p - 1] }));
       const left = l, right = this.parseAnd();
       l = async e => (await left(e)) || (await right(e));
     }
@@ -241,7 +239,7 @@ class Find {
   private parseAnd(): Pred {
     let l = this.parseNot();
     while (this.p < this.args.length && !this.is('-o') && !this.is('-or') && !this.is(')')) {
-      if ((this.is('-a') || this.is('-and')) && ++this.p >= this.args.length) throw new ShellError(`expected an expression after '${this.args[this.p - 1]}'`);
+      if ((this.is('-a') || this.is('-and')) && ++this.p >= this.args.length) throw new ShellError(specMessage('find', 'expectedExpression', { token: this.args[this.p - 1] }));
       const left = l, right = this.parseNot();
       l = async e => (await left(e)) && (await right(e));
     }
@@ -257,7 +255,7 @@ class Find {
     if (this.is('(')) {
       this.p++;
       const inner = this.parseOr();
-      if (!this.is(')')) throw new ShellError("invalid expression; expected `)'");
+      if (!this.is(')')) throw new ShellError(specMessage('find', 'expectedParen', {  }));
       this.p++;
       return inner;
     }
@@ -323,7 +321,7 @@ class Find {
   private primary(): Pred {
     const tok = this.args[this.p++];
     const arg = () => {
-      if (this.p >= this.args.length) throw new ShellError(`missing argument to \`${tok}'`);
+      if (this.p >= this.args.length) throw new ShellError(specMessage('find', 'missingArgument', { predicate: tok }));
       return this.args[this.p++];
     };
     const fs = this.ctx.fs, ctx = this.ctx;
@@ -338,7 +336,7 @@ class Find {
       }
       case '-type': case '-xtype': {
         const t = arg();
-        if (!['f', 'd', 'l'].includes(t) && !/^[fdl](,[fdl])*$/.test(t)) throw new ShellError(`Unknown argument to ${tok}: ${t}`);
+        if (!['f', 'd', 'l'].includes(t) && !/^[fdl](,[fdl])*$/.test(t)) throw new ShellError(specMessage('find', 'unknownType', { predicate: tok, value: t }));
         const types = t.split(',');
         // -xtype: the other view of a link (what it leads to under -P, the link itself under -L)
         return e => types.includes(typeChar(this.stat(tok === '-type' ? e : { ...e, follow: !e.follow })));
@@ -348,7 +346,7 @@ class Find {
       case '-mmin': case '-mtime': {
         const spec = arg();
         const num = spec.replace(/^[+-]/, '');
-        if (!/^(\d+\.?\d*|\.\d+)$/.test(num)) throw new ShellError(`invalid argument \`${spec}' to \`${tok}'`);
+        if (!/^(\d+\.?\d*|\.\d+)$/.test(num)) throw new ShellError(specMessage('find', 'invalidArgument', { value: spec, predicate: tok }));
         const unit = tok === '-mmin' ? 1 : 1440, n = Number(num);
         return e => {
           const age = (ctx.shell.now() - this.stat(e).modified) / 60_000 / unit;
@@ -357,15 +355,15 @@ class Find {
       }
       case '-newer': {
         const reference = arg(), refAbs = ctx.resolvePath(reference);
-        if (!fs.exists(refAbs)) throw new ShellError(`${quoteL(reference)}: ${fs.whyMissing(refAbs)}`);
+        if (!fs.exists(refAbs)) throw new ShellError(specMessage('find', 'cannotRead', { file: reference, errno: fs.whyMissing(refAbs) }));
         const refTime = fs.stat(refAbs).modified;
         return e => this.stat(e).modified > refTime; }
       case '-size': {
         const spec = arg();
         const m = /^([+-]?)(\d+)([cwbkMG]?)$/.exec(spec);
         const bad = /^[+-]?\d+(\D)/.exec(spec);
-        if (bad && !m) throw new ShellError(`invalid -size type \`${bad[1]}'`);
-        if (!m) throw new ShellError(`invalid argument \`${spec}' to \`-size'`);
+        if (bad && !m) throw new ShellError(specMessage('find', 'invalidSizeType', { unit: bad[1] }));
+        if (!m) throw new ShellError(specMessage('find', 'invalidArgument', { value: spec, predicate: '-size' }));
         const unit = ({ c: 1, w: 2, k: 1024, M: 1 << 20, G: 1 << 30 } as Record<string, number>)[m[3]] ?? 512;
         const n = Number(m[2]);
         return e => {
@@ -401,8 +399,8 @@ class Find {
         this.hasAction = true;
         const cmd: string[] = [];
         while (this.p < this.args.length && this.args[this.p] !== ';' && !(this.args[this.p] === '+' && cmd[cmd.length - 1] === '{}')) cmd.push(this.args[this.p++]);
-        if (this.p >= this.args.length) throw new ShellError(`missing argument to \`${tok}'`);
-        if (cmd.length === 0) throw new ShellError(`invalid argument \`${this.args[this.p]}' to \`${tok}'`);
+        if (this.p >= this.args.length) throw new ShellError(specMessage('find', 'missingArgument', { predicate: tok }));
+        if (cmd.length === 0) throw new ShellError(specMessage('find', 'invalidArgument', { value: this.args[this.p], predicate: tok }));
         if (this.args[this.p++] === '+') {
           const batch = { cmd, paths: [] as string[] };
           this.batches.push(batch);
@@ -411,7 +409,7 @@ class Find {
         return async e => (await ctx.invoke(cmd.map(x => x.replaceAll('{}', e.display)))) === 0;
       }
     }
-    throw new ShellError(`unknown predicate \`${tok}'`);
+    throw new ShellError(specMessage('find', 'unknownPredicate', { predicate: tok }));
   }
 }
 
@@ -420,12 +418,11 @@ const typeChar = (st: FileStat) => (st.isSymlink ? 'l' : st.isDirectory ? 'd' : 
 // ---------- registration ----------
 
 export function registerFiles(shell: Shell) {
-  const reg = (name: string, handler: CommandHandler, description: string, usage?: string) => shell.register(name, handler, description, usage);
+  const reg = (name: string, handler: CommandHandler) => shell.register(name, handler);
 
   reg('ls', ctx => {
     // \u0001: --time-style=STYLE, \u0002: --full-time
-    const a = Args.parse(ctx.args, 'alhA1dFrtRSCZskLH\u0002', '\u0001',
-      'all=a,almost-all=A,human-readable=h,directory=d,reverse=r,recursive=R,color=1,size=s,kibibytes=k,time-style=\u0001,full-time=\u0002,dereference=L,dereference-command-line=H');
+    const a = Args.parse(ctx.args, specOf('ls'));
     const paths = a.positional.length > 0 ? a.positional : ['.'];
     const lng = a.has('l') || a.has('\u0002'), human = a.has('h'), blocks = a.has('s'), deref = a.has('L');
     const ts = a.value('\u0001');
@@ -454,7 +451,7 @@ export function registerFiles(shell: Shell) {
       return a.has('r') ? list.reverse() : list;
     };
     const files = ordered(paths.filter(p => exists(p) && (a.has('d') || !fs.isDirectory(ctx.resolvePath(p), followOperand(p)))));
-    for (const p of paths.filter(p => !exists(p))) { ctx.stderr.write(`ls: cannot access '${p}': ${fs.whyMissing(ctx.resolvePath(p), deref || p.endsWith('/'))}\n`); code = 2; }
+    for (const p of paths.filter(p => !exists(p))) { ctx.stderr.write(`ls: ${specMessage('ls', 'cannotAccess', { file: p, errno: fs.whyMissing(ctx.resolvePath(p), deref || p.endsWith('/')) })}\n`); code = 2; }
     const groups = new Map<boolean, string[]>();
     for (const f of files) { const k = deref || a.has('H') || f.endsWith('/'); groups.set(k, [...(groups.get(k) ?? []), f]); }
     for (const [follow, group] of groups)
@@ -465,16 +462,16 @@ export function registerFiles(shell: Shell) {
     const listDir = (abs: string, label: string) => {
       abs = fs.realPath(abs) ?? abs; // where it really is, so "." and ".." are the directories themselves
       if (a.has('R') && deref) {
-        if (listed.has(abs)) { ctx.stderr.write(`ls: ${label}: not listing already-listed directory\n`); code = 2; return; }
+        if (listed.has(abs)) { ctx.stderr.write(`ls: ${specMessage('ls', 'alreadyListed', { file: label })}\n`); code = 2; return; }
         listed.add(abs);
       }
       if (paths.length > 1 || a.has('R')) line(ctx, (first ? '' : '\n') + label + ':');
       first = false;
-      if (!fs.canRead(abs)) { ctx.stderr.write(`ls: cannot open directory '${label}': Permission denied\n`); code = 2; return; }
+      if (!fs.canRead(abs)) { ctx.stderr.write(`ls: ${specMessage('ls', 'cannotOpenDirectory', { file: label, errno: 'Permission denied' })}\n`); code = 2; return; }
       let entries = fs.list(abs).filter(n => a.has('a') || a.has('A') || !n.startsWith('.'));
       if (deref && (lng || blocks)) { // a link leading nowhere: an error, then a row of question marks
         for (const n of entries.filter(n => !fs.exists(norm(abs, n)))) {
-          ctx.stderr.write(`ls: cannot access '${label === '.' ? '' : trimEnd(label, '/') + '/'}${n}': ${fs.whyMissing(norm(abs, n))}\n`);
+          ctx.stderr.write(`ls: ${specMessage('ls', 'cannotAccess', { file: (label === '.' ? '' : trimEnd(label, '/') + '/') + n, errno: fs.whyMissing(norm(abs, n)) })}\n`);
           code = 1;
         }
       }
@@ -497,10 +494,10 @@ export function registerFiles(shell: Shell) {
     };
     for (const d of dirs) listDir(ctx.resolvePath(d), d);
     return code;
-  }, 'List directory contents');
+  });
 
   reg('cat', ctx => {
-    const a = Args.parse(ctx.args, 'nbsAETveu', '', 'number=n,number-nonblank=b,squeeze-blank=s,show-all=A,show-ends=E,show-tabs=T,show-nonprinting=v');
+    const a = Args.parse(ctx.args, specOf('cat'));
     const ends = a.has('A') || a.has('E') || a.has('e'), tabs = a.has('A') || a.has('T'), nonprint = a.has('A') || a.has('v') || a.has('e');
     const plain = !(a.has('n') || a.has('b') || a.has('s') || ends || tabs || nonprint);
     let code = 0, lineNo = 0;
@@ -520,11 +517,11 @@ export function registerFiles(shell: Shell) {
       ctx.stdout.write(out);
     }
     return code;
-  }, 'Print files');
+  });
 
   reg('mkdir', ctx => {
-    const a = Args.parse(ctx.args, 'pvZ', 'm', 'parents=p,verbose=v,mode=m');
-    if (a.positional.length === 0) throw new UsageException('missing operand');
+    const a = Args.parse(ctx.args, specOf('mkdir'));
+    if (a.positional.length === 0) throw new UsageException(specMessage('mkdir', 'missingOperand', {}));
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
@@ -536,30 +533,30 @@ export function registerFiles(shell: Shell) {
         if (a.has('v')) line(ctx, `mkdir: created directory '${p}'`);
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`mkdir: cannot create directory ${quoteL(p)}: ${typed(e, p, '')[1]}\n`);
+        ctx.stderr.write('mkdir: ' + specMessage('mkdir', 'cannotCreateDirectory', { file: p, reason: typed(e, p, '')[1] }) + '\n');
         code = 1;
       }
     }
     return code;
-  }, 'Create directories');
+  });
 
   reg('touch', ctx => {
-    const a = Args.parse(ctx.args, 'acmhf', 'dtr', 'no-create=c,date=d,reference=r,time=f,no-dereference=h');
-    if (a.positional.length === 0) throw new UsageException('missing file operand');
+    const a = Args.parse(ctx.args, specOf('touch'));
+    if (a.positional.length === 0) throw new UsageException(specMessage('touch', 'missingFileOperand', {}));
     let when: number | undefined;
     const d = a.value('d'), r = a.value('r'), t = a.value('t');
     if (r !== undefined) {
       const abs = ctx.resolvePath(r);
-      if (!ctx.fs.exists(abs)) throw new ShellError(`failed to get attributes of ${quoteAlways(r)}: ${ctx.fs.whyMissing(abs)}`);
+      if (!ctx.fs.exists(abs)) throw new ShellError(specMessage('touch', 'failedToGetAttributes', { file: r, reason: ctx.fs.whyMissing(abs) }));
       when = ctx.fs.stat(abs).modified;
     }
     if (d !== undefined) {
       try { when = parseDate(d, when ?? ctx.fs.clock()); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        throw new ShellError(`invalid date format ${quoteL(d)}`);
+        throw new ShellError(specMessage('touch', 'invalidDateFormat', { value: d }));
       }
     }
-    if (t !== undefined) when = touchStamp(t, ctx.fs.clock()) ?? fail(`invalid date format ${quoteL(t)}`);
+    if (t !== undefined) when = touchStamp(t, ctx.fs.clock()) ?? fail(specMessage('touch', 'invalidDateFormat', { value: t }));
     let code = 0;
     for (const p of a.positional) {
       const path = ctx.resolvePath(p);
@@ -571,27 +568,27 @@ export function registerFiles(shell: Shell) {
         else { if (!ctx.fs.exists(path)) ctx.fs.touch(path); ctx.fs.setModifiedTime(path, when); }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        ctx.stderr.write(`touch: cannot touch ${quoteAlways(p)}: ${typed(e, p, path)[1]}\n`);
+        ctx.stderr.write('touch: ' + specMessage('touch', 'cannotTouch', { file: p, reason: typed(e, p, path)[1] }) + '\n');
         code = 1;
       }
     }
     return code;
-  }, 'Create empty files / update timestamps');
+  });
 
   reg('rm', ctx => {
-    const a = Args.parse(ctx.args, 'rRfvdi', '', 'recursive=r,force=f,verbose=v,dir=d');
+    const a = Args.parse(ctx.args, specOf('rm'));
     const recursive = a.has('r') || a.has('R');
-    if (a.positional.length === 0 && !a.has('f')) throw new UsageException('missing operand');
+    if (a.positional.length === 0 && !a.has('f')) throw new UsageException(specMessage('rm', 'missingOperand', {}));
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
       if (!ctx.fs.exists(abs, false)) {
-        if (!a.has('f') || ctx.fs.whyMissing(abs, false) !== 'No such file or directory') { ctx.stderr.write(`rm: cannot remove '${p}': ${ctx.fs.whyMissing(abs, false)}\n`); code = 1; }
+        if (!a.has('f') || ctx.fs.whyMissing(abs, false) !== 'No such file or directory') { ctx.stderr.write(`rm: ${specMessage('rm', 'cannotRemove', { file: p, reason: ctx.fs.whyMissing(abs, false) })}\n`); code = 1; }
         continue;
       }
-      if (ctx.fs.isDirectory(abs, p.endsWith('/')) && !recursive && !a.has('d')) { ctx.stderr.write(`rm: cannot remove '${p}': Is a directory\n`); code = 1; continue; }
+      if (ctx.fs.isDirectory(abs, p.endsWith('/')) && !recursive && !a.has('d')) { ctx.stderr.write(`rm: ${specMessage('rm', 'cannotRemove', { file: p, reason: 'Is a directory' })}\n`); code = 1; continue; }
       if (p.endsWith('/') && ctx.fs.isSymlink(abs) && !ctx.fs.isDirectory(abs)) { // "link/" names what it leads to, which is no directory
-        if (!a.has('f')) { ctx.stderr.write(`rm: cannot remove '${p}': Not a directory\n`); code = 1; }
+        if (!a.has('f')) { ctx.stderr.write(`rm: ${specMessage('rm', 'cannotRemove', { file: p, reason: 'Not a directory' })}\n`); code = 1; }
         continue;
       }
       if (recursive && p.endsWith('/') && ctx.fs.isSymlink(abs) && ctx.fs.isDirectory(abs)) {
@@ -600,32 +597,32 @@ export function registerFiles(shell: Shell) {
           try { ctx.fs.delete(abs + '/' + n, true); } catch (e) {
             if (!(e instanceof ShellError)) throw e;
             const [path, why] = typed(e, trimEnd(p, '/') + '/' + n, abs + '/' + n);
-            ctx.stderr.write(`rm: cannot remove '${path}': ${why}\n`);
+            ctx.stderr.write(`rm: ${specMessage('rm', 'cannotRemove', { file: path, reason: why })}\n`);
           }
         }
-        if (!a.has('f')) { ctx.stderr.write(`rm: cannot remove '${p}': Not a directory\n`); code = 1; }
+        if (!a.has('f')) { ctx.stderr.write(`rm: ${specMessage('rm', 'cannotRemove', { file: p, reason: 'Not a directory' })}\n`); code = 1; }
         continue;
       }
-      if (recursive && /(^|\/)\.\.?\/*$/.test(p)) { ctx.stderr.write(`rm: refusing to remove '.' or '..' directory: skipping '${p}'\n`); code = 1; continue; }
+      if (recursive && /(^|\/)\.\.?\/*$/.test(p)) { ctx.stderr.write(`rm: ${specMessage('rm', 'refusingDots', { file: p })}\n`); code = 1; continue; }
       try {
         ctx.fs.delete(abs, recursive);
         if (a.has('v')) line(ctx, `removed ${ctx.fs.exists(abs) ? '' : ''}'${p}'`);
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
         const [path, why] = typed(e, p, abs);
-        ctx.stderr.write(`rm: cannot remove '${path}': ${why}\n`);
+        ctx.stderr.write('rm: ' + specMessage('rm', 'cannotRemove', { file: path, reason: why }) + '\n');
         code = 1;
       }
     }
     return code;
-  }, 'Remove files or directories');
+  });
 
   reg('rmdir', ctx => {
-    const a = Args.parse(ctx.args, 'pv', '', 'parents=p,verbose=v,ignore-fail-on-non-empty=i');
-    if (a.positional.length === 0) throw new UsageException('missing operand');
+    const a = Args.parse(ctx.args, specOf('rmdir'));
+    if (a.positional.length === 0) throw new UsageException(specMessage('rmdir', 'missingOperand', {}));
     let code = 0;
     for (const arg of a.positional) {
-      if (arg.endsWith('/') && ctx.fs.isSymlink(ctx.resolvePath(arg))) { ctx.stderr.write(`rmdir: failed to remove ${quoteAlways(arg)}: Symbolic link not followed\n`); code = 1; continue; }
+      if (arg.endsWith('/') && ctx.fs.isSymlink(ctx.resolvePath(arg))) { ctx.stderr.write(`rmdir: ${specMessage('rmdir', 'failedToRemove', { file: arg, reason: 'Symbolic link not followed' })}\n`); code = 1; continue; }
       // -p: a/b/c, then a/b, then a
       for (let p = trimEnd(arg, '/'); p.length > 0; p = a.has('p') && p.lastIndexOf('/') > 0 ? trimEnd(p.slice(0, p.lastIndexOf('/')), '/') : '') {
         const abs = ctx.resolvePath(p);
@@ -636,15 +633,15 @@ export function registerFiles(shell: Shell) {
             why = typed(e, p, abs)[1];
           }
         }
-        if (why !== null) { ctx.stderr.write(`rmdir: failed to remove ${quoteAlways(p)}: ${why}\n`); code = 1; break; }
+        if (why !== null) { ctx.stderr.write('rmdir: ' + specMessage('rmdir', 'failedToRemove', { file: p, reason: why }) + '\n'); code = 1; break; }
       }
     }
     return code;
-  }, 'Remove empty directories');
+  });
 
   const copyOrMove: CommandHandler = ctx => {
     const move = ctx.name === 'mv';
-    const a = Args.parse(ctx.args, move ? 'fvniTZ' : 'rRfvanpiTZLPHd', 't', 'recursive=r,force=f,verbose=v,no-clobber=n,archive=a,target-directory=t,no-target-directory=T,dereference=L,no-dereference=P');
+    const a = Args.parse(ctx.args, specOf(ctx.name));
     const fs = ctx.fs;
     // cp follows a symbolic link it is given unless copying recursively (-r, -a) or told not to; -L follows them all
     const followTop = !move && !(a.has('P') || a.has('d') || a.has('a')) && (a.has('L') || a.has('H') || !(a.has('r') || a.has('R')));
@@ -652,27 +649,27 @@ export function registerFiles(shell: Shell) {
     const targetDir = a.value('t');
     if (targetDir !== undefined) positional.push(targetDir);
     if (positional.length < 2)
-      throw new UsageException(positional.length === 0 ? 'missing file operand' : `missing destination file operand after ${quoteAlways(positional[0])}`);
+      throw new UsageException(positional.length === 0 ? specMessage(ctx.name, 'missingFileOperand') : specMessage(ctx.name, 'missingDestination', { file: positional[0] }));
     const sources = positional.slice(0, -1);
     const destArg = positional[positional.length - 1];
     const dest = ctx.resolvePath(destArg);
     const destIsDir = fs.isDirectory(dest) && !a.has('T');
     if ((sources.length > 1 || destArg.endsWith('/') && !fs.isDirectory(ctx.resolvePath(sources[0]))) && !destIsDir) {
-      if (sources.length === 1 && !fs.exists(ctx.resolvePath(sources[0]))) throw new ShellError(`cannot stat '${sources[0]}': No such file or directory`);
-      if (sources.length > 1) throw new ShellError(`target '${destArg}': ${fs.exists(dest) ? 'Not a directory' : 'No such file or directory'}`);
-      throw new ShellError(move ? `cannot move '${sources[0]}' to '${destArg}': Not a directory` : `cannot create regular file '${destArg}': Not a directory`);
+      if (sources.length === 1 && !fs.exists(ctx.resolvePath(sources[0]))) throw new ShellError(specMessage(ctx.name, 'cannotStat', { file: sources[0], errno: 'No such file or directory' }));
+      if (sources.length > 1) throw new ShellError(specMessage(ctx.name, 'targetFailed', { file: destArg, errno: fs.exists(dest) ? 'Not a directory' : 'No such file or directory' }));
+      throw new ShellError(move ? specMessage('mv', 'cannotMove', { source: sources[0], dest: destArg, errno: 'Not a directory' }) : specMessage('cp', 'cannotCreate', { kind: 'regular file', file: destArg, errno: 'Not a directory' }));
     }
     let code = 0;
     for (const s of sources) {
       const src = ctx.resolvePath(s);
-      if (!fs.exists(src, followTop)) { ctx.stderr.write(`${ctx.name}: cannot stat '${s}': ${fs.whyMissing(src, followTop)}\n`); code = 1; continue; }
-      if (!move && fs.isDirectory(src, followTop) && !(a.has('r') || a.has('R') || a.has('a'))) { ctx.stderr.write(`cp: -r not specified; omitting directory '${s}'\n`); code = 1; continue; }
+      if (!fs.exists(src, followTop)) { ctx.stderr.write(`${ctx.name}: ${specMessage(ctx.name, 'cannotStat', { file: s, errno: fs.whyMissing(src, followTop) })}\n`); code = 1; continue; }
+      if (!move && fs.isDirectory(src, followTop) && !(a.has('r') || a.has('R') || a.has('a'))) { ctx.stderr.write(`cp: ${specMessage('cp', 'omittingDirectory', { file: s })}\n`); code = 1; continue; }
       const target = destIsDir ? norm(dest, nameOf(src)) : dest;
       if (target !== src && !move && followTop && fs.sameFile(src, target)) { // through a link or another hard link; the plain case is a clash below
-        ctx.stderr.write(`cp: ${quoteAlways(s)} and ${quoteAlways(destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg)} are the same file\n`); code = 1; continue;
+        ctx.stderr.write(`cp: ${specMessage('cp', 'sameFile', { source: s, dest: destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg })}\n`); code = 1; continue;
       }
       if (!move && fs.isFile(src, followTop) && fs.isSymlink(target) && !fs.exists(target)) {
-        ctx.stderr.write(`cp: not writing through dangling symlink '${destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg}'\n`);
+        ctx.stderr.write(`cp: ${specMessage('cp', 'danglingSymlink', { file: destIsDir ? trimEnd(destArg, '/') + '/' + nameOf(src) : destArg })}\n`);
         code = 1;
         continue;
       }
@@ -681,27 +678,26 @@ export function registerFiles(shell: Shell) {
       const srcDir = fs.isDirectory(src, followTop);
       // mv onto another name of the same file, or onto the file a link names, loses it; mv refuses as GNU mv does
       const same = target === src || (move && (fs.sameFile(src, target, false) || (fs.isSymlink(src) && !fs.isSymlink(target) && fs.sameFile(src, target))));
-      const clash = same ? `${quoteAlways(s)} and ${quoteAlways(shown)} are the same file`
+      const clashKey = same ? 'sameFile'
         : srcDir && target.startsWith(src + '/')
-          ? move ? `cannot move ${quoteAlways(s)} to a subdirectory of itself, ${quoteAlways(shown)}`
-            : `cannot copy a directory, ${quoteAlways(s)}, into itself, ${quoteAlways(shown)}`
+          ? 'intoItself'
         : !fs.exists(target) ? null
-        : srcDir && !fs.isDirectory(target) ? `cannot overwrite non-directory ${quoteAlways(shown)} with directory ${quoteAlways(s)}`
-        : !srcDir && fs.isDirectory(target) ? `cannot overwrite directory ${quoteAlways(shown)} with non-directory`
-        : move && srcDir && fs.list(target).length > 0 ? `cannot overwrite ${quoteAlways(shown)}: Directory not empty`
+        : srcDir && !fs.isDirectory(target) ? 'overwriteNonDirectory'
+        : !srcDir && fs.isDirectory(target) ? 'overwriteDirectory'
+        : move && srcDir && fs.list(target).length > 0 ? 'notEmpty'
         : null;
-      if (clash !== null) {
-        ctx.stderr.write(`${ctx.name}: ${clash}\n`);
+      if (clashKey !== null) {
+        ctx.stderr.write(`${ctx.name}: ${specMessage(ctx.name, clashKey, { source: s, dest: shown })}\n`);
         code = 1;
         // cp creates the copy and fills it until it reaches the copy itself
-        if (!move && clash.startsWith('cannot copy')) copyIntoItself(fs, src, target, new Set());
+        if (!move && clashKey === 'intoItself') copyIntoItself(fs, src, target, new Set());
         continue;
       }
       if (a.has('n') && fs.exists(target)) continue;
       if (move && srcDir && fs.isDirectory(target)) fs.delete(target); // an empty directory is replaced
       const broken = (abs: string, why: string) => {
         const p = typed(new Error(abs + ': '), s, src)[0];
-        ctx.stderr.write(why === 'cyclic' ? `cp: cannot copy cyclic symbolic link '${p}'\n` : `cp: cannot stat '${p}': ${why}\n`);
+        ctx.stderr.write(`cp: ${why === 'cyclic' ? specMessage('cp', 'cyclicLink', { file: p }) : specMessage('cp', 'cannotStat', { file: p, errno: why })}\n`);
         code = 1;
       };
       try {
@@ -720,21 +716,21 @@ export function registerFiles(shell: Shell) {
         } else {
           fs.copy(src, target, (abs, dir) => {
             const p = typed(new Error(abs + ': '), s, src)[0];
-            ctx.stderr.write(dir ? `cp: cannot access '${p}': Permission denied\n` : `cp: cannot open '${p}' for reading: Permission denied\n`);
+            ctx.stderr.write(`cp: ${specMessage('cp', dir ? 'cannotAccess' : 'cannotOpen', { file: p, errno: 'Permission denied' })}\n`);
             code = 1;
           }, followTop, a.has('L'), broken, () => ctx.checkTime());
         }
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
         if (e.message.includes(' into itself, ') || e.message.includes(' to a subdirectory of itself, ')) {
-          ctx.stderr.write(move ? `mv: cannot move '${s}' to a subdirectory of itself, '${shown}'\n` : `cp: cannot copy a directory, '${s}', into itself, '${shown}'\n`);
+          ctx.stderr.write(`${ctx.name}: ${specMessage(ctx.name, 'intoItselfPlain', { source: s, dest: shown })}\n`);
           code = 1;
           continue;
         }
-        if (e.message.endsWith(NO_SPACE)) { ctx.stderr.write(`${ctx.name}: error writing '${shown}': ${NO_SPACE}\n`); code = 1; continue; }
+        if (e.message.endsWith(NO_SPACE)) { ctx.stderr.write(`${ctx.name}: ${specMessage(ctx.name, 'errorWriting', { file: shown, errno: NO_SPACE })}\n`); code = 1; continue; }
         const why = typed(e, s, src)[1];
-        ctx.stderr.write(move ? `mv: cannot move '${s}' to '${shown}': ${why}\n`
-          : `cp: cannot create ${fs.isDirectory(src) ? 'directory' : 'regular file'} '${shown}': ${why}\n`);
+        ctx.stderr.write(move ? `mv: ${specMessage('mv', 'cannotMove', { source: s, dest: shown, errno: why })}\n`
+          : `cp: ${specMessage('cp', 'cannotCreate', { kind: fs.isDirectory(src) ? 'directory' : 'regular file', file: shown, errno: why })}\n`);
         code = 1;
         continue;
       }
@@ -742,11 +738,11 @@ export function registerFiles(shell: Shell) {
     }
     return code;
   };
-  reg('cp', copyOrMove, 'Copy files and directories');
-  reg('mv', copyOrMove, 'Move or rename files');
+  reg('cp', copyOrMove);
+  reg('mv', copyOrMove);
 
   reg('ln', ctx => {
-    const a = Args.parse(ctx.args, 'sfnvTrLPb', 't', 'symbolic=s,force=f,no-dereference=n,no-target-directory=T,target-directory=t,verbose=v,relative=r,logical=L,physical=P');
+    const a = Args.parse(ctx.args, specOf('ln'));
     const fs = ctx.fs;
     const sym = a.has('s');
     let ops = a.positional;
@@ -754,12 +750,12 @@ export function registerFiles(shell: Shell) {
     const last = ops[ops.length - 1];
     if (into === undefined && ((!a.has('T') && ops.length > 1 && fs.isDirectory(ctx.resolvePath(last), !a.has('n'))) || ops.length > 2)) into = last;
     if (ops.length === 0 || (ops.length === 1 && a.has('T') && into === undefined))
-      throw new UsageException(ops.length === 0 ? 'missing file operand' : `missing destination file operand after ${quoteAlways(ops[0])}`);
+      throw new UsageException(ops.length === 0 ? specMessage('ln', 'missingFileOperand') : specMessage('ln', 'missingDestination', { file: ops[0] }));
     if (into !== undefined && a.value('t') === undefined) ops = ops.slice(0, -1);
     if (into !== undefined && !fs.isDirectory(ctx.resolvePath(into))) {
       const abs = ctx.resolvePath(into);
-      throw new ShellError(a.value('t') !== undefined && !fs.exists(abs) ? `failed to access ${quoteAlways(into)}: ${fs.whyMissing(abs)}`
-        : fs.exists(abs) ? `target ${quoteAlways(into)} is not a directory` : `target ${quoteAlways(into)}: No such file or directory`);
+      throw new ShellError(a.value('t') !== undefined && !fs.exists(abs) ? specMessage('ln', 'failedToAccess', { file: into, errno: fs.whyMissing(abs) })
+        : fs.exists(abs) ? specMessage('ln', 'targetNotDirectory', { file: into }) : specMessage('ln', 'targetFailed', { file: into, errno: 'No such file or directory' }));
     }
     // (what the link points to, the link's name): `ln f` links into ".", `ln f d` into d when it is a directory
     const pairs: [string, string][] = into !== undefined || ops.length === 1
@@ -770,14 +766,14 @@ export function registerFiles(shell: Shell) {
       const shownName = into === undefined && ops.length === 1 ? './' + name : name;
       const abs = ctx.resolvePath(name), src = ctx.resolvePath(target);
       const failure = (why: string, arrow = true) =>
-        `ln: failed to create ${sym ? 'symbolic' : 'hard'} link ${quoteAlways(shownName)}${!arrow ? '' : sym ? (target.length === 0 ? " -> ''" : '') : ' => ' + quoteAlways(target)}: ${why}\n`;
+        `ln: ${specMessage('ln', 'createFailed', { kind: sym ? 'symbolic' : 'hard', file: shownName, arrow: !arrow ? '' : sym ? (target.length === 0 ? " -> ''" : '') : ' => ' + quoteAlways(target), errno: why })}\n`;
       try {
-        if (!sym && !fs.exists(src, a.has('L'))) { ctx.stderr.write(`ln: failed to access ${quoteAlways(target)}: ${fs.whyMissing(src, a.has('L'))}\n`); code = 1; continue; }
-        if (!sym && fs.isDirectory(src)) { ctx.stderr.write(`ln: ${target}: hard link not allowed for directory\n`); code = 1; continue; }
+        if (!sym && !fs.exists(src, a.has('L'))) { ctx.stderr.write(`ln: ${specMessage('ln', 'failedToAccess', { file: target, errno: fs.whyMissing(src, a.has('L')) })}\n`); code = 1; continue; }
+        if (!sym && fs.isDirectory(src)) { ctx.stderr.write(`ln: ${specMessage('ln', 'hardLinkDirectory', { file: target })}\n`); code = 1; continue; }
         if (fs.exists(abs, false)) {
           if (!a.has('f')) { ctx.stderr.write(failure('File exists', false)); code = 1; continue; }
-          if (fs.isDirectory(abs, false)) { ctx.stderr.write(`ln: ${name}: cannot overwrite directory\n`); code = 1; continue; }
-          if (fs.sameFile(abs, sym ? norm(VirtualFileSystem.getParent(abs), target) : src)) { ctx.stderr.write(`ln: ${quoteAlways(target)} and ${quoteAlways(name)} are the same file\n`); code = 1; continue; }
+          if (fs.isDirectory(abs, false)) { ctx.stderr.write(`ln: ${specMessage('ln', 'overwriteDirectory', { file: name })}\n`); code = 1; continue; }
+          if (fs.sameFile(abs, sym ? norm(VirtualFileSystem.getParent(abs), target) : src)) { ctx.stderr.write(`ln: ${specMessage('ln', 'sameFile', { source: target, dest: name })}\n`); code = 1; continue; }
           fs.delete(abs);
         }
         if (!sym) fs.createHardLink(src, abs, a.has('L'));
@@ -802,16 +798,16 @@ export function registerFiles(shell: Shell) {
       }
     }
     return code;
-  }, 'Make links between files (-s symbolic, -f replace)');
+  });
 
-  reg('find', ctx => new Find(ctx).run(), 'Search for files');
+  reg('find', ctx => new Find(ctx).run());
 
   reg('tree', ctx => {
-    const a = Args.parse(ctx.args, 'adfFi', 'L');
+    const a = Args.parse(ctx.args, specOf('tree'));
     const maxDepth = a.value('L') !== undefined ? Number(a.value('L')) : Infinity;
     const root = a.positional[0] ?? '.';
     const abs = ctx.resolvePath(root);
-    if (!ctx.fs.isDirectory(abs)) throw new ShellError(`${root} [error opening dir]`);
+    if (!ctx.fs.isDirectory(abs)) throw new ShellError(specMessage('tree', 'errorOpeningDir', { dir: root }));
     let dirs = 0, files = 0;
     let out = root + '\n';
     const walk = (dir: string, prefix: string, depth: number) => {
@@ -829,11 +825,11 @@ export function registerFiles(shell: Shell) {
     walk(abs, '', 1);
     out += `\n${dirs} director${dirs === 1 ? 'y' : 'ies'}` + (a.has('d') ? '\n' : `, ${files} file${files === 1 ? '' : 's'}\n`);
     ctx.stdout.write(out);
-  }, 'Show a directory tree');
+  });
 
   reg('basename', ctx => {
-    const a = Args.parse(ctx.args, 'az', 's', 'multiple=a,suffix=s,zero=z');
-    if (a.positional.length === 0) throw new UsageException('missing operand');
+    const a = Args.parse(ctx.args, specOf('basename'));
+    if (a.positional.length === 0) throw new UsageException(specMessage('basename', 'missingOperand', {}));
     const suffix = a.value('s') ?? (!a.has('a') && a.positional.length === 2 ? a.positional[1] : undefined);
     const names = a.has('a') || a.value('s') !== undefined ? a.positional : a.positional.slice(0, 1);
     for (const n of names) {
@@ -842,24 +838,24 @@ export function registerFiles(shell: Shell) {
       if (suffix !== undefined && b.endsWith(suffix) && b !== suffix) b = b.slice(0, -suffix.length);
       ctx.stdout.write(b + (a.has('z') ? '\0' : '\n'));
     }
-  }, 'Strip directory and suffix from a path');
+  });
 
   reg('dirname', ctx => {
-    const a = Args.parse(ctx.args, 'z', '', 'zero=z');
-    if (a.positional.length === 0) throw new UsageException('missing operand');
+    const a = Args.parse(ctx.args, specOf('dirname'));
+    if (a.positional.length === 0) throw new UsageException(specMessage('dirname', 'missingOperand', {}));
     for (const n of a.positional) {
       const t = trimEnd(n, '/');
       const i = t.lastIndexOf('/');
       ctx.stdout.write((t.length === 0 ? (n.length ? '/' : '.') : i < 0 ? '.' : i === 0 ? '/' : trimEnd(t.slice(0, i), '/') || '/') + (a.has('z') ? '\0' : '\n'));
     }
-  }, 'Strip the last component from a path');
+  });
 
   const realpath: CommandHandler = ctx => {
-    const a = Args.parse(ctx.args, 'fesmqnzvLP', '', 'canonicalize=f,canonicalize-existing=e,canonicalize-missing=m,no-symlinks=s,quiet=q,no-newline=n,zero=z,verbose=v,logical=L,physical=P');
+    const a = Args.parse(ctx.args, specOf(ctx.name));
     const readlink = ctx.name === 'readlink', plain = readlink && !a.has('f') && !a.has('e') && !a.has('m');
     // readlink is silent about failures unless -v; realpath reports them unless -q
     const report = readlink ? a.has('v') : !a.has('q');
-    if (a.positional.length === 0 && readlink) throw new UsageException('missing operand');
+    if (a.positional.length === 0 && readlink) throw new UsageException(specMessage('readlink', 'missingOperand'));
     const fs = ctx.fs;
     const end = a.has('z') ? '\0' : readlink && a.has('n') && a.positional.length === 1 ? '' : '\n';
     let code = 0;
@@ -870,21 +866,21 @@ export function registerFiles(shell: Shell) {
         try { result = fs.readLink(abs); } catch (e) { result = null; why = reason(e); }
       } else if (!readlink && a.has('s')) result = norm(ctx.shell.cwd, p); // -s: no links resolved
       else { result = fs.realPath(abs, a.has('e')) ?? (a.has('m') ? abs : null); why = fs.whyMissing(abs); }
-      if (result === null) { if (report) ctx.stderr.write(`${ctx.name}: ${quote(p)}: ${why}\n`); code = 1; continue; }
+      if (result === null) { if (report) ctx.stderr.write(`${ctx.name}: ${specMessage(ctx.name, 'failed', { file: p, errno: why ?? '' })}\n`); code = 1; continue; }
       ctx.stdout.write(result + end);
     }
     return code;
   };
-  reg('realpath', realpath, 'Print the absolute path');
-  reg('readlink', realpath, 'Print resolved path (-f)');
+  reg('realpath', realpath);
+  reg('readlink', realpath);
 
   reg('stat', ctx => {
-    const a = Args.parse(ctx.args, 'Lt', 'c', 'format=c,dereference=L,terse=t,printf=c');
+    const a = Args.parse(ctx.args, specOf('stat'));
     let code = 0;
     for (const p of a.positional) {
       const abs = ctx.resolvePath(p);
       const follow = a.has('L');
-      if (!ctx.fs.exists(abs, follow)) { ctx.stderr.write(`stat: cannot statx '${p}': ${ctx.fs.whyMissing(abs, follow)}\n`); code = 1; continue; }
+      if (!ctx.fs.exists(abs, follow)) { ctx.stderr.write(`stat: ${specMessage('stat', 'cannotStat', { file: p, errno: ctx.fs.whyMissing(abs, follow) })}\n`); code = 1; continue; }
       const st = ctx.fs.stat(abs, follow);
       const type = st.isSymlink ? 'symbolic link' : st.isDirectory ? 'directory' : st.size === 0 ? 'regular empty file' : 'regular file';
       const named = st.linkTarget !== null ? `${quoteAlways(p)} -> ${quoteAlways(st.linkTarget)}` : quoteAlways(p);
@@ -914,10 +910,10 @@ export function registerFiles(shell: Shell) {
         `Modify: ${mtime}\nChange: ${mtime}\n`);
     }
     return code;
-  }, 'Show file status');
+  });
 
   reg('du', ctx => {
-    const a = Args.parse(ctx.args, 'shacSkb', 'd', 'summarize=s,human-readable=h,all=a,total=c,max-depth=d');
+    const a = Args.parse(ctx.args, specOf('du'));
     const maxDepth = a.has('s') ? 0 : a.value('d') !== undefined ? Number(a.value('d')) : Infinity;
     const fmt = (kb: number) => (!a.has('h') ? String(kb)
       : kb < 10 ? `${kb.toFixed(1)}K` : kb < 1024 ? `${kb}K` : kb < 1 << 20 ? `${fmt1(kb / 1024)}M` : `${fmt1(kb / 1048576)}G`);
@@ -930,18 +926,18 @@ export function registerFiles(shell: Shell) {
       }
       let sum = 4;
       if (ctx.fs.canRead(abs)) for (const n of ctx.fs.list(abs)) sum += walk(norm(abs, n), trimEnd(display, '/') + '/' + n, depth + 1);
-      else { ctx.stderr.write(`du: cannot read directory '${display}': Permission denied\n`); code = 1; }
+      else { ctx.stderr.write('du: ' + specMessage('du', 'cannotReadDirectory', { file: display }) + '\n'); code = 1; }
       if (depth <= maxDepth) line(ctx, `${fmt(sum)}\t${display}`);
       return sum;
     };
     for (const p of a.positional.length ? a.positional : ['.']) {
       const abs = ctx.resolvePath(p);
-      if (!ctx.fs.exists(abs, false)) { ctx.stderr.write(`du: cannot access '${p}': No such file or directory\n`); code = 1; continue; }
+      if (!ctx.fs.exists(abs, false)) { ctx.stderr.write(`du: ${specMessage('du', 'cannotAccess', { file: p, errno: 'No such file or directory' })}\n`); code = 1; continue; }
       total += walk(abs, p, 0);
     }
     if (a.has('c')) line(ctx, `${fmt(total)}\ttotal`);
     return code;
-  }, 'Estimate disk usage');
+  });
 
   reg('df', ctx => {
     const h = ctx.args.some(x => x.startsWith('-') && x.includes('h'));
@@ -957,7 +953,7 @@ export function registerFiles(shell: Shell) {
     ctx.stdout.write(h
       ? `Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1      ${H(size).padStart(5)} ${H(used).padStart(5)} ${H(avail).padStart(5)} ${String(pct).padStart(3)}% /\ntmpfs           3.9G     0  3.9G   0% /dev/shm\n`
       : `Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1      ${String(Math.floor(size / 1024)).padStart(10)} ${String(Math.ceil(used / 1024)).padStart(7)} ${String(Math.floor(avail / 1024)).padStart(9)} ${String(pct).padStart(3)}% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n`);
-  }, 'Report filesystem disk space');
+  });
 
   reg('chmod', ctx => {
     let recursive = false, verbose = false, changes = false, quiet = false;
@@ -968,19 +964,19 @@ export function registerFiles(shell: Shell) {
       else if (arg === '-v' || arg === '--verbose') verbose = true;
       else if (arg === '-c' || arg === '--changes') changes = true;
       else if (arg === '-f' || arg === '--silent' || arg === '--quiet') quiet = true;
-      else if (arg.startsWith('--') && arg.length > 2) throw new UsageException(`unrecognized option '${arg}'`);
+      else if (arg.startsWith('--') && arg.length > 2) throw new UsageException(specMessage('chmod', 'unrecognizedOption', { option: arg }));
       else if (arg.length > 1 && arg[0] === '-' && [...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c)) !== undefined)
-        throw new UsageException(`invalid option -- '${[...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c))}'`);
+        throw new UsageException(specMessage('chmod', 'invalidOption', { option: [...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c))! }));
       else if (spec === undefined) spec = arg; // may look like an option, e.g. -x or -w
       else files.push(arg);
     }
-    if (spec === undefined || files.length === 0) throw new UsageException(spec === undefined ? 'missing operand' : `missing operand after ${quoteL(spec)}`);
+    if (spec === undefined || files.length === 0) throw new UsageException(spec === undefined ? specMessage('chmod', 'missingOperand', {}) : specMessage('chmod', 'missingOperandAfter', { operand: spec }));
     let code = 0;
     const apply = (display: string, path: string) => {
       const st = ctx.fs.stat(path);
       const mode = parseMode(spec!, st.mode, st.isDirectory);
       try { ctx.fs.chmod(path, mode); } catch {
-        if (!quiet) ctx.stderr.write(`chmod: changing permissions of '${display}': Operation not permitted\n`);
+        if (!quiet) ctx.stderr.write('chmod: ' + specMessage('chmod', 'cannotChangePermissions', { file: display }) + '\n');
         code = 1;
         return;
       }
@@ -996,21 +992,21 @@ export function registerFiles(shell: Shell) {
     };
     for (const f of files) {
       const path = ctx.resolvePath(f);
-      if (!ctx.fs.exists(path)) { ctx.stderr.write(`chmod: cannot access '${f}': ${ctx.fs.whyMissing(path)}\n`); code = 1; continue; }
+      if (!ctx.fs.exists(path)) { ctx.stderr.write('chmod: ' + specMessage('chmod', 'cannotAccess', { file: f, reason: ctx.fs.whyMissing(path) }) + '\n'); code = 1; continue; }
       apply(f, path);
     }
     return code;
-  }, 'Change file mode bits');
+  });
 
   const chown: CommandHandler = ctx => {
     const operands = ctx.args.filter(x => !x.startsWith('-'));
     const files = operands.slice(1); // first operand is the owner
-    if (files.length === 0) throw new UsageException('missing operand');
+    if (files.length === 0) throw new UsageException(specMessage(ctx.name, 'missingOperand', {}));
     const owner = operands[0].split(':')[0];
     let code = 0;
     for (const f of files) {
       const path = ctx.resolvePath(f);
-      if (!ctx.fs.exists(path)) { ctx.stderr.write(`${ctx.name}: cannot access '${f}': ${ctx.fs.whyMissing(path)}\n`); code = 1; continue; }
+      if (!ctx.fs.exists(path)) { ctx.stderr.write(`${ctx.name}: ` + specMessage(ctx.name, 'cannotAccess', { file: f, reason: ctx.fs.whyMissing(path) }) + '\n'); code = 1; continue; }
       try { ctx.fs.setOwner(path, owner.length > 0 && ctx.name === 'chown' ? owner : ctx.fs.stat(path).owner, ctx.args.includes('-R')); } catch {
         ctx.stderr.write(`${ctx.name}: changing ${ctx.name === 'chown' ? 'ownership' : 'group'} of '${f}': Operation not permitted\n`);
         code = 1;
@@ -1018,41 +1014,41 @@ export function registerFiles(shell: Shell) {
     }
     return code;
   };
-  reg('chown', chown, 'Change file owner');
-  reg('chgrp', chown, 'Change file group');
+  reg('chown', chown);
+  reg('chgrp', chown);
 
   const pager: CommandHandler = ctx => {
     let code = 0;
     for (const [, text] of inputs(ctx, ctx.args.filter(x => !x.startsWith('-') && !x.startsWith('+')), () => { code = 1; })) ctx.stdout.write(text);
     return code;
   };
-  reg('less', pager, 'View files (non-interactive: prints them)');
-  reg('more', pager, 'View files (non-interactive: prints them)');
+  reg('less', pager);
+  reg('more', pager);
 
   reg('file', ctx => {
     let code = 0;
     for (const p of ctx.args.filter(x => !x.startsWith('-'))) {
       const abs = ctx.resolvePath(p);
       let desc: string;
-      if (!ctx.fs.exists(abs)) { desc = `cannot open \`${p}' (No such file or directory)`; code = 1; }
+      if (!ctx.fs.exists(abs)) { desc = specMessage('file', 'cannotOpen', { file: p }); code = 1; }
       else if (ctx.fs.isDirectory(abs)) desc = 'directory';
       else desc = describeFile(ctx.fs.readBytes(abs));
       line(ctx, `${p}: ${desc}`);
     }
     return code;
-  }, 'Determine file type');
+  });
 
   reg('mktemp', ctx => {
-    const a = Args.parse(ctx.args, 'dqut', 'p', 'directory=d,quiet=q,tmpdir=p,dry-run=u');
+    const a = Args.parse(ctx.args, specOf('mktemp'));
     const template = a.positional[0] ?? 'tmp.XXXXXXXXXX';
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const m = /X{3,}$/.exec(template);
-    if (!m) throw new ShellError(`too few X's in template '${template}'`);
+    if (!m) throw new ShellError(specMessage('mktemp', 'tooFewX', { template }));
     const name = template.slice(0, m.index) + Array.from({ length: m[0].length }, () => chars[ctx.shell.nextRandom(chars.length)]).join('');
     const path = template.includes('/') && a.value('p') === undefined && !a.has('t') ? ctx.resolvePath(name) : norm(a.value('p') ?? '/tmp', name);
     if (!a.has('u')) { if (a.has('d')) { ctx.fs.mkdir(path); ctx.fs.chmod(path, 0o700); } else { ctx.fs.writeText(path, ''); ctx.fs.chmod(path, 0o600); } }
     line(ctx, path);
-  }, 'Create a temporary file or directory');
+  });
 }
 
 /** `file`'s description of some bytes. */

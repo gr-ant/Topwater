@@ -1381,5 +1381,5 @@ export function registerAwk(shell: Shell): void {
       }
       throw e;
     }
-  }, 'Pattern scanning and processing language');
+  });
 }

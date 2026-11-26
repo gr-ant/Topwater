@@ -977,6 +977,6 @@ function run(ctx: CommandContext): number {
 }
 
 export function registerJq(shell: Shell): void {
-  shell.register('jq', run, 'Command-line JSON processor', 'jq [OPTIONS] FILTER [FILES...]');
+  shell.register('jq', run);
 }
 

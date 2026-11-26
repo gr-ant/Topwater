@@ -3,7 +3,7 @@
 // Malformed input throws ShellError, never anything else.
 
 import { OutputLimitError, inflateRaw } from '../inflate.js';
-import { Args, ShellError, reason, type CommandContext } from '../command.js';
+import { Args, specOf, specMessage, ShellError, reason, type CommandContext } from '../command.js';
 import type { VirtualFileSystem } from '../vfs.js';
 import type { Shell } from '../shell.js';
 import { ZipFormatError, readZip, type ZipEntry } from './zipfile.js';
@@ -36,14 +36,14 @@ export function toMarkdown(data: Uint8Array, fileName: string): string {
   let fmt = ext === '.htm' || ext === '.xhtml' ? '.html' : ext === '.markdown' ? '.md' : ext;
   if (!Object.hasOwn(CONVERTERS, fmt)) {
     const sniffed = sniff(data);
-    if (!sniffed) throw new ShellError(`unsupported format '${ext || fileName}' (supported: ${SUPPORTED})`);
+    if (!sniffed) throw new ShellError(specMessage('to-markdown', 'unsupportedFormat', { format: ext || fileName, supported: SUPPORTED }));
     fmt = sniffed;
   }
   try { return CONVERTERS[fmt](data); } catch (e) {
     if (e instanceof ShellError) throw e;
     if (e instanceof DtdError) throw new ShellError(`${e.message}`);
     // corrupt zip/XML/encoding: report, never crash the host
-    throw new ShellError(`not a valid ${fmt.slice(1)} file (${e instanceof ZipFormatError || e instanceof XmlError || e instanceof Error ? e.message : String(e)})`);
+    throw new ShellError(specMessage('to-markdown', 'invalidFile', { format: fmt.slice(1), detail: e instanceof ZipFormatError || e instanceof XmlError || e instanceof Error ? e.message : String(e) }));
   }
 }
 
@@ -80,11 +80,11 @@ class Pkg {
     if (e.method === 0) out = e.data;
     else if (e.method === 8) {
       try { out = inflateRaw(e.data, Math.max(1, this.budget)); } catch (err) {
-        if (err instanceof OutputLimitError) throw new ShellError(`archive expands to more than ${Math.floor(converterLimits.maxUncompressedBytes / (1024 * 1024))} MB`);
+        if (err instanceof OutputLimitError) throw new ShellError(specMessage('to-markdown', 'archiveTooLarge', { megabytes: String(Math.floor(converterLimits.maxUncompressedBytes / (1024 * 1024))) }));
         throw err;
       }
     } else throw new XmlError(`unsupported compression method ${e.method}`);
-    if (out.length > this.budget) throw new ShellError(`archive expands to more than ${Math.floor(converterLimits.maxUncompressedBytes / (1024 * 1024))} MB`);
+    if (out.length > this.budget) throw new ShellError(specMessage('to-markdown', 'archiveTooLarge', { megabytes: String(Math.floor(converterLimits.maxUncompressedBytes / (1024 * 1024))) }));
     this.budget -= out.length;
     return out;
   }
@@ -93,7 +93,7 @@ class Pkg {
     const bytes = this.read(name);
     if (!bytes) return null;
     try { return parseXml(utf8(bytes)); } catch (e) {
-      if (e instanceof DtdError) throw new ShellError(`${name}: DTDs are not allowed`);
+      if (e instanceof DtdError) throw new ShellError(specMessage('to-markdown', 'dtdNotAllowed', { name: name }));
       throw e;
     }
   }
@@ -182,7 +182,7 @@ function flattenSdt(elems: XEl[]): XEl[] {
 
 function docx(pkg: Pkg): string {
   const doc = pkg.xml('word/document.xml');
-  if (!doc) throw new ShellError('not a valid docx file (word/document.xml is missing)');
+  if (!doc) throw new ShellError(specMessage('to-markdown', 'partMissing', { format: 'docx', part: 'word/document.xml' }));
   const rels = pkg.rels('word/document.xml');
   const styles = new Map<string, { name: string; num: [string, string] | null }>();
   for (const s of elements(pkg.xml('word/styles.xml'), W, 'style')) {
@@ -278,7 +278,7 @@ const MAX_SHEET_CELLS = 5_000_000;
 
 function xlsx(pkg: Pkg): string {
   const wb = pkg.xml('xl/workbook.xml');
-  if (!wb) throw new ShellError('not a valid xlsx file (xl/workbook.xml is missing)');
+  if (!wb) throw new ShellError(specMessage('to-markdown', 'partMissing', { format: 'xlsx', part: 'xl/workbook.xml' }));
   const rels = pkg.rels('xl/workbook.xml');
   const shared: string[] = [];
   for (const si of elements(pkg.xml('xl/sharedStrings.xml'))) {
@@ -305,7 +305,7 @@ function xlsx(pkg: Pkg): string {
     const first = rows.length ? rows.reduce((m, r) => { for (const k of r.keys()) m = Math.min(m, k); return m; }, Infinity) : 0;
     const last = rows.length ? rows.reduce((m, r) => { for (const k of r.keys()) m = Math.max(m, k); return m; }, -Infinity) : -1;
     const name = sheet.attrs.get('name') ?? '';
-    if ((last - first + 1) * rows.length > MAX_SHEET_CELLS) throw new ShellError(`sheet '${name}' is too large`);
+    if ((last - first + 1) * rows.length > MAX_SHEET_CELLS) throw new ShellError(specMessage('to-markdown', 'sheetTooLarge', { name: name }));
     const t = table(rows.map(r => Array.from({ length: last - first + 1 }, (_, k) => r.get(first + k) ?? '')));
     parts.push(`## ${name}` + (t ? '\n\n' + t : ''));
   }
@@ -327,7 +327,7 @@ function xlsxValue(c: XEl, shared: string[]): string {
 
 function pptx(pkg: Pkg): string {
   const pres = pkg.xml('ppt/presentation.xml');
-  if (!pres) throw new ShellError('not a valid pptx file (ppt/presentation.xml is missing)');
+  if (!pres) throw new ShellError(specMessage('to-markdown', 'partMissing', { format: 'pptx', part: 'ppt/presentation.xml' }));
   const rels = pkg.rels('ppt/presentation.xml');
   const parts: string[] = [];
   let n = 0;
@@ -614,7 +614,7 @@ function delimited(data: Uint8Array, delimiter: string): string {
 
 function json(data: Uint8Array): string {
   let value: unknown;
-  try { value = JSON.parse(utf8(data).replace(/^﻿+/, '')); } catch (e) { throw new ShellError(`not a valid json file (${(e as Error).message})`); }
+  try { value = JSON.parse(utf8(data).replace(/^﻿+/, '')); } catch (e) { throw new ShellError(specMessage('to-markdown', 'invalidFile', { format: 'json', detail: (e as Error).message })); }
   return '```json\n' + JSON.stringify(value, null, 2) + '\n```\n';
 }
 
@@ -626,8 +626,8 @@ function pdf(_data: Uint8Array): string {
 // ---------- the command, and mounting documents ----------
 
 function run(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, '', 'o', 'output=o');
-  if (a.positional.length === 0) throw new ShellError('missing file operand\nUsage: to-markdown [-o OUT.md] FILE...');
+  const a = Args.parse(ctx.args, specOf('to-markdown'));
+  if (a.positional.length === 0) throw new ShellError(specMessage('to-markdown', 'missingOperand', {}));
   let code = 0;
   const parts: string[] = [];
   for (const f of a.positional) {
@@ -635,7 +635,7 @@ function run(ctx: CommandContext): number {
     try { md = toMarkdown(ctx.fs.readBytes(ctx.resolvePath(f)), f); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
       // filesystem errors carry the path ("/abs/x: No such file..."); show the name as typed instead
-      ctx.stderr.write(`${ctx.name}: ${f}: ${e.message.startsWith('/') ? reason(e) : e.message}\n`);
+      ctx.stderr.write(`${ctx.name}: ${specMessage('to-markdown', 'convertFailed', { file: f, reason: e.message.startsWith('/') ? reason(e) : e.message })}\n`);
       code = 1;
       continue;
     }
@@ -649,7 +649,7 @@ function run(ctx: CommandContext): number {
 }
 
 export function registerDocuments(shell: Shell): void {
-  shell.register('to-markdown', run, 'Convert documents (docx, xlsx, pptx, html, csv, json) to Markdown on stdout (-o FILE to save)', 'to-markdown [-o OUT.md] FILE...');
+  shell.register('to-markdown', run);
 }
 
 /**

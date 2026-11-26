@@ -1,3 +1,4 @@
+import { ERRNO } from './spec.generated.js';
 import { decodeBytes, encodeText, hasEscapes, utf8Length, bytesToText } from './bytes.js';
 
 /** Thrown by commands and the filesystem; becomes "cmd: message" on stderr with the given exit code. */
@@ -80,7 +81,7 @@ class FileNode extends Node {
 
 export const DEFAULT_FILE_MODE = 0o644;
 export const DEFAULT_DIR_MODE = 0o755;
-export const NO_SPACE = 'No space left on device';
+export const NO_SPACE = ERRNO.ENOSPC;
 
 /** One file, directory or symbolic link as a snapshot holds it. @internal */
 export interface VfsEntry {
@@ -194,10 +195,10 @@ export class VirtualFileSystem {
     let onFile = false; // a file was reached with more of the path to go
     while (todo.length > 0) {
       const seg = todo.pop()!;
-      if (onFile) return fail('Not a directory');
+      if (onFile) return fail(ERRNO.ENOTDIR);
       if (seg === '' || seg === '.') continue;
       const dir = chain[chain.length - 1].dir;
-      if (!permits(dir, user, 1)) return fail('Permission denied');
+      if (!permits(dir, user, 1)) return fail(ERRNO.EACCES);
       if (seg === '..') { if (chain.length > 1) chain.pop(); continue; }
       const final = todo.every(t => t === '' || t === '.'), bare = todo.length === 0; // bare: no trailing slash, which would mean a directory
       const next = dir.children.get(seg);
@@ -235,12 +236,12 @@ export class VirtualFileSystem {
   private parentDir(path: string): Dir { return this.place(path).parent; }
   private allowed(n: Node, bits: number) { return permits(n, this.user, bits); }
   private require(n: Node, bits: number, path: string) {
-    if (!this.allowed(n, bits)) throw new ShellError(`${path}: Permission denied`);
+    if (!this.allowed(n, bits)) throw new ShellError(`${path}: ${ERRNO.EACCES}`);
   }
   /** In a sticky directory (/tmp) only the entry's owner or the directory's may remove or rename the entry. */
   private requireNotSticky(dir: Dir, entry: Node, path: string) {
     const u = this.user;
-    if (u !== null && dir.mode & 0o1000 && entry.owner !== u && dir.owner !== u) throw new ShellError(`${path}: Operation not permitted`);
+    if (u !== null && dir.mode & 0o1000 && entry.owner !== u && dir.owner !== u) throw new ShellError(`${path}: ${ERRNO.EPERM}`);
   }
 
   /** @param follow false: a symbolic link counts itself (lstat), even one whose target is missing. */
@@ -304,7 +305,7 @@ export class VirtualFileSystem {
   createSymlink(path: string, target: string) {
     if (target.length === 0) throw new ShellError(`${path}: ${NOT_FOUND}`);
     const spot = this.place(path);
-    if (spot.node) throw new ShellError(`${path}: File exists`);
+    if (spot.node) throw new ShellError(`${path}: ${ERRNO.EEXIST}`);
     this.require(spot.parent, 2, path);
     spot.parent.children.set(spot.name, Object.assign(new LinkNode(), { target, owner: this.runAs ?? spot.parent.owner, mode: 0o777, modified: this.store.clock() }));
     spot.parent.modified = this.store.clock();
@@ -317,9 +318,9 @@ export class VirtualFileSystem {
     if (!node) throw new ShellError(`${existing}: ${why}`);
     if (node instanceof Dir) throw new ShellError(`${existing}: hard link not allowed for directory`);
     const spot = this.place(path);
-    if (spot.node) throw new ShellError(`${path}: File exists`);
+    if (spot.node) throw new ShellError(`${path}: ${ERRNO.EEXIST}`);
     this.require(spot.parent, 2, path);
-    if (this.restricted && node.owner !== this.runAs && !this.allowed(node, 6)) throw new ShellError(`${path}: Operation not permitted`);
+    if (this.restricted && node.owner !== this.runAs && !this.allowed(node, 6)) throw new ShellError(`${path}: ${ERRNO.EPERM}`);
     node.nlink++;
     spot.parent.children.set(spot.name, node);
     spot.parent.modified = this.store.clock();
@@ -334,7 +335,7 @@ export class VirtualFileSystem {
   private readNode(path: string): FileNode {
     const { node, why } = this.find(path);
     if (node instanceof FileNode) { this.require(node, 4, path); return node; }
-    if (node instanceof Dir) throw new ShellError(`${path}: Is a directory`);
+    if (node instanceof Dir) throw new ShellError(`${path}: ${ERRNO.EISDIR}`);
     throw new ShellError(`${path}: ${why}`);
   }
 
@@ -347,10 +348,10 @@ export class VirtualFileSystem {
     if (path === '/dev/null' && this.node(path) !== null) return;
     const spot = this.walk(path); // through a symbolic link, even a dangling one: its target is written or created
     const dir = spot.parent;
-    if (dir === null) throw new ShellError(`${path}: ${spot.node ? 'Is a directory' : spot.why}`);
+    if (dir === null) throw new ShellError(`${path}: ${spot.node ? ERRNO.EISDIR : spot.why}`);
     const existing = spot.node;
     if (existing) {
-      if (!(existing instanceof FileNode)) throw new ShellError(`${path}: Is a directory`);
+      if (!(existing instanceof FileNode)) throw new ShellError(`${path}: ${ERRNO.EISDIR}`);
       this.require(existing, 2, path);
       existing.store(content, data, append, d => this.reserve(d, path));
       existing.modified = this.store.clock();
@@ -378,7 +379,7 @@ export class VirtualFileSystem {
   setModifiedTime(path: string, when: number, follow = true) {
     const { node, why } = this.find(path, follow);
     if (!node) throw new ShellError(`${path}: ${why}`);
-    if (this.restricted && node.owner !== this.runAs) throw new ShellError(`${path}: Operation not permitted`);
+    if (this.restricted && node.owner !== this.runAs) throw new ShellError(`${path}: ${ERRNO.EPERM}`);
     node.modified = when;
   }
 
@@ -417,7 +418,7 @@ export class VirtualFileSystem {
         const same = plain(e.hardLink);
         if (!same || same instanceof Dir) throw new ShellError(`${e.path}: hard link to ${e.hardLink}, which is not an earlier file`);
         if (!(dir instanceof Dir)) throw new ShellError(`${e.path}: parent is not a directory`);
-        if (dir.children.has(parts[parts.length - 1])) throw new ShellError(`${e.path}: File exists`);
+        if (dir.children.has(parts[parts.length - 1])) throw new ShellError(`${e.path}: ${ERRNO.EEXIST}`);
         same.nlink++;
         dir.children.set(parts[parts.length - 1], same);
         continue;
@@ -448,7 +449,7 @@ export class VirtualFileSystem {
   touch(path: string) {
     const { node, why } = this.find(path);
     if (node) { this.require(node, 2, path); node.modified = this.store.clock(); }
-    else if (why === 'Permission denied') throw new ShellError(`${path}: Permission denied`);
+    else if (why === ERRNO.EACCES) throw new ShellError(`${path}: ${ERRNO.EACCES}`);
     else this.writeText(path, '');
   }
 
@@ -456,7 +457,7 @@ export class VirtualFileSystem {
     path = VirtualFileSystem.normalize('/', path);
     if (this.node(path, false)) { // a symbolic link counts, even a dangling one
       if (parents && this.isDirectory(path)) return;
-      throw new ShellError(`cannot create directory '${path}': File exists`);
+      throw new ShellError(`cannot create directory '${path}': ${ERRNO.EEXIST}`);
     }
     const parent = VirtualFileSystem.getParent(path);
     if (parents && !this.exists(parent)) this.mkdir(parent, true);
@@ -470,7 +471,7 @@ export class VirtualFileSystem {
   list(path: string): string[] {
     const { node, why } = this.find(path);
     if (node instanceof Dir) { this.require(node, 4, path); return [...node.children.keys()].sort(ordinal); }
-    throw new ShellError(`${path}: ${node === null ? why : 'Not a directory'}`);
+    throw new ShellError(`${path}: ${node === null ? why : ERRNO.ENOTDIR}`);
   }
 
   /** Removes an entry (a symbolic link itself, never what it leads to); `recursive` for a directory with entries, whose
@@ -480,7 +481,7 @@ export class VirtualFileSystem {
     if (path === '/') throw new ShellError("it is dangerous to operate recursively on '/'");
     const { node, why } = this.find(path, false);
     if (!node) throw new ShellError(`${path}: ${why}`);
-    if (node instanceof Dir && node.children.size > 0 && !recursive) throw new ShellError(`${path}: Directory not empty`);
+    if (node instanceof Dir && node.children.size > 0 && !recursive) throw new ShellError(`${path}: ${ERRNO.ENOTEMPTY}`);
     const { parent, name } = this.place(path);
     if (node instanceof Dir) this.requireTreeRemovable(node, path);
     this.require(parent, 2, path);
@@ -508,7 +509,7 @@ export class VirtualFileSystem {
    * goes to `broken` as "cyclic", one leading nowhere with its reason (default: fail the whole copy). `tick` is called for
    * each entry copied: the caller's time limit (links can make a copy far bigger than the tree).
    */
-  copy(source: string, dest: string, denied: (path: string, isDir: boolean) => void = p => { throw new ShellError(`${p}: Permission denied`); },
+  copy(source: string, dest: string, denied: (path: string, isDir: boolean) => void = p => { throw new ShellError(`${p}: ${ERRNO.EACCES}`); },
     followTop = true, followAll = false, broken: (path: string, reason: string) => void = (p, reason) => { throw new ShellError(`${p}: ${reason}`); },
     tick?: () => void) {
     source = VirtualFileSystem.normalize('/', source);
@@ -519,7 +520,7 @@ export class VirtualFileSystem {
     if (node instanceof Dir && (place.real + '/').startsWith(this.realPath(source) + '/'))
       throw new ShellError(`cannot copy a directory, '${source}', into itself, '${dest}'`);
     const target = place.node instanceof LinkNode ? this.node(dest) : place.node; // a file is copied through a link onto its target
-    if (target instanceof Dir && !(node instanceof Dir)) throw new ShellError(`${dest}: Is a directory`);
+    if (target instanceof Dir && !(node instanceof Dir)) throw new ShellError(`${dest}: ${ERRNO.EISDIR}`);
     const parent = place.parent;
     if (target) this.require(target, 2, dest); else this.require(parent, 2, dest);
     const user = this.user;
@@ -577,7 +578,7 @@ export class VirtualFileSystem {
     // by real paths: through a link, a directory could otherwise be moved into itself and cut off from the tree
     if ((to.real + '/').startsWith(from.real + '/')) throw new ShellError(`cannot move '${source}' to a subdirectory of itself, '${dest}'`);
     const existing = to.node;
-    if (existing instanceof Dir) throw new ShellError(`${dest}: Is a directory`);
+    if (existing instanceof Dir) throw new ShellError(`${dest}: ${ERRNO.EISDIR}`);
     if (existing === node) return; // two hard links of one file: rename(2) leaves both
     const target = to.parent;
     this.require(from.parent, 2, source);
@@ -594,7 +595,7 @@ export class VirtualFileSystem {
   chmod(path: string, mode: number) {
     const { node, why } = this.find(path);
     if (!node) throw new ShellError(`cannot access '${path}': ${why}`);
-    if (this.restricted && node.owner !== this.runAs) throw new ShellError(`changing permissions of '${path}': Operation not permitted`);
+    if (this.restricted && node.owner !== this.runAs) throw new ShellError(`changing permissions of '${path}': ${ERRNO.EPERM}`);
     node.mode = mode & 0o7777;
   }
 
@@ -602,7 +603,7 @@ export class VirtualFileSystem {
   setOwner(path: string, owner: string, recursive = false) {
     const { node, why } = this.find(path);
     if (!node) throw new ShellError(`cannot access '${path}': ${why}`);
-    if (this.restricted) throw new ShellError(`changing ownership of '${path}': Operation not permitted`);
+    if (this.restricted) throw new ShellError(`changing ownership of '${path}': ${ERRNO.EPERM}`);
     const apply = (n: Node) => {
       n.owner = owner;
       if (recursive && n instanceof Dir) for (const c of n.children.values()) apply(c);
@@ -617,12 +618,12 @@ interface Spot { parent: Dir | null; name: string; node: Node | null; real: stri
 
 /** Symbolic links followed in one lookup before it fails with "Too many levels of symbolic links", as on Linux. */
 const MAX_LINK_HOPS = 40;
-export const LOOP = 'Too many levels of symbolic links';
+export const LOOP = ERRNO.ELOOP;
 
 function permits(n: Node, user: string | null, bits: number) {
   return user === null || ((n.mode >> (n.owner === user ? 6 : 0)) & bits) === bits;
 }
-const NOT_FOUND = 'No such file or directory';
+const NOT_FOUND = ERRNO.ENOENT;
 function treeSize(n: Node): number {
   if (n instanceof FileNode) return n.size;
   let s = 0;

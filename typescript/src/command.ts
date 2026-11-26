@@ -1,6 +1,7 @@
 import type { Shell } from './shell.js';
 import { ShellError, UsageException, type VirtualFileSystem } from './vfs.js';
 import { encodeText } from './bytes.js';
+import { COMMANDS, DEFAULT_MESSAGES, GETOPT, type CommandSpec } from './spec.generated.js';
 
 export { ShellError, UsageException };
 
@@ -104,8 +105,13 @@ export class Args {
    * @param flags allowed boolean short flags, e.g. "rfi"
    * @param valued short options that take a value, e.g. "n"
    * @param longs long-option aliases, e.g. "recursive=r,ignore-case=i"
+   * Or pass a command's spec entry as flags: its option table.
    */
-  static parse(args: readonly string[], flags = '', valued = '', longs = ''): Args {
+  static parse(args: readonly string[], flags: string | CommandSpec = '', valued = '', longs = ''): Args {
+    if (typeof flags !== 'string') {
+      if (!flags.options) throw new Error(`${flags.name} parses its own arguments`);
+      [flags, valued, longs] = flags.options;
+    }
     const map = new Map<string, string>();
     for (const pair of longs.split(',').filter(Boolean)) { const [k, v] = pair.split('='); map.set(k, v[0]); }
     const r = new Args();
@@ -118,9 +124,9 @@ export class Args {
         const eq = name.indexOf('=');
         if (eq > 0) { inline = name.slice(eq + 1); name = name.slice(0, eq); }
         const c = map.get(name);
-        if (c === undefined) throw new UsageException(`unrecognized option '${a}'`);
+        if (c === undefined) throw new UsageException(specFormat(GETOPT.unrecognizedOption, { option: a }));
         if (valued.includes(c)) {
-          if (inline === undefined && i + 1 >= args.length) throw new UsageException(`option '--${name}' requires an argument`);
+          if (inline === undefined && i + 1 >= args.length) throw new UsageException(specFormat(GETOPT.missingLongArgument, { option: name }));
           r.values.set(c, inline ?? args[++i]);
         } else r.flags.add(c);
         continue;
@@ -131,10 +137,10 @@ export class Args {
         if (valued.includes(c)) {
           if (k + 1 < a.length) r.values.set(c, a.slice(k + 1));
           else if (i + 1 < args.length) r.values.set(c, args[++i]);
-          else throw new UsageException(`option requires an argument -- '${c}'`);
+          else throw new UsageException(specFormat(GETOPT.missingShortArgument, { option: c }));
           break;
         }
-        if (!flags.includes(c)) throw new UsageException(`invalid option -- '${c}'`);
+        if (!flags.includes(c)) throw new UsageException(specFormat(GETOPT.invalidOption, { option: c }));
         r.flags.add(c);
       }
     }
@@ -167,18 +173,21 @@ export function reason(e: unknown): string {
   return i >= 0 ? m.slice(i + 2) : m;
 }
 
-/** The commands that are part of bash itself rather than programs in /usr/bin (for `type`, and for the "bash: " error prefix). */
-export const SHELL_BUILTINS = new Set(['cd', 'echo', 'printf', 'read', 'export', 'unset', 'alias', 'unalias', 'set', 'shift', 'local', 'declare', 'typeset',
-  'eval', 'exit', 'return', 'break', 'continue', 'source', '.', 'test', '[', 'true', 'false', 'pwd', 'type', 'command',
-  'let', 'history', 'help', 'exec', 'wait', 'trap', 'umask', 'readonly', 'getopts', 'hash', 'jobs', 'kill', 'shopt', ':', 'mapfile', 'readarray',
-  'pushd', 'popd', 'dirs', 'builtin', 'ulimit', 'times', 'disown']);
-export const isShellBuiltin = (sh: Shell, name: string) => SHELL_BUILTINS.has(name) && sh.isBuiltin(name);
+/** Part of bash itself rather than a program in /usr/bin (for `type`, and for the "bash: " error prefix). */
+export const isShellBuiltin = (sh: Shell, name: string) => COMMANDS.get(name)?.shellBuiltin === true && sh.isBuiltin(name);
+
+/** The spec entry for a built-in command (spec.generated.ts, from spec/). */
+export function specOf(name: string): CommandSpec {
+  const spec = COMMANDS.get(name);
+  if (!spec) throw new Error(`${name} is not in spec/`);
+  return spec;
+}
 
 /** A bad command line the way GNU tools report one: the problem, then a pointer to --help. */
 export function usageError(cmd: string, message: string): string {
-  const hint = cmd === 'grep' ? "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n"
-    : cmd === 'diff' ? "diff: Try 'diff --help' for more information.\n" : `Try '${cmd} --help' for more information.\n`;
-  return (message.length > 0 ? `${cmd}: ${message}\n` : '') + hint;
+  const spec = COMMANDS.get(cmd);
+  const shown = spec?.reportsAs ?? cmd;
+  return (message.length > 0 ? `${shown}: ${message}\n` : '') + (spec?.tryHelp ?? `Try '${cmd} --help' for more information.\n`);
 }
 
 /** A value quoted the way GNU tools quote one in a UTF-8 locale: ‘x’. */
@@ -206,16 +215,21 @@ export const quote = (s: string) =>
 /** The message after "NAME: " when an input file can't be read, worded the way each GNU tool words it. */
 export function cannotRead(cmd: string, f: string, why: string): string {
   const dir = why === 'Is a directory';
-  switch (cmd) {
-    case 'sed': return dir ? `read error on ${f}: ${why}` : `can't read ${f}: ${why}`;
-    case 'grep': case 'egrep': case 'fgrep': return `${f}: ${why}`; // grep shows names as given
-    case 'head': case 'tail': return dir ? `error reading ${quoteAlways(f)}: ${why}` : `cannot open ${quoteAlways(f)} for reading: ${why}`;
-    case 'uniq': if (dir) return `error reading ${quoteAlways(f)}: ${why}`; break;
-    case 'tac': return dir ? `${quote(f)}: read error: Invalid argument` : `failed to open ${quoteAlways(f)} for reading: ${why}`;
-    case 'sort': return dir ? `read failed: ${quote(f)}: ${why}` : `cannot read: ${quote(f)}: ${why}`;
-    case 'base64': if (dir) return `read error: ${why}`; break;
-  }
-  return `${quote(f)}: ${why}`;
+  return specMessage(cmd, dir && COMMANDS.get(cmd)?.messages.readDirectory !== undefined ? 'readDirectory' : 'openFailed', { file: f, errno: why });
+}
+
+/** Fills a spec template: {x} as given, {x:shell} / {x:shell-always} shell-quoted, {x:locale} in ‘curly quotes’. */
+export function specFormat(template: string, values: Readonly<Record<string, string>>): string {
+  return template.replace(/\{([A-Za-z]\w*)(?::([\w-]+))?\}/g, (m, name: string, how: string | undefined) => {
+    const v = values[name];
+    if (v === undefined) return m;
+    return how === 'shell' ? quote(v) : how === 'shell-always' ? quoteAlways(v) : how === 'locale' ? quoteL(v) : v;
+  });
+}
+
+/** The command's message `key` from spec/ (or the shared default), filled in. */
+export function specMessage(command: string, key: string, values: Readonly<Record<string, string>> = {}): string {
+  return specFormat(COMMANDS.get(command)?.messages[key] ?? DEFAULT_MESSAGES[key], values);
 }
 
 /**

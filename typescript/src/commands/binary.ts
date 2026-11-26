@@ -1,11 +1,11 @@
 import type { Shell } from '../shell.js';
-import { Args, ShellError, inputBytes, type CommandContext } from '../command.js';
+import { Args, specOf, specMessage, ShellError, inputBytes, type CommandContext } from '../command.js';
 import { decodeBytes, fromBase64, toBase64, toHex } from '../bytes.js';
 import { md5 } from '../md5.js';
 
 function num(s: string): number {
   const n = /^0x[0-9a-f]+$/i.test(s) ? parseInt(s.slice(2), 16) : /^-?\d+$/.test(s) ? parseInt(s, 10) : NaN;
-  if (!Number.isSafeInteger(n)) throw new ShellError(`invalid number '${s}'`);
+  if (!Number.isSafeInteger(n)) throw new ShellError(specMessage('xxd', 'invalidNumber', { value: s }));
   return n;
 }
 
@@ -49,13 +49,13 @@ const OD_ESCAPES: Record<number, string> = { 0: '\\0', 7: '\\a', 8: '\\b', 9: '\
 
 export function registerBinary(shell: Shell): void {
   shell.register('xxd', ctx => {
-    const a = Args.parse(ctx.args, 'pu', 'lsc', 'plain=p,len=l,seek=s,cols=c');
+    const a = Args.parse(ctx.args, specOf('xxd'));
     let code = 0;
     let data = readAll(ctx, a.positional.slice(0, 1), () => code = 1); // a second operand (outfile) is not supported
     let start = num(a.value('s') ?? '0');
     data = slice(data, start, a.value('l') !== undefined ? num(a.value('l')!) : undefined);
     const cols = num(a.value('c') ?? (a.has('p') ? '30' : '16'));
-    if (cols <= 0) throw new ShellError('invalid number of columns');
+    if (cols <= 0) throw new ShellError(specMessage('xxd', 'invalidColumns', {}));
     start = Math.max(0, start < 0 ? start + data.length : start);
     const fmt = (s: string) => (a.has('u') ? s.toUpperCase() : s);
     let out = '';
@@ -68,10 +68,10 @@ export function registerBinary(shell: Shell): void {
     }
     ctx.stdout.write(out);
     return code;
-  }, 'Make a hex dump (-p plain, -l LEN, -s OFFSET)');
+  });
 
   shell.register('hexdump', ctx => {
-    const a = Args.parse(ctx.args, 'Cv', 'ns', 'canonical=C,length=n,skip=s,no-squeezing=v');
+    const a = Args.parse(ctx.args, specOf('hexdump'));
     let code = 0;
     const data = slice(readAll(ctx, a.positional, () => code = 1), num(a.value('s') ?? '0'), a.value('n') !== undefined ? num(a.value('n')!) : undefined);
     let out = '';
@@ -84,10 +84,10 @@ export function registerBinary(shell: Shell): void {
     if (data.length > 0) out += data.length.toString(16).padStart(8, '0') + '\n';
     ctx.stdout.write(out);
     return code;
-  }, 'Display file contents in hexadecimal (-C canonical, -n LEN)');
+  });
 
   shell.register('od', ctx => {
-    const a = Args.parse(ctx.args, 'cxov', 'ANtj', 'address-radix=A,read-bytes=N,format=t,skip-bytes=j');
+    const a = Args.parse(ctx.args, specOf('od'));
     let code = 0;
     const data = slice(readAll(ctx, a.positional, () => code = 1), num(a.value('j') ?? '0'), a.value('N') !== undefined ? num(a.value('N')!) : undefined);
     let fmt = a.value('t') ?? (a.has('c') ? 'c' : a.has('x') ? 'x2' : 'o2');
@@ -108,19 +108,19 @@ export function registerBinary(shell: Shell): void {
         }
         return s;
       };
-    } else throw new ShellError(`invalid type string '${fmt}' (supported here: c, x1, x2, x4, x8, o1, o2, o4, o8)`);
+    } else throw new ShellError(specMessage('od', 'invalidType', { type: fmt }));
     const radix = a.value('A') ?? 'o';
-    if (!['o', 'x', 'd', 'n'].includes(radix)) throw new ShellError(`invalid output address radix '${radix}'; it must be one character from [doxn]`);
+    if (!['o', 'x', 'd', 'n'].includes(radix)) throw new ShellError(specMessage('od', 'invalidRadix', { radix }));
     const addr = (v: number) => radix === 'n' ? '' : radix === 'o' ? v.toString(8).padStart(7, '0') : radix === 'x' ? v.toString(16).padStart(6, '0') : v.toString().padStart(7, '0');
     let out = '';
     for (const [i, chunk] of lines(data, 16, !a.has('v'))) out += (chunk ? addr(i) + cells(chunk) : '*') + '\n';
     if (radix !== 'n') out += addr(data.length) + '\n';
     ctx.stdout.write(out);
     return code;
-  }, 'Dump files in octal and other formats (-c, -x, -t x1, -An, -N LEN)');
+  });
 
   shell.register('strings', ctx => {
-    const a = Args.parse(Args.numericShorthand(ctx.args), 'a', 'n', 'bytes=n,all=a');
+    const a = Args.parse(Args.numericShorthand(ctx.args), specOf('strings'));
     let code = 0;
     const min = num(a.value('n') ?? '4');
     let out = '';
@@ -135,26 +135,26 @@ export function registerBinary(shell: Shell): void {
     }
     ctx.stdout.write(out);
     return code;
-  }, 'Print printable character sequences in files (-n MIN)');
+  });
 
   shell.register('base64', ctx => {
-    const a = Args.parse(ctx.args, 'di', 'w', 'decode=d,ignore-garbage=i,wrap=w');
+    const a = Args.parse(ctx.args, specOf('base64'));
     let code = 0;
     const data = readAll(ctx, a.positional, () => code = 1);
     if (a.has('d')) {
       let s = latin1(data);
       s = a.has('i') ? s.replace(/[^A-Za-z0-9+/=]/g, '') : s.replace(/\s/g, '');
-      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s)) throw new ShellError('invalid input');
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s)) throw new ShellError(specMessage('base64', 'invalidInput', {}));
       ctx.stdout.write(decodeBytes(fromBase64(s)));
       return code;
     }
     const w = a.value('w') ?? '76';
-    if (!/^\d+$/.test(w)) throw new ShellError(`invalid wrap size: '${w}'`);
+    if (!/^\d+$/.test(w)) throw new ShellError(specMessage('base64', 'invalidWrap', { size: w }));
     const wrap = +w;
     const enc = toBase64(data);
     ctx.stdout.write(wrap > 0 ? enc.replace(new RegExp(`.{1,${wrap}}`, 'g'), '$&\n') : enc + '\n');
     return code;
-  }, 'Base64 encode/decode');
+  });
 
   for (const [name, algo] of [['md5sum', 'md5'], ['sha1sum', 'SHA-1'], ['sha256sum', 'SHA-256'], ['sha512sum', 'SHA-512']]) {
     shell.register(name, async ctx => {
@@ -167,6 +167,6 @@ export function registerBinary(shell: Shell): void {
       }
       ctx.stdout.write(out);
       return code;
-    }, `Compute ${algo.replace('-', '').toUpperCase()} checksums`);
+    });
   }
 }

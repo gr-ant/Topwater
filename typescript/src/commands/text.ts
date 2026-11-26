@@ -1,5 +1,6 @@
 import type { Shell } from '../shell.js';
-import { Args, ShellError, UsageException, quoteL, inputBytes, inputs, reason, splitLines, type CommandContext, type CommandHandler } from '../command.js';
+import { Args, specFormat, specOf, specMessage, ShellError, UsageException, quoteL, inputBytes, inputs, reason, splitLines, type CommandContext, type CommandHandler } from '../command.js';
+import { GETOPT } from '../spec.generated.js';
 import { decodeBytes, encodeText as encodeBytes } from '../bytes.js';
 import { escapeRegex, posixRegexError, posixToJs } from '../regex.js';
 import { globRegex } from '../glob.js';
@@ -15,9 +16,9 @@ function buffered(ctx: CommandContext) {
   return { w: (s: string) => { parts.push(s); }, flush: () => { if (parts.length) ctx.stdout.write(parts.join('')); parts.length = 0; } };
 }
 
-function intArg(s: string, what: string): number {
+function intArg(cmd: string, s: string, what: string): number {
   const digits = s.replace(/^[+-]/, '');
-  if (!/^\d+$/.test(digits)) throw new ShellError(`invalid number of ${what}: ${quoteL(s)}`);
+  if (!/^\d+$/.test(digits)) throw new ShellError(specMessage(cmd, 'invalidCount', { what, value: s }));
   return parseInt(digits, 10);
 }
 
@@ -34,7 +35,7 @@ function grepRegex(patterns: string[], o: { E: boolean; F: boolean; i: boolean; 
   if (o.w) re = `(?<!\\w)(?:${re})(?!\\w)`;
   if (o.x) re = `^(?:${re})$`;
   try { return new RegExp(re, 'g' + (o.i ? 'i' : '')); } catch (e) {
-    throw new ShellError(`invalid regular expression: ${(e as Error).message.replace(/^Invalid regular expression: /, '')}`, 2);
+    throw new ShellError(specMessage('grep', 'invalidRegex', { detail: (e as Error).message.replace(/^Invalid regular expression: /, '') }), 2);
   }
 }
 
@@ -57,7 +58,7 @@ function grep(ctx: CommandContext): number {
       kind = m[2];
       value = m[3];
       if (m[1]) rest.push('-' + m[1]);
-      if (value.length === 0) { if (i >= args.length) throw new UsageException(`option requires an argument -- '${kind}'`); value = args[i++]; }
+      if (value.length === 0) { if (i >= args.length) throw new UsageException(specFormat(GETOPT.missingShortArgument, { option: kind })); value = args[i++]; }
     } else if (lng) {
       kind = lng[1][0];
       value = lng[2] ?? (i < args.length ? args[i++] : '');
@@ -65,11 +66,7 @@ function grep(ctx: CommandContext): number {
     if (kind === 'e') patterns.push(value);
     else patterns.push(...splitLines(value === '-' ? ctx.stdinText : ctx.fs.readText(ctx.resolvePath(value))));
   }
-  const a = Args.parse(rest, 'invcrRlLEFwxohHqsIaZPU', 'ABCm',
-    'binary-files=I,text=a,ignore-case=i,line-number=n,invert-match=v,count=c,recursive=r,files-with-matches=l,files-without-match=L,'
-    + 'extended-regexp=E,fixed-strings=F,word-regexp=w,line-regexp=x,only-matching=o,quiet=q,silent=q,max-count=m,perl-regexp=P,'
-    + 'no-filename=h,with-filename=H,no-messages=s,color=U,colour=U,line-buffered=U,after-context=A,before-context=B,context=C,'
-    + 'dereference-recursive=R');
+  const a = Args.parse(rest, specOf('grep'));
   const positional = [...a.positional];
   if (patterns.length === 0) {
     if (positional.length === 0) throw new UsageException('');
@@ -83,7 +80,7 @@ function grep(ctx: CommandContext): number {
   if (a.has('E') && !a.has('F') && !a.has('P'))
     for (const p of patterns) {
       const lead = /^[*+?]|(?<!\\)[(|]([*+?])/.exec(p);
-      if (lead) ctx.stderr.write(`grep: warning: ${lead[0].slice(-1)} at start of expression\n`);
+      if (lead) ctx.stderr.write(`grep: ${specMessage('grep', 'leadingRepetition', { char: lead[0].slice(-1) })}\n`);
     }
   const re = grepRegex(patterns, { E: a.has('E'), F: a.has('F'), i: a.has('i'), w: a.has('w'), x: a.has('x'), P: a.has('P') });
   const num = (v: string | undefined, what: string) => { if (v === undefined) return 0; if (!/^\d+$/.test(v)) throw new ShellError(`${v}: invalid ${what} argument`, 2); return parseInt(v, 10); };
@@ -97,13 +94,13 @@ function grep(ctx: CommandContext): number {
     const abs = ctx.resolvePath(f);
     if (!ctx.fs.isDirectory(abs)) { files.push(f); continue; }
     walked = true;
-    if (!recursive) { if (!quietErr) ctx.stderr.write(`grep: ${f}: Is a directory\n`); error = true; continue; }
     const above = new Set<string>([ctx.fs.realPath(abs) ?? abs]); // the directories being walked
+    if (!recursive) { if (!quietErr) ctx.stderr.write(`grep: ${specMessage('grep', 'openFailed', { file: f, errno: 'Is a directory' })}\n`); error = true; continue; }
     const walk = (dirAbs: string, display: string) => {
       let names: string[];
       try { names = ctx.fs.list(dirAbs); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        if (!quietErr) ctx.stderr.write(`grep: ${display}: Permission denied\n`);
+        if (!quietErr) ctx.stderr.write(`grep: ${specMessage('grep', 'openFailed', { file: display, errno: 'Permission denied' })}\n`);
         error = true;
         return;
       }
@@ -147,7 +144,7 @@ function grep(ctx: CommandContext): number {
       if (a.has('l')) { if (hits.length > 0) out.w(name + '\n'); continue; }
       if (a.has('L')) { if (hits.length === 0) out.w(name + '\n'); continue; }
       if (a.has('c')) { out.w((prefix !== null ? `${prefix}:${hits.length}` : String(hits.length)) + '\n'); continue; }
-      if (binary) { if (hits.length > 0) out.w(`grep: ${name}: binary file matches\n`); continue; }
+      if (binary) { if (hits.length > 0) out.w(`grep: ${specMessage('grep', 'binaryFileMatches', { file: name })}\n`); continue; }
       let lastPrinted = -1;
       const hitSet = new Set(hits);
       const ctxOn = before > 0 || after > 0;
@@ -175,18 +172,18 @@ function grep(ctx: CommandContext): number {
 
 const headTail: CommandHandler = ctx => {
   const head = ctx.name === 'head';
-  const a = Args.parse(Args.numericShorthand(ctx.args), head ? 'qv' : 'qvfF', 'nc', 'lines=n,bytes=c,quiet=q,silent=q,verbose=v' + (head ? '' : ',follow=f,retry=F'));
+  const a = Args.parse(Args.numericShorthand(ctx.args), specOf(ctx.name));
   // a bad count is reported before any file is opened
   const lines0 = a.value('n'), bytes0 = a.value('c');
-  if (lines0 !== undefined) intArg(lines0, 'lines');
-  if (bytes0 !== undefined) intArg(bytes0, 'bytes');
+  if (lines0 !== undefined) intArg(ctx.name, lines0, 'lines');
+  if (bytes0 !== undefined) intArg(ctx.name, bytes0, 'bytes');
   let code = 0;
   const all = [...inputBytes(ctx, a.positional, () => { code = 1; })];
   all.forEach(([name, data], k) => {
     if ((all.length > 1 && !a.has('q')) || a.has('v')) ctx.stdout.write((k > 0 ? '\n' : '') + `==> ${name} <==\n`);
     const bytes = a.value('c');
     if (bytes !== undefined) {
-      const n = intArg(bytes, 'bytes');
+      const n = intArg(ctx.name, bytes, 'bytes');
       const chunk = head
         ? bytes.startsWith('-') ? data.subarray(0, Math.max(0, data.length - n)) : data.subarray(0, Math.min(n, data.length))
         : bytes.startsWith('+') ? data.subarray(Math.min(data.length, Math.max(0, n - 1))) : n > 0 ? data.subarray(Math.max(0, data.length - n)) : data.subarray(0, 0);
@@ -195,7 +192,7 @@ const headTail: CommandHandler = ctx => {
     }
     const text = decodeBytes(data);
     const spec = a.value('n') ?? '10';
-    const count = intArg(spec, 'lines');
+    const count = intArg(ctx.name, spec, 'lines');
     const lines = splitLines(text);
     const pick = head
       ? spec.startsWith('-') ? lines.slice(0, Math.max(0, lines.length - count)) : lines.slice(0, count)
@@ -211,7 +208,7 @@ const headTail: CommandHandler = ctx => {
 // ---------- wc ----------
 
 function wc(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'lwcmL', '', 'lines=l,words=w,bytes=c,chars=m,max-line-length=L');
+  const a = Args.parse(ctx.args, specOf('wc'));
   const all = !a.has('l') && !a.has('w') && !a.has('c') && !a.has('m') && !a.has('L');
   const selected = [all || a.has('l'), all || a.has('w'), a.has('m'), all || a.has('c'), a.has('L')];
   let code = 0;
@@ -303,7 +300,7 @@ function sort(ctx: CommandContext): number {
       while (j < arg.length && !'kto'.includes(arg[j]) && !'STm'.includes(arg[j])) j++;
       if (j < arg.length && arg[j] === 'k') {
         const v = arg.slice(j + 1) || args[++i];
-        if (v === undefined) throw new ShellError("option requires an argument -- 'k'", 2);
+        if (v === undefined) throw new ShellError(specMessage('sort', 'optionRequiresArgument', { option: 'k' }), 2);
         specs.push(v);
         if (j > 1) rest.push(arg.slice(0, j));
         continue;
@@ -311,16 +308,13 @@ function sort(ctx: CommandContext): number {
     }
     rest.push(arg);
   }
-  const a = Args.parse(rest, 'rnufhVgsbcCdiMRzmZ', 'toST',
-    'reverse=r,numeric-sort=n,unique=u,ignore-case=f,field-separator=t,output=o,general-numeric-sort=g,human-numeric-sort=h,'
-    + 'version-sort=V,stable=s,ignore-leading-blanks=b,check=c,dictionary-order=d,month-sort=M,random-sort=R,ignore-nonprinting=i,'
-    + 'zero-terminated=z,merge=m,buffer-size=S,temporary-directory=T,debug=Z');
+  const a = Args.parse(rest, specOf('sort'));
   const sep = a.value('t') !== undefined ? unescape(a.value('t')!) : null;
-  if (sep !== null && sep.length !== 1) throw new ShellError(`multi-character tab '${a.value('t')}'`, 2);
+  if (sep !== null && sep.length !== 1) throw new ShellError(specMessage('sort', 'multiCharacterTab', { value: a.value('t')! }), 2);
   const globalOpts = [...ORDERING].filter(c => a.has(c)).join('');
   const keys: SortKey[] = specs.map(spec => {
     const m = /^(\d+)(?:\.(\d+))?([a-zA-Z]*)(?:,(\d+)(?:\.(\d+))?([a-zA-Z]*))?$/.exec(spec);
-    if (!m || parseInt(m[1], 10) === 0) throw new ShellError(`invalid number at field start: invalid count at start of ${quoteL(spec)}`, 2);
+    if (!m || parseInt(m[1], 10) === 0) throw new ShellError(specMessage('sort', 'invalidKey', { value: spec }), 2);
     const own = m[3] + (m[6] ?? '');
     return {
       sf: parseInt(m[1], 10), sc: m[2] ? parseInt(m[2], 10) : 1, ef: m[4] ? parseInt(m[4], 10) : null, ec: m[5] ? parseInt(m[5], 10) : 0,
@@ -383,7 +377,7 @@ function sort(ctx: CommandContext): number {
     for (let i = 1; i < items.length; i++) {
       const c = compare(items[i - 1], items[i]);
       if (c > 0 || (a.has('u') && c === 0)) {
-        if (a.has('c')) ctx.stderr.write(`sort: ${a.positional.length > 0 ? named[0][0] : '-'}:${i + 1}: disorder: ${items[i].line}\n`);
+        if (a.has('c')) ctx.stderr.write('sort: ' + specMessage('sort', 'disorder', { file: a.positional.length > 0 ? named[0][0] : '-', line: String(i + 1), text: items[i].line }) + '\n');
         return 1;
       }
     }
@@ -402,10 +396,10 @@ function sort(ctx: CommandContext): number {
 // ---------- uniq ----------
 
 function uniq(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'cduiD', 'fsw', 'count=c,repeated=d,unique=u,ignore-case=i,skip-fields=f,skip-chars=s,check-chars=w');
-  const skipF = a.value('f') !== undefined ? intArg(a.value('f')!, 'fields to skip') : 0;
-  const skipS = a.value('s') !== undefined ? intArg(a.value('s')!, 'bytes to skip') : 0;
-  const maxW = a.value('w') !== undefined ? intArg(a.value('w')!, 'bytes to compare') : Infinity;
+  const a = Args.parse(ctx.args, specOf('uniq'));
+  const skipF = a.value('f') !== undefined ? intArg('uniq', a.value('f')!, 'fields to skip') : 0;
+  const skipS = a.value('s') !== undefined ? intArg('uniq', a.value('s')!, 'bytes to skip') : 0;
+  const maxW = a.value('w') !== undefined ? intArg('uniq', a.value('w')!, 'bytes to compare') : Infinity;
   const key = (line: string) => {
     let s = line;
     for (let i = 0; i < skipF; i++) s = s.replace(/^[ \t]*[^ \t]*/, '');
@@ -437,11 +431,11 @@ function parseList(spec: string): [number, number][] {
   const ranges: [number, number][] = [];
   for (const part of spec.split(',')) {
     const m = /^(\d*)(-?)(\d*)$/.exec(part);
-    if (!m || (m[1] === '' && m[3] === '') || (!m[2] && m[3])) throw new ShellError(`invalid field value '${part}'`);
+    if (!m || (m[1] === '' && m[3] === '') || (!m[2] && m[3])) throw new ShellError(specMessage('cut', 'invalidFieldValue', { part }));
     const lo = m[1] === '' ? 1 : parseInt(m[1], 10);
     const hi = !m[2] ? lo : m[3] === '' ? Infinity : parseInt(m[3], 10);
-    if ((m[1] !== '' && lo === 0) || (m[2] === '' && lo === 0)) throw new ShellError('fields and positions are numbered from 1');
-    if (hi < lo) throw new ShellError('invalid decreasing range');
+    if ((m[1] !== '' && lo === 0) || (m[2] === '' && lo === 0)) throw new ShellError(specMessage('cut', 'fieldsFromOne', {}));
+    if (hi < lo) throw new ShellError(specMessage('cut', 'invalidDecreasingRange', {}));
     ranges.push([lo, hi]);
   }
   ranges.sort((x, y) => x[0] - y[0]);
@@ -466,16 +460,16 @@ function pickGroups<T>(items: T[], ranges: [number, number][], complement: boole
 }
 
 function cut(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'snz', 'dfcbO', 'delimiter=d,fields=f,characters=c,bytes=b,only-delimited=s,complement=z,output-delimiter=O');
+  const a = Args.parse(ctx.args, specOf('cut'));
   const delim = a.value('d') ?? '\t';
-  if ([...delim].length !== 1) throw new ShellError('the delimiter must be a single character');
+  if ([...delim].length !== 1) throw new ShellError(specMessage('cut', 'delimiterNotSingle', {}));
   const bytesMode = a.value('b') !== undefined && a.value('c') === undefined;
   const chars = a.value('c') ?? a.value('b');
   const spec = chars ?? a.value('f');
-  if (spec === undefined) throw new UsageException('you must specify a list of bytes, characters, or fields');
+  if (spec === undefined) throw new UsageException(specMessage('cut', 'listRequired', {}));
   const ranges = parseList(spec);
   const complement = a.has('z');
-  const outDelim = a.value('O');
+  const outDelim = a.value('\u0002'); // --output-delimiter (long only)
   let code = 0;
   let out = '';
   for (const [, text] of inputs(ctx, a.positional, () => { code = 1; })) {
@@ -521,7 +515,7 @@ function expandSet(spec: string): string[] {
         i = close;
         continue;
       }
-      if (close > 0 && cps[close - 1] === ':') throw new ShellError(`invalid character class '${name}'`);
+      if (close > 0 && cps[close - 1] === ':') throw new ShellError(specMessage('tr', 'invalidCharacterClass', { name }));
     }
     if (c === '[' && cps[i + 1] === '=' && cps[i + 3] === '=' && cps[i + 4] === ']') { toks.push({ c: cps[i + 2], lit: true }); i += 4; continue; }
     if (c === '\\' && i + 1 < cps.length) {
@@ -540,7 +534,7 @@ function expandSet(spec: string): string[] {
   for (let i = 0; i < toks.length; i++) {
     if (i + 2 < toks.length && toks[i + 1].c === '-' && !toks[i + 1].lit) {
       const lo = toks[i].c.codePointAt(0)!, hi = toks[i + 2].c.codePointAt(0)!;
-      if (lo > hi) throw new ShellError(`range-endpoints of '${toks[i].c}-${toks[i + 2].c}' are in reverse collating sequence order`);
+      if (lo > hi) throw new ShellError(specMessage('tr', 'reverseRange', { range: `${toks[i].c}-${toks[i + 2].c}` }));
       for (let k = lo; k <= hi; k++) out.push(String.fromCodePoint(k));
       i += 2;
     } else out.push(toks[i].c);
@@ -557,11 +551,11 @@ function expandRange(s: string): string[] {
 }
 
 function tr(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'dscCt', '', 'delete=d,squeeze-repeats=s,complement=c,truncate-set1=t');
-  if (a.positional.length === 0) throw new UsageException('missing operand');
+  const a = Args.parse(ctx.args, specOf('tr'));
+  if (a.positional.length === 0) throw new UsageException(specMessage('tr', 'missingOperand', {}));
   const del = a.has('d'), squeezeOpt = a.has('s'), complement = a.has('c') || a.has('C');
-  if (!del && !squeezeOpt && a.positional.length < 2) throw new ShellError(`missing operand after '${a.positional[0]}'\nTwo strings must be given when translating.`);
-  if (a.positional.length > 2) throw new UsageException(`extra operand ${quoteL(a.positional[2])}`);
+  if (!del && !squeezeOpt && a.positional.length < 2) throw new ShellError(specMessage('tr', 'missingTranslation', { operand: a.positional[0] }));
+  if (a.positional.length > 2) throw new UsageException(specMessage('tr', 'extraOperand', { operand: a.positional[2] }));
   let set1 = expandSet(a.positional[0]);
   const set2 = a.positional.length > 1 ? expandSet(a.positional[1]) : [];
   if (a.has('t') && set2.length > 0) set1 = set1.slice(0, set2.length);
@@ -591,7 +585,7 @@ function tr(ctx: CommandContext): number {
 // ---------- tee ----------
 
 function tee(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'ai', '', 'append=a,ignore-interrupts=i');
+  const a = Args.parse(ctx.args, specOf('tee'));
   let code = 0;
   const text = ctx.stdinText;
   for (const f of a.positional) {
@@ -599,7 +593,7 @@ function tee(ctx: CommandContext): number {
     if (path === '/dev/stdout' || path === '/dev/stderr') { (path === '/dev/stderr' ? ctx.stderr : ctx.stdout).write(text); continue; }
     try { if (a.has('a')) ctx.fs.appendText(path, text); else ctx.fs.writeText(path, text); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      ctx.stderr.write(`tee: ${f}: ${reason(e)}\n`);
+      ctx.stderr.write('tee: ' + specMessage('tee', 'writeFailed', { file: f, reason: reason(e) }) + '\n');
       code = 1;
     }
   }
@@ -620,7 +614,7 @@ function xargsWords(text: string): string[] {
       i++;
     } else if (c === "'" || c === '"') {
       const j = text.indexOf(c, i + 1);
-      if (j < 0 || text.slice(i + 1, j).includes('\n')) throw new ShellError(`unmatched ${c === "'" ? 'single' : 'double'} quote; by default quotes are special to xargs unless you use the -0 option`);
+      if (j < 0 || text.slice(i + 1, j).includes('\n')) throw new ShellError(specMessage('xargs', 'unmatchedQuote', { kind: c === "'" ? 'single' : 'double' }));
       cur += text.slice(i + 1, j);
       inWord = true;
       i = j + 1;
@@ -641,13 +635,12 @@ async function xargs(ctx: CommandContext): Promise<number> {
     if (['-I', '-n', '-d', '-L', '-P', '-s', '-E', '-a'].includes(ctx.args[i]) && i + 1 < ctx.args.length) opts.push(ctx.args[++i]);
     if (ctx.args[i] === '--') { opts.pop(); i++; break; }
   }
-  const a = Args.parse(opts, '0rtpxi', 'InLdPsEa', 'null=0,no-run-if-empty=r,verbose=t,max-args=n,max-lines=L,delimiter=d,'
-    + 'max-procs=P,replace=I,arg-file=a,interactive=p,exit=x,max-chars=s,eof=E');
+  const a = Args.parse(opts, specOf('xargs'));
   const command = ctx.args.slice(i);
   if (command.length === 0) command.push('echo');
   const input = a.value('a') !== undefined ? ctx.fs.readText(ctx.resolvePath(a.value('a')!)) : ctx.stdinText;
   const replace = a.value('I') ?? (a.has('i') ? '{}' : undefined);
-  const posNum = (v: string, opt: string) => { if (!/^\d+$/.test(v) || parseInt(v, 10) < 1) throw new ShellError(`value ${v} for -${opt} option should be >= 1`); return parseInt(v, 10); };
+  const posNum = (v: string, opt: string) => { if (!/^\d+$/.test(v) || parseInt(v, 10) < 1) throw new ShellError(specMessage('xargs', 'invalidValue', { value: v, option: opt })); return parseInt(v, 10); };
   let groups: string[][];
   if (replace !== undefined || a.value('L') !== undefined) {
     const lines = splitLines(input).map(l => (replace !== undefined ? l.replace(/^[ \t]+/, '') : l));
@@ -677,7 +670,7 @@ async function xargs(ctx: CommandContext): Promise<number> {
     if (a.has('t')) ctx.stderr.write(argv.join(' ') + '\n');
     const rc = await ctx.invoke(argv);
     if (rc === 127) return 127;
-    if (rc === 255) { ctx.stderr.write(`xargs: ${argv[0]}: exited with status 255; aborting\n`); return 124; }
+    if (rc === 255) { ctx.stderr.write('xargs: ' + specMessage('xargs', 'exitedWith255', { command: argv[0] }) + '\n'); return 124; }
     if (rc !== 0) code = 123;
   }
   return code;
@@ -686,7 +679,7 @@ async function xargs(ctx: CommandContext): Promise<number> {
 // ---------- nl tac rev paste column seq ----------
 
 function nl(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, '', 'bswnvi');
+  const a = Args.parse(ctx.args, specOf('nl'));
   const body = a.value('b') ?? 't';
   const width = parseInt(a.value('w') ?? '6', 10);
   const sep = a.value('s') ?? '\t';
@@ -709,7 +702,7 @@ function nl(ctx: CommandContext): number {
 }
 
 function paste(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 's', 'd', 'serial=s,delimiters=d');
+  const a = Args.parse(ctx.args, specOf('paste'));
   let delims = [...unescape(a.value('d') ?? '\t')];
   if (delims.length === 0) delims = [''];
   const D = (i: number) => delims[i % delims.length];
@@ -738,7 +731,7 @@ function paste(ctx: CommandContext): number {
 }
 
 function column(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'tn', 'so', 'table=t,separator=s,output-separator=o');
+  const a = Args.parse(ctx.args, specOf('column'));
   let code = 0;
   const lines = [...inputs(ctx, a.positional, () => { code = 1; })].flatMap(x => splitLines(x[1]));
   if (!a.has('t')) { ctx.stdout.write(lines2text(lines)); return code; }
@@ -762,22 +755,22 @@ function seq(ctx: CommandContext): number {
     const x = args[i];
     if (isNum(x)) nums.push(x);
     else if (x === '-w' || x === '--equal-width') equalWidth = true;
-    else if (x === '-s') { if (i + 1 >= args.length) throw new ShellError("option requires an argument -- 's'"); sep = args[++i]; }
+    else if (x === '-s') { if (i + 1 >= args.length) throw new ShellError(specMessage('seq', 'optionRequiresArgument', { option: 's' })); sep = args[++i]; }
     else if (x.startsWith('-s')) sep = x.slice(2);
     else if (x.startsWith('--separator=')) sep = x.slice(12);
-    else if (x === '-f' || x === '--format') { if (i + 1 >= args.length) throw new ShellError("option requires an argument -- 'f'"); fmt = args[++i]; }
+    else if (x === '-f' || x === '--format') { if (i + 1 >= args.length) throw new ShellError(specMessage('seq', 'optionRequiresArgument', { option: 'f' })); fmt = args[++i]; }
     else if (x.startsWith('-f')) fmt = x.slice(2);
     else if (x.startsWith('--format=')) fmt = x.slice(9);
     else if (x === '--') continue;
-    else throw new ShellError(`invalid option -- '${x.replace(/^-+/, '')}'`);
+    else throw new ShellError(specMessage('seq', 'invalidOption', { option: x.replace(/^-+/, '') }));
   }
-  if (nums.length === 0 || nums.length > 3) throw new UsageException(nums.length === 0 ? 'missing operand' : `extra operand ${quoteL(nums[3])}`);
+  if (nums.length === 0 || nums.length > 3) throw new UsageException(nums.length === 0 ? specMessage('seq', 'missingOperand', {}) : specMessage('seq', 'extraOperand', { operand: nums[3] }));
   const v = nums.map(Number);
   const first = v.length > 1 ? v[0] : 1, step = v.length === 3 ? v[1] : 1, last = v[v.length - 1];
-  if (step === 0) throw new ShellError("invalid Zero increment value: '0'");
+  if (step === 0) throw new ShellError(specMessage('seq', 'zeroIncrement', {}));
   const decimals = Math.max(...nums.map(x => (/e/i.test(x) || !x.includes('.') ? 0 : x.length - x.indexOf('.') - 1)));
   const count = Math.floor((last - first) / step + 1e-9) + 1;
-  if (count > 1_000_000) throw new ShellError('too many numbers');
+  if (count > 1_000_000) throw new ShellError(specMessage('seq', 'tooManyNumbers', {}));
   let items: string[] = [];
   for (let k = 0; k < count; k++) {
     const x = first + k * step; // not a running sum, so 0.1 steps don't drift
@@ -796,7 +789,7 @@ function seq(ctx: CommandContext): number {
 interface DOp { t: 'eq' | 'del' | 'ins'; a: number; b: number }
 
 function diffOps(ctx: CommandContext, x: string[], y: string[]): DOp[] {
-  if (x.length * y.length > 25_000_000) throw new ShellError('files too large to compare', 2);
+  if (x.length * y.length > 25_000_000) throw new ShellError(specMessage('diff', 'tooLarge', {}), 2);
   const w = y.length + 1;
   const lcs = new Int32Array((x.length + 1) * w);
   for (let i = x.length - 1; i >= 0; i--) {
@@ -863,8 +856,8 @@ function diffUnified(ops: DOp[], x: string[], y: string[], an: string, bn: strin
 }
 
 function diff(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'uqsiwbBNr', 'U', 'unified=u,brief=q,report-identical-files=s,ignore-case=i,ignore-all-space=w,ignore-space-change=b,recursive=r');
-  if (a.positional.length !== 2) throw new UsageException(a.positional.length < 2 ? `missing operand after '${a.positional[a.positional.length - 1] ?? 'diff'}'` : `extra operand '${a.positional[2]}'`);
+  const a = Args.parse(ctx.args, specOf('diff'));
+  if (a.positional.length !== 2) throw new UsageException(a.positional.length < 2 ? specMessage('diff', 'missingOperandAfter', { operand: a.positional[a.positional.length - 1] ?? 'diff' }) : specMessage('diff', 'extraOperand', { operand: a.positional[2] }));
   const key = (l: string) => {
     if (a.has('w')) l = l.replace(/\s+/g, '');
     else if (a.has('b')) l = l.replace(/\s+$/, '').replace(/\s+/g, ' ');
@@ -873,7 +866,7 @@ function diff(ctx: CommandContext): number {
   const read = (p: string): string => {
     if (p === '-') return ctx.stdinText;
     const abs = ctx.resolvePath(p);
-    if (!ctx.fs.exists(abs)) throw new ShellError(`${p}: No such file or directory`, 2);
+    if (!ctx.fs.exists(abs)) throw new ShellError(specMessage('diff', 'fileNotFound', { file: p }), 2);
     if (ctx.fs.isDirectory(abs)) throw new ShellError(`${p}: Is a directory`, 2);
     return ctx.fs.readPipeText(abs);
   };
@@ -910,7 +903,7 @@ function diff(ctx: CommandContext): number {
 // ---------- registration ----------
 
 export function registerText(shell: Shell): void {
-  shell.register('grep', ctx => grep(ctx), 'Search text with regular expressions');
+  shell.register('grep', ctx => grep(ctx));
   // Ubuntu's egrep and fgrep run `grep -E` / `grep -F`, so their messages say "grep:"
   for (const [alias, flag] of [['egrep', '-E'], ['fgrep', '-F']]) {
     shell.register(alias, ctx => {
@@ -920,30 +913,30 @@ export function registerText(shell: Shell): void {
         ctx.stderr.write(`grep: ${e.message}\n`);
         return e.exitCode;
       }
-    }, `Search text, like grep ${flag}`);
+    });
   }
-  shell.register('head', headTail, 'Print the first lines of files');
-  shell.register('tail', headTail, 'Print the last lines of files');
-  shell.register('wc', wc, 'Count lines, words and bytes');
-  shell.register('sort', sort, 'Sort lines');
-  shell.register('uniq', uniq, 'Collapse adjacent duplicate lines');
-  shell.register('cut', cut, 'Select fields or characters from lines');
-  shell.register('tr', tr, 'Translate or delete characters');
-  shell.register('tee', tee, 'Copy stdin to stdout and files');
-  shell.register('xargs', xargs, 'Build and run commands from stdin');
-  shell.register('nl', nl, 'Number lines');
+  shell.register('head', headTail);
+  shell.register('tail', headTail);
+  shell.register('wc', wc);
+  shell.register('sort', sort);
+  shell.register('uniq', uniq);
+  shell.register('cut', cut);
+  shell.register('tr', tr);
+  shell.register('tee', tee);
+  shell.register('xargs', xargs);
+  shell.register('nl', nl);
   shell.register('tac', ctx => {
     let code = 0;
     ctx.stdout.write([...inputs(ctx, ctx.args, () => { code = 1; })].map(x => lines2text(splitLines(x[1]).reverse())).join(''));
     return code;
-  }, 'Print lines in reverse order');
+  });
   shell.register('rev', ctx => {
     let code = 0;
     ctx.stdout.write([...inputs(ctx, ctx.args, () => { code = 1; })].map(x => lines2text(splitLines(x[1]).map(l => [...l].reverse().join('')))).join(''));
     return code;
-  }, 'Reverse each line');
-  shell.register('paste', paste, 'Merge lines of files');
-  shell.register('column', column, 'Format input into aligned columns (-t)');
-  shell.register('seq', seq, 'Print a sequence of numbers');
-  shell.register('diff', diff, 'Compare files line by line (-u for unified)');
+  });
+  shell.register('paste', paste);
+  shell.register('column', column);
+  shell.register('seq', seq);
+  shell.register('diff', diff);
 }

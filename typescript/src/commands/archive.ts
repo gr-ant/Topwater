@@ -3,7 +3,7 @@
 // relative, nothing is written under or hard-linked through a symbolic link the archive made, hard links only reach entries
 // already there), and one extraction or decompression stops past ctx.shell.options.maxExtractBytes / maxExtractEntries.
 
-import { Args, ShellError, reason, type CommandContext } from '../command.js';
+import { Args, specOf, specMessage, ShellError, reason, type CommandContext } from '../command.js';
 import { concatBytes, decodeBytes, encodeText } from '../bytes.js';
 import { InflateError, OutputLimitError, gunzip, inflateRaw } from '../inflate.js';
 import { deflate } from '../compress.js';
@@ -25,9 +25,9 @@ class Budget {
     this.bytes = max.maxExtractBytes;
     this.entries = max.maxExtractEntries;
   }
-  entry() { if (--this.entries < 0) throw new ExtractLimit(`archive exceeds the ${this.max.maxExtractEntries}-entry extraction limit; stopping`, this.code); }
+  entry() { if (--this.entries < 0) throw new ExtractLimit(specMessage('tar', 'entryLimit', { limit: String(this.max.maxExtractEntries) }), this.code); }
   charge(n: number) { if ((this.bytes -= n) < 0) throw this.limit(); }
-  limit() { return new ExtractLimit(`output exceeds the ${this.max.maxExtractBytes}-byte extraction limit; stopping`, this.code); }
+  limit() { return new ExtractLimit(specMessage('tar', 'byteLimit', { limit: String(this.max.maxExtractBytes) }), this.code); }
 }
 
 const isGzip = (d: Uint8Array) => d.length >= 2 && d[0] === 0x1f && d[1] === 0x8b;
@@ -212,7 +212,7 @@ function* readTar(data: Uint8Array): Generator<TarEntry> {
 
 // ---------- tar ----------
 
-const TAR_USAGE = "\nTry 'tar --help' or 'tar --usage' for more information.";
+const TAR_USAGE = '\n' + specOf('tar').tryHelp.replace(/\n+$/, '');
 const isFileType = (t: string) => t === '0' || t === '7';
 
 async function tar(ctx: CommandContext): Promise<number> {
@@ -224,33 +224,32 @@ async function tar(ctx: CommandContext): Promise<number> {
     for (const c of ctx.args[0]) {
       args.push('-' + c);
       if (c !== 'f' && c !== 'C') continue;
-      if (rest.length === 0) throw new ShellError(`Old option '${c}' requires an argument.${TAR_USAGE}`, 2);
+      if (rest.length === 0) throw new ShellError(specMessage('tar', 'oldOptionNeedsArgument', { option: c }) + TAR_USAGE, 2);
       args.push(rest.shift()!);
     }
     args.push(...rest);
   }
-  const a = Args.parse(args, 'cxtzvOpo', 'fC\u0001',
-    'create=c,extract=x,get=x,list=t,gzip=z,gunzip=z,ungzip=z,verbose=v,to-stdout=O,file=f,directory=C,strip-components=\u0001,preserve-permissions=p,no-same-owner=o');
+  const a = Args.parse(args, specOf('tar'));
   const modes = [...'cxt'].filter(c => a.has(c)).length;
-  if (modes === 0) throw new ShellError("You must specify one of the '-Acdtrux', '--delete' or '--test-label' options" + TAR_USAGE, 2);
-  if (modes > 1) throw new ShellError("You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option" + TAR_USAGE, 2);
+  if (modes === 0) throw new ShellError(specMessage('tar', 'noMode', {}) + TAR_USAGE, 2);
+  if (modes > 1) throw new ShellError(specMessage('tar', 'manyModes', {}) + TAR_USAGE, 2);
   const stripText = a.value('\u0001');
   if (stripText !== undefined && !/^\d+$/.test(stripText)) throw new ShellError(`Invalid number of components to strip: '${stripText}'${TAR_USAGE}`, 2);
   const strip = stripText === undefined ? 0 : Number(stripText);
   const archive = a.value('f') ?? '-';
   const fs = ctx.fs;
-  const fatal = (msg: string) => `${msg}\ntar: Error is not recoverable: exiting now`;
+  const fatal = (msg: string) => `${msg}\ntar: ${specMessage('tar', 'unrecoverable', {})}`;
   const dir = ctx.resolvePath(a.value('C') ?? '.');
-  if (!fs.isDirectory(dir)) throw new ShellError(fatal(`${a.value('C')}: Cannot open: ${fs.exists(dir) ? 'Not a directory' : fs.whyMissing(dir)}`), 2);
+  if (!fs.isDirectory(dir)) throw new ShellError(fatal(specMessage('tar', 'cannotOpen', { file: a.value('C') ?? '', errno: fs.exists(dir) ? 'Not a directory' : fs.whyMissing(dir) })), 2);
   let code = 0;
   const fail = (msg: string) => { ctx.stderr.write(`tar: ${msg}\n`); code = 2; };
-  const done = () => { if (code !== 0) ctx.stderr.write('tar: Exiting with failure status due to previous errors\n'); return code; };
+  const done = () => { if (code !== 0) ctx.stderr.write(`tar: ${specMessage('tar', 'previousErrors', {})}\n`); return code; };
 
   if (a.has('c')) return create();
   return readArchive();
 
   async function create(): Promise<number> {
-    if (a.positional.length === 0) throw new ShellError('Cowardly refusing to create an empty archive' + TAR_USAGE, 2);
+    if (a.positional.length === 0) throw new ShellError(specMessage('tar', 'emptyArchive', {}) + TAR_USAGE, 2);
     const archivePath = archive === '-' ? null : ctx.resolvePath(archive);
     const verbose = archive === '-' ? ctx.stderr : ctx.stdout;
     const parts: Uint8Array[] = [];
@@ -274,14 +273,14 @@ async function tar(ctx: CommandContext): Promise<number> {
         for (const c of children) add(name.replace(/\/+$/, '') + '/' + c, path.replace(/\/+$/, '') + '/' + c);
       } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        fail(`${name}: Cannot open: ${reason(e)}`);
+        fail(specMessage('tar', 'cannotOpen', { file: name, errno: reason(e) }));
       }
     };
     let stripped = false;
     for (const f of a.positional) {
-      if (f.startsWith('/') && !stripped) { stripped = true; ctx.stderr.write("tar: Removing leading `/' from member names\n"); }
+      if (f.startsWith('/') && !stripped) { stripped = true; ctx.stderr.write(specMessage('tar', 'removingLeading', { prefix: '/' }) + '\n'); }
       const path = VirtualFileSystem.normalize(dir, f);
-      if (!fs.exists(path, false)) fail(`${f}: Cannot stat: ${fs.whyMissing(path, false)}`);
+      if (!fs.exists(path, false)) fail(specMessage('tar', 'cannotStat', { file: f, errno: fs.whyMissing(path, false) }));
       else add(f, path);
     }
     parts.push(new Uint8Array(BLOCK * 2));
@@ -293,7 +292,7 @@ async function tar(ctx: CommandContext): Promise<number> {
     else {
       try { fs.writeBytes(archivePath, bytes); } catch (e) {
         if (!(e instanceof ShellError)) throw e;
-        throw new ShellError(fatal(`${archive}: Cannot open: ${reason(e)}`), 2);
+        throw new ShellError(fatal(specMessage('tar', 'cannotOpen', { file: archive, errno: reason(e) })), 2);
       }
     }
     return done();
@@ -304,20 +303,20 @@ async function tar(ctx: CommandContext): Promise<number> {
     if (archive === '-') data = bytesOf(ctx.stdinText);
     else {
       const path = ctx.resolvePath(archive);
-      if (!fs.isFile(path)) throw new ShellError(fatal(`${archive}: Cannot open: ${fs.isDirectory(path) ? 'Is a directory' : fs.whyMissing(path)}`), 2);
+      if (!fs.isFile(path)) throw new ShellError(fatal(specMessage('tar', 'cannotOpen', { file: archive, errno: fs.isDirectory(path) ? 'Is a directory' : fs.whyMissing(path) })), 2);
       data = fs.readBytes(path);
     }
     if (isGzip(data)) {
-      if (!a.has('z') && archive === '-') throw new ShellError(fatal('Archive is compressed. Use -z option'), 2);
+      if (!a.has('z') && archive === '-') throw new ShellError(fatal(specMessage('tar', 'compressedArchive', {})), 2);
       const plain = inflate('gunzip', data, new Budget(ctx.shell.options, 2));
       if (failed(plain)) {
-        ctx.stderr.write(`\ngzip: stdin: ${plain.error}\ntar: Child returned status 1\n`);
-        throw new ShellError('Error is not recoverable: exiting now', 2);
+        ctx.stderr.write(specMessage('tar', 'gzipChildFailed', { error: plain.error }) + '\n');
+        throw new ShellError(specMessage('tar', 'unrecoverable', {}), 2);
       }
       data = plain;
     } else if (a.has('z')) {
-      ctx.stderr.write('\ngzip: stdin: not in gzip format\ntar: Child returned status 1\n');
-      throw new ShellError('Error is not recoverable: exiting now', 2);
+      ctx.stderr.write(specMessage('tar', 'gzipChildFailed', { error: 'not in gzip format' }) + '\n');
+      throw new ShellError(specMessage('tar', 'unrecoverable', {}), 2);
     }
 
     const budget = new Budget(ctx.shell.options, 2);
@@ -342,9 +341,9 @@ async function tar(ctx: CommandContext): Promise<number> {
           if (i < 0) continue;
           found[i] = true;
         }
-        if (prefix && !announced.has(prefix)) { announced.add(prefix); ctx.stderr.write(`tar: Removing leading \`${prefix}' from member names\n`); }
+        if (prefix && !announced.has(prefix)) { announced.add(prefix); ctx.stderr.write(specMessage('tar', 'removingLeading', { prefix: prefix }) + '\n'); }
         const linkPrefix = e.type === '1' ? tarPrefix(e.link) : '';
-        if (linkPrefix && !announced.has('link:' + linkPrefix)) { announced.add('link:' + linkPrefix); ctx.stderr.write(`tar: Removing leading \`${linkPrefix}' from hard link targets\n`); }
+        if (linkPrefix && !announced.has('link:' + linkPrefix)) { announced.add('link:' + linkPrefix); ctx.stderr.write(specMessage('tar', 'removingLeadingLink', { prefix: linkPrefix }) + '\n'); }
         const isFile = isFileType(e.type);
         if (a.has('t')) {
           if (!a.has('v')) { ctx.stdout.write(name + '\n'); continue; }
@@ -356,7 +355,7 @@ async function tar(ctx: CommandContext): Promise<number> {
           ctx.stdout.write(`${kind}${VirtualFileSystem.formatMode(false, e.mode).slice(1)} ${ug}${size.padStart(ugWidth - ug.length)} ${stamp(e.mtime * 1000)} ${name}${link}\n`);
           continue;
         }
-        if (prefix.split('/').includes('..')) { fail(`${name}: Member name contains '..'`); continue; }
+        if (prefix.split('/').includes('..')) { fail(specMessage('tar', 'memberDotDot', { name: name })); continue; }
         const parts = nonEmpty(rel.split('/'));
         if (parts.length <= strip) continue;
         const target = under(dir, parts.slice(strip));
@@ -398,14 +397,14 @@ async function tar(ctx: CommandContext): Promise<number> {
           } else fail(`${name}: Cannot mknod: Operation not permitted`);
         } catch (ex) {
           if (!(ex instanceof ShellError) || ex instanceof ExtractLimit) throw ex;
-          fail(`${name}: Cannot open: ${reason(ex)}`);
+          fail(specMessage('tar', 'cannotOpen', { file: name, errno: reason(ex) }));
         }
       }
     } catch (ex) {
       if (!(ex instanceof TarFormatError)) throw ex;
-      fail(ex.message === 'not a tar archive' ? 'This does not look like a tar archive' : 'Unexpected EOF in archive');
+      fail(ex.message === 'not a tar archive' ? specMessage('tar', 'notTar', {}) : specMessage('tar', 'unexpectedEof', {}));
     }
-    wanted.forEach((_, i) => { if (!found[i]) fail(`${a.positional[i]}: Not found in archive`); });
+    wanted.forEach((_, i) => { if (!found[i]) fail(specMessage('tar', 'notFound', { file: a.positional[i] })); });
     return done();
   }
 }
@@ -435,8 +434,7 @@ async function gzip(ctx: CommandContext): Promise<number> {
 }
 
 async function gzipRun(ctx: CommandContext): Promise<number> {
-  const a = Args.parse(ctx.args, 'cdkflvqtn123456789', '',
-    'stdout=c,to-stdout=c,decompress=d,uncompress=d,keep=k,force=f,list=l,verbose=v,quiet=q,test=t,no-name=n,fast=1,best=9');
+  const a = Args.parse(ctx.args, specOf(ctx.name));
   const decompress = ctx.name !== 'gzip' || a.has('d') || a.has('t') || a.has('l');
   const toStdout = ctx.name === 'zcat' || a.has('c');
   const fs = ctx.fs;
@@ -458,7 +456,7 @@ async function gzipRun(ctx: CommandContext): Promise<number> {
       return true;
     } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      error(`${shown}: ${reason(e)}`);
+      error(specMessage('gzip', 'fileError', { file: shown, errno: reason(e) }));
       return false;
     }
   };
@@ -469,32 +467,32 @@ async function gzipRun(ctx: CommandContext): Promise<number> {
     if (decompress && f !== '-' && !fs.exists(path) && !f.endsWith('.gz')) { f += '.gz'; path += '.gz'; }
     let data: Uint8Array;
     if (f === '-') data = bytesOf(ctx.stdinText);
-    else if (fs.isDirectory(path)) { warn(`${f} is a directory -- ignored`); continue; }
-    else if (!fs.isFile(path)) { error(`${f}: ${fs.whyMissing(path)}`); continue; }
+    else if (fs.isDirectory(path)) { warn(specMessage('gzip', 'isDirectory', { file: f })); continue; }
+    else if (!fs.isFile(path)) { error(specMessage('gzip', 'fileError', { file: f, errno: fs.whyMissing(path) })); continue; }
     else {
-      try { data = fs.readBytes(path); } catch (e) { if (!(e instanceof ShellError)) throw e; error(`${f}: ${reason(e)}`); continue; }
+      try { data = fs.readBytes(path); } catch (e) { if (!(e instanceof ShellError)) throw e; error(specMessage('gzip', 'fileError', { file: f, errno: reason(e) })); continue; }
     }
     const shown = f === '-' ? 'stdin' : f;
 
     if (!decompress) {
       const packed = await deflate('gzip', data);
       if (f === '-' || toStdout) { writeBinary(ctx, packed); continue; }
-      if (f.endsWith('.gz')) { if (!a.has('q')) ctx.stderr.write(`gzip: ${f} already has .gz suffix -- unchanged\n`); continue; }
-      if (fs.exists(path + '.gz') && !a.has('f')) { warn(`${f}.gz already exists;\tnot overwritten`); continue; }
+      if (f.endsWith('.gz')) { if (!a.has('q')) ctx.stderr.write(`gzip: ${specMessage('gzip', 'alreadySuffix', { file: f })}\n`); continue; }
+      if (fs.exists(path + '.gz') && !a.has('f')) { warn(specMessage('gzip', 'alreadyExists', { file: f + '.gz' })); continue; }
       if (replace(path, path + '.gz', packed, f) && a.has('v'))
-        ctx.stderr.write(`${f}:\t${ratio(packed.length - gzipOverhead(packed), data.length)}% -- ${a.has('k') ? 'created' : 'replaced with'} ${f}.gz\n`);
+        ctx.stderr.write(specMessage('gzip', 'ratio', { file: f, ratio: ratio(packed.length - gzipOverhead(packed), data.length), action: a.has('k') ? 'created' : 'replaced with', target: f + '.gz' }) + '\n');
       continue;
     }
 
     let outName: string | null = null;
     if (f !== '-' && !toStdout && !a.has('t') && !a.has('l')) {
       const suffix = ['.gz', '-gz', '.z', '_z', '.tgz'].find(x => f.endsWith(x) && f.length > x.length);
-      if (!suffix) { warn(`${f}: unknown suffix -- ignored`); continue; }
+      if (!suffix) { warn(specMessage('gzip', 'unknownSuffix', { file: f })); continue; }
       outName = f.slice(0, -suffix.length) + (suffix === '.tgz' ? '.tar' : '');
     }
     if (!isGzip(data)) {
       if (a.has('f') && toStdout) { writeBinary(ctx, data); continue; } // gzip -dcf passes plain data through
-      ctx.stderr.write(`\ngzip: ${shown}: not in gzip format\n`);
+      ctx.stderr.write(specMessage('gzip', 'notGzip', { file: shown }) + '\n');
       code = 1;
       continue;
     }
@@ -509,13 +507,13 @@ async function gzipRun(ctx: CommandContext): Promise<number> {
       continue;
     }
     const plain = inflate('gunzip', data, budget);
-    if (failed(plain)) { ctx.stderr.write(`\ngzip: ${shown}: ${plain.error}\n`); code = 1; continue; }
+    if (failed(plain)) { ctx.stderr.write(specMessage('gzip', 'corrupt', { file: shown, error: plain.error }) + '\n'); code = 1; continue; }
     if (a.has('t')) continue;
     if (outName === null) { writeBinary(ctx, plain); continue; }
     const outPath = ctx.resolvePath(outName);
-    if (fs.exists(outPath) && !a.has('f')) { warn(`${outName} already exists;\tnot overwritten`); continue; }
+    if (fs.exists(outPath) && !a.has('f')) { warn(specMessage('gzip', 'alreadyExists', { file: outName })); continue; }
     if (replace(path, outPath, plain, outName) && a.has('v'))
-      ctx.stderr.write(`${f}:\t${ratio(data.length - gzipOverhead(data), plain.length)}% -- replaced with ${outName}\n`);
+      ctx.stderr.write(specMessage('gzip', 'ratio', { file: f, ratio: ratio(data.length - gzipOverhead(data), plain.length), action: 'replaced with', target: outName }) + '\n');
   }
   if (header && files.length > 1) ctx.stdout.write(`${pad(totalC, 19)} ${pad(totalU, 19)} ${pad(ratio(totalC - totalH, totalU), 5)}% (totals)\n`);
   return code;
@@ -524,9 +522,9 @@ async function gzipRun(ctx: CommandContext): Promise<number> {
 // ---------- zip ----------
 
 async function zip(ctx: CommandContext): Promise<number> {
-  const a = Args.parse(ctx.args, 'rq0123456789', '', 'recurse-paths=r,quiet=q');
+  const a = Args.parse(ctx.args, specOf('zip'));
   const fs = ctx.fs;
-  if (a.positional.length === 0) throw new ShellError('\nzip error: Nothing to do! (no archive given)', 12);
+  if (a.positional.length === 0) throw new ShellError(specMessage('zip', 'noArchive', {}), 12);
   let archive = a.positional[0];
   if (archive !== '-' && !VirtualFileSystem.getName(archive).includes('.')) archive += '.zip';
   const archivePath = archive === '-' ? null : ctx.resolvePath(archive);
@@ -535,7 +533,7 @@ async function zip(ctx: CommandContext): Promise<number> {
   if (archivePath !== null && fs.isFile(archivePath)) {
     try { entries = readZip(fs.readBytes(archivePath)); } catch (e) {
       if (!(e instanceof ZipFormatError)) throw e;
-      throw new ShellError(`\nzip error: Zip file structure invalid (${archive})`, 3);
+      throw new ShellError(specMessage('zip', 'badStructure', { archive: archive }), 3);
     }
   }
   let added = 0;
@@ -573,11 +571,11 @@ async function zip(ctx: CommandContext): Promise<number> {
     }
   };
   const names = a.positional.slice(1);
-  for (const f of names) if (!fs.exists(ctx.resolvePath(f)) && !a.has('q')) info.write(`\tzip warning: name not matched: ${f}\n`);
+  for (const f of names) if (!fs.exists(ctx.resolvePath(f)) && !a.has('q')) info.write(specMessage('zip', 'nameNotMatched', { file: f }) + '\n');
   for (const f of names) if (fs.exists(ctx.resolvePath(f))) await add(f, ctx.resolvePath(f));
   if (added === 0) {
     const hint = a.has('r') ? `try: zip -r ${archive} . -i ${names.join(' ')}` : archive;
-    info.write(`\nzip error: Nothing to do! (${hint})\n`);
+    info.write(specMessage('zip', 'nothingToDo', { hint: hint }) + '\n');
     return 12;
   }
   const bytes = writeZip(entries);
@@ -589,7 +587,7 @@ async function zip(ctx: CommandContext): Promise<number> {
 // ---------- unzip ----------
 
 function unzip(ctx: CommandContext): number {
-  const a = Args.parse(ctx.args, 'lopqn', 'd');
+  const a = Args.parse(ctx.args, specOf('unzip'));
   const fs = ctx.fs;
   if (a.positional.length === 0) {
     ctx.stdout.write('UnZip 6.00 of 20 April 2009, by Debian. Original by Info-ZIP.\n\nUsage: unzip [-Z] [-opts[modifiers]] file[.zip] [list] [-x xlist] [-d exdir]\n');
@@ -598,7 +596,7 @@ function unzip(ctx: CommandContext): number {
   const name = a.positional[0];
   const path = [name, name + '.zip', name + '.ZIP'].map(p => ctx.resolvePath(p)).find(p => fs.isFile(p));
   if (path === undefined) {
-    ctx.stderr.write(`unzip:  cannot find or open ${name}, ${name}.zip or ${name}.ZIP.\n`);
+    ctx.stderr.write(specMessage('unzip', 'cannotFind', { name: name }) + '\n');
     return 9;
   }
   const quiet = a.has('q'), pipe = a.has('p');
@@ -606,8 +604,8 @@ function unzip(ctx: CommandContext): number {
   try { entries = readZip(fs.readBytes(path)); } catch (e) {
     if (!(e instanceof ZipFormatError)) throw e;
     if (!quiet) ctx.stdout.write(`Archive:  ${name}\n`);
-    ctx.stderr.write('  End-of-central-directory signature not found.  Either this file is not\n  a zipfile, or it constitutes one disk of a multi-part archive.  In the\n  latter case the central directory and zipfile comment will be found on\n  the last disk(s) of this archive.\n');
-    ctx.stderr.write(`unzip:  cannot find zipfile directory in one of ${name} or\n        ${name}.zip, and cannot find ${name}.ZIP, period.\n`);
+    ctx.stderr.write(specMessage('unzip', 'noEndSignature', {}) + '\n');
+    ctx.stderr.write(specMessage('unzip', 'noDirectory', { name: name }) + '\n');
     return 9;
   }
   if (!quiet && !pipe) ctx.stdout.write(`Archive:  ${name}\n`);
@@ -655,8 +653,8 @@ function unzip(ctx: CommandContext): number {
       const isDir = entryName.endsWith('/');
       if (pipe) { if (!isDir) writeBinary(ctx, inflateEntry(e)); continue; }
       const parts = entryName.split('/');
-      if (parts.includes('..')) { if (!quiet) ctx.stdout.write(`warning:  skipped "../" path component(s) in ${entryName}\n`); code = 1; }
-      if (entryName.startsWith('/')) { ctx.stderr.write(`warning:  stripped absolute path spec from ${entryName}\n`); code = 1; }
+      if (parts.includes('..')) { if (!quiet) ctx.stdout.write(specMessage('unzip', 'skippedDotDot', { name: entryName }) + '\n'); code = 1; }
+      if (entryName.startsWith('/')) { ctx.stderr.write(specMessage('unzip', 'strippedAbsolute', { name: entryName }) + '\n'); code = 1; }
       const clean = parts.filter(p => p !== '' && p !== '.' && p !== '..');
       if (clean.length === 0) continue;
       const rel = clean.join('/');
@@ -672,7 +670,7 @@ function unzip(ctx: CommandContext): number {
         if (fs.exists(target) && !a.has('o')) {
           if (a.has('n') || none) continue;
           // shortcut: no interactive stdin, so the prompt always reads EOF, as unzip does with </dev/null
-          ctx.stderr.write(`replace ${shown}? [y]es, [n]o, [A]ll, [N]one, [r]ename:  NULL\n(EOF or read error, treating as "[N]one" ...)\n`);
+          ctx.stderr.write(specMessage('unzip', 'replacePrompt', { file: shown }) + '\n');
           none = true;
           code = Math.max(code, 1);
           continue;
@@ -686,22 +684,22 @@ function unzip(ctx: CommandContext): number {
         if (!quiet) ctx.stdout.write(`${e.method === 0 ? ' extracting' : '  inflating'}: ${shown.padEnd(22)}  \n`);
       } catch (ex) {
         if (!(ex instanceof ShellError) || ex instanceof ExtractLimit) throw ex;
-        ctx.stderr.write(`error:  cannot create ${shown}\n        ${reason(ex)}\n`);
+        ctx.stderr.write(specMessage('unzip', 'cannotCreate', { file: shown, errno: reason(ex) }) + '\n');
         code = Math.max(code, 1);
       }
     }
   }
   patterns.forEach((_, i) => {
-    if (!found[i]) { if (!a.has('l')) ctx.stderr.write(`caution: filename not matched:  ${a.positional[i + 1]}\n`); code = 11; }
+    if (!found[i]) { if (!a.has('l')) ctx.stderr.write(specMessage('unzip', 'filenameNotMatched', { pattern: a.positional[i + 1] }) + '\n'); code = 11; }
   });
   return code;
 }
 
 export function registerArchives(shell: Shell): void {
-  shell.register('tar', tar, 'Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components)');
-  shell.register('gzip', gzip, 'Compress or decompress files (-c -d -k -f -l -t -v -1..-9)');
-  shell.register('gunzip', gzip, 'Decompress .gz files (gzip -d)');
-  shell.register('zcat', gzip, 'Decompress .gz files to stdout (gzip -dc)');
-  shell.register('zip', zip, 'Package files into a zip archive (-r, -q)');
-  shell.register('unzip', unzip, 'List or extract a zip archive (-l -o -n -d -p -q)');
+  shell.register('tar', tar);
+  shell.register('gzip', gzip);
+  shell.register('gunzip', gzip);
+  shell.register('zcat', gzip);
+  shell.register('zip', zip);
+  shell.register('unzip', unzip);
 }

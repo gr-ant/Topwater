@@ -1,5 +1,6 @@
 // Shell built-ins (cd, read, declare, set, trap, ...) and the small system commands (date, uname, id, ...).
-import { Args, ShellError, UsageException, SHELL_BUILTINS, isShellBuiltin, quoteL, StdinBuffer, DeadlineExceeded, type CommandContext, type CommandHandler, type Deadline } from '../command.js';
+import { COMMANDS, DIAGNOSTICS } from '../spec.generated.js';
+import { Args, specFormat, specOf, specMessage, ShellError, UsageException, isShellBuiltin, quoteL, StdinBuffer, DeadlineExceeded, type CommandContext, type CommandHandler, type Deadline } from '../command.js';
 import { isName } from '../parser.js';
 import { evalArith } from '../arith.js';
 import { printfFormat, unescape, shellQuote, quoteValue, strftime } from '../format.js';
@@ -31,7 +32,7 @@ export function testUnary(shell: Shell, op: string, arg: string): boolean {
     case '-v': return shell.isVariableSet(arg);
     case '-o': return shell.optionList.some(([n, on]) => n === arg && on);
   }
-  throw new ShellError(`${op}: unary operator expected`, 2);
+  throw new ShellError(specMessage('test', 'unaryExpected', { op: op }), 2);
 }
 
 /** -nt / -ot: a missing file is older than any existing one, as in bash. */
@@ -54,7 +55,7 @@ function testBinary(shell: Shell, left: string, op: string, right: string): bool
     case '-ef': return shell.agentFs.sameFile(shell.resolvePath(left), shell.resolvePath(right));
   }
   const okL = /^\s*[-+]?\d+\s*$/.test(left), okR = /^\s*[-+]?\d+\s*$/.test(right);
-  if (!okL || !okR) throw new ShellError(`${okL ? right : left}: integer expression expected`, 2);
+  if (!okL || !okR) throw new ShellError(specMessage('test', 'integerExpected', { value: okL ? right : left }), 2);
   const l = BigInt(left.trim()), r = BigInt(right.trim());
   return op === '-eq' ? l === r : op === '-ne' ? l !== r : op === '-lt' ? l < r : op === '-le' ? l <= r : op === '-gt' ? l > r : l >= r;
 }
@@ -71,7 +72,7 @@ function testEvaluate(shell: Shell, a: string[]): boolean {
       if (a[1] === '-a' || a[1] === '-o') return a[1] === '-a' ? a[0].length > 0 && a[2].length > 0 : a[0].length > 0 || a[2].length > 0;
       if (a[0] === '!') return !testEvaluate(shell, a.slice(1));
       if (a[0] === '(' && a[2] === ')') return a[1].length > 0;
-      throw new ShellError(`${a[1]}: binary operator expected`, 2);
+      throw new ShellError(specMessage('test', 'binaryExpected', { op: a[1] }), 2);
     case 4: if (a[0] === '!') return !testEvaluate(shell, a.slice(1));
   }
   let pos = 0;
@@ -81,11 +82,11 @@ function testEvaluate(shell: Shell, a: string[]): boolean {
   const not = (): boolean => { if (peek() === '!') { pos++; return !not(); } return primary(); };
   const primary = (): boolean => {
     const t = peek();
-    if (t === undefined) throw new ShellError('argument expected', 2);
+    if (t === undefined) throw new ShellError(specMessage('test', 'argumentExpected'), 2);
     if (t === '(') {
       pos++;
       const v = or();
-      if (peek() !== ')') throw new ShellError("`)' expected", 2);
+      if (peek() !== ')') throw new ShellError(specMessage('test', 'parenExpected'), 2);
       pos++;
       return v;
     }
@@ -95,7 +96,7 @@ function testEvaluate(shell: Shell, a: string[]): boolean {
     return t.length > 0;
   };
   const result = or();
-  if (pos < n) throw new ShellError('too many arguments', 2);
+  if (pos < n) throw new ShellError(specMessage('test', 'tooManyArguments'), 2);
   return result;
 }
 
@@ -105,20 +106,20 @@ const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'case', 'esa
 
 function parseCount(ctx: CommandContext, fallback: number): number {
   if (ctx.args.length === 0) return fallback;
-  if (!/^-?\d+$/.test(ctx.args[0])) throw new ShellError(`${ctx.args[0]}: numeric argument required`, 2);
+  if (!/^-?\d+$/.test(ctx.args[0])) throw new ShellError(specMessage(ctx.name, 'numericArgument', { value: ctx.args[0] }), 2);
   return Number(ctx.args[0]);
 }
 
 function parseDuration(s: string): number {
   const m = /^(\d+(?:\.\d+)?|\.\d+)([smhd]?)$/.exec(s);
-  if (!m) throw new ShellError(`invalid time interval '${s}'`);
+  if (!m) throw new ShellError(specMessage('sleep', 'invalidTimeInterval', { value: s }));
   const n = Number(m[1]);
   return n * ({ m: 60_000, h: 3_600_000, d: 86_400_000 } as Record<string, number>)[m[2]] || n * 1000;
 }
 
 function loopJump(ctx: CommandContext, isBreak: boolean): number {
   if (ctx.shell.loopDepth > 0) ctx.shell.loopControl(isBreak, Math.max(1, parseCount(ctx, 1)));
-  ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: only meaningful in a \`for', \`while', or \`until' loop\n`);
+  ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: ${specMessage(ctx.name, 'onlyInLoop')}\n`);
   return 0;
 }
 
@@ -162,7 +163,7 @@ function describe(ctx: CommandContext, a: string, all = false): boolean {
     const l = sh.locate(a);
     if (l) lines.push(l[1] ? `${a} is hashed (${l[0].startsWith('/') || l[0].startsWith('./') ? '' : './'}${l[0]})` : `${a} is ${l[0]}`);
   }
-  if (!lines.length) { ctx.stderr.write(`${ctx.shell.errPrefix}type: ${a}: not found\n`); return false; }
+  if (!lines.length) { ctx.stderr.write(`${ctx.shell.errPrefix}type: ${specMessage('type', 'notFound', { name: a })}\n`); return false; }
   for (const l of all ? lines : lines.slice(0, 1)) line(ctx, l);
   return true;
 }
@@ -199,7 +200,7 @@ function inputFor(ctx: CommandContext, u: string | undefined): StdinBuffer {
   const fd = /^\d+$/.test(u) ? Number(u) : -1;
   const f = ctx.fds?.get(fd);
   const input = f instanceof StdinBuffer ? f : ctx.shell.inputFd(fd);
-  if (!input) throw new ShellError(`${u}: invalid file descriptor: Bad file descriptor`);
+  if (!input) throw new ShellError(specMessage(ctx.name, 'badFileDescriptor', { fd: u }));
   return input;
 }
 
@@ -217,7 +218,7 @@ const DATE_UNITS: Record<string, number> = { second: 1, sec: 1, minute: 60, min:
  * ("3 days ago", "next week", "+2 hours") applied last. Results are UTC (ms since the epoch).
  */
 export function parseDate(text: string, now: number): number {
-  const bad = new ShellError(`invalid date ${quoteL(text)}`);
+  const bad = new ShellError(specMessage('date', 'invalidDate', { value: text }));
   let s = text.trim().toLowerCase();
   const epoch = /^@(-?\d+(?:\.\d+)?)$/.exec(s);
   if (epoch) return Number(epoch[1]) * 1000;
@@ -307,37 +308,14 @@ export function parseDate(text: string, now: number): number {
   return t;
 }
 
-const DATE_USAGE = `Usage: date [OPTION]... [+FORMAT]
-Print the current date and time, or the one given with -d, in UTC.
-
-  -d, --date=STRING        show the time described by STRING instead of now
-  -r, --reference=FILE     show FILE's last modification time
-  -u, --utc, --universal   use UTC (the clock is already UTC)
-  -I, --iso-8601           print the date as YYYY-MM-DD
-  -R, --rfc-email          print like: Fri, 20 Nov 2026 13:30:00 +0000
-
-STRING can combine, in any order:
-  dates      2026-11-20   11/20/2026   20 Nov 2026   Nov 20, 2026   20261120
-  times      13:30   13:30:05.25   1:30pm   (2026-11-20T13:30:00 also works)
-  zones      UTC  Z  GMT  EST  PDT  +0100  -05:00  UTC+2   (converted to UTC)
-  weekdays   Monday, fri   (moves forward to that day)
-  words      now  today  yesterday  tomorrow
-  relative   3 days ago   +2 hours   next week   last month   1 year
-  epoch      @1795168800
-
-FORMAT controls the output: %Y %m %d %H %M %S %F %T %s %a %b %A %B %j %Z %z %n %%,
-and %-d etc. for no padding. Example: date -d '20 Nov 2026 13:30 +0100' +%s
-
-`;
-
 // ---------- registration ----------
 
 export function registerBuiltins(shell: Shell) {
-  const reg = (name: string, handler: CommandHandler, description: string, usage?: string) => shell.register(name, handler, description, usage);
+  const reg = (name: string, handler: CommandHandler) => shell.register(name, handler);
 
-  reg('true', () => 0, 'Do nothing, successfully');
-  reg(':', () => 0, 'Do nothing, successfully (the null command)');
-  reg('false', () => 1, 'Do nothing, unsuccessfully');
+  reg('true', () => 0);
+  reg(':', () => 0);
+  reg('false', () => 1);
 
   reg('echo', ctx => {
     const args = [...ctx.args];
@@ -355,20 +333,20 @@ export function registerBuiltins(shell: Shell) {
       text = unescape(text, true, true);
     }
     ctx.stdout.write(newline ? text + '\n' : text);
-  }, 'Print arguments');
+  });
 
   reg('printf', ctx => {
     const args = [...ctx.args];
     let variable: string | undefined;
     if (args.length >= 2 && args[0] === '-v') { variable = args[1]; args.splice(0, 2); }
     if (args[0] === '--') args.shift();
-    if (args.length === 0) throw new ShellError('usage: printf [-v var] format [arguments]', 2);
+    if (args.length === 0) throw new ShellError(specMessage('printf', 'usage'), 2);
     const errors: string[] = [];
     const text = printfFormat(args[0], args.slice(1), errors, () => ctx.shell.now());
     for (const e of errors) ctx.stderr.write(ctx.shell.errPrefix + e + '\n'); // bash reports them as it goes, then writes the text
     if (variable === undefined) ctx.stdout.write(text); else ctx.shell.setVar(variable, text);
     return errors.length > 0 ? 1 : 0;
-  }, 'Format and print data');
+  });
 
   reg('cd', ctx => {
     const sh = ctx.shell;
@@ -376,23 +354,23 @@ export function registerBuiltins(shell: Shell) {
     let physical = false;
     while (['-L', '-P', '-e', '-@'].includes(args[0])) { const f = args.shift()!; if (f === '-L' || f === '-P') physical = f === '-P'; }
     if (args[0] === '--') args.shift();
-    if (args.length > 1) throw new ShellError('too many arguments');
+    if (args.length > 1) throw new ShellError(specMessage('cd', 'tooManyArguments'));
     const target = args.length === 0 ? sh.environment.get('HOME') ?? '/' : args[0] === '-' ? sh.environment.get('OLDPWD') ?? sh.cwd : args[0];
     // like bash: the new directory is the old one's logical path plus the operand, ".." removing a name (-L, the default);
     // if that isn't a directory, or with -P, the physical path, every symbolic link resolved
     let abs = VirtualFileSystem.normalize(sh.cwd, target);
     if (physical || !ctx.fs.isDirectory(abs)) abs = ctx.resolvePath(target);
-    if (!ctx.fs.exists(abs)) throw new ShellError(`${target}: ${ctx.fs.whyMissing(abs)}`);
-    if (!ctx.fs.isDirectory(abs)) throw new ShellError(`${target}: Not a directory`);
-    if (!ctx.fs.canExecute(abs)) throw new ShellError(`${target}: Permission denied`);
+    if (!ctx.fs.exists(abs)) throw new ShellError(specMessage('cd', 'failed', { dir: target, errno: ctx.fs.whyMissing(abs) }));
+    if (!ctx.fs.isDirectory(abs)) throw new ShellError(specMessage('cd', 'failed', { dir: target, errno: 'Not a directory' }));
+    if (!ctx.fs.canExecute(abs)) throw new ShellError(specMessage('cd', 'failed', { dir: target, errno: 'Permission denied' }));
     if (physical) abs = ctx.fs.realPath(abs) ?? abs;
     sh.environment.set('OLDPWD', sh.cwd);
     sh.cwd = abs;
     if (args.length === 1 && args[0] === '-') line(ctx, abs);
-  }, 'Change the working directory');
+  });
 
   // -P: the physical path, symbolic links resolved; -L (the default): the logical one cd kept
-  reg('pwd', ctx => line(ctx, ctx.args.findLast(x => x === '-L' || x === '-P') === '-P' ? ctx.fs.realPath(ctx.shell.cwd) ?? ctx.shell.cwd : ctx.shell.cwd), 'Print the working directory');
+  reg('pwd', ctx => line(ctx, ctx.args.findLast(x => x === '-L' || x === '-P') === '-P' ? ctx.fs.realPath(ctx.shell.cwd) ?? ctx.shell.cwd : ctx.shell.cwd));
 
   reg('export', ctx => {
     const sh = ctx.shell;
@@ -416,7 +394,7 @@ export function registerBuiltins(shell: Shell) {
       const append = eq > 0 && a[eq - 1] === '+';
       const name = eq > 0 ? a.slice(0, append ? eq - 1 : eq) : a;
       try {
-        if (!isName(name)) throw new ShellError(`\`${a}': not a valid identifier`);
+        if (!isName(name)) throw new ShellError(specFormat(DIAGNOSTICS.notValidIdentifier, { name: a }));
         const target = sh.resolve(name);
         if (eq > 0) sh.setVar(name, a.slice(eq + 1), append);
         else if (!sh.arrays.has(target) && !sh.environment.has(target)) { sh.markShellVariable(target); sh.environment.set(target, ''); }
@@ -428,7 +406,7 @@ export function registerBuiltins(shell: Shell) {
       }
     }
     return code;
-  }, 'Set environment variables');
+  });
 
   reg('unset', async ctx => {
     const sh = ctx.shell;
@@ -439,7 +417,7 @@ export function registerBuiltins(shell: Shell) {
     for (const arg of ctx.args.slice(k)) {
       try {
         if (!flags.includes('f') && !isName(arg.split('[')[0])) {
-          if (flags.includes('v')) throw new ShellError(`\`${arg}': not a valid identifier`);
+          if (flags.includes('v')) throw new ShellError(specFormat(DIAGNOSTICS.notValidIdentifier, { name: arg }));
           continue; // plain unset passes over what can be neither a variable nor a function, silently
         }
         const a = await sh.expandSubscript(arg, ioOf(ctx));
@@ -453,7 +431,7 @@ export function registerBuiltins(shell: Shell) {
       }
     }
     return code;
-  }, 'Remove variables or functions (-f)');
+  });
 
   const printEnv = (ctx: CommandContext) => {
     for (const k of [...ctx.shell.environment.keys()].sort(ordinal)) if (ctx.shell.isExported(k)) line(ctx, `${k}=${ctx.shell.environment.get(k)}`);
@@ -481,9 +459,14 @@ export function registerBuiltins(shell: Shell) {
     for (const [k, v] of sets) { sh.environment.set(k, v); sh.varAttrs.set(k, 'x'); }
     try {
       if (args.length === 0) { printEnv(ctx); return 0; }
+      // with no PATH, env searches /bin and /usr/bin, as execvp does
+      if (!sh.environment.has('PATH') && !args[0].includes('/')) {
+        const dir = ['/bin/', '/usr/bin/'].find(d => ctx.fs.isFile(d + args[0]));
+        if (dir) args[0] = dir + args[0];
+      }
       return await sh.invoke(args, ioOf(ctx), true);
     } finally { sh.environment = savedEnv; sh.varAttrs = savedAttrs; }
-  }, 'Print the environment, or run a command in a modified one');
+  });
 
   reg('alias', ctx => {
     const sh = ctx.shell;
@@ -494,23 +477,23 @@ export function registerBuiltins(shell: Shell) {
       const eq = a.indexOf('=');
       if (eq > 0) sh.aliases.set(a.slice(0, eq), a.slice(eq + 1));
       else if (sh.aliases.has(a)) line(ctx, `alias ${a}='${sh.aliases.get(a)}'`);
-      else { ctx.stderr.write(`${ctx.shell.errPrefix}alias: ${a}: not found\n`); code = 1; }
+      else { ctx.stderr.write(`${ctx.shell.errPrefix}alias: ${specMessage('alias', 'notFound', { name: a })}\n`); code = 1; }
     }
     return code;
-  }, 'Define or list aliases');
+  });
 
   reg('unalias', ctx => {
     if (ctx.args.includes('-a')) { ctx.shell.aliases.clear(); return 0; }
     let code = 0;
-    for (const a of ctx.args) if (!ctx.shell.aliases.delete(a)) { ctx.stderr.write(`${ctx.shell.errPrefix}unalias: ${a}: not found\n`); code = 1; }
+    for (const a of ctx.args) if (!ctx.shell.aliases.delete(a)) { ctx.stderr.write(`${ctx.shell.errPrefix}unalias: ${specMessage('unalias', 'notFound', { name: a })}\n`); code = 1; }
     return code;
-  }, 'Remove aliases');
+  });
 
   reg('history', ctx => {
     const h = ctx.shell.history;
     const n = ctx.args.length && /^\d+$/.test(ctx.args[0]) ? Number(ctx.args[0]) : h.length;
     for (let i = Math.max(0, h.length - n); i < h.length; i++) line(ctx, `${String(i + 1).padStart(5)}  ${h[i]}`);
-  }, 'Show command history');
+  });
 
   reg('which', ctx => {
     let code = 0;
@@ -520,12 +503,12 @@ export function registerBuiltins(shell: Shell) {
       for (const p of ctx.args.includes('-a') ? found : found.slice(0, 1)) line(ctx, p);
     }
     return code;
-  }, 'Locate a command');
+  });
 
   reg('type', ctx => {
     const sh = ctx.shell;
     let code = 0;
-    const opts = Args.parse(ctx.args, 'atpPf');
+    const opts = Args.parse(ctx.args, specOf('type'));
     for (const a of opts.positional) {
       if (opts.has('t') || opts.has('p') || opts.has('P')) {
         let kind = sh.aliases.has(a) ? 'alias' : SHELL_KEYWORDS.has(a) ? 'keyword' : sh.functions.has(a) ? 'function'
@@ -541,13 +524,13 @@ export function registerBuiltins(shell: Shell) {
       if (!describe(ctx, a, opts.has('a'))) code = 1;
     }
     return code;
-  }, 'Describe a command');
+  });
 
-  reg('test', ctx => (testEvaluate(ctx.shell, [...ctx.args]) ? 0 : 1), 'Evaluate a conditional expression');
+  reg('test', ctx => (testEvaluate(ctx.shell, [...ctx.args]) ? 0 : 1));
   reg('[', ctx => {
-    if (ctx.args.length === 0 || ctx.args[ctx.args.length - 1] !== ']') throw new ShellError("missing `]'", 2);
+    if (ctx.args.length === 0 || ctx.args[ctx.args.length - 1] !== ']') throw new ShellError(specMessage('[', 'missingBracket'), 2);
     return testEvaluate(ctx.shell, ctx.args.slice(0, -1)) ? 0 : 1;
-  }, 'Evaluate a conditional expression');
+  });
 
   const runScript: CommandHandler = async ctx => {
     const io = ioOf(ctx);
@@ -571,11 +554,11 @@ export function registerBuiltins(shell: Shell) {
     args = args.slice(i);
     const setup = () => { for (const [name, on] of options) sh.setOption(name, on); };
     if (command) {
-      if (args.length === 0) throw new ShellError('-c: option requires an argument', 2);
+      if (args.length === 0) throw new ShellError(specMessage(ctx.name, 'cOptionArgument'), 2);
       return sh.runScriptText(args[0], io, true, args.slice(2), { arg0: args[1] ?? ctx.name, setup });
     }
     if (args.length === 0) {
-      if (!isBash) throw new ShellError('filename argument required', 2);
+      if (!isBash) throw new ShellError(specMessage(ctx.name, 'filenameRequired'), 2);
       return sh.runScriptText(ctx.stdinText, { ...io, stdin: new StdinBuffer('') }, true, [], { arg0: ctx.name, setup });
     }
     let text: string;
@@ -592,16 +575,16 @@ export function registerBuiltins(shell: Shell) {
       throw e;
     } finally { sh.sourceDepth--; }
   };
-  reg('bash', runScript, 'Run a command string (-c) or script file');
-  reg('sh', runScript, 'Run a command string (-c) or script file');
-  reg('source', runScript, 'Run a script in the current shell');
-  reg('.', runScript, 'Run a script in the current shell');
+  reg('bash', runScript);
+  reg('sh', runScript);
+  reg('source', runScript);
+  reg('.', runScript);
 
   reg('help', ctx => {
     const sh = ctx.shell;
     if (ctx.args.length > 0) {
       const c = sh.commands.get(ctx.args[0]);
-      if (!c) throw new ShellError(`no help topics match '${ctx.args[0]}'`);
+      if (!c) throw new ShellError(specMessage('help', 'noTopics', { topic: ctx.args[0] }));
       line(ctx, c.usage ?? `${c.name}: ${c.description}`);
       return 0;
     }
@@ -609,31 +592,31 @@ export function registerBuiltins(shell: Shell) {
     const width = Math.max(...cmds.map(c => c.name.length)) + 2;
     line(ctx, "Available commands (run '<command> --help' for details on non-standard ones):");
     for (const c of cmds) line(ctx, `  ${c.name.padEnd(width)}${c.description}`);
-  }, 'List available commands');
+  });
 
   // ---------- scripting ----------
 
   reg('exit', ctx => {
     if (ctx.args.length > 0 && !/^-?\d+$/.test(ctx.args[0])) {
       // bash still exits, with status 2
-      ctx.stderr.write(`${ctx.shell.errPrefix}exit: ${ctx.args[0]}: numeric argument required\n`);
+      ctx.stderr.write(`${ctx.shell.errPrefix}exit: ${specMessage('exit', 'numericArgument', { value: ctx.args[0] })}\n`);
       throw new ExitSignal(2);
     }
     throw new ExitSignal(parseCount(ctx, ctx.shell.lastExitCode) & 255);
-  }, 'Exit the shell');
+  });
   reg('return', ctx => {
-    if (!ctx.shell.inFunction && ctx.shell.sourceDepth === 0) throw new ShellError("can only `return' from a function or sourced script", 2);
+    if (!ctx.shell.inFunction && ctx.shell.sourceDepth === 0) throw new ShellError(specMessage('return', 'notInFunction'), 2);
     ctx.shell.returnSignal(parseCount(ctx, ctx.shell.lastExitCode) & 255);
-  }, 'Return from a function');
-  reg('break', ctx => loopJump(ctx, true), 'Exit a loop');
-  reg('continue', ctx => loopJump(ctx, false), 'Next loop iteration');
+  });
+  reg('break', ctx => loopJump(ctx, true));
+  reg('continue', ctx => loopJump(ctx, false));
 
   reg('shift', ctx => {
     const n = parseCount(ctx, 1);
     if (n > ctx.shell.positional.length) return 1;
     ctx.shell.positional = ctx.shell.positional.slice(n);
     return 0;
-  }, 'Shift positional parameters');
+  });
 
   reg('trap', ctx => {
     // EXIT runs when the tool call or script ends, ERR after a failing command, RETURN as a function returns;
@@ -654,7 +637,7 @@ export function registerBuiltins(shell: Shell) {
     const [act, signals] = args.length === 1 ? [null, args] : [args[0], args.slice(1)];
     for (const sig of signals) if (act === null || act === '-') traps.delete(sigName(sig)); else traps.set(sigName(sig), act);
     return 0;
-  }, 'Run a command when the shell exits (EXIT), a command fails (ERR) or a function returns (RETURN)');
+  });
 
   const KNOWN_SHOPTS = ['assoc_expand_once', 'autocd', 'cdable_vars', 'cdspell', 'checkhash', 'checkjobs', 'checkwinsize', 'cmdhist',
     'complete_fullquote', 'direxpand', 'dirspell', 'dotglob', 'execfail', 'expand_aliases', 'extdebug', 'extglob', 'extquote',
@@ -665,11 +648,11 @@ export function registerBuiltins(shell: Shell) {
     'shift_verbose', 'sourcepath', 'varredir_close', 'xpg_echo'];
   reg('shopt', ctx => {
     const sh = ctx.shell;
-    const a = Args.parse(ctx.args, 'supqo');
+    const a = Args.parse(ctx.args, specOf('shopt'));
     const setting = a.has('s') || a.has('u');
     if (a.has('o')) {
       // shopt -o: the set -o options
-      for (const n of a.positional) if (!sh.setOption(n, a.has('s')) && setting) throw new ShellError(`${n}: invalid option name`);
+      for (const n of a.positional) if (!sh.setOption(n, a.has('s')) && setting) throw new ShellError(specMessage('shopt', 'invalidOptionName', { name: n }));
       if (setting) return 0;
       for (const [n, on] of sh.optionList) if (a.positional.length === 0 || a.positional.includes(n)) line(ctx, `${n.padEnd(15)}\t${on ? 'on' : 'off'}`);
       return 0;
@@ -677,20 +660,20 @@ export function registerBuiltins(shell: Shell) {
     const names = a.positional.length > 0 ? a.positional : KNOWN_SHOPTS;
     if (setting) {
       for (const n of names) {
-        if (!KNOWN_SHOPTS.includes(n)) throw new ShellError(`${n}: invalid shell option name`);
+        if (!KNOWN_SHOPTS.includes(n)) throw new ShellError(specMessage('shopt', 'invalidShellOptionName', { name: n }));
         if (a.has('s')) sh.shopts.add(n); else sh.shopts.delete(n);
       }
       return 0;
     }
     let code = 0;
     for (const n of names) {
-      if (!KNOWN_SHOPTS.includes(n)) { ctx.stderr.write(`${ctx.shell.errPrefix}shopt: ${n}: invalid shell option name\n`); code = 1; continue; }
+      if (!KNOWN_SHOPTS.includes(n)) { ctx.stderr.write(`${ctx.shell.errPrefix}shopt: ${specMessage('shopt', 'invalidShellOptionName', { name: n })}\n`); code = 1; continue; }
       const on = sh.shopts.has(n);
       if (code === 0 && !on) code = 1;
       if (!a.has('q')) line(ctx, `${n.padEnd(15)}\t${on ? 'on' : 'off'}`);
     }
     return code;
-  }, 'Set shell options (nullglob, dotglob, globstar, extglob, nocasematch ...)');
+  });
 
   reg('set', ctx => {
     const args = [...ctx.args];
@@ -718,14 +701,14 @@ export function registerBuiltins(shell: Shell) {
             continue;
           }
           const opt = args[++i];
-          if (!sh.setOption(opt, on)) throw new ShellError(`${opt}: invalid option name`, 2);
+          if (!sh.setOption(opt, on)) throw new ShellError(specMessage('set', 'invalidOptionName', { name: opt }), 2);
         } else if ('eufxC'.includes(c)) sh.setOption(({ e: 'errexit', u: 'nounset', f: 'noglob', x: 'xtrace', C: 'noclobber' } as Record<string, string>)[c], on);
-        else if (!'abhkmnpvBEHPT'.includes(c)) throw new ShellError(`${a[0]}${c}: invalid option`, 2); // accepted, no effect here
+        else if (!'abhkmnpvBEHPT'.includes(c)) throw new ShellError(specMessage('set', 'builtinInvalidOption', { option: a[0] + c }), 2); // accepted, no effect here
       }
     }
     if (i < args.length) sh.positional = args.slice(i);
     return 0;
-  }, 'Set shell options (-e, -u, -x, -f, -C, -o pipefail) or positional parameters');
+  });
 
   const declare: CommandHandler = ctx => {
     const sh = ctx.shell;
@@ -743,7 +726,7 @@ export function registerBuiltins(shell: Shell) {
           case 'a': case 'A': listOnly += c; break; // arrays were declared before the built-in ran
           case 't': break;
           case 'i': case 'r': case 'x': case 'l': case 'u': case 'n': if (a[0] === '-') on += c; else off += c; break;
-          default: throw new ShellError(`-${c}: invalid option`, 2);
+          default: throw new ShellError(specMessage(ctx.name, 'builtinInvalidOption', { option: '-' + c }), 2);
         }
       }
     }
@@ -771,7 +754,7 @@ export function registerBuiltins(shell: Shell) {
     if (print) {
       for (const n of names) {
         const l = declareLine(sh, n);
-        if (l) line(ctx, l); else { ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: ${n}: not found\n`); code = 1; }
+        if (l) line(ctx, l); else { ctx.stderr.write(`${ctx.shell.errPrefix}${ctx.name}: ${specMessage(ctx.name, 'notFound', { name: n })}\n`); code = 1; }
       }
       return code;
     }
@@ -782,7 +765,7 @@ export function registerBuiltins(shell: Shell) {
       const name = eq > 0 ? arg.slice(0, append ? eq - 1 : eq) : arg;
       const value = eq > 0 ? arg.slice(eq + 1) : null;
       try {
-        if (!isName(name)) throw new ShellError(`\`${arg}': not a valid identifier`);
+        if (!isName(name)) throw new ShellError(specFormat(DIAGNOSTICS.notValidIdentifier, { name: arg }));
         if (local && !sh.arrays.has(name)) sh.declareLocal(name, null); // shortcut: `local x` is empty here, unset in bash
         else if (local && sh.arrays.has(name) && value !== null) sh.declareLocal(name, null);
         if (on.includes('n')) {
@@ -805,13 +788,13 @@ export function registerBuiltins(shell: Shell) {
     }
     return code;
   };
-  reg('local', declare, 'Declare function-local variables');
-  reg('declare', declare, 'Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)');
-  reg('typeset', declare, 'Declare variables and their attributes (-a -A -i -r -x -l -u -n -p -f)');
-  reg('readonly', declare, 'Make variables read-only');
+  reg('local', declare);
+  reg('declare', declare);
+  reg('typeset', declare);
+  reg('readonly', declare);
 
   reg('read', ctx => {
-    const a = Args.parse(ctx.args, 'rsea', 'ptdnuNi');
+    const a = Args.parse(ctx.args, specOf('read'));
     const sh = ctx.shell;
     const names = a.positional.length > 0 ? a.positional : ['REPLY'];
     const input = inputFor(ctx, a.value('u'));
@@ -845,10 +828,10 @@ export function registerBuiltins(shell: Shell) {
     }
     // like bash, a final line with no trailing newline is still assigned, but read reports end of input
     return input.lastTerminated ? 0 : 1;
-  }, 'Read a line from stdin into variables');
+  });
 
   const mapfile: CommandHandler = ctx => {
-    const a = Args.parse(ctx.args, 't', 'dnsuCcO');
+    const a = Args.parse(ctx.args, specOf(ctx.name));
     const sh = ctx.shell;
     const name = a.positional[0] ?? 'MAPFILE';
     const input = inputFor(ctx, a.value('u'));
@@ -870,11 +853,11 @@ export function registerBuiltins(shell: Shell) {
     }
     return 0;
   };
-  reg('mapfile', mapfile, 'Read lines from stdin into an array (-t drops the newlines)');
-  reg('readarray', mapfile, 'Read lines from stdin into an array (-t drops the newlines)');
+  reg('mapfile', mapfile);
+  reg('readarray', mapfile);
 
   reg('getopts', ctx => {
-    if (ctx.args.length < 2) throw new ShellError('usage: getopts optstring name [arg ...]', 2);
+    if (ctx.args.length < 2) throw new ShellError(specMessage('getopts', 'usage'), 2);
     const sh = ctx.shell;
     const [spec, name] = ctx.args;
     const args = ctx.args.length > 2 ? ctx.args.slice(2) : sh.positional;
@@ -900,7 +883,7 @@ export function registerBuiltins(shell: Shell) {
     if (++pos >= arg.length) { optind++; pos = 1; }
     if (at < 0) {
       if (silent) sh.setVar('OPTARG', c);
-      else { ctx.stderr.write(`${sh.getVariable('0')}: illegal option -- ${c}\n`); sh.unset('OPTARG'); }
+      else { ctx.stderr.write(`${specMessage('getopts', 'illegalOption', { script: sh.getVariable('0'), option: c })}\n`); sh.unset('OPTARG'); }
       return done(0, '?');
     }
     if (spec[at + 1] !== ':') { sh.unset('OPTARG'); return done(0, c); }
@@ -908,12 +891,12 @@ export function registerBuiltins(shell: Shell) {
     else if (optind <= args.length) sh.setVar('OPTARG', args[optind++ - 1]);
     else if (silent) { sh.setVar('OPTARG', c); return done(0, ':'); }
     else {
-      ctx.stderr.write(`${sh.getVariable('0')}: option requires an argument -- ${c}\n`);
+      ctx.stderr.write(`${specMessage('getopts', 'missingArgument', { script: sh.getVariable('0'), option: c })}\n`);
       sh.unset('OPTARG');
       return done(0, '?');
     }
     return done(0, c);
-  }, 'Parse command-line options');
+  });
 
   reg('exec', async ctx => {
     // exec with only redirections is handled by the shell; with a command, the command's status ends the shell
@@ -921,7 +904,7 @@ export function registerBuiltins(shell: Shell) {
     while (args[0] === '-c' || args[0] === '-l') args.shift();
     if (args.length === 0) return 0;
     throw new ExitSignal(await ctx.shell.invoke(args, ioOf(ctx), true));
-  }, "Replace the shell with a command, or redirect the shell's own input and output");
+  });
 
   reg('wait', ctx => {
     // background jobs ran to completion when they were started: wait just reports their status
@@ -932,14 +915,14 @@ export function registerBuiltins(shell: Shell) {
     if (ids.length === 0) sh.forgetJobs();
     for (const id of ids) {
       if (id.startsWith('%')) { code = 0; continue; }
-      if (!/^\d+$/.test(id)) { ctx.stderr.write(`${ctx.shell.errPrefix}wait: \`${id}': not a pid or valid job spec\n`); code = 2; continue; }
+      if (!/^\d+$/.test(id)) { ctx.stderr.write(`${ctx.shell.errPrefix}wait: ${specMessage('wait', 'notPid', { id: id })}\n`); code = 2; continue; }
       code = sh.waitFor(Number(id));
-      if (code === 127) ctx.stderr.write(`${ctx.shell.errPrefix}wait: pid ${id} is not a child of this shell\n`);
+      if (code === 127) ctx.stderr.write(`${ctx.shell.errPrefix}wait: ${specMessage('wait', 'notChild', { pid: id })}\n`);
     }
     return code;
-  }, 'Wait for background jobs (they run to completion when started)');
-  reg('jobs', () => 0, 'List background jobs (none are ever still running)');
-  reg('disown', () => 0, 'Forget background jobs');
+  });
+  reg('jobs', () => 0);
+  reg('disown', () => 0);
 
   reg('kill', ctx => {
     if (ctx.args[0] === '-l') { line(ctx, ' 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 9) SIGKILL\t15) SIGTERM'); return 0; }
@@ -955,15 +938,15 @@ export function registerBuiltins(shell: Shell) {
       }
       targets.push(a);
     }
-    if (targets.length === 0) throw new ShellError('usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]', 2);
+    if (targets.length === 0) throw new ShellError(specMessage('kill', 'usage'), 2);
     for (const t of targets) {
       if (t === '4242') { if (signal !== 0) throw new ExitSignal(128 + signal); continue; } // the shell itself
       if (/^\d+$/.test(t) && ctx.shell.isJob(Number(t))) continue; // a finished job: nothing to signal
-      ctx.stderr.write(t.startsWith('%') ? `${ctx.shell.errPrefix}kill: ${t}: no such job\n` : `${ctx.shell.errPrefix}kill: (${t}) - No such process\n`);
+      ctx.stderr.write(`${ctx.shell.errPrefix}kill: ${t.startsWith('%') ? specMessage('kill', 'noSuchJob', { job: t }) : specMessage('kill', 'noSuchProcess', { pid: t })}\n`);
       code = 1;
     }
     return code;
-  }, 'Send a signal to a process (background jobs have always finished already)');
+  });
 
   reg('hash', ctx => {
     const sh = ctx.shell;
@@ -978,7 +961,7 @@ export function registerBuiltins(shell: Shell) {
         else if (ch === 'd') del = true;
         else if (ch === 'p') { if (i + 1 >= args.length) throw new UsageException('-p: option requires an argument'); path = args[++i]; break; }
         else if (ch === 'l') list = true;
-        else throw new UsageException(`-${ch}: invalid option`);
+        else throw new UsageException(specMessage('hash', 'builtinInvalidOption', { option: '-' + ch }));
       }
     }
     const names = args.slice(i);
@@ -993,7 +976,7 @@ export function registerBuiltins(shell: Shell) {
       if (!sh.hashed.size) line(ctx, 'hash: hash table empty');
       else ctx.stdout.write('hits\tcommand\n' + [...sh.hashed.values()].map(([p, n]) => `${String(n).padStart(4)}\t${p}\n`).join(''));
     }
-    const notFound = (n: string) => { ctx.stderr.write(`${sh.errPrefix}hash: ${n}: not found\n`); code = 1; };
+    const notFound = (n: string) => { ctx.stderr.write(`${sh.errPrefix}hash: ${specMessage('hash', 'notFound', { name: n })}\n`); code = 1; };
     for (const n of names) {
       const hashed = show ? sh.hashLookup(n) : null;
       if (hashed !== null) line(ctx, list ? reusable(n, hashed) : names.length > 1 ? `${n}\t${hashed}` : hashed);
@@ -1004,13 +987,13 @@ export function registerBuiltins(shell: Shell) {
       else { const found = sh.searchPathAll(n)[0]; if (found) sh.hashed.set(n, [found, 0]); else notFound(n); }
     }
     return code;
-  }, 'Remember command locations');
+  });
 
   reg('builtin', ctx => {
     if (ctx.args.length === 0) return 0;
-    if (!isShellBuiltin(ctx.shell, ctx.args[0])) throw new ShellError(`${ctx.args[0]}: not a shell builtin`);
+    if (!isShellBuiltin(ctx.shell, ctx.args[0])) throw new ShellError(specMessage('builtin', 'notBuiltin', { name: ctx.args[0] }));
     return ctx.shell.invoke([...ctx.args], ioOf(ctx), true);
-  }, 'Run a shell builtin, bypassing a function of the same name');
+  });
 
   const dirs = (sh: Shell) => {
     const home = sh.environment.get('HOME') ?? '';
@@ -1019,7 +1002,7 @@ export function registerBuiltins(shell: Shell) {
   };
   const changeDir = (ctx: CommandContext, dir: string) => {
     const abs = ctx.resolvePath(dir);
-    if (!ctx.fs.isDirectory(abs)) throw new ShellError(`${dir}: No such file or directory`);
+    if (!ctx.fs.isDirectory(abs)) throw new ShellError(specMessage('pushd', 'noDirectory', { dir }));
     ctx.shell.environment.set('OLDPWD', ctx.shell.cwd);
     ctx.shell.cwd = abs;
   };
@@ -1028,41 +1011,41 @@ export function registerBuiltins(shell: Shell) {
     const args = ctx.args.filter(a => a !== '-n');
     const old = sh.cwd;
     if (args.length === 0) {
-      if (sh.dirStack.length === 0) throw new ShellError('no other directory');
+      if (sh.dirStack.length === 0) throw new ShellError(specMessage('pushd', 'noOtherDirectory'));
       changeDir(ctx, sh.dirStack[0]);
       sh.dirStack[0] = old;
     } else { changeDir(ctx, args[0]); sh.dirStack.unshift(old); }
     line(ctx, dirs(sh));
-  }, 'Change directory, remembering the old one');
+  });
   reg('popd', ctx => {
     const sh = ctx.shell;
-    if (sh.dirStack.length === 0) throw new ShellError('directory stack empty');
+    if (sh.dirStack.length === 0) throw new ShellError(specMessage('popd', 'stackEmpty'));
     changeDir(ctx, sh.dirStack[0]);
     sh.dirStack.shift();
     line(ctx, dirs(sh));
-  }, 'Return to the directory pushd left');
+  });
   reg('dirs', ctx => {
     if (ctx.args.includes('-c')) { ctx.shell.dirStack.length = 0; return 0; }
     const l = dirs(ctx.shell);
     if (ctx.args.some(a => a === '-p' || a === '-v')) l.split(' ').forEach((d, i) => line(ctx, ctx.args.includes('-v') ? `${String(i).padStart(2)}  ${d}` : d));
     else line(ctx, l);
-  }, 'Show the directory stack');
+  });
 
   reg('ulimit', ctx => {
     if (ctx.args.some(a => !a.startsWith('-'))) return 0; // setting a limit: accepted
     line(ctx, ctx.args.includes('-n') ? '1024' : ctx.args.includes('-s') ? '8192' : ctx.args.includes('-c') ? '0' : 'unlimited');
-  }, 'Show resource limits');
-  reg('umask', ctx => { if (ctx.args.length === 0) line(ctx, '0002'); }, 'Show the file mode creation mask');
-  reg('times', ctx => ctx.stdout.write('0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n'), "Show the shell's CPU times");
+  });
+  reg('umask', ctx => { if (ctx.args.length === 0) line(ctx, '0022'); });
+  reg('times', ctx => ctx.stdout.write('0m0.010s 0m0.005s\n0m0.000s 0m0.000s\n'), );
 
-  reg('eval', ctx => ctx.shell.runScriptText(ctx.args.join(' '), ioOf(ctx), false), 'Run arguments as a shell command');
+  reg('eval', ctx => ctx.shell.runScriptText(ctx.args.join(' '), ioOf(ctx), false));
 
   reg('let', ctx => {
-    if (ctx.args.length === 0) throw new ShellError('expression expected');
+    if (ctx.args.length === 0) throw new ShellError(specMessage('let', 'expressionExpected'));
     let v = 0n;
     for (const expr of ctx.args) v = evalArith(ctx.shell, expr);
     return v !== 0n ? 0 : 1;
-  }, 'Evaluate arithmetic expressions');
+  });
 
   reg('command', async ctx => {
     const sh = ctx.shell;
@@ -1079,17 +1062,17 @@ export function registerBuiltins(shell: Shell) {
       else { const l = sh.locate(n); if (l) line(ctx, l[0]); else code = 1; }
     }
     return code;
-  }, 'Run a command, or describe it with -v');
+  });
 
   reg('printenv', ctx => {
     if (ctx.args.length === 0) { printEnv(ctx); return 0; }
     let code = 0;
     for (const n of ctx.args) { const v = ctx.shell.environment.get(n); if (v !== undefined && ctx.shell.isExported(n)) line(ctx, v); else code = 1; }
     return code;
-  }, 'Print environment variables');
+  });
 
   reg('sleep', async ctx => {
-    if (ctx.args.length === 0) throw new UsageException('missing operand');
+    if (ctx.args.length === 0) throw new UsageException(specMessage('sleep', 'missingOperand', {}));
     const total = ctx.args.reduce((t, a) => t + parseDuration(a), 0);
     if (ctx.shell.virtualNow !== undefined) { ctx.shell.sleepVirtual(total); return; }
     const end = Date.now() + total;
@@ -1101,12 +1084,12 @@ export function registerBuiltins(shell: Shell) {
       await new Promise(r => setTimeout(r, Math.min(left, 1000)));
     }
     ctx.checkTime();
-  }, 'Pause for a number of seconds');
+  });
 
   reg('timeout', async ctx => {
     const args = [...ctx.args];
     while (args.length && args[0].startsWith('-')) { const a = args.shift()!; if ((a === '-s' || a === '-k') && args.length) args.shift(); }
-    if (args.length < 2) throw new ShellError('missing operand', 125);
+    if (args.length < 2) throw new ShellError(specMessage('timeout', 'missingOperand', {}), 125);
     const sh = ctx.shell;
     const parent = sh.deadline;
     const own: Deadline = { at: Date.now() + parseDuration(args[0]), parent };
@@ -1115,7 +1098,7 @@ export function registerBuiltins(shell: Shell) {
       if (e instanceof DeadlineExceeded && e.owner === own) return 124;
       throw e;
     } finally { sh.deadline = parent; }
-  }, 'Run a command with a time limit');
+  });
 
   reg('time', async ctx => {
     const start = ctx.shell.now();
@@ -1123,16 +1106,16 @@ export function registerBuiltins(shell: Shell) {
     const t = (ctx.shell.now() - start) / 1000;
     ctx.stderr.write(`\nreal\t${Math.floor(t / 60)}m${(t % 60).toFixed(3)}s\nuser\t0m0.000s\nsys\t0m0.000s\n`);
     return code;
-  }, 'Time a command');
+  });
 
-  reg('clear', () => 0, 'Clear the terminal');
+  reg('clear', () => 0);
 
   // ---------- system information ----------
 
-  reg('whoami', ctx => line(ctx, ctx.shell.options.user), 'Print the current user');
-  reg('hostname', ctx => line(ctx, ctx.shell.options.hostname), 'Print the host name');
+  reg('whoami', ctx => line(ctx, ctx.shell.options.user));
+  reg('hostname', ctx => line(ctx, ctx.shell.options.hostname));
   reg('uname', ctx => {
-    const a = Args.parse(ctx.args, 'asnrvmoip', '', 'all=a,kernel-name=s,nodename=n,kernel-release=r,machine=m,operating-system=o');
+    const a = Args.parse(ctx.args, specOf('uname'));
     const all = a.has('a');
     const parts: string[] = [];
     if (all || a.has('s') || a.flags.size === 0) parts.push('Linux');
@@ -1144,44 +1127,44 @@ export function registerBuiltins(shell: Shell) {
     if (a.has('i') && !all) parts.push('x86_64');
     if (all || a.has('o')) parts.push('GNU/Linux');
     line(ctx, parts.join(' '));
-  }, 'Print system information');
+  });
 
   reg('date', ctx => {
     // the simulated machine's clock is UTC (TZ is unset), so output never depends on the host's time zone
-    const a = Args.parse(ctx.args, 'uIR', 'dr', 'utc=u,universal=u,iso-8601=I,date=d,reference=r,rfc-email=R');
+    const a = Args.parse(ctx.args, specOf('date'));
     let now = ctx.shell.now();
     const d = a.value('d'), r = a.value('r');
     if (d !== undefined) now = parseDate(d, now);
     else if (r !== undefined) now = ctx.fs.stat(ctx.resolvePath(r)).modified;
     const fmt = a.positional.find(p => p.startsWith('+'));
     const extra = a.positional.find(p => !p.startsWith('+'));
-    if (extra !== undefined) throw new ShellError(`invalid date ${quoteL(extra)}`);
+    if (extra !== undefined) throw new ShellError(specMessage('date', 'invalidDate', { value: extra }));
     line(ctx, strftime(now, a.has('I') ? '%Y-%m-%d' : a.has('R') ? '%a, %d %b %Y %H:%M:%S +0000' : fmt !== undefined ? fmt.slice(1) : '%a %b %e %H:%M:%S %Z %Y'));
-  }, 'Print the date and time', DATE_USAGE);
+  });
 
-  reg('ps', ctx => ctx.stdout.write('    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n'), 'List processes');
+  reg('ps', ctx => ctx.stdout.write('    PID TTY          TIME CMD\n      1 pts/0    00:00:00 bash\n   4242 pts/0    00:00:00 ps\n'));
   reg('id', ctx => {
     const u = ctx.shell.options.user;
-    const a = Args.parse(ctx.args, 'ugnGr');
+    const a = Args.parse(ctx.args, specOf('id'));
     line(ctx, a.has('u') || a.has('g') || a.has('G') ? (a.has('n') ? u : '1000') : `uid=1000(${u}) gid=1000(${u}) groups=1000(${u})`);
-  }, 'Print user and group IDs');
+  });
   reg('uptime', ctx => line(ctx, ctx.args.includes('-p') ? 'up 3 days, 4 hours, 12 minutes'
-    : ` ${strftime(ctx.shell.now(), '%H:%M:%S')} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01`), 'Show how long the system has been running');
+    : ` ${strftime(ctx.shell.now(), '%H:%M:%S')} up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01`));
   reg('free', ctx => ctx.stdout.write(ctx.args.some(x => x.includes('h'))
     ? '               total        used        free      shared  buff/cache   available\nMem:           7.6Gi       1.9Gi       3.8Gi        12Mi       2.1Gi       5.5Gi\nSwap:          2.0Gi          0B       2.0Gi\n'
-    : '               total        used        free      shared  buff/cache   available\nMem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n'), 'Display memory usage');
-  reg('nproc', ctx => line(ctx, '4'), 'Print the number of processors');
+    : '               total        used        free      shared  buff/cache   available\nMem:         8014880     1992344     3984512       12288     2201024     5748660\nSwap:        2097148           0     2097148\n'));
+  reg('nproc', ctx => line(ctx, '4'));
 
   // the agent is a regular user: privilege escalation fails the way it does on a real server
   reg('sudo', ctx => {
     const user = ctx.shell.options.user;
     if (ctx.args.length === 1 && (ctx.args[0] === '-V' || ctx.args[0] === '--version')) { line(ctx, 'Sudo version 1.9.15p5'); return 0; }
-    if (ctx.args.length === 0) { ctx.stderr.write('usage: sudo -h | -K | -k | -V\nusage: sudo [-AbEHknPS] [-u user] [command [arg ...]]\n'); return 1; }
-    if (ctx.args[0] === '-l' || ctx.args[0] === '--list') { ctx.stderr.write(`Sorry, user ${user} may not run sudo on ${ctx.shell.options.hostname}.\n`); return 1; }
-    ctx.stderr.write(`${user} is not in the sudoers file.\n`);
+    if (ctx.args.length === 0) { ctx.stderr.write(specMessage('sudo', 'usage') + '\n'); return 1; }
+    if (ctx.args[0] === '-l' || ctx.args[0] === '--list') { ctx.stderr.write(specMessage('sudo', 'listDenied', { user: user, host: ctx.shell.options.hostname }) + '\n'); return 1; }
+    ctx.stderr.write(specMessage('sudo', 'notSudoer', { user: user }) + '\n');
     return 1;
-  }, 'Execute a command as another user');
-  reg('su', ctx => { ctx.stderr.write('Password: \nsu: Authentication failure\n'); return 1; }, 'Run a command with a substitute user ID');
+  });
+  reg('su', ctx => { ctx.stderr.write(specMessage('su', 'authenticationFailure') + '\n'); return 1; });
 }
 
 export { VirtualFileSystem };

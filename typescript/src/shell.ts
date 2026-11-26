@@ -12,6 +12,7 @@ import { escapeGlob, hasWildcard, globRegex, globBody, cachedRegex, expandGlob }
 import { printable } from './bytes.js';
 import { quoteValue, shellQuote, unescape } from './format.js';
 import { posixToJs } from './regex.js';
+import { COMMANDS, DIAGNOSTICS, ERRNO, diagnostic } from './spec.generated.js';
 import { registerAll } from './commands/index.js';
 import { registerApi, type ApiEndpoint } from './api.js';
 import { registerTools, mountMcp, type ToolSpec, type ToolInvoker, type McpClientLike, type McpMountOptions } from './tools.js';
@@ -191,9 +192,6 @@ const INDIRECT_RE = /^!([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])([^]*)$/;
 const PREFIX_RE = /^!([A-Za-z_][A-Za-z0-9_]*)[*@]$/;
 
 // bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
-const NO_PROGRAM_FILE = new Set(['alias', 'break', 'cd', 'command', 'continue', 'declare', 'eval', 'exit', 'export', 'help',
-  'history', 'let', 'local', 'mapfile', 'read', 'readarray', 'readonly', 'return', 'set', 'shift', 'shopt', 'source', 'trap', 'type', 'typeset', 'unalias', 'unset']);
-
 /** ${p-w} ${p:-w} ${p=w} ${p:=w} ${p+w} ${p:+w} ${p?w} ${p:?w}: the operator and the word; null for any other operator. */
 function defaultOp(rest: string): [op: string, word: string] | null {
   const n = rest[0] === ':' ? 2 : 1;
@@ -375,6 +373,9 @@ export class Shell implements ArithHost {
 
   /** Adds a command the agent can run (and lists it in /usr/bin and `help`). Returns this shell. */
   register(name: string, handler: CommandHandler, description = '', usage?: string): this {
+    const spec = COMMANDS.get(name);
+    // built-ins take their summary and help from spec/ (spec.generated.ts)
+    if (this.builtinNames === null && description === '' && usage === undefined && spec) { description = spec.summary; usage = spec.help ?? undefined; }
     this.commands.set(name, { name, description, usage, handler });
     this.builtinNames?.delete(name); // an app command replacing a built-in owns its own --help/--version
     this.writeProgramFile(name, this.builtinNames === null);
@@ -382,8 +383,8 @@ export class Shell implements ArithHost {
   }
 
   private writeProgramFile(name: string, builtin: boolean) {
-    const shellOnly = builtin && NO_PROGRAM_FILE.has(name);
-    if (shellOnly || name.includes('/') || name === '.' || name === '..' || name === ':' || name === '[' || !this.fs.isDirectory('/usr/bin')) return;
+    const shellOnly = builtin && COMMANDS.get(name)?.programFile === false;
+    if (shellOnly || name.includes('/') || name === '.' || name === '..' || name === ':' || !this.fs.isDirectory('/usr/bin')) return;
     for (const dir of ['/usr/bin/', '/bin/']) {
       if (!this.fs.isDirectory(dir)) continue;
       this.fs.writeText(dir + name, EXECUTABLE_STUB);
@@ -998,7 +999,7 @@ export class Shell implements ArithHost {
           if (target === '-') dup = r.op === '<&' ? new StdinBuffer('') : nullWriter;
           else {
             const d = /^\d+$/.test(target) ? this.descriptor(Number(target), io) : undefined;
-            if (!d) throw new ShellError(`${target}: ${/^\d+$/.test(target) ? 'Bad file descriptor' : 'ambiguous redirect'}`);
+            if (!d) throw new ShellError(diagnostic('redirectFailed', { target: target, reason: /^\\d+$/.test(target) ? ERRNO.EBADF : DIAGNOSTICS.ambiguousRedirect }));
             dup = d;
           }
           io = withFd(io, r.fd, dup);
@@ -1040,7 +1041,7 @@ export class Shell implements ArithHost {
     }
     if (target === '') throw new ShellError(': No such file or directory');
     if (this.agentFs.isDirectory(path)) throw new ShellError(`${target}: Is a directory`);
-    if (this.noclobber && (r.op === '>' || r.op === '&>') && this.agentFs.isFile(path)) throw new ShellError(`${target}: cannot overwrite existing file`);
+    if (this.noclobber && (r.op === '>' || r.op === '&>') && this.agentFs.isFile(path)) throw new ShellError(diagnostic('noclobber', { target: target }));
     try {
       if (!r.op.endsWith('>>') || !this.agentFs.exists(path)) this.agentFs.writeText(path, ''); // truncate on open, like bash
     } catch (e) {
@@ -1072,7 +1073,7 @@ export class Shell implements ArithHost {
           if (t === '-') target = null;
           else {
             const d = /^\d+$/.test(t) ? this.descriptor(Number(t), io) : undefined;
-            if (!d) throw new ShellError(`${t}: Bad file descriptor`);
+            if (!d) throw new ShellError(diagnostic('redirectFailed', { target: t, reason: ERRNO.EBADF }));
             target = d instanceof SwitchWriter ? d.target : d;
           }
         } else target = await this.openOutput(r, io, path => new FileAppender(this.agentFs, path));
@@ -1203,7 +1204,7 @@ export class Shell implements ArithHost {
         found = this.searchPath(name);
         if (found === null) {
           io.err.write(!this.environment.get('PATH') ? `${this.errPrefix}${name}: No such file or directory\n`
-            : `${argv[0]}: command not found (run 'help' to list available commands)\n`);
+            : diagnostic('commandNotFound', { command: argv[0] }) + '\n');
           return 127;
         }
         this.hashed.set(name, [found, 1]);
@@ -1214,7 +1215,7 @@ export class Shell implements ArithHost {
     }
     const cmd = this.commands.get(name);
     if (!cmd) {
-      io.err.write(`${argv[0]}: command not found (run 'help' to list available commands)\n`);
+      io.err.write(diagnostic('commandNotFound', { command: argv[0] }) + '\n');
       return 127;
     }
     const ctx = this.makeContext(name, argv.slice(1), io);
@@ -1225,8 +1226,8 @@ export class Shell implements ArithHost {
     } catch (e) {
       if (e instanceof ControlFlow || e instanceof LimitExceeded || e instanceof DeadlineExceeded) throw e;
       if (e instanceof UsageException && !isShellBuiltin(this, name)) {
-        io.err.write(usageError(name === 'egrep' || name === 'fgrep' ? 'grep' : name, e.message));
-        return ['ls', 'grep', 'egrep', 'fgrep', 'sort', 'diff'].includes(name) ? 2 : 1;
+        io.err.write(usageError(name, e.message));
+        return COMMANDS.get(name)?.usageExitCode ?? 1;
       }
       if (e instanceof ShellError) {
         io.err.write(`${e instanceof UsageException || isShellBuiltin(this, name) ? this.errPrefix : ''}${name}: ${e.message}\n`);
@@ -1261,7 +1262,7 @@ export class Shell implements ArithHost {
     if (text.startsWith(EXECUTABLE_STUB.slice(0, 4))) {
       const stub = this.stubCommand(path);
       if (stub !== null) return this.invoke([stub, ...argv.slice(1)], io, true);
-      io.err.write(`${this.errPrefix}${name}: cannot execute binary file\n`);
+      io.err.write(this.errPrefix + diagnostic('cannotExecuteBinary', { name: name }) + '\n');
       return 126;
     }
     if (text.startsWith('#!')) {
@@ -1282,7 +1283,7 @@ export class Shell implements ArithHost {
     const m = /^(\S+)(?:[ \t]+(.*))?$/.exec(line)!;
     const program = this.stubCommand(m[1]);
     if (program === null) {
-      io.err.write(`${this.errPrefix}${name}: cannot execute: required file not found\n`);
+      io.err.write(this.errPrefix + diagnostic('requiredFileNotFound', { name: name }) + '\n');
       return 127;
     }
     const opt = (m[2] ?? '').trim();
@@ -1455,7 +1456,7 @@ export class Shell implements ArithHost {
 
   /** @internal `local NAME[=VALUE]`: remembers the outer value and attributes, restored when the function returns. */
   declareLocal(name: string, value: string | null) {
-    if (this.locals.length === 0) throw new ShellError('can only be used in a function');
+    if (this.locals.length === 0) throw new ShellError(DIAGNOSTICS.onlyInFunction);
     const top = this.locals[this.locals.length - 1];
     if (!top.has(name)) { top.set(name, { value: this.environment.get(name), attrs: this.varAttrs.get(name) }); this.varAttrs.delete(name); }
     this.markShellVariable(name);
@@ -1505,7 +1506,7 @@ export class Shell implements ArithHost {
       this.setElement(r.name, r.sub, this.converted(this.resolve(r.name), value, append ? this.getElement(r.name, r.sub) : null));
       return;
     }
-    if (!isName(name)) throw new ShellError(`\`${name}': not a valid identifier`);
+    if (!isName(name)) throw new ShellError(diagnostic('notValidIdentifier', { name: name }));
     this.checkWritable(name);
     if (name === 'PATH') this.hashed = new Map(); // even to the same value
     if (name === 'RANDOM') { this.random = BigInt.asUintN(64, /^\s*[-+]?\d+\s*$/.test(value) ? BigInt(value.trim()) : 0n); return; }
@@ -1530,7 +1531,7 @@ export class Shell implements ArithHost {
   }
 
   private checkWritable(name: string) {
-    if (this.hasAttr(name, 'r')) throw new ShellError(`${name}: readonly variable`);
+    if (this.hasAttr(name, 'r')) throw new ShellError(diagnostic('readonlyVariable', { name: name }));
   }
 
   /** @internal The array called name (through namerefs), including FUNCNAME, BASH_SOURCE, PIPESTATUS and BASH_VERSINFO. */
@@ -1617,7 +1618,7 @@ export class Shell implements ArithHost {
     if (array?.assoc) return subscript;
     let i = evalArith(this, subscript);
     if (i < 0n) i += BigInt(array?.next ?? 1);
-    if (i < 0n) throw new ShellError(`${name}: bad array subscript`);
+    if (i < 0n) throw new ShellError(diagnostic('badArraySubscript', { name: name }));
     return i.toString();
   }
 
@@ -1649,7 +1650,7 @@ export class Shell implements ArithHost {
       return;
     }
     const name = r?.name ?? target;
-    if (this.hasAttr(name, 'r')) throw new ShellError(`${name}: cannot unset: readonly variable`);
+    if (this.hasAttr(name, 'r')) throw new ShellError(diagnostic('cannotUnsetReadonly', { name: name }));
     this.environment.delete(name);
     this.arrays.delete(name);
     this.varAttrs.delete(name);
@@ -1674,7 +1675,7 @@ export class Shell implements ArithHost {
       const missing = items.length === 0 || (op[0] === ':' && items.join(r.sub === '*' ? this.ifsJoiner : ' ').length === 0);
       if (op.endsWith('?') && missing)
         throw this.fatal(io, `${r.name}[${r.sub}]: ${word.length > 0 ? await this.paramWordValue(word, quoted, io) : 'parameter null or not set'}`, 127);
-      if (op.endsWith('=') && missing) throw new ShellError(`${r.name}[${r.sub}]: bad array subscript`);
+      if (op.endsWith('=') && missing) throw new ShellError(diagnostic('badArraySubscript', { name: `${r.name}[${r.sub}]` }));
       if (op.endsWith('-')) return missing ? [await this.paramWordValue(word, quoted, io)] : items;
       if (op.endsWith('+')) return missing ? [] : [await this.paramWordValue(word, quoted, io)];
       return items;
@@ -1683,7 +1684,7 @@ export class Shell implements ArithHost {
       const spec = splitOnce(r.tail.slice(1), ':');
       let from = Number(await this.evalArithExpr(spec[0], io));
       const count = spec.length === 1 ? Infinity : Number(await this.evalArithExpr(spec[1], io));
-      if (count < 0) throw new ShellError(`${spec[1].trim()}: substring expression < 0`);
+      if (count < 0) throw new ShellError(diagnostic('substringNegative', { expression: spec[1].trim() }));
       // an indexed array is sliced by index, so a sparse array skips its gaps
       if (a && !a.assoc) {
         const keys = a.keys().map(Number);
@@ -1855,7 +1856,7 @@ export class Shell implements ArithHost {
     const name = m[1];
     if (this.hasAttr(name, 'n')) return null; // ${!ref} of a nameref is the name it refers to
     const target = this.getVariable(name);
-    if (target.length === 0) throw new ShellError(`${name}: invalid indirect expansion`);
+    if (target.length === 0) throw new ShellError(diagnostic('invalidIndirect', { name: name }));
     return target + m[2];
   }
 
@@ -1919,7 +1920,7 @@ export class Shell implements ArithHost {
         io.err.write(`${this.errPrefix}${e.message}\n`); // like bash: reported, and the expansion is empty
         element = null;
       }
-      if (element === null && this.nounset && !defaultOp(one.tail)) throw this.fatal(io, `${one.name}[${one.sub}]: unbound variable`, 127);
+      if (element === null && this.nounset && !defaultOp(one.tail)) throw this.fatal(io, diagnostic('unboundVariable', { name: `${one.name}[${one.sub}]` }), 127);
       return this.elementOp(element, one.tail, io, quoted);
     }
     if (expr.length > 1 && expr[0] === '#') {
@@ -1931,7 +1932,7 @@ export class Shell implements ArithHost {
       }
     }
     const m = PARAM_RE.exec(expr);
-    if (!m) throw new ShellError(`\${${expr}}: bad substitution`);
+    if (!m) throw new ShellError(diagnostic('badSubstitution', { expr: expr }));
     const name = m[1], rest = m[2];
     const value = this.getVariable(name);
     const dop = defaultOp(rest);
@@ -1944,7 +1945,7 @@ export class Shell implements ArithHost {
         case '-': return missing ? this.paramWordValue(word, quoted, io) : value;
         case '=':
           if (!missing) return value;
-          if (!isName(name)) throw new ShellError(`$${name}: cannot assign in this way`);
+          if (!isName(name)) throw new ShellError(diagnostic('cannotAssign', { name: name }));
           this.setVar(name, await this.paramWordValue(word, quoted, io));
           return this.getVariable(name);
         case '+': return missing ? '' : this.paramWordValue(word, quoted, io);
@@ -2020,7 +2021,7 @@ export class Shell implements ArithHost {
         }
         case 'P': return value;
       }
-      throw new ShellError(`\${${expr}}: bad substitution`);
+      throw new ShellError(diagnostic('badSubstitution', { expr: expr }));
     }
     if (rest[0] === ':') {
       const spec = splitOnce(rest.slice(1), ':');
@@ -2031,16 +2032,16 @@ export class Shell implements ArithHost {
       const tail = chars.slice(offset);
       if (spec.length === 1) return tail.join('');
       let len = Number(await this.evalArithExpr(spec[1], io));
-      if (len < 0 && (len += tail.length) < 0) throw new ShellError(`${spec[1].trim()}: substring expression < 0`);
+      if (len < 0 && (len += tail.length) < 0) throw new ShellError(diagnostic('substringNegative', { expression: spec[1].trim() }));
       return tail.slice(0, len).join('');
     }
-    throw new ShellError(`\${${expr}}: bad substitution`);
+    throw new ShellError(diagnostic('badSubstitution', { expr: expr }));
   }
 
   /** set -u: expanding an unset variable is an error that ends the (sub)shell, like bash. */
   private checkSet(name: string, io: Io) {
     if (!this.nounset || name === '@' || name === '*' || this.isSet(name)) return;
-    throw this.fatal(io, `${name}: unbound variable`, 127);
+    throw this.fatal(io, diagnostic('unboundVariable', { name }), 127);
   }
 
   /** $(...) and <(...) run in a subshell that, as in bash, does not inherit set -e (unless shopt inherit_errexit). */
@@ -2341,21 +2342,11 @@ function stopped(why: string) {
 }
 function seconds(ms: number) { return `${Number((ms / 1000).toFixed(3))} s`; }
 
-const VERSIONS: Record<string, string> = {
-  grep: 'grep (GNU grep) 3.11', sed: 'sed (GNU sed) 4.9', find: 'find (GNU findutils) 4.9.0', xargs: 'xargs (GNU findutils) 4.9.0',
-  diff: 'diff (GNU diffutils) 3.10', jq: 'jq-1.7.1', tree: 'tree v2.1.1', bash: 'GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)',
-  sh: 'GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)', file: 'file-5.45', sudo: 'Sudo version 1.9.15p5',
-  less: 'less 590 (GNU regular expressions)', ps: 'ps from procps-ng 4.0.4', free: 'free from procps-ng 4.0.4', uptime: 'uptime from procps-ng 4.0.4',
-  column: 'column from util-linux 2.39.3', rev: 'rev from util-linux 2.39.3', more: 'more from util-linux 2.39.3', egrep: 'grep (GNU grep) 3.11',
-  fgrep: 'grep (GNU grep) 3.11', tar: 'tar (GNU tar) 1.35', gzip: 'gzip 1.12', gunzip: 'gzip 1.12', zcat: 'gzip 1.12',
-};
-const NO_STANDARD_OPTIONS = new Set(['sudo', 'su', 'echo', 'printf', 'test', '[', 'true', 'false', ':', 'awk', 'help', 'exit', 'return', 'break',
-  'continue', 'set', 'eval', 'command', 'type', 'alias', 'export', 'local', 'declare', 'read', 'cd']);
-
 /** `tool --version` / `tool --help` for built-ins, so probing them looks like a real system. */
 function standardOption(ctx: CommandContext, cmd: RegisteredCommand, arg: string): boolean {
-  if ((arg !== '--version' && arg !== '--help') || NO_STANDARD_OPTIONS.has(cmd.name)) return false;
-  if (arg === '--version') ctx.stdout.write((VERSIONS[cmd.name] ?? `${cmd.name} (GNU coreutils) 9.4`) + '\n');
+  const spec = COMMANDS.get(cmd.name);
+  if ((arg !== '--version' && arg !== '--help') || !spec?.standardOptions) return false;
+  if (arg === '--version') ctx.stdout.write(spec.version + '\n');
   else ctx.stdout.write(cmd.usage ?? `Usage: ${cmd.name} [OPTION]... [ARG]...\n${cmd.description}.\n`);
   return true;
 }
@@ -2371,9 +2362,9 @@ class CondEvaluator {
   private isBinary(w: Word) { const l = literal(w); return l !== null && CondEvaluator.BINARY.has(l); }
 
   async evaluate(): Promise<boolean> {
-    if (this.items.length === 0) throw new ShellError('syntax error in conditional expression', 2);
+    if (this.items.length === 0) throw new ShellError(DIAGNOSTICS.conditionalSyntax, 2);
     const v = await this.or();
-    if (this.p < this.items.length) throw new ShellError(`syntax error in conditional expression near \`${literal(this.items[this.p]) ?? ''}'`, 2);
+    if (this.p < this.items.length) throw new ShellError(diagnostic('conditionalSyntaxNear', { token: (literal(this.items[this.p]) ?? '') }), 2);
     return v;
   }
   private async or(): Promise<boolean> {
@@ -2395,11 +2386,11 @@ class CondEvaluator {
     if (this.isOp('(')) {
       this.p++;
       const v = await this.or();
-      if (!this.isOp(')')) throw new ShellError("syntax error in conditional expression: expected `)'", 2);
+      if (!this.isOp(')')) throw new ShellError(DIAGNOSTICS.conditionalParen, 2);
       this.p++;
       return v;
     }
-    if (this.p >= items.length) throw new ShellError('syntax error in conditional expression: unexpected end', 2);
+    if (this.p >= items.length) throw new ShellError(DIAGNOSTICS.conditionalEnd, 2);
     const u = literal(items[this.p]);
     if (u !== null && CondEvaluator.UNARY.has(u) && this.p + 1 < items.length && !(this.p + 2 < items.length && this.isBinary(items[this.p + 1]))) {
       const arg = await sh.expandSingle(items[this.p + 1], io);
@@ -2409,7 +2400,7 @@ class CondEvaluator {
     const left = items[this.p++];
     if (this.p < items.length && this.isBinary(items[this.p])) {
       const op = literal(items[this.p++])!;
-      if (this.p >= items.length) throw new ShellError(`unexpected argument to conditional binary operator \`${op}'`, 2);
+      if (this.p >= items.length) throw new ShellError(diagnostic('conditionalBinaryArgument', { op: op }), 2);
       const right = items[this.p++];
       const l = await sh.expandSingle(left, io);
       switch (op) {
@@ -2493,7 +2484,7 @@ function expandBraceText(text: string): string[] {
     const results: string[] = [];
     for (const alt of alts) {
       results.push(...expandBraceText(text.slice(0, open) + alt + text.slice(close + 1)));
-      if (results.length > MAX_BRACE_ITEMS) throw new ShellError('brace expansion: too many items');
+      if (results.length > MAX_BRACE_ITEMS) throw new ShellError(DIAGNOSTICS.braceTooMany);
     }
     return results;
   }
@@ -2518,7 +2509,7 @@ function alternatives(inner: string): string[] | null {
     const padded = (s: string) => s.replace(/^-/, '').startsWith('0') && s.length > 1;
     const pad = padded(m[1]) || padded(m[2]);
     const width = Math.max(m[1].length, m[2].length);
-    if (Math.abs(b - a) / step > MAX_BRACE_ITEMS) throw new ShellError('brace expansion: too many items');
+    if (Math.abs(b - a) / step > MAX_BRACE_ITEMS) throw new ShellError(DIAGNOSTICS.braceTooMany);
     const list: string[] = [];
     for (let v = a; a <= b ? v <= b : v >= b; v += a <= b ? step : -step) {
       const s = String(Math.abs(v));
