@@ -25,10 +25,10 @@ function webBody(p: Point, n: number): WebBody {
   const x = p.i >= 0 && Number.isInteger(n) ? t!.call(p.b, p.i)?.web?.[n] : undefined;
   if (!x) throw new Error('no such web request');
   const head = x.body.subarray(0, MAX_WEB_PREVIEW);
-  let text: string | null;
-  // stream: a UTF-8 sequence cut at the limit is held back rather than taken for binary
-  try { text = new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true }); } catch { text = null; }
-  return { text: text?.includes('\0') ? null : text, size: x.body.length, truncated: x.body.length > head.length };
+  const truncated = x.body.length > head.length;
+  // bytes that are no text show as U+FFFD; stream only when cut, so a sequence cut at the limit is held back, not shown as U+FFFD
+  const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(head, { stream: truncated });
+  return { text: text.includes('\0') ? null : text, size: x.body.length, truncated };
 }
 
 async function load(data: Uint8Array, sidecars: Record<string, Uint8Array>) {

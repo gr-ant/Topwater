@@ -34,7 +34,7 @@ export interface CallInfo {
 /** a recorded request and its answer: `error` for one that failed below the policy (no status then) */
 export interface WebInfo { method: string; url: string; status: number; reason: string; error?: string; size: number }
 
-/** the start of a response body as text; null when it isn't text (not UTF-8, or holds a NUL) */
+/** the start of a response body as text (bytes that are no UTF-8 as U+FFFD); null when it holds a NUL, so is no text */
 export interface WebBody { text: string | null; size: number; truncated: boolean }
 
 export interface LoadedRecording {

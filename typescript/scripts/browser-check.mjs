@@ -241,11 +241,24 @@ try {
   await liveCmd.fill("printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\\n' | grep -E '^(a|aa)+$'");
   await liveCmd.press('Enter');
   await viewer.getByRole('button', { name: 'Stop' }).click({ timeout: 10_000 });
-  await viewer.waitForFunction(() => document.querySelector('#live-out')?.textContent?.includes('stopped; the branch is as it was'), null, { timeout: 10_000 });
+  await viewer.waitForFunction(() => document.querySelector('#live-out')?.textContent?.includes('stopped; nothing this command did was kept'), null, { timeout: 10_000 });
   const stopWait = Date.now() - stopped0;
   check(stopWait < 10_000 && await viewer.locator('#live-stop').isHidden(), `viewer: Stop ends a hung branch command after ${stopWait} ms`);
   await typeLive('ls m | wc -l', 'Turn 5 of 5 · Branch 1');
   check((await viewer.locator('#live-out').innerText()).trimEnd().endsWith('600'), 'viewer: after Stop the branch goes on from the machine it had');
+
+  // Stop on the first command of a new branch keeps no empty branch, and moving at once after Stop works
+  await viewer.locator('#timeline button[data-index="0"]').click();
+  await settled();
+  await viewer.getByRole('button', { name: 'Continue from here' }).click();
+  await liveCmd.fill("printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\\n' | grep -E '^(a|aa)+$'");
+  await liveCmd.press('Enter');
+  await viewer.getByRole('button', { name: 'Stop' }).click({ timeout: 10_000 });
+  await viewer.getByRole('button', { name: 'Previous turn' }).click();
+  await settled();
+  check((await pos()).startsWith('Start') && (await viewer.locator('#branches li').count()) === 2 && !(await viewer.locator('#status').getAttribute('class'))?.includes('error'),
+    'viewer: Stop on a new branch\'s first command leaves no empty branch, and "Previous turn" right after it works');
+  await typeLive('ls m 2>&1 | head -1', 'Turn 2 of 2 · Branch 2');
 
   // a recording with web calls (written by the C# port): each turn lists its requests, bodies as text on demand
   await viewer.locator('#file').setInputFiles(join(root, '../tests/Topwater.Tests/recordings/web-from-csharp.topwater'));

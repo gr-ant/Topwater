@@ -32,6 +32,11 @@ type Req = ReplayRequest extends infer R ? R extends { id: number } ? Omit<R, 'i
 /** set while a replaced worker loads the recording and its branches again: a typed command waits for it */
 let restoring: Promise<unknown> = Promise.resolve();
 function request<T>(msg: Req, transfer: Transferable[] = [], what = 'rebuilding this turn', timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  // a replaced worker answers nothing else until it has the recording and the branches again
+  return msg.t === 'load' || msg.t === 'restore' ? send<T>(msg, transfer, what, timeoutMs) : restoring.then(() => send<T>(msg, transfer, what, timeoutMs));
+}
+
+function send<T>(msg: Req, transfer: Transferable[], what: string, timeoutMs: number): Promise<T> {
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -87,7 +92,7 @@ const owner = (b: number, i: number) => { while (b > 0 && i <= branches[b].at) b
 const callAt = (b: number, i: number) => { const o = owner(b, i); return branches[o].calls[o === 0 ? i : i - branches[o].at - 1]; };
 const branchName = (b: number) => b === 0 ? 'Original' : `Branch ${b}`;
 const forkLabel = (b: number) => branches[b].at < 0 ? 'from the start' : `after turn ${branches[b].at + 1} of ${branchName(branches[b].parent).toLowerCase()}`;
-const MAX_CHANGE_ROWS = 500;
+const MAX_CHANGE_ROWS = 500, MAX_WEB_ROWS = 500;
 const pointValue = (p: Point) => `${p.i < 0 ? 0 : owner(p.b, p.i)}:${p.i}`;
 const parsePoint = (v: string): Point => { const [b, i] = v.split(':').map(Number); return { b, i }; };
 
@@ -246,11 +251,12 @@ function renderTurn(index: number, view: TurnView | null) {
 // the requests a call made and what came back (recorded, so a re-run gets the same answers); all of it is untrusted text
 function webList(c: CallInfo, p: Point): HTMLElement {
   const list = el('ul', { cls: 'web-list' });
-  c.web!.forEach((x, n) => {
+  // like the Changes list: thousands of rows would block the page
+  c.web!.slice(0, MAX_WEB_ROWS).forEach((x, n) => {
     const outcome = x.error ? `failed (${x.error})` : `${x.status}${x.reason ? ' ' + x.reason : ''}, ${fmtSize(x.size)}`;
     const li = el('li', {}, el('code', { textContent: `${x.method} ${x.url}` }), ' ', el('span', { cls: x.error || x.status >= 400 ? 'note error' : 'note', textContent: `→ ${outcome}` }));
     if (x.size > 0) {
-      const d = el('details', { cls: 'diff' }, el('summary', { textContent: 'body' }));
+      const d = el('details', { cls: 'diff' }, el('summary', { textContent: 'body', ariaLabel: `Body of ${x.method} ${x.url}` }));
       let filled = false;
       d.addEventListener('toggle', async () => {
         if (!d.open || filled) return;
@@ -268,7 +274,9 @@ function webList(c: CallInfo, p: Point): HTMLElement {
     }
     list.append(li);
   });
-  return el('section', { cls: 'web' }, el('h4', { textContent: `Web requests (${c.web!.length})` }), list);
+  const more = c.web!.length - MAX_WEB_ROWS;
+  return el('section', { cls: 'web' }, el('h4', { textContent: `Web requests (${c.web!.length})` }), list,
+    ...more > 0 ? [el('p', { cls: 'note', textContent: `…and ${more} more (showing the first ${MAX_WEB_ROWS}).` })] : []);
 }
 
 function sourceText(view: TurnView): string {
@@ -538,21 +546,24 @@ function continueHere() {
   liveCmd.focus();
 }
 
+const RUNNING = 'Running the command; Stop ends it.';
 async function runLive(command: string) {
   if (!live || !command.trim()) return;
   liveCmd.value = '';
   liveCmd.disabled = true;
   const block = el('span', {}, el('span', { cls: 'p', textContent: '$ ' }), command + '\n');
   liveOut.append(block);
+  let b = live.b, made: Worker | null = null;
   try {
     await restoring;
     liveStop.hidden = false;
-    let b = live.b;
+    status(RUNNING);
     if (b === 0 || live.i !== len(b) - 1) {
       b = await request<number>({ t: 'branch', parent: live.b, at: live.i });
       if (b !== branches.length) throw new Error('the viewer lost track of its branches; reload the recording');
       // filed under the timeline that holds the turn (the worker does the same)
       branches.push({ parent: live.i < 0 ? 0 : owner(live.b, live.i), at: live.i, calls: [] });
+      made = worker;
       renderCompareOptions();
     }
     const c = await request<CallInfo>({ t: 'run', b, command }, [], 'running this command');
@@ -566,7 +577,10 @@ async function runLive(command: string) {
     switchTo(b, c.index);
   } catch (e) {
     block.append(el('span', { cls: 'err', textContent: `${(e as Error).message}\n` }));
+    // a branch this command started, on a worker since replaced: drop it before the new worker is given the branches
+    if (made && made !== worker && b === branches.length - 1 && branches[b].calls.length === 0) { branches.pop(); renderCompareOptions(); }
   } finally {
+    if (statusEl.textContent === RUNNING) status('');
     liveStop.hidden = true;
     liveCmd.disabled = false;
     liveOut.scrollTop = liveOut.scrollHeight;
@@ -578,7 +592,7 @@ async function runLive(command: string) {
 $('continue').addEventListener('click', continueHere);
 $('live-form').addEventListener('submit', e => { e.preventDefault(); void runLive(liveCmd.value); });
 // the 60 s limit stops a hung command anyway; this lets the user stop it sooner
-liveStop.addEventListener('click', () => replaceWorker('stopped; the branch is as it was before this command'));
+liveStop.addEventListener('click', () => replaceWorker('stopped; nothing this command did was kept'));
 $('live-close').addEventListener('click', () => { liveEl.hidden = true; live = null; $('continue').focus(); });
 for (const sel of [cmpA, cmpZ]) sel.addEventListener('change', () => void compareChosen());
 $('open').addEventListener('click', () => $<HTMLInputElement>('file').click());
