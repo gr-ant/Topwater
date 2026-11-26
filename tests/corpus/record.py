@@ -6,16 +6,28 @@
 By default the script runs in a fresh ubuntu:24.04 docker container (bash 5.2.21, GNU coreutils 9.4), as `bash -c` in an
 empty /tmp/w with TZ=UTC, LC_ALL=C.UTF-8 and no network. --local uses this machine's bash in an empty temp directory.
 --agent runs it as the ordinary user `agent` (uid 1000, owning /tmp/w) like Topwater's shell, instead of root: for
-`ls -l` owners and "Permission denied" cases.
+`ls -l` owners and "Permission denied" cases. --git uses an image with git 2.43 (built once as topwater-git-ref) and stores
+GIT_SETUP as the case's setup: fixed author, committer and dates, so commit ids are the same everywhere.
 """
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 
 CORPUS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = "ubuntu:24.04"
+GIT_IMAGE = "topwater-git-ref"
+GIT_DOCKERFILE = ("FROM ubuntu:24.04\nRUN apt-get -qq update >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get -qq install -y git >/dev/null"
+                  " && rm -rf /var/lib/apt/lists/*\n")
+GIT_SETUP = ("export GIT_AUTHOR_NAME='A U Thor' GIT_AUTHOR_EMAIL=author@example.com GIT_COMMITTER_NAME='A U Thor' "
+             "GIT_COMMITTER_EMAIL=author@example.com GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' GIT_COMMITTER_DATE='2026-01-02T03:04:05Z'")
 TIMEOUT = 60  # AGENTS.md: probes run under a time limit, without container logs
 
 
-def run(script, local, apt, agent=False):
+def git_image():
+    if subprocess.run(["docker", "image", "inspect", GIT_IMAGE], capture_output=True).returncode != 0:
+        subprocess.run(["docker", "build", "-q", "-t", GIT_IMAGE, "-"], input=GIT_DOCKERFILE.encode(), check=True, timeout=600)
+    return GIT_IMAGE
+
+
+def run(script, local, apt, agent=False, image=IMAGE):
     env = {"TZ": "UTC", "LC_ALL": "C.UTF-8"}
     if local:
         with tempfile.TemporaryDirectory() as d:
@@ -36,7 +48,7 @@ def run(script, local, apt, agent=False):
         # the image's uid-1000 user, renamed to match Topwater's
         start = ("usermod -l agent -d /home/agent -m ubuntu && groupmod -n agent ubuntu && mkdir -p /tmp/w && chown agent: /tmp/w"
                  ' && cd /tmp/w && exec timeout 5 setpriv --reuid=agent --regid=agent --init-groups env HOME=/home/agent bash -c "$1"')
-    cmd = ["docker", "run", "--rm", "--log-driver", "none", "-i", *net, *sum((["-e", f"{k}={v}"] for k, v in env.items()), []), IMAGE,
+    cmd = ["docker", "run", "--rm", "--log-driver", "none", "-i", *net, *sum((["-e", f"{k}={v}"] for k, v in env.items()), []), image,
            "bash", "-c", prep + start, "_", script]
     return subprocess.run(cmd, capture_output=True, timeout=TIMEOUT + (300 if apt else 0))
 
@@ -47,6 +59,7 @@ def main():
     p.add_argument("script")
     p.add_argument("--local", action="store_true", help="use this machine's bash instead of docker")
     p.add_argument("--agent", action="store_true", help="run as the ordinary user agent (uid 1000), not root")
+    p.add_argument("--git", action="store_true", help="use the git image and the fixed git identity and dates (GIT_SETUP)")
     p.add_argument("--apt", default="", help="comma-separated packages to install in the container first (e.g. bc,zip)")
     p.add_argument("--tags", default="")
     p.add_argument("--notes", default="")
@@ -65,14 +78,18 @@ def main():
 
     if a.agent and a.local:
         sys.exit("record.py: --agent needs docker")
-    r = run(a.script, a.local, [x for x in a.apt.split(",") if x], a.agent)
+    setup = GIT_SETUP if a.git else None
+    if a.git and a.local:
+        sys.exit("record.py: --git needs docker")
+    r = run(setup + "\n" + a.script if setup else a.script, a.local, [x for x in a.apt.split(",") if x], a.agent,
+            git_image() if a.git else IMAGE)
     try:
         stdout = r.stdout.decode("utf-8")
     except UnicodeDecodeError:
         sys.exit("record.py: stdout is not UTF-8 text; compare a listing or a checksum instead")
 
     nums = [int(m.group(1)) for c in cases if (m := re.fullmatch(re.escape(a.area) + r"-(\d+)", c["id"]))]
-    case = {"id": f"{a.area}-{max(nums, default=0) + 1:03d}", "script": a.script, "stdout": stdout,
+    case = {"id": f"{a.area}-{max(nums, default=0) + 1:03d}", **({"setup": setup} if setup else {}), "script": a.script, "stdout": stdout,
             "exitCode": r.returncode, "quiet": not r.stderr}
     if a.tags:
         case["tags"] = a.tags.split(",")
