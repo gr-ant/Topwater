@@ -14,6 +14,7 @@ import {
   lstripChars, mergeLines, msg, objectId, parseDate, parseIdent, parseTree, partition, readIndex, rjust, rstripChars, sortCp,
   sortPaths, splitLines, stripChars, treeBytes, unified, validKey, writeIndex, type TreeEntry, type Values,
 } from './gitcore.js';
+import { MAX_PACKS, Corrupt, Pack } from './gitpack.js';
 
 const SPEC = (): CommandSpec => COMMANDS.get('git')!;
 const subSpec = (sub: string): SubcommandSpec => SPEC().subcommands!.get(sub)!;
@@ -107,6 +108,7 @@ class Repo {
   readonly fs: VirtualFileSystem;
   readonly limit: number;
   private objects = new Map<string, [string, Uint8Array]>();
+  private packList: Pack[] | null = null;
   private commits = new Map<string, Commit>();
   private cfg: Config | null = null;
   private ignores = new Map<string, IgnoreRules | null>();
@@ -149,11 +151,9 @@ class Repo {
   obj(sha: string): [string, Uint8Array] {
     const known = this.objects.get(sha);
     if (known) return known;
+    if (this.packs().some(p => p.offsets.has(sha))) return this.packed(sha);
     const raw = SHA.test(sha) ? this.gread(`objects/${sha.slice(0, 2)}/${sha.slice(2)}`) : null;
-    if (raw === null) {
-      if (this.gexists('objects/pack') && this.fs.list(this.gpath('objects/pack')).some(n => n.endsWith('.pack'))) throw fatal('packedObjects', { object: sha });
-      throw fatal('missingObject', { object: sha });
-    }
+    if (raw === null) return this.packed(sha);
     let data: Uint8Array;
     try {
       if (raw.length < 2 || (raw[0] & 0x0f) !== 8 || raw[0] >> 4 > 7 || raw[1] & 0x20 || ((raw[0] << 8) | raw[1]) % 31 !== 0) throw new Error('zlib header');
@@ -171,13 +171,44 @@ class Repo {
     if (this.objects.size < 4096) this.objects.set(sha, result);
     return result;
   }
-  has(sha: string): boolean { return this.gexists(`objects/${sha.slice(0, 2)}/${sha.slice(2)}`); }
+  /** The packs under objects/pack that have an index, loaded and verified on first use. */
+  packs(): Pack[] {
+    if (this.packList === null) {
+      const list: Pack[] = [];
+      const d = 'objects/pack';
+      const names = this.fs.isDirectory(this.gpath(d), false) ? this.fs.list(this.gpath(d)).filter(n => n.endsWith('.idx')).sort(cmpPath) : [];
+      if (names.length > MAX_PACKS) throw fatal('tooLarge', { what: this.gpath(d) });
+      for (const name of names) {
+        const pack = this.gread(`${d}/${name.slice(0, -4)}.pack`);
+        // like git, an index without its pack is skipped
+        if (pack !== null) list.push(new Pack(this.gpath(`${d}/${name.slice(0, -4)}.pack`), this.gread(`${d}/${name}`) ?? new Uint8Array(0), pack, this.limit, () => this.ctx.checkTime()));
+      }
+      this.packList = list;
+    }
+    return this.packList;
+  }
+  private packed(sha: string): [string, Uint8Array] {
+    for (const pack of this.packs()) {
+      if (!pack.offsets.has(sha)) continue;
+      let result: [string, Uint8Array];
+      try {
+        result = pack.read(sha);
+      } catch (e) {
+        if (e instanceof Corrupt) throw fatal('corruptObject', { object: sha });
+        throw e;
+      }
+      if (objectId(...result) !== sha) throw fatal('corruptObject', { object: sha });
+      if (this.objects.size < 4096) this.objects.set(sha, result);
+      return result;
+    }
+    throw fatal('missingObject', { object: sha });
+  }
+  has(sha: string): boolean { return this.packs().some(p => p.offsets.has(sha)) || this.gexists(`objects/${sha.slice(0, 2)}/${sha.slice(2)}`); }
   put(kind: string, data: Uint8Array | string): string {
     const bytes = typeof data === 'string' ? encodeText(data) : data;
     const sha = objectId(kind, bytes);
-    const rel = `objects/${sha.slice(0, 2)}/${sha.slice(2)}`;
     // synchronous, so an object is on disk before any ref, index or log that names it
-    if (!this.gexists(rel)) this.gwrite(rel, zlibSync(concat([encodeText(`${kind} ${bytes.length}\0`), bytes])));
+    if (!this.has(sha)) this.gwrite(`objects/${sha.slice(0, 2)}/${sha.slice(2)}`, zlibSync(concat([encodeText(`${kind} ${bytes.length}\0`), bytes])));
     return sha;
   }
   typed(sha: string, kind: string): Uint8Array {
@@ -570,7 +601,12 @@ function resolveBase(repo: Repo, name: string): string | null {
     const b = previousBranch(repo, Number(m[1]));
     return b ? repo.readRef('refs/heads/' + b) : null;
   }
-  for (const r of [name, 'refs/' + name, 'refs/tags/' + name, 'refs/heads/' + name, 'refs/remotes/' + name]) {
+  const up = /^(.*)@\{(?:u|upstream)\}$/s.exec(name);
+  if (up) {
+    const u = upstream(repo, up[1] || repo.branch() || '');
+    return u ? repo.readRef(u[1]) : null;
+  }
+  for (const r of [name, 'refs/' + name, 'refs/tags/' + name, 'refs/heads/' + name, 'refs/remotes/' + name, 'refs/remotes/' + name + '/HEAD']) {
     if (r === name && !(isUpper(name) || name.startsWith('refs/'))) continue;
     const sha = repo.readRef(r);
     if (sha) return sha;
@@ -587,8 +623,26 @@ function uniquePrefix(repo: Repo, prefix: string): string | null {
   const hits = new Set<string>();
   if (repo.fs.isDirectory(d, false))
     for (const n of repo.fs.list(d)) if ((prefix.slice(0, 2) + n).startsWith(prefix) && n.length === 38) hits.add(prefix.slice(0, 2) + n);
+  for (const pack of repo.packs()) for (const h of pack.withPrefix(prefix)) hits.add(h);
   if (hits.size > 1) throw fatal('ambiguousPrefix', { prefix });
   return hits.size ? [...hits][0] : null;
+}
+
+/** [HEAD is still there, what to call it] for a detached HEAD: the ref the last checkout named, else the commit it went to,
+ * from the HEAD reflog; git says 'detached at' while HEAD has not moved since and 'detached from' after. */
+function detachedName(repo: Repo): [boolean, string] {
+  const head = repo.head() ?? '';
+  const lines = (repo.gtext('logs/HEAD') ?? '').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^[0-9a-f]{40} ([0-9a-f]{40}) [^\t]*\tcheckout: moving from \S+ to (\S+)$/.exec(lines[i]);
+    if (!m) continue;
+    for (const ref of [m[2], 'refs/tags/' + m[2], 'refs/heads/' + m[2], 'refs/remotes/' + m[2]]) {
+      const sha = ref.startsWith('refs/') ? repo.readRef(ref) : null;
+      if (sha) return [peel(repo, sha, 'commit') === head, ref.replace(/^refs\/(heads|tags|remotes)\//, '')];
+    }
+    return [m[1] === head, abbrev(m[1])];
+  }
+  return [true, abbrev(head)];
 }
 
 function previousBranch(repo: Repo, n: number): string | null {
@@ -660,6 +714,70 @@ function mergeBase(repo: Repo, a: string, b: string, check: () => void): string 
 }
 
 /** Commits reachable from starts, newest commit date first (ties: first seen first), each once. */
+/** [name to show, ref] of a branch's upstream, from branch.<name>.remote and .merge (as git clone sets them). */
+function upstream(repo: Repo, branch: string): [string, string] | null {
+  const cfg = repo.config();
+  const remote = cfg.get(`branch.${branch}.remote`), merge = cfg.get(`branch.${branch}.merge`);
+  if (!remote || !merge || !merge.startsWith('refs/heads/')) return null;
+  if (remote === '.') return [merge.slice(11), merge];
+  // shortcut: assumes the default fetch refspec (refs/remotes/<remote>/*) that clone writes; read remote.<name>.fetch if others show up
+  return [`${remote}/${merge.slice(11)}`, `refs/remotes/${remote}/${merge.slice(11)}`];
+}
+
+/** [upstream name, commits ahead, commits behind, upstream gone] for a branch with an upstream. */
+function tracking(repo: Repo, branch: string, check: () => void): [string, number, number, boolean] | null {
+  const up = upstream(repo, branch);
+  const ours = repo.readRef('refs/heads/' + branch);
+  if (up === null || ours === null) return null;
+  const theirs = repo.readRef(up[1]);
+  if (theirs === null) return [up[0], 0, 0, true];
+  const a = ancestors(repo, [ours], check), b = ancestors(repo, [theirs], check);
+  let ahead = 0, behind = 0;
+  for (const x of a) if (!b.has(x)) ahead++;
+  for (const x of b) if (!a.has(x)) behind++;
+  return [up[0], ahead, behind, false];
+}
+
+/** The 'Your branch is ...' lines git status and checkout print. */
+function trackingText(repo: Repo, branch: string, check: () => void): string | null {
+  const t = tracking(repo, branch, check);
+  if (t === null) return null;
+  const [name, ahead, behind, gone] = t;
+  const M = (key: string, v: Values = {}) => subMsg('status', key, v);
+  const count = (n: number) => n === 1 ? M('oneCommit') : M('commits', { n: String(n) });
+  if (gone) return M('upstreamGone', { upstream: name });
+  if (ahead && behind) return M('diverged', { upstream: name, ahead: String(ahead), behind: String(behind) });
+  if (ahead) return M('ahead', { upstream: name, count: count(ahead) });
+  if (behind) return M('behind', { upstream: name, count: count(behind) });
+  return M('upToDate', { upstream: name });
+}
+
+/** [upstream name, 'ahead 1, behind 2' or 'gone' or ''] for status -sb and branch -vv. */
+function trackingBrief(repo: Repo, branch: string, check: () => void): [string, string] | null {
+  const t = tracking(repo, branch, check);
+  if (t === null) return null;
+  const [name, ahead, behind, gone] = t;
+  const M = (key: string, v: Values = {}) => subMsg('status', key, v);
+  if (gone) return [name, M('trackGone')];
+  return [name, [...(ahead ? [M('trackAhead', { n: String(ahead) })] : []), ...(behind ? [M('trackBehind', { n: String(behind) })] : [])].join(', ')];
+}
+
+/** [name below refs/remotes/, commit, symbolic target below refs/remotes/ or null] sorted by name. */
+function remoteBranches(repo: Repo): [string, string | null, string | null][] {
+  const rows: [string, string | null, string | null][] = repo.refs('refs/remotes/').map(([name, sha]) => [name.slice(13), sha, null]);
+  const base = 'refs/remotes';
+  if (repo.fs.isDirectory(repo.gpath(base), false)) {
+    for (const remote of repo.fs.list(repo.gpath(base))) {
+      const rel = `${base}/${remote}/HEAD`;
+      if (repo.fs.isDirectory(repo.gpath(`${base}/${remote}`), false) && repo.fs.isFile(repo.gpath(rel), false)) {
+        const text = (repo.gtext(rel) ?? '').trim();
+        if (text.startsWith('ref: refs/remotes/')) rows.push([`${remote}/HEAD`, repo.readRef(rel), text.slice(18)]);
+      }
+    }
+  }
+  return rows.sort((x, y) => cmpPath(x[0], y[0]));
+}
+
 function walkOrder(repo: Repo, starts: string[], check: () => void): string[] {
   type Item = [number, number, string];
   const heap: Item[] = [];
@@ -1250,7 +1368,9 @@ function shortQuote(p: string): string {
 function branchLine(repo: Repo): string {
   const b = repo.branch();
   if (b === null) return 'HEAD (no branch)';
-  return repo.head() ? b : subMsg('status', 'noCommitsOnBranch', { branch: b });
+  if (!repo.head()) return subMsg('status', 'noCommitsOnBranch', { branch: b });
+  const t = trackingBrief(repo, b, () => repo.ctx.checkTime());
+  return t === null ? b : `${b}...${t[0]}` + (t[1] ? ` [${t[1]}]` : '');
 }
 
 const UNMERGED_CODES: Record<string, string> = { '1,2,3': 'UU', '2,3': 'AA', '1': 'DD', '1,2': 'UD', '1,3': 'DU', '2': 'AU', '3': 'UA' };
@@ -1280,7 +1400,14 @@ function longStatus(repo: Repo, s: Status, committing = false): string {
   const M = (key: string, v: Values = {}) => subMsg('status', key, v);
   const out: string[] = [];
   const b = repo.branch();
-  out.push(b === null ? M('detachedAt', { commit: abbrev(s.head ?? '') }) : M('onBranch', { branch: b }));
+  if (b === null) {
+    const [at, name] = detachedName(repo);
+    out.push(M(at ? 'detachedAt' : 'detachedFrom', { commit: name }));
+  } else {
+    out.push(M('onBranch', { branch: b }));
+    const t = s.head ? trackingText(repo, b, () => repo.ctx.checkTime()) : null;
+    if (t) out.push(t, '');
+  }
   const merging = repo.gexists('MERGE_HEAD');
   if (s.head === null) out.push('', committing ? M('initialCommit') : M('noCommitsYet'), '');
   if (merging) out.push(s.unmerged.size ? M('unmergedHeader') : M('mergeFixed'), '');
@@ -1630,11 +1757,12 @@ function commitSummary(g: Git, repo: Repo, c: Commit, root: boolean, amend = fal
 function decorations(repo: Repo): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const headRef = repo.headRef();
-  const refs = [...repo.refs('refs/heads/'), ...repo.refs('refs/tags/')].sort((x, y) => cmpPath(y[0], x[0]));
+  const remotes: [string, string][] = remoteBranches(repo).filter(r => r[1]).map(([n, sha]) => ['refs/remotes/' + n, sha!]);
+  const refs = [...repo.refs('refs/heads/'), ...repo.refs('refs/tags/'), ...remotes].sort((x, y) => cmpPath(y[0], x[0]));
   for (const [name, sha] of refs) {
     if (name === headRef) continue;
     const target = name.startsWith('refs/tags/') ? peel(repo, sha, 'commit') : sha;
-    const label = name.startsWith('refs/tags/') ? 'tag: ' + name.slice(10) : name.slice(11);
+    const label = name.startsWith('refs/tags/') ? 'tag: ' + name.slice(10) : name.startsWith('refs/remotes/') ? name.slice(13) : name.slice(11);
     const k = target || sha;
     if (!out.has(k)) out.set(k, []);
     out.get(k)!.push(label);
@@ -2043,12 +2171,15 @@ function switchTrees(g: Git, repo: Repo, old: string | null, neu: string | null,
 const subjectOf = (repo: Repo, sha: string) => `${abbrev(sha)} ${repo.commit(sha).subject}`;
 
 function moveHead(g: Git, repo: Repo, targetRef: string | null, targetSha: string | null, label: string, force: boolean, quiet: boolean,
-  newBranch: string | null = null, resetBranch = false, stay = false): number {
+  newBranch: string | null = null, resetBranch = false, stay = false, track: string | null = null): number {
   const old = repo.head();
   const oldBranch = repo.branch();
   const M = (key: string, v: Values = {}) => subMsg('checkout', key, v);
   if (targetRef !== null && targetRef === repo.headRef() && newBranch === null && !stay) {
-    if (!quiet) g.err(M('alreadyOn', { branch: label }) + '\n');
+    if (!quiet) {
+      g.err(M('alreadyOn', { branch: label }) + '\n');
+      reportTracking(g, repo);
+    }
     return 0;
   }
   const carried = switchTrees(g, repo, old, targetSha, force);
@@ -2057,7 +2188,10 @@ function moveHead(g: Git, repo: Repo, targetRef: string | null, targetSha: strin
     if (!quiet) for (const line of carried) g.out(line + '\n');
     return 0;
   }
-  if (newBranch !== null && targetSha) repo.updateRef('refs/heads/' + newBranch, targetSha, `branch: Created from ${label}`);
+  if (newBranch !== null) {
+    if (targetSha) repo.updateRef('refs/heads/' + newBranch, targetSha, `branch: Created from ${label}`);
+    if (track) setTracking(g, repo, newBranch, track, quiet);
+  }
   const fromName = oldBranch !== null ? oldBranch : (old ?? '');
   if (targetRef !== null) repo.setHead(targetRef, `checkout: moving from ${fromName} to ${newBranch || label}`);
   else repo.setHead(targetSha!, `checkout: moving from ${fromName} to ${label}`, true);
@@ -2068,7 +2202,39 @@ function moveHead(g: Git, repo: Repo, targetRef: string | null, targetSha: strin
   } else if (newBranch !== null) g.err(M(resetBranch ? 'switchedResetBranch' : 'switchedNewBranch', { branch: newBranch }) + '\n');
   else g.err(M('switchedBranch', { branch: label }) + '\n');
   for (const line of carried) g.out(line + '\n');
+  if (targetRef !== null && newBranch === null) reportTracking(g, repo);
   return 0;
+}
+
+function reportTracking(g: Git, repo: Repo): void {
+  const b = repo.branch();
+  const t = b ? trackingText(repo, b, g.check) : null;
+  if (t) g.out(t + '\n');
+}
+
+/** The remote-tracking branch a start point names (origin/x or refs/remotes/origin/x), for setting up tracking. */
+function remoteStart(repo: Repo, start: string | null): string | null {
+  if (start === null || tryResolve(repo, start) === null) return null;
+  for (const ref of [start, 'refs/' + start, 'refs/remotes/' + start])
+    if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD') && repo.readRef(ref) && !repo.readRef('refs/heads/' + start)) return ref;
+  return null;
+}
+
+/** Records ref (refs/remotes/<remote>/<name>) as branch's upstream, as git does for a branch started from it. */
+function setTracking(g: Git, repo: Repo, branch: string, ref: string, quiet: boolean): void {
+  const [remote, , name] = partition(ref.slice(13), '/');
+  const cfg = repo.config();
+  cfg.set(`branch.${branch}.remote`, remote);
+  cfg.set(`branch.${branch}.merge`, 'refs/heads/' + name);
+  repo.saveConfig();
+  if (!quiet) g.out(subMsg('checkout', 'trackingSetUp', { branch, upstream: ref.slice(13) }) + '\n');
+}
+
+/** refs/remotes/<remote>/<name> when exactly one remote has a branch called name (git checkout <name> then creates it). */
+function guessRemote(repo: Repo, name: string): string | null {
+  if (!validBranchName(name)) return null;
+  const hits = remoteBranches(repo).filter(([n, , sym]) => sym === null && partition(n, '/')[2] === name).map(r => r[0]);
+  return hits.length === 1 ? 'refs/remotes/' + hits[0] : null;
 }
 
 /** checkout [tree-ish] -- paths / restore: copies paths from a commit (or the index) into the index and/or work tree. */
@@ -2140,7 +2306,7 @@ function gitCheckout(g: Git, args: string[]): number {
       if (!quiet) g.err(subMsg('checkout', 'switchedNewBranch', { branch: neu }) + '\n');
       return 0;
     }
-    return moveHead(g, repo, 'refs/heads/' + neu, start, target || 'HEAD', force, quiet, neu, exists);
+    return moveHead(g, repo, 'refs/heads/' + neu, start, target || 'HEAD', force, quiet, neu, exists, false, remoteStart(repo, target));
   }
   if (target === null) {
     if (o.has('\x01')) return moveHead(g, repo, null, repo.head(), 'HEAD', force, quiet);
@@ -2157,6 +2323,8 @@ function gitCheckout(g: Git, args: string[]): number {
     return moveHead(g, repo, null, c, target, force, quiet);
   }
   if (o.has('\x01')) throw fatal('badRevision', { rev: target });
+  const guess = o.args.length === 1 && !o.dashdash ? guessRemote(repo, target) : null;
+  if (guess) return moveHead(g, repo, 'refs/heads/' + target, repo.readRef(guess), guess.slice(13), force, quiet, target, false, false, guess);
   return checkoutPaths(g, repo, null, o.args, 'checkout', false, true, quiet);
 }
 
@@ -2181,13 +2349,15 @@ function gitSwitch(g: Git, args: string[]): number {
       if (!quiet) g.err(subMsg('checkout', 'switchedNewBranch', { branch: neu }) + '\n');
       return 0;
     }
-    return moveHead(g, repo, 'refs/heads/' + neu, start, target || 'HEAD', force, quiet, neu, exists);
+    return moveHead(g, repo, 'refs/heads/' + neu, start, target || 'HEAD', force, quiet, neu, exists, false, remoteStart(repo, target));
   }
   if (o.has('d')) return moveHead(g, repo, null, commitOf(repo, target || 'HEAD'), target || 'HEAD', force, quiet);
   if (target === null) throw subFatal('switch', 'missingBranch');
   if (repo.readRef('refs/heads/' + target)) return moveHead(g, repo, 'refs/heads/' + target, repo.readRef('refs/heads/' + target), target, force, quiet);
   if ((target === 'HEAD' || target === '@') && repo.headRef()) throw subFatal('switch', 'expectedBranchRef', { rev: repo.headRef()! });
   if (tryResolve(repo, target)) throw subFatal('switch', 'expectedBranch', { rev: target });
+  const guess = guessRemote(repo, target);
+  if (guess) return moveHead(g, repo, 'refs/heads/' + target, repo.readRef(guess), guess.slice(13), force, quiet, target, false, false, guess);
   throw subFatal('switch', 'invalidReference', { rev: target });
 }
 
@@ -2329,20 +2499,35 @@ function gitBranch(g: Git, args: string[]): number {
   }
   const listing = o.has('\x02') || o.has('a') || o.has('r') || o.has('v') || !o.args.length;
   if (listing) {
-    if (o.has('r') && !o.has('a')) return 0;
     const pattern = o.has('\x02') && o.args.length ? o.args.map(p => globFull(p, false)) : null;
-    const rows: [string, string, string][] = [];
-    const headRef = repo.headRef();
-    if (headRef === null && repo.head()) rows.push(['*', M('detachedLabel', { commit: abbrev(repo.head()!) }), repo.head()!]);
-    for (const [name, sha] of repo.refs('refs/heads/')) {
-      const short = name.slice(11);
-      if (pattern && !pattern.some(p => p?.test(short))) continue;
-      rows.push([name === headRef ? '*' : ' ', short, sha]);
+    const rows: [mark: string, name: string, sha: string | null, sym: string | null, local: string | null][] = [];
+    if (!o.has('r') || o.has('a')) {
+      const headRef = repo.headRef();
+      if (headRef === null && repo.head() && !pattern) {
+        const [at, label] = detachedName(repo);
+        rows.push(['*', M(at ? 'detachedLabel' : 'detachedFromLabel', { commit: label }), repo.head()!, null, null]);
+      }
+      for (const [name, sha] of repo.refs('refs/heads/')) {
+        const short = name.slice(11);
+        if (pattern && !pattern.some(p => p?.test(short))) continue;
+        rows.push([name === headRef ? '*' : ' ', short, sha, null, short]);
+      }
+    }
+    if (o.has('r') || o.has('a')) {
+      const prefix = o.has('a') ? 'remotes/' : '';
+      for (const [short, sha, sym] of remoteBranches(repo)) {
+        if (pattern && !pattern.some(p => p?.test(short) || p?.test(prefix + short))) continue;
+        rows.push([' ', prefix + short, sha, sym, null]);
+      }
     }
     const width = Math.max(0, ...rows.map(r => cpLen(r[1])));
-    for (const [mark, name, sha] of rows) {
-      if (o.has('v')) g.out(`${mark} ${ljust(name, width)} ${abbrev(sha)} ${repo.commit(sha).subject}\n`);
-      else g.out(`${mark} ${name}\n`);
+    for (const [mark, name, sha, sym, local] of rows) {
+      if (sym !== null) g.out(o.has('v') ? `${mark} ${ljust(name, width)} -> ${sym}\n` : `${mark} ${name} -> ${sym}\n`);
+      else if (o.has('v') && sha) {
+        const up = local && (o.flags.get('v') ?? 0) > 1 ? trackingBrief(repo, local, g.check) : null;
+        const track = up === null ? '' : `[${up[0]}${up[1] ? ': ' + up[1] : ''}] `;
+        g.out(`${mark} ${ljust(name, width)} ${abbrev(sha)} ${track}${repo.commit(sha).subject}\n`);
+      } else g.out(`${mark} ${name}\n`);
     }
     return 0;
   }
@@ -2358,6 +2543,8 @@ function gitBranch(g: Git, args: string[]): number {
   sha = sha ? peel(repo, sha, 'commit') : null;
   if (sha === null) throw subFatal('branch', 'notValidObject', { name: start === 'HEAD' ? (repo.branch() || 'HEAD') : start });
   repo.updateRef('refs/heads/' + name, sha, `branch: Created from ${start}`);
+  const track = remoteStart(repo, start);
+  if (track) setTracking(g, repo, name, track, false);
   return 0;
 }
 
@@ -2817,11 +3004,16 @@ function gitRevParse(g: Git, args: string[]): number {
       const prev = /^@\{-(\d+)\}$/.exec(a);
       if (prev && abbrevRef) { outputs.push(previousBranch(r, Number(prev[1])) || a); continue; }
       let name: string | null = null;
-      if (a === 'HEAD' || a === '@') {
+      const upOf = /^(.*)@\{(?:u|upstream)\}$/s.exec(a);
+      if (upOf) {
+        const up = upstream(r, upOf[1] || r.branch() || '');
+        name = up ? (abbrevRef ? up[0] : up[1]) : null;
+      } else if (a === 'HEAD' || a === '@') {
         const ref = r.headRef();
         name = ref ? (abbrevRef && ref.startsWith('refs/heads/') ? ref.slice(11) : ref) : 'HEAD';
       } else if (r.readRef('refs/heads/' + a)) name = abbrevRef ? a : 'refs/heads/' + a;
       else if (r.readRef('refs/tags/' + a)) name = abbrevRef ? a : 'refs/tags/' + a;
+      else if (r.readRef('refs/remotes/' + a)) name = abbrevRef ? a : 'refs/remotes/' + a;
       outputs.push(name !== null ? name : (abbrevRef ? a : ''));
       continue;
     }
@@ -3009,9 +3201,22 @@ function configWrite(g: Git, scope: string | null, key: string, val: string | nu
 
 function gitRemote(g: Git, args: string[]): number {
   const o = parse('remote', args);
-  g.repo();
+  const repo = g.repo();
   if (o.args.length) throw subFatal('remote', 'noRemotes');
-  return 0; // there are no remotes to list
+  const remotes = new Map<string, Map<string, string>>(); // the remotes a copied clone names, in config order
+  for (const [key, value] of repo.config().items()) {
+    if (!key.startsWith('remote.') || key.split('.').length < 3) continue;
+    const rest = key.slice(7), dot = rest.lastIndexOf('.');
+    const name = rest.slice(0, dot), field = rest.slice(dot + 1);
+    if (!remotes.has(name)) remotes.set(name, new Map());
+    const f = remotes.get(name)!;
+    if (!f.has(field)) f.set(field, value);
+  }
+  for (const [name, f] of remotes) {
+    if (o.has('v')) g.out(`${name}\t${f.get('url') ?? ''} (fetch)\n${name}\t${f.get('pushurl') ?? f.get('url') ?? ''} (push)\n`);
+    else g.out(name + '\n');
+  }
+  return 0;
 }
 
 const HANDLERS: Record<string, (g: Git, args: string[]) => number> = {

@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import * as zlib from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { Shell, type ShellOptions } from '../src/index.js';
 import { sha1 } from '../src/sha1.js';
 import { zlibSync } from '../src/compress.js';
@@ -26,6 +27,63 @@ function put(sh: Shell, kind: string, body: Uint8Array, raw?: Uint8Array): strin
   sh.fs.writeBytes(`/tmp/w/.git/objects/${sha.slice(0, 2)}/${sha.slice(2)}`, raw ?? zlib.deflateSync(data));
   return sha;
 }
+
+interface PackObject { kind: string; data: Uint8Array; name: string }
+const oid = (kind: string, data: Uint8Array) => createHash('sha1').update(Buffer.concat([Buffer.from(`${kind} ${data.length}\0`), data])).digest('hex');
+
+/** A pack and its v2 index holding whole objects (no deltas), like tests/git/make_packs.py's build(). */
+function buildPack(objs: PackObject[]): [Uint8Array, Uint8Array] {
+  const TYPES: Record<string, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
+  const parts: Buffer[] = [Buffer.from('PACK'), Buffer.alloc(8)];
+  parts[1].writeUInt32BE(2, 0);
+  parts[1].writeUInt32BE(objs.length, 4);
+  let len = 12;
+  const offsets: number[] = [];
+  for (const o of objs) {
+    offsets.push(len);
+    let size = o.data.length;
+    const head = [(TYPES[o.kind] << 4) | (size & 15)];
+    size >>= 4;
+    while (size) { head[head.length - 1] |= 0x80; head.push(size & 0x7f); size >>= 7; }
+    const entry = Buffer.concat([Buffer.from(head), zlib.deflateSync(o.data)]);
+    parts.push(entry);
+    len += entry.length;
+  }
+  let pack = Buffer.concat(parts);
+  pack = Buffer.concat([pack, createHash('sha1').update(pack).digest()]);
+  const order = objs.map((_, i) => i).sort((a, b) => objs[a].name < objs[b].name ? -1 : 1);
+  const fan = Buffer.alloc(1024);
+  const counts = new Array(256).fill(0);
+  for (const o of objs) counts[parseInt(o.name.slice(0, 2), 16)]++;
+  for (let b = 0, t = 0; b < 256; b++) { t += counts[b]; fan.writeUInt32BE(t, 4 * b); }
+  const tail = Buffer.alloc(8 * objs.length);
+  order.forEach((i, k) => tail.writeUInt32BE(offsets[i], 4 * objs.length + 4 * k));
+  let idx = Buffer.concat([Buffer.from([0xff, 0x74, 0x4f, 0x63, 0, 0, 0, 2]), fan, ...order.map(i => Buffer.from(objs[i].name, 'hex')), tail, pack.subarray(pack.length - 20)]);
+  idx = Buffer.concat([idx, createHash('sha1').update(idx).digest()]);
+  return [pack, idx];
+}
+
+const PACKS: { name: string; files: Record<string, string>; script: string; exitCode: number; stdout?: string; stderr?: string }[] =
+  JSON.parse(readFileSync(new URL('../../tests/git/packs.json', import.meta.url), 'utf8'));
+
+describe('packfiles (tests/git/packs.json, shared with the other ports)', () => {
+  for (const c of PACKS) {
+    it(c.name, async () => {
+      const sh = await repo({ maxCallDurationMs: 10_000 });
+      sh.fs.mkdir('/tmp/w/.git/objects/pack', true);
+      for (const [name, data] of Object.entries(c.files)) sh.fs.writeBytes(`/tmp/w/.git/objects/pack/${name}`, zlib.gunzipSync(Buffer.from(data, 'base64')));
+      const start = Date.now();
+      const r = await sh.run(c.script);
+      expect(Date.now() - start).toBeLessThan(5000);
+      expect(r.exitCode, r.stderr).toBe(c.exitCode);
+      if (c.stdout !== undefined) expect(r.stdout).toBe(c.stdout);
+      if (c.stderr !== undefined) {
+        expect(r.stderr).toContain(c.stderr);
+        expect(r.stderr.startsWith('fatal: ')).toBe(true);
+      }
+    });
+  }
+});
 
 const commitBody = (tree: string) => Buffer.from(`tree ${tree}\nauthor A <a@b> 1 +0000\ncommitter A <a@b> 1 +0000\n\nx\n`);
 const commitWithTree = (sh: Shell, entries: Uint8Array) => put(sh, 'commit', commitBody(put(sh, 'tree', entries)));
@@ -188,15 +246,46 @@ describe('git', () => {
     expect(aborted).toBeGreaterThan(0);
   }, 60_000);
 
-  it('packed repositories get a clear message', async () => {
+  it('a packed repository takes new loose objects, and gc and repack are not available', async () => {
     const sh = await repo();
-    await sh.run('mkdir -p .git/objects/pack && touch .git/objects/pack/pack-1.pack .git/objects/pack/pack-1.idx');
-    let r = await sh.run('git cat-file -p 0123456789012345678901234567890123456789');
+    await sh.run('echo b > g && git add g && git commit -qm two');
+    // pack everything the way git gc would leave it: objects only in a pack
+    const names = (await sh.run('find .git/objects -type f | cut -d/ -f3,4 | tr -d /')).stdout.split(/\s+/).filter(Boolean);
+    const objs = names.map(sha => {
+      const raw = zlib.inflateSync(sh.fs.readBytes(`/tmp/w/.git/objects/${sha.slice(0, 2)}/${sha.slice(2)}`));
+      const sp = raw.indexOf(0x20), nul = raw.indexOf(0);
+      return { kind: raw.subarray(0, sp).toString(), data: raw.subarray(nul + 1), name: sha };
+    });
+    const [pack, idx] = buildPack(objs);
+    await sh.run('rm -rf .git/objects/?? && mkdir -p .git/objects/pack');
+    sh.fs.writeBytes('/tmp/w/.git/objects/pack/pack-1.pack', pack);
+    sh.fs.writeBytes('/tmp/w/.git/objects/pack/pack-1.idx', idx);
+    let r = await sh.run('git log --oneline && git status -s && echo c > h && git add h && git commit -qm three && git log --oneline | wc -l' +
+      ' && find .git/objects -type f | grep -vc pack && git rev-parse --short HEAD~2 | wc -c');
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(r.stdout.split('\n').slice(-4)).toEqual(['3', '3', '8', '']);
+    r = await sh.run('git gc; git repack');
     expect(r.exitCode).toBe(128);
-    await sh.run('rm -rf .git/objects/$(git rev-parse HEAD | cut -c1-2)');
-    r = await sh.run('git log');
-    expect(r.exitCode).toBe(128);
-    expect(r.stderr).toContain('do not delete .git');
+    expect(r.stderr).toContain('not available');
+  });
+
+  it('reads a 5000-object pack quickly', async () => {
+    const sh = await repo();
+    const objs: PackObject[] = [];
+    let text = '';
+    for (let n = 0; n < 5000; n++) {
+      text += `line ${n}\n`;
+      const data = Buffer.from(text.slice(-2000));
+      objs.push({ kind: 'blob', data, name: oid('blob', data) });
+    }
+    const [pack, idx] = buildPack(objs);
+    sh.fs.mkdir('/tmp/w/.git/objects/pack', true);
+    sh.fs.writeBytes('/tmp/w/.git/objects/pack/pack-1.pack', pack);
+    sh.fs.writeBytes('/tmp/w/.git/objects/pack/pack-1.idx', idx);
+    const start = Date.now();
+    const r = await sh.run(`git cat-file -s ${objs[4999].name}; git cat-file -t ${objs[10].name.slice(0, 8)}`);
+    expect(r.stdout).toBe('2000\nblob\n');
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 
   it('graph refuses history it cannot draw', async () => {
