@@ -20,9 +20,9 @@ The generator writes, and the repository checks in:
 
 | Port | Generated file | Used through |
 |---|---|---|
-| C# | `src/Topwater/Generated/CommandSpec.g.cs` | `CommandSpec.Of(name)`, `CommandSpec.Message(...)`, `Args.Parse(args, CommandSpec.Of(name))`, `CommandSpec.Diagnostics.X` / `CommandSpec.Format(...)`, `CommandSpec.Errno.X` (`src/Topwater/CommandSpec.cs`) |
-| Python | `python/src/topwater/_spec.py` | `COMMANDS[name]`, `spec_message(...)`, `Args.parse(args, COMMANDS[name])` (`commands/__init__.py`), `diagnostic(...)`, `DIAGNOSTICS`, `ERRNO` |
-| TypeScript | `typescript/src/spec.generated.ts` | `specOf(name)`, `specMessage(...)`, `Args.parse(args, specOf(name))` (`src/command.ts`), `diagnostic(...)`, `DIAGNOSTICS`, `ERRNO` |
+| C# | `src/Topwater/Generated/CommandSpec.g.cs` | `CommandSpec.Of(name)`, `CommandSpec.Message(...)`, `CommandSpec.SubMessage(name, sub, ...)`, `Args.Parse(args, CommandSpec.Of(name))`, `CommandSpec.Diagnostics.X` / `CommandSpec.Format(...)`, `CommandSpec.Errno.X` (`src/Topwater/CommandSpec.cs`) |
+| Python | `python/src/topwater/_spec.py` | `COMMANDS[name]`, `spec_message(...)`, `spec_sub_message(name, sub, ...)`, `Args.parse(args, COMMANDS[name])` (`commands/__init__.py`), `diagnostic(...)`, `DIAGNOSTICS`, `ERRNO` |
+| TypeScript | `typescript/src/spec.generated.ts` | `specOf(name)`, `specMessage(...)`, `specSubMessage(name, sub, ...)`, `Args.parse(args, specOf(name))` (`src/command.ts`), `diagnostic(...)`, `DIAGNOSTICS`, `ERRNO` |
 
 Nothing reads `spec/` at run time: no file IO, no new dependencies, and the browser bundle needs nothing extra.
 
@@ -60,6 +60,7 @@ Nothing reads `spec/` at run time: no file IO, no new dependencies, and the brow
 | `options[]` | `short`, `long` (aliases), `arg` (present when it takes a value), `description`, `ports` (when not all), `key` (what the code looks it up by: for a long-only option a control character, e.g. tar's `--strip-components` uses `\u0001`, so that no short letter is accepted by accident), `custom` (the command reads it itself before the shared parser, e.g. grep's `-e`), `ignored` (accepted but without effect: `true`, or the ports where it does nothing) |
 | `exitCodes`, `notes` | documentation |
 | `messages` | diagnostic templates keyed by an id the code uses; the port adds the `NAME: ` prefix |
+| `subcommands` | for a command with subcommands (`git`): name → `summary`, `usage` (lines), `help` (default: generated from usage, summary and options), `options` (same shape as above; always parsed through the generated table), `messages` (falling back to the command's, then the defaults), `ports`, `unsupported` (recognised, answered with the command's own message and a failure). The command itself uses `parser: custom` and dispatches |
 
 The schema in `command.schema.json` is the full list; the generator rejects unknown keys.
 

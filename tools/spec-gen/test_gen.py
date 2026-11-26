@@ -11,6 +11,13 @@ SHELL, COMMANDS = gen.load()
 BY_NAME = {c["name"]: c for c in COMMANDS}
 DEFAULTS = SHELL["defaults"]["messages"]
 
+# how each port spells a subcommand message lookup: (command, subcommand, key)
+SUB_LOOKUPS = {
+    "cs": r'CommandSpec\.SubMessage\(("[^"]+"), ("[^"]+"|[\w.]+), "(\w+)"',
+    "py": r'spec_sub_message\(("[^"]+"), ("[^"]+"|[\w.]+), "(\w+)"',
+    "ts": r"specSubMessage\(('[^']+'), ('[^']+'|[\w.]+), '(\w+)'",
+}
+
 # each port's hand-written sources (the generated tables left out) and how it spells a lookup
 PORTS = {
     "cs": ([p for p in (gen.ROOT / "src/Topwater").rglob("*.cs") if "Generated" not in p.parts],
@@ -44,12 +51,37 @@ class Validate(unittest.TestCase):
             "unknown key": lambda c: c.update(foo=1),
             "unknown category": lambda c: c.update(category="misc"),
             "long-only without key": lambda c: c["options"].append({"long": ["x"]}),
+            "subcommand without usage": lambda c: c.update(subcommands={"x": {"summary": "s"}}),
+            "unknown subcommand key": lambda c: c.update(subcommands={"x": {"summary": "s", "usage": ["git x"], "foo": 1}}),
         }
         for name, change in bad.items():
             c = copy.deepcopy(HEAD)
             change(c)
             with self.subTest(name), self.assertRaises(gen.SpecError):
                 check(c)
+
+
+class Subcommands(unittest.TestCase):
+    SUB = {"summary": "Do x", "usage": ["git x [<options>]"], "options": [
+        {"short": "q", "long": ["quiet"], "description": "say less"},
+        {"short": "m", "long": ["message"], "arg": "<msg>", "description": "the message"}]}
+
+    def command(self, **sub):
+        return {"name": "git", "category": "utility", "summary": "s", "parser": "custom", "subcommands": {"x": {**self.SUB, **sub}}}
+
+    def test_table_and_default_help(self):
+        s = gen.resolve_subcommands(self.command(), "py")["x"]
+        self.assertEqual(s["options"], ("q", "m", "quiet=q,message=m"))
+        self.assertEqual(s["help"], "usage: git x [<options>]\n\nDo x.\n\n    -q, --quiet          say less\n    -m, --message <msg>  the message\n")
+
+    def test_ports(self):
+        self.assertEqual(gen.resolve_subcommands(self.command(ports=["cs"]), "py"), {})
+
+    def test_needs_custom_parser(self):
+        c = self.command()
+        c["parser"] = "args"
+        with self.assertRaises(gen.SpecError):
+            gen.check_command(c, "git")
 
 
 class PortsUseTheSpec(unittest.TestCase):
@@ -67,12 +99,27 @@ class PortsUseTheSpec(unittest.TestCase):
                         else:  # looked up by the command's own name at run time
                             self.assertIn(key, every_key)
 
+    def test_subcommand_message_keys_exist(self):
+        for port, rx in SUB_LOOKUPS.items():
+            for f in PORTS[port][0]:
+                for cmd, sub, key in re.findall(rx, f.read_text(encoding="utf-8")):
+                    c = BY_NAME[cmd[1:-1]]
+                    subs = c.get("subcommands", {})
+                    known = set(c.get("messages", {})) | set(DEFAULTS)
+                    known |= set(subs[sub[1:-1]].get("messages", {})) if sub[0] in "\"'" else {k for s in subs.values() for k in s.get("messages", {})}
+                    with self.subTest(port=port, file=f.name, key=key):
+                        self.assertIn(key, known)
+
     def test_every_message_key_is_used(self):
         # used: looked up under its command, or (for keys the code picks at run time, such as cp/mv's clash keys and
         # the unreadable-file helper's openFailed/readDirectory) written as a string somewhere in a port
         sources = {p: "\n".join(f.read_text(encoding="utf-8") for f in files) for p, (files, _, _, _) in PORTS.items()}
         lookups = {(cmd.strip("\"'"), key) for p, (_, message, _, _) in PORTS.items() for cmd, key in re.findall(message, sources[p])}
         for c in COMMANDS:
+            for sub, s in c.get("subcommands", {}).items():
+                for key in s.get("messages", {}):
+                    with self.subTest(command=c["name"], subcommand=sub, key=key):
+                        self.assertTrue(any(re.search(rf"[\"']{key}[\"']", text) for text in sources.values()), "no port uses it")
             for key in c.get("messages", {}):
                 with self.subTest(command=c["name"], key=key):
                     quoted = any(re.search(rf"[\"']{key}[\"']", text) for text in sources.values())

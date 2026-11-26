@@ -45,10 +45,32 @@
       "type": "object", "additionalProperties": { "type": "string" },
       "description": "Diagnostic templates, keyed by a camelCase id the code uses. Placeholders: {name}, {name:shell}, {name:shell-always}, {name:locale}; see spec/README.md. Usually the text after the '<name>: ' prefix the port adds; a message of another shape (a leading newline, several lines, another program's prefix) is stored whole. A key missing here falls back to shell.json's defaults.messages."
     },
+    "subcommands": {
+      "type": "object", "additionalProperties": { "$ref": "#/$defs/subcommand" },
+      "description": "For a command with subcommands (git): one entry per subcommand name. The command uses parser 'custom' and dispatches itself; each subcommand parses with its own generated option table. See spec/README.md."
+    },
     "notes": { "type": "string", "description": "Free text for maintainers." }
   },
   "$defs": {
     "port": { "enum": ["cs", "py", "ts"] },
+    "subcommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "usage"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "description": "One line, no final period: what the command's help lists for this subcommand." },
+        "usage": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Usage lines without the 'usage: ' prefix (added to the first line, the others indented to match)." },
+        "help": { "type": "array", "items": { "type": "string" }, "description": "The full help text, one string per line. Default (generated): the usage lines, a blank line, the summary with a period, then one line per option." },
+        "ports": { "type": "array", "items": { "$ref": "#/$defs/port" }, "uniqueItems": true, "minItems": 1, "description": "The ports that have it. Absent: all that have the command." },
+        "unsupported": { "type": "boolean", "description": "Recognised but not available in this machine: the command prints its own message for it and fails." },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/option" }, "description": "Same shape as a command's options; their generated table is what the subcommand parses with." },
+        "messages": {
+          "type": "object", "additionalProperties": { "type": "string" },
+          "description": "Diagnostic templates for this subcommand; a key missing here falls back to the command's messages, then shell.json's defaults.messages."
+        },
+        "notes": { "type": "string" }
+      }
+    },
     "option": {
       "type": "object",
       "additionalProperties": false,

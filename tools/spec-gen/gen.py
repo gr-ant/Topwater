@@ -109,13 +109,7 @@ def load():
         validate(c, command_schema, command_schema, where)
         if path.stem != SLUGS.get(c["name"], c["name"]):
             raise SpecError(f"{where}: file name does not match name '{c['name']}'")
-        for o in c.get("options", []):
-            if not set(o.get("ports", PORTS)) <= set(c.get("ports", PORTS)):
-                raise SpecError(f"{where}: option {o}: ports outside the command's")
-        for key, text in c.get("messages", {}).items():
-            check_template(f"{where}: messages.{key}", text)
-        for p in PORTS:
-            option_table(c, p)  # raises on clashes
+        check_command(c, where)
         commands.append(c)
     names = [c["name"] for c in commands]
     if len(names) != len(set(names)):
@@ -128,33 +122,85 @@ def load():
     return shell, commands
 
 
+def check_command(c, where):
+    """The rules the schema cannot express: ports nest, templates use known quoting, option tables have no clashes."""
+    for o in c.get("options", []):
+        if not set(o.get("ports", PORTS)) <= set(c.get("ports", PORTS)):
+            raise SpecError(f"{where}: option {o}: ports outside the command's")
+    for key, text in c.get("messages", {}).items():
+        check_template(f"{where}: messages.{key}", text)
+    if c.get("subcommands") and c["parser"] != "custom":
+        raise SpecError(f"{where}: a command with subcommands parses its own arguments (parser 'custom')")
+    for sub, s in c.get("subcommands", {}).items():
+        if not set(s.get("ports", PORTS)) <= set(c.get("ports", PORTS)):
+            raise SpecError(f"{where}: subcommand {sub}: ports outside the command's")
+        for o in s.get("options", []):
+            if not set(o.get("ports", PORTS)) <= set(s.get("ports", c.get("ports", PORTS))):
+                raise SpecError(f"{where}: subcommand {sub}: option {o}: ports outside the subcommand's")
+        for key, text in s.get("messages", {}).items():
+            check_template(f"{where}: subcommands.{sub}.messages.{key}", text)
+    for p in PORTS:
+        option_table(c, p)  # raises on clashes
+        for sub, s in c.get("subcommands", {}).items():
+            table(f"{c['name']} {sub}", s.get("options", []), p)
+
+
 def option_table(c, port):
     """(flags, valued, longs) for Args.Parse in one port: short flag letters, letters that take a value, 'long=key,...'."""
-    if c["parser"] != "args":
-        return None
+    return table(c["name"], c.get("options", []), port) if c["parser"] == "args" else None
+
+
+def table(name, options, port):
     flags, valued, longs, kinds = [], [], [], {}
-    for o in c.get("options", []):
+    for o in options:
         if port not in o.get("ports", PORTS) or o.get("custom"):
             continue  # custom: the command reads it itself, before the shared parser
         key = o.get("key", o.get("short"))
         if kinds.setdefault(key, "arg" in o) != ("arg" in o):
-            raise SpecError(f"{c['name']}: option key '{key}' both takes a value and does not ({port})")
+            raise SpecError(f"{name}: option key '{key}' both takes a value and does not ({port})")
         if "short" in o:
             (valued if "arg" in o else flags).append(o["short"])
         elif "arg" in o and key not in valued:
             valued.append(key)  # a long-only option with a value still needs its key in the valued set
-        for name in o.get("long", []):
-            if any(x.split("=")[0] == name for x in longs):
-                raise SpecError(f"{c['name']}: --{name} listed twice ({port})")
-            longs.append(f"{name}={key}")
+        for long in o.get("long", []):
+            if any(x.split("=")[0] == long for x in longs):
+                raise SpecError(f"{name}: --{long} listed twice ({port})")
+            longs.append(f"{long}={key}")
     for letters in (flags, valued):
         if len(letters) != len(set(letters)):
-            raise SpecError(f"{c['name']}: a short option is listed twice ({port}): {letters}")
+            raise SpecError(f"{name}: a short option is listed twice ({port}): {letters}")
     return "".join(flags), "".join(valued), ",".join(longs)
 
 
 def fill(template, **values):
     return PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), template)
+
+
+def sub_help(command, sub, s, port):
+    """A subcommand's help text: the spec's, or usage lines, the summary and one line per option this port accepts."""
+    if "help" in s:
+        return "\n".join(s["help"]) + "\n"
+    lines = [("usage: " if i == 0 else "   or: ") + u for i, u in enumerate(s["usage"])] + ["", s["summary"] + "."]
+    rows = []
+    for o in s.get("options", []):
+        if port not in o.get("ports", PORTS):
+            continue
+        names = (["-" + o["short"]] if "short" in o else []) + ["--" + x for x in o.get("long", [])]
+        rows.append((", ".join(names) + (" " + o["arg"] if "arg" in o else ""), o["description"]))
+    if rows:
+        width = max(len(label) for label, _ in rows) + 2
+        lines += [""] + [f"    {label.ljust(width)}{text}" for label, text in rows]
+    return "\n".join(lines) + "\n"
+
+
+def resolve_subcommands(c, port):
+    out = {}
+    for sub, s in sorted(c.get("subcommands", {}).items()):
+        if port in s.get("ports", PORTS):
+            out[sub] = {"name": sub, "summary": s["summary"], "help": sub_help(c["name"], sub, s, port),
+                        "unsupported": s.get("unsupported", False), "options": table(f"{c['name']} {sub}", s.get("options", []), port),
+                        "messages": s.get("messages", {})}
+    return out
 
 
 def resolve(shell, c, port):
@@ -175,6 +221,7 @@ def resolve(shell, c, port):
         "tryHelp": "\n".join(fill(x, name=shown) for x in c.get("tryHelp", d["tryHelp"])) + "\n",
         "options": option_table(c, port),
         "messages": c.get("messages", {}),
+        "subcommands": resolve_subcommands(c, port),
     }
 
 
@@ -213,6 +260,17 @@ def cs_dict(d, indent):
     return "new Dictionary<string, string>\n" + pad + "{\n" + "".join(f"{pad}    [{cs_str(k)}] = {cs_str(v)},\n" for k, v in d.items()) + pad + "}"
 
 
+def cs_subs(subs):
+    if not subs:
+        return ""
+    rows = []
+    for s in subs.values():
+        o = s["options"]
+        rows.append(f"            [{cs_str(s['name'])}] = new({cs_str(s['name'])}, {cs_str(s['summary'])}, {cs_str(s['help'])}, "
+                    f"{'true' if s['unsupported'] else 'false'}, ({cs_str(o[0])}, {cs_str(o[1])}, {cs_str(o[2])}), {cs_dict(s['messages'], 12)}),\n")
+    return ", Subcommands: new Dictionary<string, SubEntry>(StringComparer.Ordinal)\n        {\n" + "".join(rows) + "        }"
+
+
 def emit_cs(shell, entries):
     b = lambda v: "true" if v else "false"
     lines = [f"// <auto-generated>{HEADER}</auto-generated>", "#nullable enable", "namespace Topwater;", "",
@@ -222,6 +280,9 @@ def emit_cs(shell, entries):
              "    /// <param name=\"Options\">Args.Parse's (flags, valued, longs), or null when the command parses its own arguments.</param>",
              "    internal sealed record Entry(string Name, string Summary, string? Help, string Version, bool StandardOptions, bool ShellBuiltin,",
              "        bool ProgramFile, string ReportsAs, int UsageExitCode, string TryHelp, (string Flags, string Valued, string Longs)? Options,",
+             "        IReadOnlyDictionary<string, string> Messages, IReadOnlyDictionary<string, SubEntry>? Subcommands = null);", "",
+             "    /// <summary>One subcommand (git's): its help text, option table for the subcommand's parser, and messages.</summary>",
+             "    internal sealed record SubEntry(string Name, string Summary, string Help, bool Unsupported, (string Flags, string Valued, string Longs) Options,",
              "        IReadOnlyDictionary<string, string> Messages);", "",
              "    static readonly IReadOnlyDictionary<string, string> Empty = new Dictionary<string, string>();", "",
              "    internal static readonly IReadOnlyDictionary<string, Entry> Commands = new Dictionary<string, Entry>(StringComparer.Ordinal)",
@@ -231,7 +292,7 @@ def emit_cs(shell, entries):
         opts = f"({cs_str(o[0])}, {cs_str(o[1])}, {cs_str(o[2])})" if o else "null"
         lines.append(f"        [{cs_str(e['name'])}] = new({cs_str(e['name'])}, {cs_str(e['summary'])}, {cs_str(e['help'])}, {cs_str(e['version'])}, "
                      f"{b(e['standardOptions'])}, {b(e['shellBuiltin'])}, {b(e['programFile'])}, {cs_str(e['reportsAs'])}, {e['usageExitCode']}, "
-                     f"{cs_str(e['tryHelp'])}, {opts}, {cs_dict(e['messages'], 8)}),")
+                     f"{cs_str(e['tryHelp'])}, {opts}, {cs_dict(e['messages'], 8)}{cs_subs(e['subcommands'])}),")
     lines += ["    };", ""]
     for group, title in (("defaults", None), ("getopt", "Getopt"), ("errno", "Errno"), ("diagnostics", "Diagnostics")):
         if group == "defaults":
@@ -246,20 +307,39 @@ def emit_cs(shell, entries):
     return "\n".join(lines) + "\n"
 
 
+def py_msgs(m):
+    return "{" + ", ".join(f"{py_str(k)}: {py_str(v)}" for k, v in m.items()) + "}"
+
+
+def py_subs(subs):
+    if not subs:
+        return ""
+    rows = []
+    for s in subs.values():
+        o = s["options"]
+        rows.append(f"        {py_str(s['name'])}: SubcommandSpec({py_str(s['name'])}, {py_str(s['summary'])}, {py_str(s['help'])}, {s['unsupported']}, "
+                    f"({py_str(o[0])}, {py_str(o[1])}, {py_str(o[2])}), {py_msgs(s['messages'])}),\n")
+    return ", {\n" + "".join(rows) + "    }"
+
+
 def emit_py(shell, entries):
     lines = [f'"""{HEADER}"""', "# fmt: off", "import re as _re", "from typing import NamedTuple, Optional", "", "",
              "class CommandSpec(NamedTuple):",
              '    """One built-in command. help: the --help text when the spec gives one; options: Args.parse\'s (flags, valued, longs) or None."""',
              "    name: str", "    summary: str", "    help: Optional[str]", "    version: str", "    standard_options: bool", "    shell_builtin: bool",
              "    program_file: bool", "    reports_as: str", "    usage_exit_code: int", "    try_help: str", "    options: Optional[tuple]",
-             "    messages: dict", "", "", "COMMANDS: dict = {"]
+             "    messages: dict", "    subcommands: dict = {}", "", "",
+             "class SubcommandSpec(NamedTuple):",
+             '    """One subcommand (git\'s): its help text, Args table (flags, valued, longs) and messages."""',
+             "    name: str", "    summary: str", "    help: str", "    unsupported: bool", "    options: tuple", "    messages: dict", "", "",
+             "COMMANDS: dict = {"]
     for e in entries:
         o = e["options"]
         opts = f"({py_str(o[0])}, {py_str(o[1])}, {py_str(o[2])})" if o else "None"
         msgs = "{" + ", ".join(f"{py_str(k)}: {py_str(v)}" for k, v in e["messages"].items()) + "}"
         lines.append(f"    {py_str(e['name'])}: CommandSpec({py_str(e['name'])}, {py_str(e['summary'])}, {py_str(e['help'])}, {py_str(e['version'])}, "
                      f"{e['standardOptions']}, {e['shellBuiltin']}, {e['programFile']}, {py_str(e['reportsAs'])}, {e['usageExitCode']}, "
-                     f"{py_str(e['tryHelp'])}, {opts}, {msgs}),")
+                     f"{py_str(e['tryHelp'])}, {opts}, {msgs}{py_subs(e['subcommands'])}),")
     lines += ["}", ""]
     lines.append("DEFAULT_MESSAGES = " + json.dumps(shell["defaults"]["messages"], ensure_ascii=False))
     for group in ("getopt", "errno", "diagnostics"):
@@ -272,6 +352,21 @@ def emit_py(shell, entries):
     return "\n".join(lines) + "\n"
 
 
+def ts_msgs(m):
+    return "{ " + ", ".join(f"{js_str(k)}: {js_str(v)}" for k, v in m.items()) + " }" if m else "{}"
+
+
+def ts_subs(subs):
+    if not subs:
+        return ""
+    rows = []
+    for s in subs.values():
+        o = s["options"]
+        rows.append(f"    [{js_str(s['name'])}, {{ name: {js_str(s['name'])}, summary: {js_str(s['summary'])}, help: {js_str(s['help'])}, "
+                    f"unsupported: {js_str(s['unsupported'])}, options: [{js_str(o[0])}, {js_str(o[1])}, {js_str(o[2])}], messages: {ts_msgs(s['messages'])} }}],\n")
+    return ", subcommands: new Map<string, SubcommandSpec>([\n" + "".join(rows) + "  ])"
+
+
 def emit_ts(shell, entries):
     lines = [f"// {HEADER}", "/* eslint-disable */", "",
              "/** One built-in command. help: the --help text when the spec gives one; options: Args.parse's [flags, valued, longs], or null. */",
@@ -279,6 +374,11 @@ def emit_ts(shell, entries):
              "  readonly version: string;", "  readonly standardOptions: boolean;", "  readonly shellBuiltin: boolean;", "  readonly programFile: boolean;",
              "  readonly reportsAs: string;", "  readonly usageExitCode: number;", "  readonly tryHelp: string;",
              "  readonly options: readonly [flags: string, valued: string, longs: string] | null;",
+             "  readonly messages: Readonly<Record<string, string>>;",
+             "  readonly subcommands?: ReadonlyMap<string, SubcommandSpec>;", "}", "",
+             "/** One subcommand (git's): its help text, Args table [flags, valued, longs] and messages. */",
+             "export interface SubcommandSpec {", "  readonly name: string;", "  readonly summary: string;", "  readonly help: string;",
+             "  readonly unsupported: boolean;", "  readonly options: readonly [flags: string, valued: string, longs: string];",
              "  readonly messages: Readonly<Record<string, string>>;", "}", "",
              "export const COMMANDS: ReadonlyMap<string, CommandSpec> = new Map<string, CommandSpec>(["]
     for e in entries:
@@ -288,7 +388,7 @@ def emit_ts(shell, entries):
         lines.append(f"  [{js_str(e['name'])}, {{ name: {js_str(e['name'])}, summary: {js_str(e['summary'])}, help: {js_str(e['help'])}, "
                      f"version: {js_str(e['version'])}, standardOptions: {js_str(e['standardOptions'])}, shellBuiltin: {js_str(e['shellBuiltin'])}, "
                      f"programFile: {js_str(e['programFile'])}, reportsAs: {js_str(e['reportsAs'])}, usageExitCode: {e['usageExitCode']}, "
-                     f"tryHelp: {js_str(e['tryHelp'])}, options: {opts}, messages: {msgs} }}],")
+                     f"tryHelp: {js_str(e['tryHelp'])}, options: {opts}, messages: {msgs}{ts_subs(e['subcommands'])} }}],")
     lines += ["]);", ""]
     lines.append("export const DEFAULT_MESSAGES: Readonly<Record<string, string>> = " + json.dumps(shell["defaults"]["messages"], ensure_ascii=False) + ";")
     for group in ("getopt", "errno", "diagnostics"):

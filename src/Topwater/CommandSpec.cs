@@ -28,4 +28,9 @@ internal static partial class CommandSpec
     /// <summary>The command's message <paramref name="key"/> (or the shared default), filled in.</summary>
     internal static string Message(string command, string key, params (string Name, string Value)[] values) =>
         Format(Commands.TryGetValue(command, out var e) && e.Messages.TryGetValue(key, out var t) ? t : DefaultMessages[key], values);
+
+    /// <summary>A subcommand's message <paramref name="key"/> (else the command's, else the shared default), filled in.</summary>
+    internal static string SubMessage(string command, string sub, string key, params (string Name, string Value)[] values) =>
+        Commands[command].Subcommands is { } subs && subs.TryGetValue(sub, out var s) && s.Messages.TryGetValue(key, out var t)
+            ? Format(t, values) : Message(command, key, values);
 }

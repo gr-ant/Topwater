@@ -227,6 +227,12 @@ export function specFormat(template: string, values: Readonly<Record<string, str
   });
 }
 
+/** A subcommand's message `key` (else the command's, else the shared default), filled in. */
+export function specSubMessage(command: string, sub: string, key: string, values: Readonly<Record<string, string>> = {}): string {
+  const t = COMMANDS.get(command)?.subcommands?.get(sub)?.messages[key];
+  return t !== undefined ? specFormat(t, values) : specMessage(command, key, values);
+}
+
 /** The command's message `key` from spec/ (or the shared default), filled in. */
 export function specMessage(command: string, key: string, values: Readonly<Record<string, string>> = {}): string {
   return specFormat(COMMANDS.get(command)?.messages[key] ?? DEFAULT_MESSAGES[key], values);
