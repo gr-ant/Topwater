@@ -56,10 +56,36 @@ async function make(policy?: (t: WebTransport) => WebPolicy) {
   return { sh, f };
 }
 
+/** Serves the "raw" routes on a loopback port, byte for byte as tests/web/server.py does, then closes. */
+async function rawServer() {
+  const server = createServer(socket => {
+    let text = '';
+    socket.on('data', d => {
+      text += d.toString('latin1');
+      if (!text.includes('\r\n\r\n')) return;
+      socket.end(Buffer.from(routes[text.split(' ')[1]].raw, 'latin1'));
+    });
+    socket.on('error', () => undefined);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { server, port: (server.address() as AddressInfo).port };
+}
+
+/** The real connection path to rawServer: the wire cases are malformed responses a fake transport cannot send. */
+async function wireShell(port: number) {
+  const sh = new Shell().allowWeb({ domains: [`api.test:${port}`], allowHttp: true, explainBlocked: false,
+    transport: pinnedTransport({ resolve: () => ['127.0.0.1'], allowLoopback: true }) });
+  await sh.run('mkdir -p /tmp/w && cd /tmp/w');
+  return sh;
+}
+
 describe('tests/web cases', () => {
   for (const c of cases) it(c.id, async () => {
-    const { sh } = await make();
-    const r = await sh.run(c.script);
+    let r;
+    if (c.wire) {
+      const { server, port } = await rawServer();
+      try { r = await (await wireShell(port)).run(c.script.replaceAll('http://api.test/', `http://api.test:${port}/`)); } finally { server.close(); }
+    } else r = await (await make()).sh.run(c.script);
     expect(r.stdout).toBe(c.stdout);
     if (c.stderr !== null) expect(r.stderr).toBe(c.stderr);
     expect(r.exitCode).toBe(c.exitCode);
@@ -466,6 +492,21 @@ describe('recorded web exchanges', () => {
     good.calls[0].web![0] = { ...good.calls[0].web![0], error: 'nope' as never };
     await expect(Recording.load(await good.save())).rejects.toThrow(/unknown error/);
   });
+});
+
+it('replays a body cut short as it came', async () => {
+  const { server, port } = await rawServer();
+  try {
+    const sh = await wireShell(port);
+    const rec = startRecording(sh);
+    const first = await sh.run(`curl -sS http://api.test:${port}/short-length; curl -sS http://api.test:${port}/empty; wget -q -O- http://api.test:${port}/chunked-short; echo $?`);
+    rec.stop();
+    expect(first.stdout).toBe('shortok\n4\n');
+    const loaded = await Recording.load(await rec.recording.save());
+    expect(loaded.calls[0].web!.map(x => [x.error, x.status, new TextDecoder().decode(x.body)])).toEqual([['partial', 200, 'short'], ['empty', 0, ''], ['partial', 200, 'ok\n']]);
+    const report = await loaded.replay();
+    expect(report.differences).toEqual([]);
+  } finally { server.close(); }
 });
 
 describe('the pinned connection', () => {

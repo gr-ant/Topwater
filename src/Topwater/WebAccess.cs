@@ -46,7 +46,9 @@ public sealed class WebPolicy
 /// <summary>One request a recorded call made and what came back (or how it failed), stored so a replay never touches the network.</summary>
 public sealed record WebExchange(string Method, string Url, int Status, string Reason, IReadOnlyList<KeyValuePair<string, string>> Headers, byte[] Body)
 {
-    /// <summary>How the request failed instead (resolve, blocked, connect, timeout, tls, recv); null when it got an answer.</summary>
+    /// <summary>How the request failed instead (resolve, blocked, connect, timeout, tls, recv; partial: the body ended before its
+    /// Content-Length or last chunk; weird: an unreadable status line or header; empty: closed before any response); null when
+    /// it got an answer. With a status (partial) the body ended early, and is what came.</summary>
     public string? Error { get; init; }
 }
 
@@ -70,7 +72,7 @@ public sealed partial class Shell
 }
 
 /// <summary>Why a request failed; each command turns it into its own message and exit status.</summary>
-internal enum WebError { BadUrl, BadHostname, Protocol, Resolve, Connect, Timeout, Tls, Recv, TooLarge, Redirects, Policy, Replay, BadHeader }
+internal enum WebError { BadUrl, BadHostname, Protocol, Resolve, Connect, Timeout, Tls, Recv, Partial, Weird, Empty, TooLarge, Redirects, Policy, Replay, BadHeader }
 
 internal sealed class WebFailure(WebError kind, string host = "", int port = 0, string? blocked = null) : Exception(kind.ToString())
 {
@@ -211,6 +213,9 @@ internal static class WebAddresses
 
 internal sealed record WebResponse(WebUrl Url, string Method, int Status, string Reason, List<KeyValuePair<string, string>> Headers, byte[] Body, bool Truncated)
 {
+    /// <summary>partial: the body ended early, and is what came.</summary>
+    public string? Error { get; init; }
+
     public string? Header(string name) => Headers.FirstOrDefault(h => h.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
 }
 
@@ -369,17 +374,17 @@ internal sealed class WebSession
             long cap = Policy.MaxResponseBytes + (secrets.Length > 0 ? secrets[0].Length : 0);
             exchange = await ExchangeAsync(url, method, sent, body, timeout, cap, ct);
             // a compressed body would pass the scrub and be decoded later (curl --compressed, gunzip): decode it first
-            if (auth != null && exchange.Error == null) exchange = Decoded(exchange, cap);
-            if (exchange.Error == null && secrets.Length > 0)
+            if (auth != null && exchange.Status != 0) exchange = Decoded(exchange, cap);
+            if (exchange.Status != 0 && secrets.Length > 0)
                 exchange = exchange with { Headers = [.. exchange.Headers.Select(h => new KeyValuePair<string, string>(h.Key, Scrub(h.Value, secrets)))], Body = ScrubBytes(exchange.Body, secrets) };
         }
         lock (_log) _log.Add(exchange);
-        if (exchange.Error is { } error)
+        if (exchange.Error is { } error && exchange.Status == 0)
             throw new WebFailure(Enum.Parse<WebError>(error == "blocked" ? "Resolve" : error, ignoreCase: true), url.Host, url.Port,
                 error == "blocked" ? Explain(Reason("reasonResolvesPrivate", ("host", url.Host))) : null)
             { Detail = ((long)timeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) };
         bool truncated = exchange.Body.Length > Policy.MaxResponseBytes;
-        return new(url, method, exchange.Status, exchange.Reason, [.. exchange.Headers], truncated ? exchange.Body[..(int)Policy.MaxResponseBytes] : exchange.Body, truncated);
+        return new(url, method, exchange.Status, exchange.Reason, [.. exchange.Headers], truncated ? exchange.Body[..(int)Policy.MaxResponseBytes] : exchange.Body, truncated) { Error = exchange.Error };
     }
 
     WebExchange NextRecorded(string method, string url)
@@ -413,17 +418,29 @@ internal sealed class WebSession
                 foreach (var v in h.Value) list.Add(new(h.Key, v));
             if (list.Sum(h => h.Key.Length + h.Value.Length + 4) > MaxHeaderBytes) return Failed("recv");
             var buffer = new MemoryStream();
+            string? cut = null;
             if (method != "HEAD")
             {
                 await using var stream = await response.Content.ReadAsStreamAsync(limit.Token);
                 var chunk = new byte[16384];
-                for (int n; buffer.Length <= cap && (n = await stream.ReadAsync(chunk, limit.Token)) > 0;)
-                    buffer.Write(chunk, 0, (int)Math.Min(n, cap + 1 - buffer.Length));
+                try
+                {
+                    for (int n; buffer.Length <= cap && (n = await stream.ReadAsync(chunk, limit.Token)) > 0;)
+                        buffer.Write(chunk, 0, (int)Math.Min(n, cap + 1 - buffer.Length));
+                }
+                // a body that ended early keeps what came; nothing of a malformed one (a bad chunk size: .NET loses the bytes of
+                // the read that finds it) or of a reset is kept
+                catch (HttpIOException e) when (e.HttpRequestError == HttpRequestError.ResponseEnded) { cut = "partial"; }
             }
-            return new(method, url.ToString(), (int)response.StatusCode, response.ReasonPhrase ?? "", list, buffer.ToArray());
+            return new(method, url.ToString(), (int)response.StatusCode, response.ReasonPhrase ?? "", list, buffer.ToArray()) { Error = cut };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) { return Failed("timeout"); }
+        catch (HttpRequestException e) when (e.HttpRequestError is HttpRequestError.ResponseEnded or HttpRequestError.InvalidResponse)
+        {
+            // closed before a status line; or a status line or header it cannot read
+            return Failed(e.HttpRequestError == HttpRequestError.ResponseEnded ? "empty" : "weird");
+        }
         catch (Exception e) when (e is HttpRequestException or IOException or SocketException or AuthenticationException or WebFailure)
         {
             for (Exception? x = e; x != null; x = x.InnerException)
@@ -444,7 +461,7 @@ internal sealed class WebSession
         var encoding = x.Headers.FirstOrDefault(h => h.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase)).Value?.Trim().ToLowerInvariant();
         if (encoding is null or "" or "identity") return x;
         var body = encoding is "gzip" or "x-gzip" or "deflate" ? (x.Body.Length == 0 ? [] : Inflate(x.Body, encoding != "deflate", cap + 1)) : null;
-        if (body == null) return x with { Status = 0, Reason = "", Headers = [], Body = [], Error = "recv" };
+        if (body == null) return x with { Status = 0, Reason = "", Headers = [], Body = [], Error = x.Error ?? "recv" };
         return x with
         {
             Body = body,
@@ -525,7 +542,7 @@ internal sealed class WebSession
                 : headers.Where(h => !h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) && !h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).ToList();
             var response = await SendAsync(url, forcedMethod ?? method, hopHeaders, body, timeout, ct);
             onHop?.Invoke(response);
-            if (!follow || response.Status is not (301 or 302 or 303 or 307 or 308) || response.Header("Location") is not { Length: > 0 } location) return (response, redirects);
+            if (!follow || response.Error != null || response.Status is not (301 or 302 or 303 or 307 or 308) || response.Header("Location") is not { Length: > 0 } location) return (response, redirects);
             if (redirects >= limit) throw new WebFailure(WebError.Redirects, url.Host, url.Port) { Detail = limit.ToString(System.Globalization.CultureInfo.InvariantCulture) };
             url = url.Resolve(location);
             if (response.Status == 303 && method != "HEAD" || response.Status is 301 or 302 && method == "POST")

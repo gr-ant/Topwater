@@ -74,13 +74,59 @@ public class WebAccessTests
         return (sh, handler);
     }
 
+    static readonly JsonElement Routes = JsonDocument.Parse(File.ReadAllText(Path.Combine(Dir, "routes.json"))).RootElement.GetProperty("routes");
+
+    /// <summary>Serves the "raw" routes on a loopback port, byte for byte as tests/web/server.py does, then closes.</summary>
+    static (TcpListener Listener, int Port) RawServer()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                TcpClient client;
+                try { client = await listener.AcceptTcpClientAsync(); } catch (Exception) { return; }
+                _ = Task.Run(async () =>
+                {
+                    using var _ = client;
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream, Encoding.Latin1);
+                    var target = (await reader.ReadLineAsync())!.Split(' ')[1];
+                    while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                    await stream.WriteAsync(Encoding.Latin1.GetBytes(Routes.GetProperty(target).GetProperty("raw").GetString()!));
+                    client.Client.Shutdown(SocketShutdown.Send);
+                });
+            }
+        });
+        return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
+    }
+
+    /// <summary>The real connection path to <see cref="RawServer"/>: the wire cases are malformed responses a fake handler cannot send.</summary>
+    static async Task<Shell> WireShell(int port)
+    {
+        var sh = new Shell().AllowWeb(new WebPolicy
+        {
+            Domains = [$"api.test:{port}"], AllowHttp = true, ExplainBlocked = false, Handler = WebSession.PinnedHandler(_ => [IPAddress.Loopback], allowLoopback: true),
+        });
+        await sh.RunAsync("mkdir -p /tmp/w && cd /tmp/w");
+        return sh;
+    }
+
     [Theory]
     [MemberData(nameof(Ids))]
     public async Task Case(string id)
     {
         var c = Cases[id];
-        var (sh, _) = await Make();
-        var r = await sh.RunAsync(c.GetProperty("script").GetString()!);
+        var script = c.GetProperty("script").GetString()!;
+        ShellResult r;
+        if (c.TryGetProperty("wire", out var wire) && wire.GetBoolean())
+        {
+            var (listener, port) = RawServer();
+            try { r = await (await WireShell(port)).RunAsync(script.Replace("http://api.test/", $"http://api.test:{port}/")); }
+            finally { listener.Stop(); }
+        }
+        else r = await (await Make()).Shell.RunAsync(script);
         Assert.Equal(c.GetProperty("stdout").GetString(), r.Stdout);
         if (c.GetProperty("stderr").ValueKind == JsonValueKind.String) Assert.Equal(c.GetProperty("stderr").GetString(), r.Stderr);
         Assert.Equal(c.GetProperty("exitCode").GetInt32(), r.ExitCode);
@@ -270,6 +316,29 @@ public class WebAccessTests
         var (sh, _) = await Make();
         var r = await sh.Fork().RunAsync("curl -s http://api.test/hello; echo $?");
         Assert.Equal("6\n", r.Stdout);
+    }
+
+    [Fact]
+    public async Task ABodyCutShortReplaysAsItCame()
+    {
+        var (listener, port) = RawServer();
+        try
+        {
+            var sh = await WireShell(port);
+            var recorder = sh.StartRecording();
+            var first = await sh.RunAsync($"curl -sS http://api.test:{port}/short-length; curl -sS http://api.test:{port}/empty; wget -q -O- http://api.test:{port}/chunked-short; echo $?");
+            recorder.Stop();
+            Assert.Equal("shortok\n4\n", first.Stdout);
+            var file = new MemoryStream();
+            recorder.Save(file);
+            file.Position = 0;
+            var loaded = Recording.Load(file);
+            Assert.Equal([("partial", 200, "short"), ("empty", 0, ""), ("partial", 200, "ok\n")],
+                loaded.Calls[0].Web!.Select(x => (x.Error, x.Status, Encoding.UTF8.GetString(x.Body))));
+            var report = await loaded.ReplayAsync();
+            Assert.True(report.Matches, report.ToString());
+        }
+        finally { listener.Stop(); }
     }
 
     [Fact]

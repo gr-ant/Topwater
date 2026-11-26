@@ -55,7 +55,7 @@
   "exitCodes": {
     "1": "generic error (an output file that cannot be written, a request the web policy refuses)",
     "2": "bad command line",
-    "4": "network failure: host not resolved or not allowed, connection refused, timeout",
+    "4": "network failure: host not resolved or not allowed, connection refused, timeout, a response cut short or unreadable",
     "5": "certificate not trusted",
     "8": "the server answered with an error status, or too many redirects"
   },
@@ -77,6 +77,7 @@
     "saving": "Saving to: {file:locale}",
     "saved": "{time} - {file:locale} saved [{size}]",
     "written": "{time} - written to stdout [{size}]",
+    "closed": "{time} - Connection closed at byte {size}. Giving up.",
     "writeFailed": "{file}: {errno}",
     "readFile": "wget: Couldn't open {file}: {errno}",
     "timeout": "Read error (Connection timed out) in headers.",
@@ -97,5 +98,5 @@
     "nvSpider": "{time} URL: {url} {status}",
     "clobber": "File {file:locale} already there; not retrieving."
   },
-  "notes": "Registered in every shell; without a web policy every host fails to resolve. The progress report is shortened: no Resolving/Connecting lines, no dots or speed. No retries. -nv and -nc are wget's two-letter short forms of --no-verbose and --no-clobber."
+  "notes": "Registered in every shell; without a web policy every host fails to resolve. The progress report is shortened: no Resolving/Connecting lines, no dots or speed. No retries. -nv and -nc are wget's two-letter short forms of --no-verbose and --no-clobber. A body cut short (before its Content-Length or last chunk) is written as far as it came and fails with 4; a chunk size that is not hex, an unreadable status line or header, and no response at all fail with 4 and write nothing (wget itself reads some of these as HTTP/0.9 or skips the line)."
 }

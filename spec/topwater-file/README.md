@@ -66,12 +66,14 @@ A shell with web access (`AllowWeb`) adds `web` to the header: its policy withou
 (`credentials` lists only the host names) and without its handler. A call that made requests adds `web`: each request
 as it went out of the policy check and what came back, in order, redirects included. A response's body is a blob
 (`body` names it, `size` is its length; no `body` when empty), stored after credentials were scrubbed; a request that
-failed below the policy has `error` (`resolve`, `blocked`, `connect`, `timeout`, `tls` or `recv`) instead of a status.
+failed below the policy has `error` (`resolve`, `blocked`, `connect`, `timeout`, `tls`, `recv`; `weird`: an unreadable
+status line or header; `empty`: closed before any response) instead of a status. A body that ended before its
+`Content-Length` or last chunk has a status, its body as far as it came, and `error: "partial"`.
 Requests the policy refused are not stored: a replay under the same policy refuses them again.
 
 A shell built from the recording serves these in order, starting at the first call it runs, and never uses the
 network. A reader checks each blob as it does a file's (present, the stated size, matching its hash), every body
-together at most MaxFileSystemBytes, `status` from 100 to 999, and `error` one of the six. Files without `web` load as
+together at most MaxFileSystemBytes, `status` from 100 to 999, and `error` one of the nine. Files without `web` load as
 before; the history version stays 1, since a Topwater without web access has no `curl` to replay anyway.
 
 ## `files`

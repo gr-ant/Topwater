@@ -3,7 +3,7 @@
 // write and read it. The JSON Lines recordings this replaced (snapshots embedded or in side-car files) still load.
 import { DEFAULTS, Shell, type ShellOptions, type ShellResult } from './shell.js';
 import { HOST, ShellSnapshot, SnapshotError, USER, openTopwater, parseTime, sha256, writeTopwater } from './snapshot.js';
-import { WebSession, type WebExchange, type WebPolicy } from './web.js';
+import { KINDS, WebSession, type WebExchange, type WebPolicy } from './web.js';
 import { sameEntry, type VfsEntry } from './vfs.js';
 
 export const RECORDING_FORMAT_VERSION = 1;
@@ -123,10 +123,10 @@ export class Recording {
     });
     const blobs = new Map<string, Uint8Array>();
     const exchange = async (x: WebExchange) => {
-      if (x.error) return { method: x.method, url: x.url, error: x.error };
+      if (x.error && !x.status) return { method: x.method, url: x.url, error: x.error };
       const body = x.body.length ? await sha256(x.body) : undefined;
       if (body) blobs.set(body, x.body);
-      return { method: x.method, url: x.url, status: x.status, reason: x.reason, headers: x.headers, body, size: x.body.length };
+      return { method: x.method, url: x.url, status: x.status, reason: x.reason, headers: x.headers, body, size: x.body.length, error: x.error };
     };
     const lines = [JSON.stringify(header)];
     const checkpoints: [string, ShellSnapshot][] = [['checkpoints/0.json', this.start]];
@@ -357,7 +357,6 @@ function webPolicy(w: any): WebPolicy {
   return policy;
 }
 
-const ERRORS = ['resolve', 'blocked', 'connect', 'timeout', 'tls', 'recv'];
 
 /** One call's requests and responses; each body is a blob. */
 async function exchanges(list: unknown, where: string, blob: (hash: unknown, size: number, where: string) => Promise<Uint8Array>): Promise<WebExchange[]> {
@@ -367,8 +366,8 @@ async function exchanges(list: unknown, where: string, blob: (hash: unknown, siz
     const w = `${where} web ${i}`;
     if (x == null || typeof x !== 'object') throw bad(`${where}: null in web`);
     if (typeof x.method !== 'string' || !x.method || typeof x.url !== 'string' || !x.url) throw bad(`${w}: method and url are required`);
-    if (x.error != null) {
-      if (!ERRORS.includes(x.error)) throw bad(`${w}: unknown error ${JSON.stringify(x.error)}`);
+    if (x.error != null && !KINDS.includes(x.error)) throw bad(`${w}: unknown error ${JSON.stringify(x.error)}`);
+    if (x.error != null && x.status == null) { // no answer; with a status, the response came in part
       out.push({ method: x.method, url: x.url, status: 0, reason: '', headers: [], body: new Uint8Array(0), error: x.error });
       continue;
     }
@@ -377,7 +376,7 @@ async function exchanges(list: unknown, where: string, blob: (hash: unknown, siz
       || (x.reason != null && typeof x.reason !== 'string')
       || (x.headers != null && !(Array.isArray(x.headers) && x.headers.every((h: unknown) => Array.isArray(h) && h.length === 2 && h.every(s => typeof s === 'string')))))
       throw bad(`${w}: bad response`);
-    out.push({ method: x.method, url: x.url, status: x.status, reason: x.reason ?? '', headers: x.headers ?? [], body: await blob(x.body, size, w) });
+    out.push({ method: x.method, url: x.url, status: x.status, reason: x.reason ?? '', headers: x.headers ?? [], body: await blob(x.body, size, w), ...x.error != null && { error: x.error } });
   }
   return out;
 }

@@ -268,7 +268,7 @@ async function curl(ctx: CommandContext): Promise<number> {
         redirects = result.redirects;
         let data = r.body;
         const encoding = header(r, 'Content-Encoding')?.trim().toLowerCase();
-        if (compressed && !r.truncated && (encoding === 'gzip' || encoding === 'x-gzip' || encoding === 'deflate') && data.length > 0)
+        if (compressed && !r.truncated && !r.error && (encoding === 'gzip' || encoding === 'x-gzip' || encoding === 'deflate') && data.length > 0)
           data = decode(data, encoding !== 'deflate', web.policy.maxResponseBytes);
         if ((fail || failWithBody) && r.status >= 400) {
           if (failWithBody) buffer.push(data);
@@ -277,8 +277,9 @@ async function curl(ctx: CommandContext): Promise<number> {
         } else {
           if (!head) buffer.push(data);
           if (r.truncated) { code = 63; message = M('tooLarge'); }
+          else if (r.error) [code, message] = cutShort(r);
         }
-        if (target !== null && target !== '-' && (code === 0 || code === 63 || failWithBody)) {
+        if (target !== null && target !== '-' && ([0, 18, 63].includes(code) || failWithBody)) {
           try { ctx.fs.writeBytes(ctx.resolvePath(target), concatBytes(buffer)); } catch (e) {
             if (!(e instanceof ShellError)) throw e;
             code = 23; message = M('writeFailed');
@@ -333,6 +334,13 @@ async function curl(ctx: CommandContext): Promise<number> {
   return exit;
 }
 
+/** A response whose body ended early (written as far as it came). */
+function cutShort(r: WebResponse): [number, string] {
+  const M = (key: string, values: Record<string, string> = {}) => specMessage('curl', key, values);
+  const length = header(r, 'Content-Length')?.trim() ?? '';
+  return /^[0-9]+$/.test(length) && Number(length) > r.body.length ? [18, M('partial', { bytes: String(Number(length) - r.body.length) })] : [18, M('partialChunked')];
+}
+
 function curlError(f: WebFailure, explain: boolean): [number, string] {
   const M = (key: string, values: Record<string, string> = {}) => specMessage('curl', key, values);
   if (f.blocked !== null && (explain || f.kind === 'policy')) return [f.kind === 'resolve' ? 6 : f.kind === 'connect' ? 7 : 1, M('blocked', { reason: f.blocked })];
@@ -348,6 +356,9 @@ function curlError(f: WebFailure, explain: boolean): [number, string] {
     case 'badHeader': return [43, M('badHeader')];
     case 'tooLarge': return [63, M('tooLarge')];
     case 'replay': return [7, M('replay', { request: f.detail })];
+    case 'partial': return [18, M('partialChunked')];
+    case 'weird': return [8, M('weird')];
+    case 'empty': return [52, M('empty')];
     default: return f.kind === 'recv' && f.detail === 'noRemoteName' ? [23, M('noRemoteName')] : [56, M('recv')];
   }
 }
@@ -598,9 +609,15 @@ async function wget(ctx: CommandContext): Promise<number> {
         }
         say('');
         const size = String(r.body.length) + (length !== undefined ? '/' + length : '');
-        say(file === '-' ? M('written', { time: now(), size }) : M('saved', { time: now(), file, size }));
-        say('');
-        if (brief) note(M('nvSaved', { time: now(), url: r.url.toString(), size, file }));
+        if (r.error) { // the body ended early: kept as far as it came
+          note(M('closed', { time: now(), size: String(r.body.length) }));
+          say('');
+          code = 4;
+        } else {
+          say(file === '-' ? M('written', { time: now(), size }) : M('saved', { time: now(), file, size }));
+          say('');
+        }
+        if (brief && !r.error) note(M('nvSaved', { time: now(), url: r.url.toString(), size, file }));
         if (r.truncated) { ctx.stderr.write(M('tooLarge', { limit: String(web.policy.maxResponseBytes) }) + '\n'); code = 1; }
       }
     } catch (e) {

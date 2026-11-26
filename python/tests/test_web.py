@@ -71,10 +71,50 @@ def make(**more):
     return sh, fx
 
 
+@pytest.fixture(scope="module")
+def raw_server():
+    """Serves the "raw" routes on a loopback port, byte for byte as tests/web/server.py does, then closes."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+
+    def handle(conn):
+        with conn:
+            f = conn.makefile("rb")
+            target = f.readline().split(b" ")[1].decode()
+            while f.readline() not in (b"\r\n", b"\n", b""):
+                pass
+            conn.sendall(ROUTES[target]["raw"].encode("latin-1"))
+            conn.shutdown(socket.SHUT_WR)
+
+    def serve():
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+    threading.Thread(target=serve, daemon=True).start()
+    yield listener.getsockname()[1]
+    listener.close()
+
+
+def wire_shell(port, **more):
+    """The real connection path to raw_server: the wire cases are malformed responses a fake transport cannot send."""
+    sh = Shell().allow_web(WebPolicy(domains=[f"api.test:{port}"], allow_http=True, explain_blocked=False, **more,
+                                     transport=functools.partial(pinned_transport, resolve=lambda name: ["127.0.0.1"], allow_loopback=True)))
+    sh.run("mkdir -p /tmp/w && cd /tmp/w")
+    return sh
+
+
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_case(case):
-    sh, _ = make()
-    r = sh.run(case["script"])
+def test_case(case, raw_server):
+    if case.get("wire"):
+        sh = wire_shell(raw_server)
+        r = sh.run(case["script"].replace("http://api.test/", f"http://api.test:{raw_server}/"))
+    else:
+        sh, _ = make()
+        r = sh.run(case["script"])
     assert r.stdout == case["stdout"]
     if case["stderr"] is not None:
         assert r.stderr == case["stderr"]
@@ -316,6 +356,19 @@ WEB_SCENARIO = [
     "curl -sL -o page http://api.test/redirect; wget -q http://api.test/gzip; cat page; wc -c < gzip",
     "curl -sS http://nope.test/; echo $?",
 ]
+
+
+def test_a_body_cut_short_replays_as_it_came(raw_server):
+    sh = wire_shell(raw_server)
+    recorder = sh.start_recording()
+    first = sh.run(f"curl -sS http://api.test:{raw_server}/short-length; curl -sS http://api.test:{raw_server}/empty; "
+                   f"wget -q -O- http://api.test:{raw_server}/chunked-short; echo $?")
+    recorder.stop()
+    assert first.stdout == "shortok\n4\n"
+    loaded, _ = save_and_load(recorder.recording)
+    assert [(x.error, x.status, x.body) for x in loaded.calls[0].web] == [("partial", 200, b"short"), ("empty", 0, b""), ("partial", 200, b"ok\n")]
+    report = loaded.replay()
+    assert report.matches, report.differences
 
 
 def test_a_recording_from_the_csharp_port_replays():

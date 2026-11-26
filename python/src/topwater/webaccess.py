@@ -23,10 +23,13 @@ from typing import Callable, Mapping, Sequence
 
 # A transport sends one request: (method, url, [(name, value)], body, timeout, limit) -> (status, reason, [(name, value)], body).
 # It must not follow redirects. It may return more than limit + 1 bytes of body (they are cut), but need not. It raises
-# TransportError(kind) for a request that got no answer.
+# TransportError(kind) for a request that got no answer, or whose body ended early (kind partial, with the response so
+# far as response).
 Transport = Callable[[str, str, "list[tuple[str, str]]", "bytes | None", float, int], "tuple[int, str, list[tuple[str, str]], bytes]"]
 
-ERROR_KINDS = ("resolve", "blocked", "connect", "timeout", "tls", "recv")
+# partial: the body ended before its Content-Length or last chunk; weird: an unreadable status line or header; empty: the
+# connection closed before any response (curl 18, 8, 52; see spec/commands/curl.json)
+ERROR_KINDS = ("resolve", "blocked", "connect", "timeout", "tls", "recv", "partial", "weird", "empty")
 
 
 @dataclass
@@ -54,8 +57,8 @@ class WebPolicy:
 
 @dataclass
 class WebExchange:
-    """One request a recorded call made and what came back, or how it failed (error: resolve, blocked, connect, timeout,
-    tls, recv), stored so a replay never touches the network."""
+    """One request a recorded call made and what came back, or how it failed (error: one of ERROR_KINDS), stored so a
+    replay never touches the network. An error with a status (partial) is a body that ended early: what came is kept."""
     method: str
     url: str
     status: int = 0
@@ -66,11 +69,12 @@ class WebExchange:
 
 
 class TransportError(Exception):
-    """A transport's request got no answer; kind is one of ERROR_KINDS."""
+    """A transport's request got no answer, or its body ended early; kind is one of ERROR_KINDS, response (status,
+    reason, headers, body) what came before a partial one."""
 
-    def __init__(self, kind: str):
+    def __init__(self, kind: str, response: tuple | None = None):
         super().__init__(kind)
-        self.kind = kind
+        self.kind, self.response = kind, response
 
 
 class WebFailure(Exception):
@@ -267,8 +271,9 @@ def secrets_of(credential: str) -> list[str]:
 
 
 class WebResponse:
-    def __init__(self, url: WebUrl, method: str, status: int, reason: str, headers: list, body: bytes, truncated: bool):
+    def __init__(self, url: WebUrl, method: str, status: int, reason: str, headers: list, body: bytes, truncated: bool, error: str | None = None):
         self.url, self.method, self.status, self.reason, self.headers, self.body, self.truncated = url, method, status, reason, headers, body, truncated
+        self.error = error  # partial: the body ended early, and is what came
 
     def header(self, name: str) -> str | None:
         return next((v for k, v in self.headers if k.lower() == name.lower()), None)
@@ -379,14 +384,14 @@ class WebSession:
         else:
             exchange = await self._exchange(url, method, sent, body, timeout, secrets, deadline, auth is not None)
         self._log.append(exchange)
-        if exchange.error is not None:
+        if exchange.error is not None and not exchange.status:
             blocked = exchange.error == "blocked"
             raise WebFailure("resolve" if blocked else exchange.error, url.host, url.port,
                              explain(_reason("reasonResolvesPrivate", host=url.host)) if blocked else None,
                              detail=str(int(timeout * 1000)) if exchange.error == "timeout" else "")
         truncated = len(exchange.body) > p.max_response_bytes
         return WebResponse(url, method, exchange.status, exchange.reason, list(exchange.headers),
-                           exchange.body[:p.max_response_bytes] if truncated else exchange.body, truncated)
+                           exchange.body[:p.max_response_bytes] if truncated else exchange.body, truncated, exchange.error)
 
     def _next_recorded(self, method: str, url: str) -> WebExchange:
         if self._replay_at < len(self._replay):
@@ -408,6 +413,7 @@ class WebSession:
         wait = min(timeout, deadline - time.monotonic())
         if wait <= 0:
             raise CallTimeout()
+        error = None
         try:
             status, reason, raw_headers, data = await asyncio.wait_for(
                 asyncio.to_thread(self._send, method, str(url), list(headers), body, wait, cap), wait)
@@ -416,7 +422,10 @@ class WebSession:
                 raise CallTimeout() from None
             return failed("timeout")
         except TransportError as e:
-            return failed(e.kind if e.kind in ERROR_KINDS else "recv")
+            kind = e.kind if e.kind in ERROR_KINDS else "recv"
+            if e.response is None or kind != "partial":
+                return failed(kind)
+            (status, reason, raw_headers, data), error = e.response, kind
         except ssl.SSLError:
             return failed("tls")
         except socket.gaierror:
@@ -434,10 +443,10 @@ class WebSession:
             # the scrub must see the credential as the agent will, so a compressed echo cannot carry it out
             data = decode_body(data, encoding, cap + 1)
             if data is None:
-                return failed("recv")
+                return failed(error or "recv")
             resp_headers = [(k, v) for k, v in resp_headers if k.lower() not in ("content-encoding", "content-length")]
         return WebExchange(method, str(url), int(status), reason or "", [(k, _scrub(v, secrets)) for k, v in resp_headers],
-                           _scrub_bytes(data, secrets))
+                           _scrub_bytes(data, secrets), error)
 
     async def fetch(self, url: WebUrl, method: str, forced: str | None, headers: list, body: bytes | None, follow: bool,
                     max_redirects: int, timeout: float, on_hop, deadline: float) -> tuple[WebResponse, int]:
@@ -452,7 +461,7 @@ class WebSession:
             if on_hop:
                 on_hop(response)
             location = response.header("Location")
-            if not follow or response.status not in (301, 302, 303, 307, 308) or not location:
+            if not follow or response.error or response.status not in (301, 302, 303, 307, 308) or not location:
                 return response, redirects
             if redirects >= limit:
                 raise WebFailure("redirects", url.host, url.port, detail=str(limit))
@@ -573,15 +582,35 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
             conn.putheader("Content-Length", str(len(body)))
         sock.settimeout(left())
         conn.endheaders(body)
-        resp = conn.getresponse()  # http.client caps a header line at 64 KB and the count at 100
+        try:
+            resp = conn.getresponse()  # http.client caps a header line at 64 KB and the count at 100, skips 100 Continue
+        except http.client.RemoteDisconnected:
+            raise TransportError("empty") from None
+        except http.client.BadStatusLine:
+            raise TransportError("weird") from None
+        if resp.msg.defects:  # a header line without a colon, or a continuation line first
+            raise TransportError("weird")
         data = bytearray()
+        failure = None
+        ended = []  # the connection closed where a chunk size was due (http.client closes it on any bad size line)
+        next_size = resp._read_next_chunk_size
+        resp._read_next_chunk_size = lambda: (ended.append(not resp.fp.peek(1)), next_size())[1]
         if method != "HEAD":
-            while len(data) <= limit:
-                chunk = resp.read1(min(65536, limit + 1 - len(data)))
-                if not chunk:
-                    break
-                data += chunk
+            try:
+                while len(data) <= limit:
+                    chunk = resp.read1(min(65536, limit + 1 - len(data)))
+                    if not chunk:
+                        failure = "partial" if resp.length else None  # closed before Content-Length
+                        break
+                    data += chunk
+            except http.client.IncompleteRead:
+                # a chunked body cut short (the connection closed) or a chunk size that is not hex (more follows)
+                if resp.fp is None and not (ended and ended[-1]):
+                    raise TransportError("recv") from None  # nothing of a malformed body is kept
+                failure = "partial"
         left()  # the socket was shut at the deadline: what was read is not the whole body
+        if failure:
+            raise TransportError(failure, (resp.status, resp.reason or "", resp.getheaders(), bytes(data)))
         return resp.status, resp.reason or "", resp.getheaders(), bytes(data)
     except (TransportError, TimeoutError):
         raise

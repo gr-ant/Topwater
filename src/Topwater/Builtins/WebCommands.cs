@@ -283,7 +283,7 @@ internal static partial class Builtins
                     }
                     (last, redirects) = await web.FetchAsync(url, method, forced, sent, body, follow, maxRedirs, timeout, OnHop, ctx.CancellationToken);
                     var data = last.Body;
-                    if (compressed && !last.Truncated && last.Header("Content-Encoding")?.Trim().ToLowerInvariant() is "gzip" or "x-gzip" or "deflate" && data.Length > 0)
+                    if (compressed && !last.Truncated && last.Error == null && last.Header("Content-Encoding")?.Trim().ToLowerInvariant() is "gzip" or "x-gzip" or "deflate" && data.Length > 0)
                     {
                         data = WebSession.Inflate(data, last.Header("Content-Encoding")!.Trim().ToLowerInvariant() != "deflate", web.Policy.MaxResponseBytes + 1) ?? throw new WebFailure(WebError.Recv);
                         if (data.Length > web.Policy.MaxResponseBytes) throw new WebFailure(WebError.TooLarge);
@@ -298,8 +298,9 @@ internal static partial class Builtins
                     {
                         if (!head) buffer.Write(data);
                         if (last.Truncated) { code = 63; message = CommandSpec.Message("curl", "tooLarge"); }
+                        else if (last.Error != null) (code, message) = CutShort(last);
                     }
-                    if (target is { } t && t != "-" && (code == 0 || code == 63 || failWithBody))
+                    if (target is { } t && t != "-" && (code is 0 or 18 or 63 || failWithBody))
                     {
                         try { ctx.Fs.WriteAllBytes(ctx.ResolvePath(t), buffer.ToArray()); }
                         catch (ShellException) { code = 23; message = CommandSpec.Message("curl", "writeFailed"); }
@@ -354,6 +355,15 @@ internal static partial class Builtins
         return exit;
     }
 
+    /// <summary>A response whose body ended early (written as far as it came).</summary>
+    static (int Code, string Message) CutShort(WebResponse r)
+    {
+        var length = r.Header("Content-Length")?.Trim() ?? "";
+        return long.TryParse(length, NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n > r.Body.Length
+            ? (18, CommandSpec.Message("curl", "partial", ("bytes", (n - r.Body.Length).ToString(CultureInfo.InvariantCulture))))
+            : (18, CommandSpec.Message("curl", "partialChunked"));
+    }
+
     static (int Code, string Message) CurlError(WebFailure f, bool explain)
     {
         string M(string key, params (string, string)[] values) => CommandSpec.Message("curl", key, values);
@@ -371,6 +381,9 @@ internal static partial class Builtins
             WebError.BadHeader => (43, M("badHeader")),
             WebError.TooLarge => (63, M("tooLarge")),
             WebError.Replay => (7, M("replay", ("request", f.Detail))),
+            WebError.Partial => (18, M("partialChunked")),
+            WebError.Weird => (8, M("weird")),
+            WebError.Empty => (52, M("empty")),
             WebError.Recv when f.Detail == "noRemoteName" => (23, M("noRemoteName")),
             _ => (56, M("recv")),
         };
@@ -627,9 +640,18 @@ internal static partial class Builtins
                     }
                     Say("");
                     var size = r.Body.Length.ToString(CultureInfo.InvariantCulture) + (length != null ? "/" + length : "");
-                    Say(file == "-" ? M("written", ("time", Now()), ("size", size)) : M("saved", ("time", Now()), ("file", file), ("size", size)));
-                    Say("");
-                    if (brief) Note(M("nvSaved", ("time", Now()), ("url", r.Url.ToString()), ("size", size), ("file", file)));
+                    if (r.Error != null) // the body ended early: kept as far as it came
+                    {
+                        Note(M("closed", ("time", Now()), ("size", r.Body.Length.ToString(CultureInfo.InvariantCulture))));
+                        Say("");
+                        code = 4;
+                    }
+                    else
+                    {
+                        Say(file == "-" ? M("written", ("time", Now()), ("size", size)) : M("saved", ("time", Now()), ("file", file), ("size", size)));
+                        Say("");
+                    }
+                    if (brief && r.Error == null) Note(M("nvSaved", ("time", Now()), ("url", r.Url.ToString()), ("size", size), ("file", file)));
                     if (r.Truncated) { ctx.Stderr.WriteLine(M("tooLarge", ("limit", web.Policy.MaxResponseBytes.ToString(CultureInfo.InvariantCulture)))); code = 1; }
                 }
             }

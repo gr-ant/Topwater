@@ -77,7 +77,7 @@
         "headers": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
         "body": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blobs/<sha256> holding the body, after credentials were scrubbed; absent when empty." },
         "size": { "type": "integer", "minimum": 0 },
-        "error": { "enum": ["resolve", "blocked", "connect", "timeout", "tls", "recv"], "description": "How the request failed instead of getting an answer." }
+        "error": { "enum": ["resolve", "blocked", "connect", "timeout", "tls", "recv", "partial", "weird", "empty"], "description": "How the request failed instead of getting an answer; partial with a status: the body ended early, and is what came." }
       }
     }
   }

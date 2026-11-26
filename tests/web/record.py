@@ -7,7 +7,9 @@
 Each case runs as `bash -c` in an empty /tmp/w, LC_ALL=C.UTF-8, in a container without a network where api.test
 is 127.0.0.1 and server.py serves routes.json on port 80. Other names do not resolve, which is what Topwater's web
 policy makes of hosts it does not allow. Only stdout, stderr and the exit status are stored; "stderr": null in a
-case means stderr is not compared (wget's progress report has times and speeds).
+case means stderr is not compared (wget's progress report has times and speeds). A case with a "note" is Topwater's
+own behaviour where it differs from curl or wget on purpose (the note says how): it is not recorded, only printed
+beside what the real tool does.
 """
 import json, os, subprocess, sys
 
@@ -40,6 +42,9 @@ def main():
                         "--add-host", "api.test:127.0.0.1", "-v", f"{HERE}:/web:ro", IMAGE, "python3", "-c", INSIDE],
                        input=json.dumps([{"script": c["script"]} for c in todo]).encode(), capture_output=True, check=True)
     for c, res in zip(todo, json.loads(r.stdout)):
+        if "note" in c:
+            print(f"{c['id']} (not recorded: {c['note']}): {json.dumps(res)}")
+            continue
         keep_stderr = c.get("stderr", "") is not None
         c.update(res)
         if not keep_stderr:

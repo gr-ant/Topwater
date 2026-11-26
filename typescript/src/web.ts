@@ -35,16 +35,20 @@ export interface WebPolicy {
   transport?: WebTransport;
 }
 
-/** How a request failed below the policy; a transport throws an error with one of these as its `kind` (anything else is recv). */
-export type WebErrorKind = 'resolve' | 'blocked' | 'connect' | 'timeout' | 'tls' | 'recv';
-const KINDS: readonly string[] = ['resolve', 'blocked', 'connect', 'timeout', 'tls', 'recv'];
+/** How a request failed below the policy; a transport throws an error with one of these as its `kind` (anything else is
+ * recv). partial: the body ended before its Content-Length or last chunk; weird: an unreadable status line or header;
+ * empty: closed before any response. A partial error may carry the response so far as `response`. */
+export type WebErrorKind = 'resolve' | 'blocked' | 'connect' | 'timeout' | 'tls' | 'recv' | 'partial' | 'weird' | 'empty';
+/** @internal */
+export const KINDS: readonly string[] = ['resolve', 'blocked', 'connect', 'timeout', 'tls', 'recv', 'partial', 'weird', 'empty'];
 
 /** Sends one request without following redirects, reading at most `maxBytes + 1` bytes of body. */
 export type WebTransport = (req: {
   method: string; url: string; headers: [string, string][]; body?: Uint8Array; timeoutMs: number; maxBytes: number; signal: AbortSignal;
 }) => Promise<{ status: number; reason: string; headers: [string, string][]; body: Uint8Array }>;
 
-/** One request a recorded call made and what came back (or how it failed: `error`), so a replay never touches the network. */
+/** One request a recorded call made and what came back (or how it failed: `error`), so a replay never touches the network.
+ * An error with a status (partial) is a body that ended early: what came is kept. */
 export interface WebExchange {
   method: string;
   url: string;
@@ -56,7 +60,7 @@ export interface WebExchange {
 }
 
 /** @internal Why a request failed; each command turns it into its own message and exit status. */
-export type WebError = 'badUrl' | 'badHostname' | 'protocol' | 'resolve' | 'connect' | 'timeout' | 'tls' | 'recv' | 'tooLarge' | 'redirects' | 'policy' | 'replay' | 'badHeader';
+export type WebError = 'badUrl' | 'badHostname' | 'protocol' | 'resolve' | 'connect' | 'timeout' | 'tls' | 'recv' | 'partial' | 'weird' | 'empty' | 'tooLarge' | 'redirects' | 'policy' | 'replay' | 'badHeader';
 
 /** @internal */
 export class WebFailure extends Error {
@@ -209,7 +213,8 @@ export function isBlocked(a: Uint8Array): boolean {
 }
 
 /** @internal */
-export interface WebResponse { url: WebUrl; method: string; status: number; reason: string; headers: [string, string][]; body: Uint8Array; truncated: boolean }
+/** `error` (partial): the body ended early, and is what came. */
+export interface WebResponse { url: WebUrl; method: string; status: number; reason: string; headers: [string, string][]; body: Uint8Array; truncated: boolean; error?: WebErrorKind }
 export const header = (r: { headers: [string, string][] }, name: string) => r.headers.find(h => h[0].toLowerCase() === name.toLowerCase())?.[1];
 
 const MAX_HEADER_BYTES = 64 * 1024;
@@ -307,13 +312,13 @@ export class WebSession {
 
     const exchange = this.replay ? this.nextRecorded(method, url.toString()) : await this.exchange(url, method, sent, body, timeoutMs, auth ? secrets : null, ctx);
     this.log.push(exchange);
-    if (exchange.error) {
+    if (exchange.error && !exchange.status) {
       const kind: WebError = exchange.error === 'blocked' ? 'resolve' : exchange.error;
       throw new WebFailure(kind, url.host, url.port, exchange.error === 'blocked' ? explain(reason('reasonResolvesPrivate', { host: url.host })) : null,
         kind === 'timeout' ? String(Math.floor(timeoutMs)) : '');
     }
     const truncated = exchange.body.length > p.maxResponseBytes;
-    return { url, method, status: exchange.status, reason: exchange.reason, headers: [...exchange.headers], body: truncated ? exchange.body.subarray(0, p.maxResponseBytes) : exchange.body, truncated };
+    return { url, method, status: exchange.status, reason: exchange.reason, headers: [...exchange.headers], body: truncated ? exchange.body.subarray(0, p.maxResponseBytes) : exchange.body, truncated, error: exchange.error };
   }
 
   private nextRecorded(method: string, url: string): WebExchange {
@@ -332,7 +337,14 @@ export class WebSession {
     const maxBytes = this.policy.maxResponseBytes + (secrets?.[0]?.length ?? 0);
     try {
       const transport = this.policy.transport ?? defaultTransport();
-      const r = await transport({ method, url: url.toString(), headers, body: body ?? undefined, timeoutMs: limit, maxBytes, signal: controller.signal });
+      let error: WebErrorKind | undefined;
+      const r = await transport({ method, url: url.toString(), headers, body: body ?? undefined, timeoutMs: limit, maxBytes, signal: controller.signal })
+        .catch(e => {
+          // a body that ended early keeps what came
+          if (controller.signal.aborted || !e?.response || e.kind !== 'partial') throw e;
+          error = e.kind;
+          return e.response as Awaited<ReturnType<WebTransport>>;
+        });
       if (r.headers.reduce((n, [k, v]) => n + k.length + v.length + 4, 0) > MAX_HEADER_BYTES) return failed('recv');
       let data = method === 'HEAD' ? new Uint8Array(0) : r.body.length > maxBytes + 1 ? r.body.subarray(0, maxBytes + 1) : r.body;
       let responseHeaders = r.headers;
@@ -342,13 +354,13 @@ export class WebSession {
         if (encoding !== undefined && encoding !== '' && encoding !== 'identity') {
           if (encoding !== 'gzip' && encoding !== 'x-gzip' && encoding !== 'deflate') return failed('recv');
           if (data.length > 0) {
-            try { data = decompress(data, encoding !== 'deflate', maxBytes + 1); } catch { return failed('recv'); }
+            try { data = decompress(data, encoding !== 'deflate', maxBytes + 1); } catch { return failed(error ?? 'recv'); }
           }
           responseHeaders = responseHeaders.filter(([k]) => !['content-encoding', 'content-length'].includes(k.toLowerCase()));
         }
       }
       const scrub = (s: string) => (secrets ?? []).reduce((t, secret) => t.split(secret).join('[REDACTED]'), s);
-      return { method, url: url.toString(), status: r.status, reason: r.reason || REASONS[r.status] || '', headers: responseHeaders.map(([k, v]) => [k, scrub(v)]), body: scrubBytes(data, secrets ?? []) };
+      return { method, url: url.toString(), status: r.status, reason: r.reason || REASONS[r.status] || '', headers: responseHeaders.map(([k, v]) => [k, scrub(v)]), body: scrubBytes(data, secrets ?? []), ...error && { error } };
     } catch (e) {
       if (e instanceof DeadlineExceeded) throw e;
       if (controller.signal.aborted) { ctx.checkTime(); return failed('timeout'); } // the call's own deadline ends the whole call
@@ -371,7 +383,7 @@ export class WebSession {
       const response = await this.send(url, forced ?? method, hopHeaders, body, timeoutMs, ctx);
       onHop?.(response);
       const location = header(response, 'Location');
-      if (!follow || ![301, 302, 303, 307, 308].includes(response.status) || !location) return { response, redirects };
+      if (!follow || response.error || ![301, 302, 303, 307, 308].includes(response.status) || !location) return { response, redirects };
       if (redirects >= limit) throw new WebFailure('redirects', url.host, url.port, null, String(limit));
       url = url.resolve(location);
       if (response.status === 303 && method !== 'HEAD' || (response.status === 301 || response.status === 302) && method === 'POST') {
@@ -489,7 +501,12 @@ export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => a
       for (let i = 0; i + 1 < raw.length; i += 2) list.push([raw[i], raw[i + 1]]);
       const chunks: Uint8Array[] = [];
       let total = 0;
-      const finish = () => done(() => resolve({ status: res.statusCode, reason: res.statusMessage ?? '', headers: list, body: concatBytes(chunks) }));
+      const response = () => ({ status: res.statusCode, reason: res.statusMessage ?? '', headers: list, body: concatBytes(chunks) });
+      const finish = () => done(() => resolve(response()));
+      // a body that ended early keeps what came (a turn later, so what was parsed has reached 'data'); nothing of a malformed
+      // one (a bad chunk size) is kept; bytes past a complete body (more than Content-Length) are ignored
+      cut = (e?: any) => setTimeout(() => res.complete ? finish() : done(() => reject(req.signal.aborted ? fail('timeout')
+        : /^HPE_/.test(String(e?.code ?? '')) ? fail('recv') : Object.assign(fail('partial'), { response: response() }))), 0);
       res.on('data', (c: Uint8Array) => {
         const take = c.subarray(0, Math.min(c.length, req.maxBytes + 1 - total));
         chunks.push(take);
@@ -497,10 +514,11 @@ export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => a
         if (total > req.maxBytes) { finish(); res.destroy(); r.destroy(); }
       });
       res.on('end', finish);
-      res.on('error', (e: any) => done(() => reject(classify(e, req.signal))));
-      res.on('aborted', () => done(() => reject(fail(req.signal.aborted ? 'timeout' : 'recv'))));
+      res.on('error', (e: any) => cut!(e));
+      res.on('aborted', () => cut!());
     });
-    r.on('error', (e: any) => done(() => reject(classify(e, req.signal))));
+    let cut: ((e?: any) => void) | undefined;
+    r.on('error', (e: any) => cut ? cut(e) : done(() => reject(classify(e, req.signal, true))));
     if (req.body) r.write(req.body);
     r.end();
   });
@@ -508,9 +526,11 @@ export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => a
 
 const nodeTransport = pinnedTransport();
 
-function classify(e: any, signal: AbortSignal) {
+function classify(e: any, signal: AbortSignal, beforeResponse = false) {
   const code = String(e?.code ?? '');
   if (signal.aborted || code === 'ABORT_ERR' || code === 'ETIMEDOUT') return fail('timeout');
+  if (beforeResponse && code === 'ECONNRESET' && e?.message === 'socket hang up') return fail('empty'); // closed before a status line
+  if (beforeResponse && /^HPE_/.test(code) && code !== 'HPE_HEADER_OVERFLOW') return fail('weird'); // a status line or header it cannot read
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_NONAME') return fail('resolve');
   if (code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || code === 'EADDRNOTAVAIL') return fail('connect');
   if (TLS.test(code)) return fail('tls');

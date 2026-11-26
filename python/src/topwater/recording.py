@@ -402,8 +402,9 @@ def _with_web(c: RecordedCall, web, number: int, blob) -> RecordedCall:
         if error is not None:
             if error not in ERROR_KINDS:
                 raise _bad(f"{where}: unknown error {json.dumps(error)}")
-            c.web.append(WebExchange(m, u, error=error))
-            continue
+            if "status" not in x:  # no answer; with a status, the response came in part
+                c.web.append(WebExchange(m, u, error=error))
+                continue
         status, size, reason, headers = x.get("status", 0), x.get("size", 0), x.get("reason"), x.get("headers")
         if (not _is_int(status) or not 100 <= status <= 999 or not _is_int(size) or size < 0 or not (reason is None or isinstance(reason, str))
                 or not (headers is None or isinstance(headers, list) and all(isinstance(h, list) and len(h) == 2 and all(isinstance(v, str) for v in h)
@@ -411,13 +412,13 @@ def _with_web(c: RecordedCall, web, number: int, blob) -> RecordedCall:
             raise _bad(f"{where}: bad response")
         if blob is None:
             raise _bad(f"{where}: web responses need a .topwater file")
-        c.web.append(WebExchange(m, u, status, reason or "", [(k, v) for k, v in headers or []], blob(x.get("body"), size, where)))
+        c.web.append(WebExchange(m, u, status, reason or "", [(k, v) for k, v in headers or []], blob(x.get("body"), size, where), error))
     return c
 
 
 def _exchange_entry(x: WebExchange, zf: zipfile.ZipFile, written: set) -> dict:
     """One request of a call and its response; the body is a blob (written now, so it is in the zip before history.jsonl)."""
-    if x.error is not None:
+    if x.error is not None and not x.status:
         return {"method": x.method, "url": x.url, "error": x.error}
     entry = {"method": x.method, "url": x.url, "status": x.status, "reason": x.reason, "headers": [[k, v] for k, v in x.headers]}
     if x.body:
@@ -426,6 +427,8 @@ def _exchange_entry(x: WebExchange, zf: zipfile.ZipFile, written: set) -> dict:
             written.add(blob)
             zf.writestr("blobs/" + blob, x.body)
     entry["size"] = len(x.body)
+    if x.error is not None:
+        entry["error"] = x.error
     return entry
 
 

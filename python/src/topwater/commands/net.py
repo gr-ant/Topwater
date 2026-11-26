@@ -337,7 +337,7 @@ async def _curl(ctx):
                 last_r, redirects = await web.fetch(url, method, forced, sent, body, follow, max_redirs, timeout, on_hop, ctx.shell._deadline)
                 data = last_r.body
                 encoding = (last_r.header("Content-Encoding") or "").strip().lower()
-                if compressed and not last_r.truncated and encoding in ("gzip", "x-gzip", "deflate") and data:
+                if compressed and not last_r.truncated and not last_r.error and encoding in ("gzip", "x-gzip", "deflate") and data:
                     data = _decompress(data, encoding != "deflate", web.policy.max_response_bytes)
                     if data is None:
                         raise WebFailure("recv")
@@ -351,7 +351,9 @@ async def _curl(ctx):
                         buffer.extend(data)
                     if last_r.truncated:
                         code, message = 63, spec_message("curl", "tooLarge")
-                if target is not None and target != "-" and (code in (0, 63) or fail_with_body):
+                    elif last_r.error:
+                        code, message = _curl_cut_short(last_r)
+                if target is not None and target != "-" and (code in (0, 18, 63) or fail_with_body):
                     try:
                         ctx.fs.write_bytes(ctx.resolve(target), bytes(buffer))
                     except ShellError:
@@ -419,6 +421,14 @@ async def _curl(ctx):
     return exit_code
 
 
+def _curl_cut_short(r) -> tuple[int, str]:
+    """A response whose body ended early (written as far as it came)."""
+    length = (r.header("Content-Length") or "").strip()
+    if length.isascii() and length.isdigit() and int(length) > len(r.body):
+        return 18, spec_message("curl", "partial", bytes=str(int(length) - len(r.body)))
+    return 18, spec_message("curl", "partialChunked")
+
+
 def _curl_error(f: WebFailure, explain: bool) -> tuple[int, str]:
     if f.blocked is not None and (explain or f.kind == "policy"):
         return {"resolve": 6, "connect": 7}.get(f.kind, 1), spec_message("curl", "blocked", reason=f.blocked)
@@ -445,6 +455,12 @@ def _curl_error(f: WebFailure, explain: bool) -> tuple[int, str]:
         return 63, spec_message("curl", "tooLarge")
     if k == "replay":
         return 7, spec_message("curl", "replay", request=f.detail)
+    if k == "partial":
+        return 18, spec_message("curl", "partialChunked")
+    if k == "weird":
+        return 8, spec_message("curl", "weird")
+    if k == "empty":
+        return 52, spec_message("curl", "empty")
     if k == "recv" and f.detail == "noRemoteName":
         return 23, spec_message("curl", "noRemoteName")
     return 56, spec_message("curl", "recv")
@@ -757,10 +773,15 @@ async def _wget(ctx):
                         continue
                 say("")
                 size = str(len(r.body)) + (f"/{length}" if length is not None else "")
-                say(spec_message("wget", "written", time=now(), size=size) if file == "-"
-                    else spec_message("wget", "saved", time=now(), file=file, size=size))
-                say("")
-                if brief:
+                if r.error:  # the body ended early: kept as far as it came
+                    note(spec_message("wget", "closed", time=now(), size=str(len(r.body))))
+                    say("")
+                    code = 4
+                else:
+                    say(spec_message("wget", "written", time=now(), size=size) if file == "-"
+                        else spec_message("wget", "saved", time=now(), file=file, size=size))
+                    say("")
+                if brief and not r.error:
                     note(spec_message("wget", "nvSaved", time=now(), url=str(r.url), size=size, file=file))
                 if r.truncated:
                     ctx.stderr.write(spec_message("wget", "tooLarge", limit=str(web.policy.max_response_bytes)) + "\n")

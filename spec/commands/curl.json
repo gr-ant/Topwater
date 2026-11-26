@@ -99,11 +99,14 @@
     "3": "malformed URL",
     "6": "host not resolved, or not allowed by the web policy",
     "7": "could not connect (an IP address the web policy refuses)",
+    "8": "the server's reply could not be read: a malformed status line or header",
+    "18": "the body ended before its Content-Length or last chunk; what came is written",
     "22": "--fail and a status of 400 or more",
     "23": "could not write the output file",
     "26": "could not read a data file",
     "28": "timed out",
     "47": "too many redirects",
+    "52": "the server closed the connection without a response",
     "56": "failure receiving the response",
     "60": "certificate not trusted",
     "63": "response larger than the web policy allows"
@@ -136,6 +139,10 @@
     "noRemoteName": "Failed writing received data to disk/application",
     "badHeader": "A libcurl function was given a bad argument",
     "recv": "Failure when receiving data from the peer",
+    "partial": "transfer closed with {bytes} bytes remaining to read",
+    "partialChunked": "transfer closed with outstanding read data remaining",
+    "weird": "Weird server reply",
+    "empty": "Empty reply from server",
     "tls": "SSL certificate problem: unable to verify the certificate of {host}",
     "blocked": "Blocked by the web policy: {reason}",
     "unknownWriteOut": "curl: unknown --write-out variable: '{name}'",
@@ -151,5 +158,5 @@
     "reasonNoCredential": "the credentials for {host} are not available",
     "reasonBadCredential": "the credentials for {host} are not a valid header value"
   },
-  "notes": "The reason* messages are the web policy's reasons, shared with wget (WebSession builds them). Registered in every shell; without a web policy (Shell.AllowWeb and the ports' equivalents) every host fails to resolve, as on a machine without a network. No progress meter is printed. Warnings (curl's \"Warning: \" lines) are wrapped at 79 columns as curl does when standard error is not a terminal. Without --fail-early the exit status is the last URL's."
+  "notes": "The reason* messages are the web policy's reasons, shared with wget (WebSession builds them). Registered in every shell; without a web policy (Shell.AllowWeb and the ports' equivalents) every host fails to resolve, as on a machine without a network. No progress meter is printed. Warnings (curl's \"Warning: \" lines) are wrapped at 79 columns as curl does when standard error is not a terminal. Without --fail-early the exit status is the last URL's. Malformed responses: a body shorter than its Content-Length, or a chunked body cut short, is written as far as it came and fails with 18 (a redirect is then not followed); a longer body is cut at its Content-Length; any number of 100 Continue responses is skipped; a chunk size that is not hex fails with 56, and nothing of that body is written (curl writes what came before it); an unreadable status line or a header line without a colon fails with 8 (curl says 1 for some status lines); no response at all fails with 52."
 }

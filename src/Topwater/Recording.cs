@@ -617,17 +617,18 @@ public sealed class Recording
                 blob = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(x.Body)).ToLowerInvariant();
                 if (written.Add(blob)) using (var s = zip.CreateEntry("blobs/" + blob, CompressionLevel.Fastest).Open()) s.Write(x.Body);
             }
-            return x.Error != null ? new() { Method = x.Method, Url = x.Url, Error = x.Error }
-                : new() { Method = x.Method, Url = x.Url, Status = x.Status, Reason = x.Reason, Headers = [.. x.Headers.Select(h => new List<string> { h.Key, h.Value })], Body = blob, Size = x.Body.Length };
+            return x.Error != null && x.Status == 0 ? new() { Method = x.Method, Url = x.Url, Error = x.Error }
+                : new() { Method = x.Method, Url = x.Url, Status = x.Status, Reason = x.Reason, Headers = [.. x.Headers.Select(h => new List<string> { h.Key, h.Value })], Body = blob, Size = x.Body.Length, Error = x.Error };
         }
 
         public WebExchange ToExchange(Func<string?, long, string, byte[]> blob, string where)
         {
             if (Method is not { Length: > 0 } m || Url is not { Length: > 0 } u) throw Bad($"{where}: method and url are required");
-            if (Error != null)
-                return Error is "resolve" or "blocked" or "connect" or "timeout" or "tls" or "recv" ? new(m, u, 0, "", [], []) { Error = Error } : throw Bad($"{where}: unknown error {JsonSerializer.Serialize(Error)}");
+            if (Error is not (null or "resolve" or "blocked" or "connect" or "timeout" or "tls" or "recv" or "partial" or "weird" or "empty"))
+                throw Bad($"{where}: unknown error {JsonSerializer.Serialize(Error)}");
+            if (Error != null && Status == null) return new(m, u, 0, "", [], []) { Error = Error }; // no answer; with a status, the response came in part
             if (Status is not (>= 100 and <= 999) || Size is not >= 0 || Headers?.Any(h => h is not { Count: 2 } || h.Contains(null!)) == true) throw Bad($"{where}: bad response");
-            return new(m, u, Status.Value, Reason ?? "", [.. (Headers ?? []).Select(h => new KeyValuePair<string, string>(h[0], h[1]))], blob(Body, Size.Value, where));
+            return new(m, u, Status.Value, Reason ?? "", [.. (Headers ?? []).Select(h => new KeyValuePair<string, string>(h[0], h[1]))], blob(Body, Size.Value, where)) { Error = Error };
         }
     }
 

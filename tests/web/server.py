@@ -1,7 +1,8 @@
 """The test web server for tests/web: serves routes.json over plain HTTP, exactly as the ports' fake transports do.
 
     python3 server.py routes.json PORT
-Every response carries the route's headers, then Content-Length; /echo answers with the request (see README.md)."""
+Every response carries the route's headers, then Content-Length; /echo answers with the request (see README.md). A route
+with "raw" sends exactly those bytes (Latin-1) and closes the connection: the malformed responses of the "wire" cases."""
 import base64, json, socket, sys, threading
 
 ECHOED = ("content-type", "accept", "authorization", "user-agent", "x-test")
@@ -32,6 +33,11 @@ def handle(conn, routes):
                 k, v = h.split(":", 1)
                 headers[k.strip().lower()] = v.strip()
             body = f.read(int(headers.get("content-length", "0")))
+            raw = routes.get(target.split("?", 1)[0], {}).get("raw")
+            if raw is not None:
+                conn.sendall(raw.encode("latin-1"))
+                conn.shutdown(socket.SHUT_WR)
+                return
             status, reason, hs, data = respond(routes, method, target, headers, body)
             out = f"HTTP/1.1 {status} {reason}\r\n" + "".join(f"{k}: {v}\r\n" for k, v in hs) + f"Content-Length: {len(data)}\r\n\r\n"
             conn.sendall(out.encode() + (b"" if method == "HEAD" else data))
