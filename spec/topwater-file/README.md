@@ -41,11 +41,14 @@ reader refuses a newer version with an error that says so, before looking at any
 A file is untrusted input. Every port enforces the same limits, taken from the caller's shell options (never from the
 file; the header's limits can only lower them):
 
-- the number of zip entries, read from the end of the archive before any entry is listed: at most
-  4 x MaxExtractEntries + 1002;
+- the number of zip entries, counted before any entry is listed (the end record's count, and the directory walked
+  up to the cap): at most 4 x MaxExtractEntries + 1002. No two entries may have the same name, and none a NUL;
 - per manifest or checkpoint: at most MaxExtractEntries files, MaxFileSystemBytes of content, MaxStringBytes of
   variables and of functions, every path normal, every blob present, of the stated size and matching its hash, text
   valid UTF-8, function bodies parsing as one function, hard links naming an earlier non-directory entry;
-- at most 1000 checkpoints, holding at most 4 x MaxFileSystemBytes of content together;
-- `history.jsonl` and each manifest at most 4 x MaxStringBytes + 1024 x MaxExtractEntries bytes;
+- at most 1000 checkpoints, holding at most 4 x MaxFileSystemBytes of content and 4 x MaxExtractEntries files and
+  directories together, each manifest's count charged before its entries are built;
+- each manifest at most 4 x MaxStringBytes + 1024 x MaxExtractEntries bytes;
+- `history.jsonl` read line by line as it inflates, at most 2 x MaxStringBytes bytes and MaxExtractEntries + 1 lines
+  (header and calls; blank lines count). An old `.jsonl` recording has the same line cap;
 - an old recording's side-car snapshot names: segments of `A-Z a-z 0-9 . _ -` separated by `/`, no segment of only dots.

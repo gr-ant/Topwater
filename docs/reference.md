@@ -226,7 +226,7 @@ which are loaded as untrusted (see [Loading untrusted snapshots](#loading-untrus
 | Command | Effect |
 |---|---|
 | `topwater export FILE` | writes the machine the options give (`--state`, `--from`, `--import`) to FILE as a [`.topwater` file](#the-file-format). If the source has history (a recording, or an older `.jsonl` one), the history comes along, which also converts old recordings |
-| `topwater import FILE --state STATE` | checks FILE (a `.topwater` file, a snapshot or an older `.jsonl` recording) and writes its machine to STATE: the manifest, or for an old recording the machine after its last call |
+| `topwater import FILE --state STATE` | checks FILE (a `.topwater` file, a snapshot or an older `.jsonl` recording) and writes its machine to STATE: the manifest, or for an old recording the machine after its last call. STATE may not be a recording |
 | `topwater replay FILE` | replays a recording on a fresh machine and prints the report; exit code 0 when every call matches, 1 when one doesn't. A run without a virtual clock is compared with `ReplayNormalizers.Volatile` |
 
 None of these is reachable from the agent's `bash` tool, and none touches Docker; container images are built from
@@ -503,9 +503,9 @@ come from the `ShellOptions` you pass (the defaults otherwise):
 
 - The file contents together may hold at most `MaxFileSystemBytes`. A snapshot of a shell whose app wrote more than
   that (the app's writes are never refused) needs a larger value to load.
-- Files and directories may number at most `MaxExtractEntries`. The zip's entry count is read from the end of the
-  file before any entry is listed, and may be at most 4 × `MaxExtractEntries` + 1,002 (room for a recording's
-  checkpoints).
+- Files and directories may number at most `MaxExtractEntries`. The zip's entries are counted before any is listed,
+  and may number at most 4 × `MaxExtractEntries` + 1,002 (room for a recording's checkpoints); two with one name are
+  refused.
 - Variables and array elements together may hold at most `MaxStringBytes` characters, and so may function bodies.
 - `manifest.json` may be at most 4 × `MaxStringBytes` plus 1 KB per allowed entry. The whole file may be at most
   twice `MaxFileSystemBytes` plus that, and a stream that can't seek is read only up to that size.
@@ -890,8 +890,10 @@ history. The JSON Schemas are in [`spec/topwater-file`](../spec/topwater-file/RE
 | `history.jsonl` | with history only: a header line, then one line per call |
 | `checkpoints/<n>.json` | with history only: the machine after `n` calls, the manifest's shape. `0` is the start and always there |
 
-Because the machine is always `manifest.json`, a recording opens anywhere a snapshot does (`Shell.Load`, `--state`,
-`snapshot info`), also in a Topwater that predates history.
+Because the machine is always `manifest.json`, a recording opens anywhere a snapshot does (`Shell.Load`, `--from`,
+`snapshot info`), also in a Topwater that predates history. The CLI refuses a recording as `--state`, which it would
+rewrite as the machine alone: start from it with `--from`, or copy its machine to a new state file with
+`topwater import`.
 
 `history.jsonl` is JSON Lines (UTF-8, `\n` endings): one line per call, so `jq` and `grep` work on it after
 `unzip -p run.topwater history.jsonl`. Line 1 is the header:
@@ -927,9 +929,11 @@ Version rules: readers ignore fields they don't know, so later versions may add 
 `NotSupportedException`, and later Topwater versions keep reading version 1. Loading treats the file as untrusted:
 every manifest and checkpoint loads under the default limits or the `ShellOptions` passed to `Load` (never limits the
 file names) with every check [`ShellSnapshot.Load`](#loading-untrusted-snapshots) makes. The replay shell's limits are
-the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000 checkpoints load,
-their files together may hold at most 4 x `MaxFileSystemBytes`, `history.jsonl` is read up to the manifest's size cap,
-and checkpoint names must be `0` or a number without leading zeros no greater than the number of calls.
+the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000 checkpoints load;
+together they may hold at most 4 x `MaxFileSystemBytes` of content and 4 x `MaxExtractEntries` files and directories.
+`history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and `MaxExtractEntries` calls.
+Checkpoint names must be `0` or a number without leading zeros no greater than the number of calls, and no two zip
+entries may share a name.
 
 Older files still load: snapshot zips are `.topwater` files already, and the JSON Lines recordings that came before
 (header `"format":"topwater-recording"`, snapshots embedded as base64 zips or in side-car files) load with the same
