@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "true",
   "category": "shell",
-  "summary": "Do nothing, successfully",
+  "summary": "Exit with status 0 and nothing else",
   "shellBuiltin": true,
   "standardOptions": false,
   "parser": "custom"

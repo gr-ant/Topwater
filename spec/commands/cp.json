@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "cp",
   "category": "file",
-  "summary": "Copy files and directories",
+  "summary": "Make copies of files or whole directory trees",
   "parser": "args",
   "options": [
     {"short": "a", "description": "copy recursively, keeping modes and times"},

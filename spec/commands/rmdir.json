@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "rmdir",
   "category": "file",
-  "summary": "Remove empty directories",
+  "summary": "Delete directories that are empty",
   "parser": "args",
   "options": [
     {"long": ["ignore-fail-on-non-empty"], "key": "i", "description": "say nothing about directories that are not empty", "ports": ["ts"]},

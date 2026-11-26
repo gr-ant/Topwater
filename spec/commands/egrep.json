@@ -43,11 +43,5 @@
     {"long": ["include"], "arg": "GLOB", "description": "with -r, search only files whose names match GLOB", "custom": true},
     {"long": ["exclude"], "arg": "GLOB", "description": "with -r, skip files whose names match GLOB", "custom": true},
     {"long": ["exclude-dir"], "arg": "GLOB", "description": "with -r, skip directories whose names match GLOB", "custom": true}
-  ],
-  "messages": {
-    "openFailed": "{file}: {errno}",
-    "invalidRegex": "invalid regular expression: {detail}",
-    "leadingRepetition": "warning: {char} at start of expression",
-    "binaryFileMatches": "{file}: binary file matches"
-  }
+  ]
 }

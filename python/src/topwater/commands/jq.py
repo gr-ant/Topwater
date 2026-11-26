@@ -21,7 +21,7 @@ import time
 from urllib.parse import quote
 
 from ..vfs import ShellError
-from . import inputs
+from . import inputs, spec_message
 
 
 class JqError(Exception):
@@ -1817,7 +1817,7 @@ def _jq(ctx):
         else:
             files.append(arg)
     if filt is None:
-        raise ShellError("Usage: jq [OPTIONS] FILTER [FILES...]", 2)
+        raise ShellError(spec_message("jq", "missingFilter"), 2)
     node = compile_filter(filt)
     code = 0
 

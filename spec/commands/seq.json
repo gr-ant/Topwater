@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "seq",
   "category": "text",
-  "summary": "Print a sequence of numbers",
+  "summary": "Count from one number to another, one number per line",
   "parser": "custom",
   "messages": {
     "zeroIncrement": "invalid Zero increment value: '0'",

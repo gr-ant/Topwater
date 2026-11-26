@@ -67,6 +67,20 @@ class PortsUseTheSpec(unittest.TestCase):
                         else:  # looked up by the command's own name at run time
                             self.assertIn(key, every_key)
 
+    def test_every_message_key_is_used(self):
+        # used: looked up under its command, or (for keys the code picks at run time, such as cp/mv's clash keys and
+        # the unreadable-file helper's openFailed/readDirectory) written as a string somewhere in a port
+        sources = {p: "\n".join(f.read_text(encoding="utf-8") for f in files) for p, (files, _, _, _) in PORTS.items()}
+        lookups = {(cmd.strip("\"'"), key) for p, (_, message, _, _) in PORTS.items() for cmd, key in re.findall(message, sources[p])}
+        for c in COMMANDS:
+            for key in c.get("messages", {}):
+                with self.subTest(command=c["name"], key=key):
+                    quoted = any(re.search(rf"[\"']{key}[\"']", text) for text in sources.values())
+                    self.assertTrue((c["name"], key) in lookups or quoted, "no port uses it")
+        for key in DEFAULTS:
+            with self.subTest(default=key):
+                self.assertTrue(any(re.search(rf"[\"']{key}[\"']", text) for text in sources.values()), "no port uses it")
+
     def test_diagnostics_and_errno_are_used_by_every_port(self):
         for port, (files, _, diag, errno) in PORTS.items():
             text = "\n".join(f.read_text(encoding="utf-8") for f in files)

@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "rm",
   "category": "file",
-  "summary": "Remove files or directories",
+  "summary": "Delete files, or directories with -r",
   "parser": "args",
   "options": [
     {"short": "d", "description": "remove empty directories too"},

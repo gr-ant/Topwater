@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "od",
   "category": "binary",
-  "summary": "Dump files in octal and other formats (-c, -x, -t x1, -An, -N LEN)",
+  "summary": "Show bytes as octal, hex or characters (-c, -x, -t x1, -An, -N LEN)",
   "parser": "args",
   "options": [
     {"short": "A", "long": ["address-radix"], "arg": "RADIX", "description": "address base: d, o, x or n (none)"},

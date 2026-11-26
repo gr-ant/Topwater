@@ -38,7 +38,6 @@
     "unexpectedEof": "Unexpected EOF in archive",
     "memberDotDot": "{name}: Member name contains '..'",
     "cannotHardLink": "{name}: Cannot hard link to ‘{target}’: No such file or directory",
-    "cannotSymlink": "{name}: Cannot create symlink to ‘{target}’: Operation not supported",
     "cannotMknod": "{name}: Cannot mknod: Operation not permitted",
     "notFound": "{file}: Not found in archive",
     "entryLimit": "archive exceeds the {limit}-entry extraction limit; stopping",

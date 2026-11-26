@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "ls",
   "category": "file",
-  "summary": "List directory contents",
+  "summary": "Show what a directory holds",
   "usageExitCode": 2,
   "parser": "args",
   "options": [

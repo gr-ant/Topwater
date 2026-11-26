@@ -289,7 +289,7 @@ public sealed class VirtualFileSystem
     {
         LinkNode l => l.Target,
         null => throw new ShellException($"{path}: {why}"),
-        _ => throw new ShellException($"{path}: Invalid argument"),
+        _ => throw new ShellException($"{path}: {CommandSpec.Errno.EINVAL}"),
     };
 
     /// <summary>The physical absolute path with every symbolic link resolved (`realpath`, `pwd -P`). With

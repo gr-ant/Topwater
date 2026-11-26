@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "tr",
   "category": "text",
-  "summary": "Translate or delete characters",
+  "summary": "Replace, squeeze or drop characters read from stdin",
   "parser": "args",
   "options": [
     {"short": "C", "description": "complement SET1"},

@@ -364,7 +364,7 @@ class VirtualFileSystem:
         n, why = self._find_why(path, follow=False)
         if isinstance(n, _Link):
             return n.target
-        raise ShellError(f"{path}: {why if n is None else 'Invalid argument'}")
+        raise ShellError(f"{path}: {why if n is None else ERRNO['EINVAL']}")
 
     def real_path(self, path: str, existing: bool = True) -> tuple[str | None, str]:
         """(physical absolute path with every symbolic link resolved, why): `realpath`, `pwd -P`. With existing False the last

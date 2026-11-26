@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "paste",
   "category": "text",
-  "summary": "Merge lines of files",
+  "summary": "Join the lines of several files side by side",
   "parser": "args",
   "options": [
     {"short": "d", "long": ["delimiters"], "arg": "LIST", "description": "join with the characters in LIST in turn (default tab)"},

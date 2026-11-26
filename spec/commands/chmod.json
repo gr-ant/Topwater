@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "chmod",
   "category": "utility",
-  "summary": "Change file mode bits",
+  "summary": "Set the permission bits of files",
   "parser": "custom",
   "messages": {
     "unrecognizedOption": "unrecognized option '{option}'",

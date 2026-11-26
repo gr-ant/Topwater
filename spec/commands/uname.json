@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "uname",
   "category": "system",
-  "summary": "Print system information",
+  "summary": "Show the kernel name and other machine facts",
   "parser": "args",
   "options": [
     {"short": "a", "long": ["all"], "description": "everything"},

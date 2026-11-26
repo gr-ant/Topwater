@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "basename",
   "category": "utility",
-  "summary": "Strip directory and suffix from a path",
+  "summary": "Print the last part of a path, optionally without a suffix",
   "parser": "args",
   "options": [
     {"short": "a", "long": ["multiple"], "description": "treat every argument as a name"},

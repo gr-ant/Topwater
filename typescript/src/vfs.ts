@@ -276,7 +276,7 @@ export class VirtualFileSystem {
   readLink(path: string): string {
     const { node, why } = this.find(path, false);
     if (node instanceof LinkNode) return node.target;
-    throw new ShellError(`${path}: ${node === null ? why : 'Invalid argument'}`);
+    throw new ShellError(`${path}: ${node === null ? why : ERRNO.EINVAL}`);
   }
 
   /** The physical absolute path with every symbolic link resolved (`realpath`, `pwd -P`). With `existing` false the last

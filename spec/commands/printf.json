@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "printf",
   "category": "shell",
-  "summary": "Format and print data",
+  "summary": "Print arguments through a format string",
   "shellBuiltin": true,
   "standardOptions": false,
   "parser": "custom",

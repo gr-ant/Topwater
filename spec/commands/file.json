@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "file",
   "category": "utility",
-  "summary": "Determine file type",
+  "summary": "Guess what kind of data a file holds",
   "version": "file-5.45",
   "parser": "custom",
   "messages": {

@@ -2057,7 +2057,7 @@ internal static class Jq
             }
             else files.Add(arg);
         }
-        if (filter == null) throw new ShellException("Usage: jq [OPTIONS] FILTER [FILES...]", 2);
+        if (filter == null) throw new ShellException(CommandSpec.Message("jq", "missingFilter"), 2);
         var node = CompileFilter(filter);
         int code = 0;
 

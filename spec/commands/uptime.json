@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "uptime",
   "category": "system",
-  "summary": "Show how long the system has been running",
+  "summary": "Show the time, how long the machine has been up and its load",
   "version": "uptime from procps-ng 4.0.4",
   "parser": "custom"
 }
