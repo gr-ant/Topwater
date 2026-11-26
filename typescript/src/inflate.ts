@@ -3,7 +3,17 @@ import { crc32 } from './commands/zipfile.js';
 
 export type InflateErrorKind = 'eof' | 'crc' | 'format';
 export class InflateError extends Error {
+  /** For 'eof' from inflateRaw and gunzip: what was decoded before the data ran out. */
+  partial?: Uint8Array;
   constructor(readonly kind: InflateErrorKind, message: string = kind) { super(message); }
+}
+
+/** Runs `f`, adding what `out` holds to an 'eof' error. */
+function keepPartial<T>(out: Out, f: () => T): T {
+  try { return f(); } catch (e) {
+    if (e instanceof InflateError && e.kind === 'eof') e.partial = out.buf.subarray(0, out.len);
+    throw e;
+  }
 }
 /** The output would exceed the caller's cap. */
 export class OutputLimitError extends Error {
@@ -155,7 +165,7 @@ function run(data: Uint8Array, start: number, out: Out, maxOut: number, base: nu
 /** Decodes a raw DEFLATE stream; throws OutputLimitError past maxOut bytes of output. */
 export function inflateRaw(data: Uint8Array, maxOut = Infinity): Uint8Array {
   const out: Out = { buf: new Uint8Array(Math.min(maxOut, Math.max(1024, data.length * 3))), len: 0 };
-  run(data, 0, out, maxOut, 0);
+  keepPartial(out, () => run(data, 0, out, maxOut, 0));
   return out.buf.subarray(0, out.len);
 }
 
@@ -163,7 +173,7 @@ export function inflateRaw(data: Uint8Array, maxOut = Infinity): Uint8Array {
 export function gunzip(data: Uint8Array, maxOut = Infinity): Uint8Array {
   const out: Out = { buf: new Uint8Array(Math.min(maxOut, Math.max(1024, data.length * 3))), len: 0 };
   let pos = 0;
-  do {
+  return keepPartial(out, () => { do {
     if (pos + 10 > data.length) throw new InflateError('eof');
     if (data[pos] !== 0x1f || data[pos + 1] !== 0x8b || data[pos + 2] !== 8) throw new InflateError('format', 'bad gzip header');
     const flg = data[pos + 3];
@@ -193,5 +203,5 @@ export function gunzip(data: Uint8Array, maxOut = Infinity): Uint8Array {
     if (((out.len - base) >>> 0) !== v.getUint32(pos + 4, true)) throw new InflateError('format', 'length mismatch');
     pos += 8;
   } while (pos + 1 < data.length && data[pos] === 0x1f && data[pos + 1] === 0x8b);
-  return out.buf.subarray(0, out.len);
+  return out.buf.subarray(0, out.len); });
 }

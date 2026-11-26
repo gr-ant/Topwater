@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import email.errors
 import http.client
 import ipaddress
+import re
 import socket
 import ssl
 import threading
@@ -23,13 +25,15 @@ from typing import Callable, Mapping, Sequence
 
 # A transport sends one request: (method, url, [(name, value)], body, timeout, limit) -> (status, reason, [(name, value)], body).
 # It must not follow redirects. It may return more than limit + 1 bytes of body (they are cut), but need not. It raises
-# TransportError(kind) for a request that got no answer, or whose body ended early (kind partial, with the response so
-# far as response).
+# TransportError(kind) for a request that got no answer, or whose body ended early (kind partial or reset, with the
+# response so far as response).
 Transport = Callable[[str, str, "list[tuple[str, str]]", "bytes | None", float, int], "tuple[int, str, list[tuple[str, str]], bytes]"]
 
-# partial: the body ended before its Content-Length or last chunk; weird: an unreadable status line or header; empty: the
-# connection closed before any response (curl 18, 8, 52; see spec/commands/curl.json)
-ERROR_KINDS = ("resolve", "blocked", "connect", "timeout", "tls", "recv", "partial", "weird", "empty")
+# partial: the body ended before its Content-Length or last chunk; reset: the connection was reset during the body; weird:
+# an unreadable status line or header; empty: the connection closed before any response (curl 18, 56, 8, 52; see
+# spec/commands/curl.json). partial and reset keep the body as far as it came.
+ERROR_KINDS = ("resolve", "blocked", "connect", "timeout", "tls", "recv", "partial", "reset", "weird", "empty")
+CUT = ("partial", "reset")
 
 
 @dataclass
@@ -58,7 +62,7 @@ class WebPolicy:
 @dataclass
 class WebExchange:
     """One request a recorded call made and what came back, or how it failed (error: one of ERROR_KINDS), stored so a
-    replay never touches the network. An error with a status (partial) is a body that ended early: what came is kept."""
+    replay never touches the network. An error with a status (partial, reset) is a body that ended early: what came is kept."""
     method: str
     url: str
     status: int = 0
@@ -70,7 +74,7 @@ class WebExchange:
 
 class TransportError(Exception):
     """A transport's request got no answer, or its body ended early; kind is one of ERROR_KINDS, response (status,
-    reason, headers, body) what came before a partial one."""
+    reason, headers, body) what came before a partial or reset one."""
 
     def __init__(self, kind: str, response: tuple | None = None):
         super().__init__(kind)
@@ -273,7 +277,7 @@ def secrets_of(credential: str) -> list[str]:
 class WebResponse:
     def __init__(self, url: WebUrl, method: str, status: int, reason: str, headers: list, body: bytes, truncated: bool, error: str | None = None):
         self.url, self.method, self.status, self.reason, self.headers, self.body, self.truncated = url, method, status, reason, headers, body, truncated
-        self.error = error  # partial: the body ended early, and is what came
+        self.error = error  # partial or reset: the body ended early, and is what came
 
     def header(self, name: str) -> str | None:
         return next((v for k, v in self.headers if k.lower() == name.lower()), None)
@@ -423,8 +427,8 @@ class WebSession:
             return failed("timeout")
         except TransportError as e:
             kind = e.kind if e.kind in ERROR_KINDS else "recv"
-            if e.response is None or kind != "partial":
-                return failed(kind)
+            if e.response is None or kind not in CUT or decode:
+                return failed(kind)  # from a host with a credential nothing of a cut body is kept: the cut may split the credential
             (status, reason, raw_headers, data), error = e.response, kind
         except ssl.SSLError:
             return failed("tls")
@@ -493,7 +497,8 @@ def decode_body(data: bytes, encoding: str, max_out: int) -> bytes | None:
         out = z.decompress(data, max_out)
     except zlib.error:
         return None
-    return out
+    # a stream cut short (by the server, or by the read cap) decodes to a prefix that may end inside the credential
+    return out if z.eof or len(out) >= max_out else None
 
 
 def allow_web(shell, policy: WebPolicy):
@@ -589,8 +594,12 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
             raise TransportError("empty") from None
         except http.client.BadStatusLine:
             raise TransportError("weird") from None
-        if resp.msg.defects:  # a header line without a colon, or a continuation line first
+        # a header line without a colon, or a continuation line first; a NUL in a value (other defects, such as a multipart
+        # type without its body, are not about the header block)
+        if any(isinstance(d, (email.errors.MissingHeaderBodySeparatorDefect, email.errors.FirstHeaderLineIsContinuationDefect))
+               for d in resp.msg.defects) or any("\0" in v for _, v in resp.getheaders()):
             raise TransportError("weird")
+        headers_out = [(k, re.sub(r"\r?\n[ \t]+", " ", v)) for k, v in resp.getheaders()]  # a folded value is one line
         data = bytearray()
         failure = None
         ended = []  # the connection closed where a chunk size was due (http.client closes it on any bad size line)
@@ -604,6 +613,8 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
                         failure = "partial" if resp.length else None  # closed before Content-Length
                         break
                     data += chunk
+            except ConnectionResetError:
+                failure = "reset"
             except http.client.IncompleteRead:
                 # a chunked body cut short (the connection closed) or a chunk size that is not hex (more follows)
                 if resp.fp is None and not (ended and ended[-1]):
@@ -611,8 +622,8 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
                 failure = "partial"
         left()  # the socket was shut at the deadline: what was read is not the whole body
         if failure:
-            raise TransportError(failure, (resp.status, resp.reason or "", resp.getheaders(), bytes(data)))
-        return resp.status, resp.reason or "", resp.getheaders(), bytes(data)
+            raise TransportError(failure, (resp.status, resp.reason or "", headers_out, bytes(data)))
+        return resp.status, resp.reason or "", headers_out, bytes(data)
     except (TransportError, TimeoutError):
         raise
     except (http.client.HTTPException, OSError):
@@ -625,17 +636,34 @@ def pinned_transport(method, url, headers, body, timeout, limit, *, resolve: Cal
         sock.close()
 
 
+class _Counted:
+    """A response stream that counts the bytes of the lines read from it (the status lines and headers)."""
+
+    def __init__(self, fp):
+        self.fp, self.count = fp, 0
+
+    def readline(self, *a):
+        line = self.fp.readline(*a)
+        self.count += len(line)
+        return line
+
+    def __getattr__(self, name):
+        return getattr(self.fp, name)
+
+
 class _InterimCapped(http.client.HTTPResponse):
-    """100 Continue responses count toward the header limit, as in the other ports: a flood of them fails (recv)."""
-    _interim = 0
+    """Interim responses (1xx but 101) are skipped, as curl does (http.client skips only 100), and their status lines and
+    headers count toward the header limit, as in the other ports: a flood of them fails (recv)."""
+
+    def __init__(self, sock, *a, **k):
+        super().__init__(sock, *a, **k)
+        self.fp = _Counted(self.fp)
 
     def _read_status(self):
+        if self.fp.count > MAX_HEADER_BYTES:
+            raise http.client.HTTPException("too many interim responses")
         version, status, reason = super()._read_status()
-        if status == http.client.CONTINUE:
-            self._interim += len(version) + len(reason) + 9
-            if self._interim > MAX_HEADER_BYTES:
-                raise http.client.HTTPException("too many interim responses")
-        return version, status, reason
+        return version, http.client.CONTINUE if 100 <= status < 200 and status != 101 else status, reason
 
 
 def _shutdown(fd: int) -> None:

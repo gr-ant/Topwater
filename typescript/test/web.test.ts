@@ -63,7 +63,10 @@ async function rawServer() {
     socket.on('data', d => {
       text += d.toString('latin1');
       if (!text.includes('\r\n\r\n')) return;
-      socket.end(Buffer.from(routes[text.split(' ')[1]].raw, 'latin1'));
+      const route = routes[text.split(' ')[1]];
+      if (!route.reset) { socket.end(Buffer.from(route.raw, 'latin1')); return; }
+      socket.write(Buffer.from(route.raw, 'latin1'));
+      setTimeout(() => socket.resetAndDestroy(), 200); // a reset (RST) instead of a close
     });
     socket.on('error', () => undefined);
   });
@@ -72,8 +75,8 @@ async function rawServer() {
 }
 
 /** The real connection path to rawServer: the wire cases are malformed responses a fake transport cannot send. */
-async function wireShell(port: number) {
-  const sh = new Shell().allowWeb({ domains: [`api.test:${port}`], allowHttp: true, explainBlocked: false,
+async function wireShell(port: number, credentials?: WebPolicy['credentials']) {
+  const sh = new Shell().allowWeb({ domains: [`api.test:${port}`], allowHttp: true, explainBlocked: false, credentials,
     transport: pinnedTransport({ resolve: () => ['127.0.0.1'], allowLoopback: true }) });
   await sh.run('mkdir -p /tmp/w && cd /tmp/w');
   return sh;
@@ -492,6 +495,41 @@ describe('recorded web exchanges', () => {
     good.calls[0].web![0] = { ...good.calls[0].web![0], error: 'nope' as never };
     await expect(Recording.load(await good.save())).rejects.toThrow(/unknown error/);
   });
+});
+
+const SECRET = 'Bearer s3cr3t-T0KEN-value', TOKEN = 's3cr3t-T0KEN-value';
+/** Whether any 8 characters of the credential's token show. */
+const leaks = (text: string) => [...Array(TOKEN.length - 7).keys()].some(i => text.includes(TOKEN.slice(i, i + 8)));
+
+it('keeps nothing of a cut body from a host with a credential', async () => {
+  const { server, port } = await rawServer();
+  try {
+    const sh = await wireShell(port, { [`api.test:${port}`]: () => SECRET });
+    const rec = startRecording(sh);
+    const r = await sh.run(`curl -sS --compressed http://api.test:${port}/secret-gzip-cut; echo rc=$?; curl -sS http://api.test:${port}/secret-cut; echo rc=$?; curl -sS http://api.test:${port}/reset-body; echo rc=$?`);
+    rec.stop();
+    expect(r.stdout).toBe('rc=18\nrc=18\nrc=56\n');
+    expect(leaks(r.stdout + r.stderr)).toBe(false);
+    expect(leaks(Buffer.from(await rec.recording.save()).toString('latin1'))).toBe(false);
+  } finally { server.close(); }
+});
+
+it('never shows the credential of a compressed body cut at the cap', async () => {
+  const body = enc.encode('x'.repeat(1000) + 'Authorization: ' + SECRET + '\n' + 'y'.repeat(200));
+  // stored blocks of 40 bytes: a cut decodes to almost the same prefix
+  const parts: number[] = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+  for (let i = 0; i < body.length; i += 40) {
+    const n = Math.min(40, body.length - i);
+    parts.push(i + n >= body.length ? 1 : 0, n & 0xff, n >> 8, ~n & 0xff, (~n >> 8) & 0xff, ...body.subarray(i, i + n));
+  }
+  const gz = gzipSync(body);
+  const data = new Uint8Array([...parts, ...gz.subarray(gz.length - 8)]); // the same CRC-32 and length trailer
+  for (let cap = 1000; cap < data.length; cap += 3) {
+    const sh = new Shell().allowWeb({ domains: ['api.test'], allowHttp: true, explainBlocked: false, maxResponseBytes: cap, credentials: { 'api.test': () => SECRET },
+      transport: async () => ({ status: 200, reason: 'OK', headers: [['Content-Encoding', 'gzip']], body: data }) });
+    const r = await sh.run("curl -sS -H 'Accept-Encoding: gzip' http://api.test/x | tail -c 60");
+    expect(leaks(r.stdout + r.stderr), String(cap)).toBe(false);
+  }
 });
 
 it('replays a body cut short as it came', async () => {

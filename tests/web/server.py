@@ -2,8 +2,9 @@
 
     python3 server.py routes.json PORT
 Every response carries the route's headers, then Content-Length; /echo answers with the request (see README.md). A route
-with "raw" sends exactly those bytes (Latin-1) and closes the connection: the malformed responses of the "wire" cases."""
-import base64, json, socket, sys, threading
+with "raw" sends exactly those bytes (Latin-1) and closes the connection (with "reset", resets it): the malformed
+responses of the "wire" cases."""
+import base64, json, socket, struct, sys, threading, time
 
 ECHOED = ("content-type", "accept", "authorization", "user-agent", "x-test")
 
@@ -36,6 +37,10 @@ def handle(conn, routes):
             raw = routes.get(target.split("?", 1)[0], {}).get("raw")
             if raw is not None:
                 conn.sendall(raw.encode("latin-1"))
+                if routes[target.split("?", 1)[0]].get("reset"):  # a reset (RST) instead of a close
+                    time.sleep(0.2)
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                    return
                 conn.shutdown(socket.SHUT_WR)
                 return
             status, reason, hs, data = respond(routes, method, target, headers, body)

@@ -7,9 +7,11 @@ import io
 import json
 import os
 import socket
+import struct
 import sys
 import threading
 import time
+import zlib
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -85,6 +87,10 @@ def raw_server():
             while f.readline() not in (b"\r\n", b"\n", b""):
                 pass
             conn.sendall(ROUTES[target]["raw"].encode("latin-1"))
+            if ROUTES[target].get("reset"):  # a reset (RST) instead of a close
+                time.sleep(0.2)
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                return
             conn.shutdown(socket.SHUT_WR)
 
     def serve():
@@ -369,6 +375,39 @@ def test_a_body_cut_short_replays_as_it_came(raw_server):
     assert [(x.error, x.status, x.body) for x in loaded.calls[0].web] == [("partial", 200, b"short"), ("empty", 0, b""), ("partial", 200, b"ok\n")]
     report = loaded.replay()
     assert report.matches, report.differences
+
+
+SECRET = "Bearer s3cr3t-T0KEN-value"
+
+
+def leaks(data) -> bool:
+    """Whether any 8 characters of the credential's token show."""
+    text = data if isinstance(data, str) else data.decode("latin-1")
+    return any(TOKEN[i:i + 8] in text for i in range(len(TOKEN) - 7))
+
+
+def test_a_cut_body_from_a_host_with_a_credential_keeps_nothing(raw_server):
+    sh = wire_shell(raw_server, credentials={f"api.test:{raw_server}": lambda: SECRET})
+    recorder = sh.start_recording()
+    r = sh.run(f"curl -sS --compressed http://api.test:{raw_server}/secret-gzip-cut; echo rc=$?; "
+               f"curl -sS http://api.test:{raw_server}/secret-cut; echo rc=$?; curl -sS http://api.test:{raw_server}/reset-body; echo rc=$?")
+    recorder.stop()
+    assert r.stdout == "rc=18\nrc=18\nrc=56\n"
+    _, saved = save_and_load(recorder.recording)
+    assert not leaks(r.stdout + r.stderr) and not leaks(saved)
+
+
+def test_a_compressed_body_cut_at_the_cap_never_shows_the_credential():
+    body = b"x" * 1000 + b"Authorization: " + SECRET.encode() + b"\n" + b"y" * 200
+    # stored blocks of 40 bytes: the decoded prefix follows the cut closely, and the blocks' own bytes put the cut past the
+    # cap's margin for the credential, so without the end-of-stream check the prefix would show up to inside the token
+    c = zlib.compressobj(0, zlib.DEFLATED, 31)
+    data = b"".join(c.compress(body[i:i + 40]) + c.flush(zlib.Z_FULL_FLUSH) for i in range(0, len(body), 40)) + c.flush()
+    for cap in range(1000, len(data), 3):
+        sh, fx = make(credentials={"api.test": lambda: SECRET}, max_response_bytes=cap)
+        fx.override = lambda *a: (200, "OK", [("Content-Encoding", "gzip")], data)
+        r = sh.run("curl -sS -H 'Accept-Encoding: gzip' http://api.test/x | tail -c 60")
+        assert not leaks(r.stdout + r.stderr), cap
 
 
 def test_a_recording_from_the_csharp_port_replays():

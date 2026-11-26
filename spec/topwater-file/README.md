@@ -68,12 +68,14 @@ as it went out of the policy check and what came back, in order, redirects inclu
 (`body` names it, `size` is its length; no `body` when empty), stored after credentials were scrubbed; a request that
 failed below the policy has `error` (`resolve`, `blocked`, `connect`, `timeout`, `tls`, `recv`; `weird`: an unreadable
 status line or header; `empty`: closed before any response) instead of a status. A body that ended before its
-`Content-Length` or last chunk has a status, its body as far as it came, and `error: "partial"`.
+`Content-Length` or last chunk has a status, its body as far as it came, and `error: "partial"`; one the connection
+reset during the body, the same with `error: "reset"`. From a host with a credential such a body is not kept: the
+entry has the error alone.
 Requests the policy refused are not stored: a replay under the same policy refuses them again.
 
 A shell built from the recording serves these in order, starting at the first call it runs, and never uses the
 network. A reader checks each blob as it does a file's (present, the stated size, matching its hash), every body
-together at most MaxFileSystemBytes, `status` from 100 to 999, and `error` one of the nine. Files without `web` load as
+together at most MaxFileSystemBytes, `status` from 100 to 999, and `error` one of the ten. Files without `web` load as
 before; the history version stays 1, since a Topwater without web access has no `curl` to replay anyway.
 
 ## `files`

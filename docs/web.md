@@ -76,13 +76,17 @@ not sent again. `-w` times come from the shell's clock and are measured around t
 reads `0.000000` and the speeds `0`, so recordings replay exactly.
 
 A malformed response fails the way curl fails: a body shorter than its `Content-Length`, or a chunked body cut short,
-is written as far as it came and exits 18 (`transfer closed with 5 bytes remaining to read`; wget 4); a longer body
-is cut at its `Content-Length`; `100 Continue` responses are skipped; no response at all exits 52 (`Empty reply from
-server`). Three differences: `100 Continue` responses count toward the 64 KB header limit (a flood of them exits 56),
-an unreadable status line or a header line without a colon always exits 8 (`Weird server reply`; curl says 1 for some
-status lines, and wget reads them as it can), and a chunk size that is not hex exits 56 with nothing of that body
-written (curl writes what came before it). A recording keeps a body that ended early with its status and `error:
-"partial"`, so a replay writes the same part.
+is written as far as it came and exits 18 (`transfer closed with 5 bytes remaining to read`; wget 4), and a body the
+connection resets is written as far as it came and exits 56 (`Recv failure: Connection reset by peer`; wget 4); with
+`--compressed` what came is decoded as far as it goes. From a host with a credential nothing of such a body is kept,
+since the cut may fall inside the credential, and a compressed body is decoded for the scrub only when its stream is
+whole. A longer body is cut at its `Content-Length`; interim responses (`100 Continue`, `103 Early Hints`, ...) are
+skipped; a folded header line is joined to the one before; no response at all exits 52 (`Empty reply from server`).
+Three differences: interim responses count toward the 64 KB header limit (a flood of them exits 56), an unreadable
+status line, a header line without a colon or a NUL in a header always exits 8 (`Weird server reply`; curl says 1 for
+some status lines, and wget reads them as it can), and a chunk size that is not hex exits 56 with nothing of that
+body written (curl writes what came before it). A recording keeps a body that ended early with its status and `error:
+"partial"` (or `"reset"`), so a replay writes the same part.
 
 ## Blocked requests
 
@@ -105,8 +109,11 @@ Even against a hostile agent:
   request is refused. Otherwise the connection goes to the
   address that was checked, while TLS and `Host` use the name, so DNS rebinding cannot swap it. IP literals are
   refused the same way, even when listed in `Domains`. No policy setting turns this off, and there is no global
-  switch: the tests reach a loopback server through a test-only handler (transport) that their own shell is given. A
-  `Handler` (`transport`) of yours replaces the connection, and the check with it.
+  switch: the tests reach a loopback server through a test-only handler (transport) that their own shell is given. That
+  is C#'s internal `WebSession.PinnedHandler(resolve, allowLoopback)`, Python's `functools.partial(pinned_transport,
+  resolve=..., allow_loopback=True)` and TypeScript's `pinnedTransport({ resolve, allowLoopback })` (in `web.js`, not
+  exported by the package): given a resolver or loopback, they skip the protection, so never give one to an agent's
+  shell. A `Handler` (`transport`) of yours replaces the connection, and the check with it.
 - **Nothing of yours leaks.** No proxy settings, cookies or default headers of your process are used. The agent's
   `Host`, `Content-Length`, `Transfer-Encoding`, `Connection` and `Proxy-*` headers are dropped, header values cannot
   hold line breaks, and its `Authorization` (and `-u`) for a host with a credential is replaced by yours. Its own

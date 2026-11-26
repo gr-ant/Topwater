@@ -3,7 +3,7 @@
 import { DeadlineExceeded, specMessage, type CommandContext } from './command.js';
 import { concatBytes } from './bytes.js';
 import { REASONS, secretsOf } from './api.js';
-import { OutputLimitError, gunzip, inflateRaw } from './inflate.js';
+import { InflateError, OutputLimitError, gunzip, inflateRaw } from './inflate.js';
 
 /** The web access a shell's `curl` and `wget` get through `shell.allowWeb`. */
 export interface WebPolicy {
@@ -36,11 +36,12 @@ export interface WebPolicy {
 }
 
 /** How a request failed below the policy; a transport throws an error with one of these as its `kind` (anything else is
- * recv). partial: the body ended before its Content-Length or last chunk; weird: an unreadable status line or header;
- * empty: closed before any response. A partial error may carry the response so far as `response`. */
-export type WebErrorKind = 'resolve' | 'blocked' | 'connect' | 'timeout' | 'tls' | 'recv' | 'partial' | 'weird' | 'empty';
+ * recv). partial: the body ended before its Content-Length or last chunk; reset: the connection was reset during the body;
+ * weird: an unreadable status line or header; empty: closed before any response. A partial or reset error may carry the
+ * response so far as `response`. */
+export type WebErrorKind = 'resolve' | 'blocked' | 'connect' | 'timeout' | 'tls' | 'recv' | 'partial' | 'reset' | 'weird' | 'empty';
 /** @internal */
-export const KINDS: readonly string[] = ['resolve', 'blocked', 'connect', 'timeout', 'tls', 'recv', 'partial', 'weird', 'empty'];
+export const KINDS: readonly string[] = ['resolve', 'blocked', 'connect', 'timeout', 'tls', 'recv', 'partial', 'reset', 'weird', 'empty'];
 
 /** Sends one request without following redirects, reading at most `maxBytes + 1` bytes of body. */
 export type WebTransport = (req: {
@@ -48,7 +49,7 @@ export type WebTransport = (req: {
 }) => Promise<{ status: number; reason: string; headers: [string, string][]; body: Uint8Array }>;
 
 /** One request a recorded call made and what came back (or how it failed: `error`), so a replay never touches the network.
- * An error with a status (partial) is a body that ended early: what came is kept. */
+ * An error with a status (partial, reset) is a body that ended early: what came is kept. */
 export interface WebExchange {
   method: string;
   url: string;
@@ -60,7 +61,7 @@ export interface WebExchange {
 }
 
 /** @internal Why a request failed; each command turns it into its own message and exit status. */
-export type WebError = 'badUrl' | 'badHostname' | 'protocol' | 'resolve' | 'connect' | 'timeout' | 'tls' | 'recv' | 'partial' | 'weird' | 'empty' | 'tooLarge' | 'redirects' | 'policy' | 'replay' | 'badHeader';
+export type WebError = 'badUrl' | 'badHostname' | 'protocol' | 'resolve' | 'connect' | 'timeout' | 'tls' | 'recv' | 'partial' | 'reset' | 'weird' | 'empty' | 'tooLarge' | 'redirects' | 'policy' | 'replay' | 'badHeader';
 
 /** @internal */
 export class WebFailure extends Error {
@@ -213,7 +214,7 @@ export function isBlocked(a: Uint8Array): boolean {
 }
 
 /** @internal */
-/** `error` (partial): the body ended early, and is what came. */
+/** `error` (partial, reset): the body ended early, and is what came. */
 export interface WebResponse { url: WebUrl; method: string; status: number; reason: string; headers: [string, string][]; body: Uint8Array; truncated: boolean; error?: WebErrorKind }
 export const header = (r: { headers: [string, string][] }, name: string) => r.headers.find(h => h[0].toLowerCase() === name.toLowerCase())?.[1];
 
@@ -340,8 +341,8 @@ export class WebSession {
       let error: WebErrorKind | undefined;
       const r = await transport({ method, url: url.toString(), headers, body: body ?? undefined, timeoutMs: limit, maxBytes, signal: controller.signal })
         .catch(e => {
-          // a body that ended early keeps what came
-          if (controller.signal.aborted || !e?.response || e.kind !== 'partial') throw e;
+          // a body that ended early keeps what came; from a host with a credential nothing: the cut may split the credential
+          if (controller.signal.aborted || !e?.response || (e.kind !== 'partial' && e.kind !== 'reset') || secrets) throw e;
           error = e.kind;
           return e.response as Awaited<ReturnType<WebTransport>>;
         });
@@ -407,7 +408,9 @@ function hostPort(text: string): { host: string; port: number | null } | null {
 
 /** @internal gzip or zlib-wrapped deflate, cut at `max` bytes out (an output past `max` keeps its first `max` bytes).
  * Throws on a corrupt stream. */
-export function decompress(data: Uint8Array, gzip: boolean, max: number): Uint8Array {
+/** gzip, or zlib-wrapped deflate, at most `max` bytes; throws when corrupt, and unless `whole` is false also when the stream
+ * stops before its end (curl --compressed decodes what came; a credential's scrub must not see a prefix that ends inside it). */
+export function decompress(data: Uint8Array, gzip: boolean, max: number, whole = true): Uint8Array {
   const room = max + 65_536; // more than one block or match adds, so a stream stopped at the limit has decoded `max` bytes
   try {
     if (gzip) return gunzip(data, room).subarray(0, max);
@@ -415,6 +418,7 @@ export function decompress(data: Uint8Array, gzip: boolean, max: number): Uint8A
     return inflateRaw(data.subarray(2), room).subarray(0, max);
   } catch (e) {
     if (e instanceof OutputLimitError && e.partial) return e.partial.subarray(0, max);
+    if (!whole && e instanceof InflateError && e.kind === 'eof' && e.partial) return e.partial.subarray(0, max);
     throw e;
   }
 }
@@ -493,12 +497,16 @@ export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => a
     const r = lib.request({
       host: url.host, servername: url.ip ? undefined : url.host, port: url.port, path: url.pathAndQuery, method: req.method,
       headers: headers.flat(), setHost: false, agent: false, maxHeaderSize: MAX_HEADER_BYTES, signal: req.signal,
+      // a folded header line is joined, as curl (and the other ports) do; the strict parser refuses it. What else the
+      // lenient one lets through in a value (a NUL) is refused below
+      insecureHTTPParser: true,
       lookup: (_name: string, opts: { all?: boolean }, cb: (...a: unknown[]) => void) =>
         opts?.all ? cb(null, addresses) : cb(null, addresses[0].address, addresses[0].family),
     }, (res: any) => {
       const raw: string[] = res.rawHeaders;
       const list: [string, string][] = [];
       for (let i = 0; i + 1 < raw.length; i += 2) list.push([raw[i], raw[i + 1]]);
+      if (list.some(([, v]) => /[\0\r\n]/.test(v))) { done(() => reject(fail('weird'))); res.destroy(); r.destroy(); return; }
       const chunks: Uint8Array[] = [];
       let total = 0;
       const response = () => ({ status: res.statusCode, reason: res.statusMessage ?? '', headers: list, body: concatBytes(chunks) });
@@ -506,7 +514,8 @@ export const pinnedTransport = (test: PinnedTestOptions = {}): WebTransport => a
       // a body that ended early keeps what came (a turn later, so what was parsed has reached 'data'); nothing of a malformed
       // one (a bad chunk size) is kept; bytes past a complete body (more than Content-Length) are ignored
       cut = (e?: any) => setTimeout(() => res.complete ? finish() : done(() => reject(req.signal.aborted ? fail('timeout')
-        : /^HPE_/.test(String(e?.code ?? '')) ? fail('recv') : Object.assign(fail('partial'), { response: response() }))), 0);
+        : /^HPE_/.test(String(e?.code ?? '')) ? fail('recv')
+        : Object.assign(fail(e?.code === 'ECONNRESET' && e?.syscall === 'read' ? 'reset' : 'partial'), { response: response() }))), 0);
       res.on('data', (c: Uint8Array) => {
         const take = c.subarray(0, Math.min(c.length, req.maxBytes + 1 - total));
         chunks.push(take);

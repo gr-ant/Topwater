@@ -89,12 +89,20 @@ public class WebAccessTests
                 try { client = await listener.AcceptTcpClientAsync(); } catch (Exception) { return; }
                 _ = Task.Run(async () =>
                 {
-                    using var _ = client;
+                    using var owned = client;
                     var stream = client.GetStream();
                     var reader = new StreamReader(stream, Encoding.Latin1);
                     var target = (await reader.ReadLineAsync())!.Split(' ')[1];
                     while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
-                    await stream.WriteAsync(Encoding.Latin1.GetBytes(Routes.GetProperty(target).GetProperty("raw").GetString()!));
+                    var route = Routes.GetProperty(target);
+                    await stream.WriteAsync(Encoding.Latin1.GetBytes(route.GetProperty("raw").GetString()!));
+                    if (route.TryGetProperty("reset", out _)) // a reset (RST) instead of a close
+                    {
+                        await Task.Delay(200);
+                        client.Client.LingerState = new LingerOption(true, 0);
+                        client.Client.Close(0); // no FIN first, as disposing the client would send
+                        return;
+                    }
                     client.Client.Shutdown(SocketShutdown.Send);
                 });
             }
@@ -103,11 +111,12 @@ public class WebAccessTests
     }
 
     /// <summary>The real connection path to <see cref="RawServer"/>: the wire cases are malformed responses a fake handler cannot send.</summary>
-    static async Task<Shell> WireShell(int port)
+    static async Task<Shell> WireShell(int port, Dictionary<string, Func<string>>? credentials = null)
     {
         var sh = new Shell().AllowWeb(new WebPolicy
         {
             Domains = [$"api.test:{port}"], AllowHttp = true, ExplainBlocked = false, Handler = WebSession.PinnedHandler(_ => [IPAddress.Loopback], allowLoopback: true),
+            Credentials = credentials ?? new(StringComparer.OrdinalIgnoreCase),
         });
         await sh.RunAsync("mkdir -p /tmp/w && cd /tmp/w");
         return sh;
@@ -316,6 +325,74 @@ public class WebAccessTests
         var (sh, _) = await Make();
         var r = await sh.Fork().RunAsync("curl -s http://api.test/hello; echo $?");
         Assert.Equal("6\n", r.Stdout);
+    }
+
+    const string CutSecret = "Bearer s3cr3t-T0KEN-value", CutToken = "s3cr3t-T0KEN-value";
+
+    /// <summary>Whether any 8 characters of the credential's token show.</summary>
+    static bool Leaks(string text) => Enumerable.Range(0, CutToken.Length - 7).Any(i => text.Contains(CutToken.Substring(i, 8), StringComparison.Ordinal));
+
+    [Fact]
+    public async Task ACutBodyFromAHostWithACredentialKeepsNothing()
+    {
+        var (listener, port) = RawServer();
+        try
+        {
+            var sh = await WireShell(port, new(StringComparer.OrdinalIgnoreCase) { [$"api.test:{port}"] = () => CutSecret });
+            var recorder = sh.StartRecording();
+            var r = await sh.RunAsync($"curl -sS --compressed http://api.test:{port}/secret-gzip-cut; echo rc=$?; curl -sS http://api.test:{port}/secret-cut; echo rc=$?; curl -sS http://api.test:{port}/reset-body; echo rc=$?");
+            recorder.Stop();
+            Assert.Equal("rc=18\nrc=18\nrc=56\n", r.Stdout);
+            var file = new MemoryStream();
+            recorder.Save(file);
+            Assert.False(Leaks(r.Stdout + r.Stderr));
+            Assert.False(Leaks(Encoding.Latin1.GetString(file.ToArray())));
+        }
+        finally { listener.Stop(); }
+    }
+
+    [Fact]
+    public async Task ACompressedBodyCutAtTheCapNeverShowsTheCredential()
+    {
+        var body = Encoding.ASCII.GetBytes(new string('x', 1000) + "Authorization: " + CutSecret + "\n" + new string('y', 200));
+        var data = StoredGzip(body, 40);
+        for (int cap = 1000; cap < data.Length; cap += 3)
+        {
+            var sh = new Shell().AllowWeb(new WebPolicy
+            {
+                Domains = ["api.test"], AllowHttp = true, ExplainBlocked = false, MaxResponseBytes = cap, Handler = new RawHandler(data),
+                Credentials = new(StringComparer.OrdinalIgnoreCase) { ["api.test"] = () => CutSecret },
+            });
+            var r = await sh.RunAsync("curl -sS -H 'Accept-Encoding: gzip' http://api.test/x | tail -c 60");
+            Assert.False(Leaks(r.Stdout + r.Stderr), cap.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+    }
+
+    /// <summary>gzip of stored deflate blocks of <paramref name="size"/> bytes: a cut in it decodes to almost the same prefix.</summary>
+    static byte[] StoredGzip(byte[] data, int size)
+    {
+        var o = new MemoryStream();
+        o.Write([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff]);
+        for (int i = 0; i < data.Length; i += size)
+        {
+            int n = Math.Min(size, data.Length - i);
+            o.WriteByte((byte)(i + n >= data.Length ? 1 : 0));
+            o.Write([(byte)n, (byte)(n >> 8), (byte)~n, (byte)(~n >> 8)]);
+            o.Write(data, i, n);
+        }
+        o.Write(BitConverter.GetBytes(WebSession.Crc32(data)));
+        o.Write(BitConverter.GetBytes((uint)data.Length));
+        return o.ToArray();
+    }
+
+    sealed class RawHandler(byte[] gzip) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(gzip) };
+            r.Content.Headers.ContentEncoding.Add("gzip");
+            return Task.FromResult(r);
+        }
     }
 
     [Fact]
@@ -675,8 +752,8 @@ public class WebPinningTests
         int lookups = 0;
         try
         {
-            Assert.False(WebSession.DefaultHandler.UseProxy); // the host's proxy settings are never used (not set in the
-            Assert.False(WebSession.DefaultHandler.UseCookies); // environment here: other tests run beside this one)
+            Assert.False(WebSession.PinnedHandler().UseProxy); // the host's proxy settings are never used (the default handler
+            Assert.False(WebSession.PinnedHandler().UseCookies); // is built the same way; not set in the environment here: other tests run beside this one)
             IPAddress[] Resolve(string name) { lookups++; return name == "pinned.test" ? [IPAddress.Loopback] : [IPAddress.Parse("169.254.169.254")]; }
             var domains = new[] { $"pinned.test:{port}", $"pinned.test:{port + 1}", "meta.test" };
             var sh = new Shell().AllowWeb(new WebPolicy { Domains = domains, AllowHttp = true, ExplainBlocked = false, Handler = WebSession.PinnedHandler(Resolve, allowLoopback: true) });

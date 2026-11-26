@@ -16,9 +16,14 @@ Python and TypeScript packages are not published yet and are used from the repos
   URLs and no `--fail-early`, `curl` now exits with the last URL's status, as curl does.
   `--retry` waits at least the server's `Retry-After`; on a virtual clock the `-w` times read 0, so recordings replay.
 - **Malformed web responses fail the same way in every port**, as curl does: a body that ends before its
-  `Content-Length` or last chunk is written as far as it came (curl 18, wget 4) and recorded that way; an unreadable
-  status line or header is 8, no response 52, a bad chunk size 56; a longer body is cut at its `Content-Length`. 100
-  Continue responses count toward the 64 KB header limit. Recordings may hold `error` `partial`, `weird` and `empty`.
+  `Content-Length` or last chunk is written as far as it came (curl 18, wget 4) and recorded that way, as is one the
+  connection resets (curl 56); an unreadable status line or header (or a NUL in one) is 8, no response 52, a bad chunk
+  size 56; a longer body is cut at its `Content-Length`; folded headers are joined; interim responses (`103 Early
+  Hints`) are skipped and count toward the 64 KB header limit. Recordings may hold `error` `partial`, `reset`, `weird`
+  and `empty`.
+- **A compressed body from a host with a credential is scrubbed only when it is whole.** A gzip or deflate stream cut
+  short (by the server, or by the response cap) used to be decoded as far as it went, so the scrub could miss a
+  credential cut in two; it now fails, and nothing of any cut-short body from such a host is kept.
 - **No global switch for the private-address check.** The test-only hooks that let loopback through were process-wide
   settings in each library; the tests now give their own shell a test-only transport instead.
 - **`find -links N`** selects by link count, and `/usr/local/man` is a link to `share/man` as on Ubuntu.

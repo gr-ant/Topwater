@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net;
@@ -47,8 +48,9 @@ public sealed class WebPolicy
 public sealed record WebExchange(string Method, string Url, int Status, string Reason, IReadOnlyList<KeyValuePair<string, string>> Headers, byte[] Body)
 {
     /// <summary>How the request failed instead (resolve, blocked, connect, timeout, tls, recv; partial: the body ended before its
-    /// Content-Length or last chunk; weird: an unreadable status line or header; empty: closed before any response); null when
-    /// it got an answer. With a status (partial) the body ended early, and is what came.</summary>
+    /// Content-Length or last chunk; reset: the connection was reset during the body; weird: an unreadable status line or
+    /// header; empty: closed before any response); null when it got an answer. With a status (partial, reset) the body ended
+    /// early, and is what came.</summary>
     public string? Error { get; init; }
 }
 
@@ -72,7 +74,7 @@ public sealed partial class Shell
 }
 
 /// <summary>Why a request failed; each command turns it into its own message and exit status.</summary>
-internal enum WebError { BadUrl, BadHostname, Protocol, Resolve, Connect, Timeout, Tls, Recv, Partial, Weird, Empty, TooLarge, Redirects, Policy, Replay, BadHeader }
+internal enum WebError { BadUrl, BadHostname, Protocol, Resolve, Connect, Timeout, Tls, Recv, Partial, Reset, Weird, Empty, TooLarge, Redirects, Policy, Replay, BadHeader }
 
 internal sealed class WebFailure(WebError kind, string host = "", int port = 0, string? blocked = null) : Exception(kind.ToString())
 {
@@ -213,7 +215,7 @@ internal static class WebAddresses
 
 internal sealed record WebResponse(WebUrl Url, string Method, int Status, string Reason, List<KeyValuePair<string, string>> Headers, byte[] Body, bool Truncated)
 {
-    /// <summary>partial: the body ended early, and is what came.</summary>
+    /// <summary>partial or reset: the body ended early, and is what came.</summary>
     public string? Error { get; init; }
 
     public string? Header(string name) => Headers.FirstOrDefault(h => h.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
@@ -228,7 +230,7 @@ internal sealed class WebSession
     static readonly HashSet<string> DroppedHeaders = new(StringComparer.OrdinalIgnoreCase)
         { "Host", "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive", "Upgrade", "TE", "Trailer", "Proxy-Authorization", "Proxy-Connection" };
 
-    internal static readonly SocketsHttpHandler DefaultHandler = PinnedHandler();
+    static readonly SocketsHttpHandler DefaultHandler = PinnedHandler();
 
     /// <summary>The network handler: no redirects, cookies, proxy or decompression, and every connection pinned to a checked
     /// address. Tests pass their own (through <see cref="WebPolicy.Handler"/>) with <paramref name="resolve"/> instead of DNS
@@ -373,6 +375,8 @@ internal sealed class WebSession
             // past the cap by the longest secret, so a credential cut in half at the cap is still scrubbed
             long cap = Policy.MaxResponseBytes + (secrets.Length > 0 ? secrets[0].Length : 0);
             exchange = await ExchangeAsync(url, method, sent, body, timeout, cap, ct);
+            // from a host with a credential nothing of a cut body is kept: the cut may split the credential
+            if (auth != null && exchange is { Status: not 0, Error: not null }) exchange = exchange with { Status = 0, Reason = "", Headers = [], Body = [] };
             // a compressed body would pass the scrub and be decoded later (curl --compressed, gunzip): decode it first
             if (auth != null && exchange.Status != 0) exchange = Decoded(exchange, cap);
             if (exchange.Status != 0 && secrets.Length > 0)
@@ -417,6 +421,7 @@ internal sealed class WebSession
             foreach (var h in response.Headers.NonValidated.Concat(response.Content.Headers.NonValidated))
                 foreach (var v in h.Value) list.Add(new(h.Key, v));
             if (list.Sum(h => h.Key.Length + h.Value.Length + 4) > MaxHeaderBytes) return Failed("recv");
+            if (list.Any(h => h.Value.Contains('\0'))) return Failed("weird"); // as curl, and as Node's parser
             var buffer = new MemoryStream();
             string? cut = null;
             if (method != "HEAD")
@@ -431,6 +436,7 @@ internal sealed class WebSession
                 // a body that ended early keeps what came; nothing of a malformed one (a bad chunk size: .NET loses the bytes of
                 // the read that finds it) or of a reset is kept
                 catch (HttpIOException e) when (e.HttpRequestError == HttpRequestError.ResponseEnded) { cut = "partial"; }
+                catch (IOException e) when (e.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset }) { cut = "reset"; }
             }
             return new(method, url.ToString(), (int)response.StatusCode, response.ReasonPhrase ?? "", list, buffer.ToArray()) { Error = cut };
         }
@@ -469,20 +475,33 @@ internal sealed class WebSession
         };
     }
 
-    /// <summary>gzip, or zlib-wrapped deflate, decoded to at most <paramref name="max"/> bytes (more is cut); null when corrupt.</summary>
-    internal static byte[]? Inflate(byte[] data, bool gzip, long max)
+    /// <summary>gzip, or zlib-wrapped deflate, decoded to at most <paramref name="max"/> bytes (more is cut); null when corrupt,
+    /// and when <paramref name="whole"/> also when the stream stops before its end (its trailer does not match what was decoded):
+    /// a stream cut short decodes to a prefix that may end inside a credential. curl --compressed decodes what came.</summary>
+    internal static byte[]? Inflate(byte[] data, bool gzip, long max, bool whole = true)
     {
+        byte[] output;
         try
         {
             using var input = new MemoryStream(data);
             using Stream z = gzip ? new GZipStream(input, CompressionMode.Decompress) : new ZLibStream(input, CompressionMode.Decompress);
-            var output = new MemoryStream();
+            var buffer = new MemoryStream();
             var chunk = new byte[16384];
-            for (int n; output.Length < max && (n = z.Read(chunk)) > 0;) output.Write(chunk, 0, (int)Math.Min(n, max - output.Length));
-            return output.ToArray();
+            for (int n; buffer.Length < max && (n = z.Read(chunk)) > 0;) buffer.Write(chunk, 0, (int)Math.Min(n, max - buffer.Length));
+            output = buffer.ToArray();
         }
         catch (InvalidDataException) { return null; }
+        if (!whole || output.Length >= max) return output; // at the cap the rest is not decoded, and is cut anyway
+        // .NET stops quietly where a cut stream ends; the trailer tells: gzip's CRC-32 and length, zlib's Adler-32
+        var t = data.AsSpan();
+        bool ok = gzip ? t.Length >= 18 && BinaryPrimitives.ReadUInt32LittleEndian(t[^8..]) == Crc32(output) && BinaryPrimitives.ReadUInt32LittleEndian(t[^4..]) == (uint)output.Length
+            : t.Length >= 6 && BinaryPrimitives.ReadUInt32BigEndian(t[^4..]) == Adler32(output);
+        return ok ? output : null;
     }
+
+    static readonly uint[] CrcTable = [.. Enumerable.Range(0, 256).Select(n => { uint c = (uint)n; for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1; return c; })];
+    internal static uint Crc32(byte[] data) { uint c = 0xFFFFFFFF; foreach (var b in data) c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8); return ~c; }
+    static uint Adler32(byte[] data) { uint a = 1, b = 0; foreach (var x in data) { a = (a + x) % 65521; b = (b + a) % 65521; } return b << 16 | a; }
 
     static string Scrub(string s, string[] secrets) => secrets.Aggregate(s, (t, secret) => t.Replace(secret, "[REDACTED]", StringComparison.Ordinal));
 

@@ -624,7 +624,7 @@ public sealed class Recording
         public WebExchange ToExchange(Func<string?, long, string, byte[]> blob, string where)
         {
             if (Method is not { Length: > 0 } m || Url is not { Length: > 0 } u) throw Bad($"{where}: method and url are required");
-            if (Error is not (null or "resolve" or "blocked" or "connect" or "timeout" or "tls" or "recv" or "partial" or "weird" or "empty"))
+            if (Error is not (null or "resolve" or "blocked" or "connect" or "timeout" or "tls" or "recv" or "partial" or "reset" or "weird" or "empty"))
                 throw Bad($"{where}: unknown error {JsonSerializer.Serialize(Error)}");
             if (Error != null && Status == null) return new(m, u, 0, "", [], []) { Error = Error }; // no answer; with a status, the response came in part
             if (Status is not (>= 100 and <= 999) || Size is not >= 0 || Headers?.Any(h => h is not { Count: 2 } || h.Contains(null!)) == true) throw Bad($"{where}: bad response");
