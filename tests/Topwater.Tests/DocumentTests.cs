@@ -405,14 +405,15 @@ public class DocumentTests
         var sh = DocShell();
         var fs = sh.Fs;
         var dir = Directory.CreateTempSubdirectory();
+        var docx = MakeDocx();   // once: each build stamps the current time into the zip entries
         try
         {
             var src = Path.Combine(dir.FullName, "real.docx");
-            File.WriteAllBytes(src, MakeDocx());
+            File.WriteAllBytes(src, docx);
             fs.AddDocument("/data/docs/real.docx", src, alsoMarkdown: true);
         }
         finally { dir.Delete(true); }
-        Assert.Equal(MakeDocx(), fs.ReadAllBytes("/data/docs/real.docx"));
+        Assert.Equal(docx, fs.ReadAllBytes("/data/docs/real.docx"));
         Assert.Equal(DocxMd, fs.ReadAllText("/data/docs/real.docx.md"));
         fs.AddDocument("/data/raw.xlsx", MakeXlsx());
         Assert.False(fs.Exists("/data/raw.xlsx.md"));
