@@ -22,7 +22,7 @@
 </p>
 
 Topwater is a library for **.NET**, **Python** and **TypeScript**. You register your functions, MCP servers and
-HTTP APIs; the model sees them as command-line programs on a small Linux machine and reaches all of them through a
+HTTP APIs. The model sees them as command-line programs on a small Linux machine and reaches all of them through a
 single tool:
 
 ```console
@@ -77,14 +77,9 @@ public class Tools
 }
 ```
 
-Add `Topwater.Mcp` for MCP servers and `Topwater.AI` for Microsoft.Extensions.AI. `Topwater.Containers` turns the machine
-into a Docker image and back, and `Topwater.Replay` replays recordings. An exported image holds what the agent wrote (its
-files, scripts and `~/.bashrc`, which a shell in the image runs): treat it as untrusted and run it as carefully as the
-agent itself.
-
 ### Python
 
-Requires Python 3.10 or later. Preview, not on PyPI yet.
+Requires Python 3.10 or later. Standard library only. Not on PyPI yet, so install from the repository:
 
 ```bash
 pip install "git+https://github.com/gr-ant/Topwater#subdirectory=python"
@@ -114,7 +109,8 @@ Inside async code, use `await topwater.execute_tool(shell, command)` instead of 
 
 ### TypeScript
 
-Requires Node 22 or later. Preview, not on npm yet. The package is an ES module.
+Requires Node 22 or later. No runtime dependencies; the package is an ES module. Not on npm yet, so build it from
+the repository:
 
 ```bash
 git clone https://github.com/gr-ant/Topwater
@@ -144,25 +140,27 @@ console.log(await BashTool.execute(shell, 'shop orders --status open | jq length
 
 TypeScript describes tools with a JSON Schema, so the function appears as a subcommand: `shop orders`.
 
-### No code: command line and MCP server
+### No code
 
-`topwater mcp` is an MCP server with one sandboxed `bash` tool, for Claude Desktop, Cursor, VS Code or any MCP
-client. `topwater` alone opens a shell on the simulated machine.
+`topwater mcp` is an MCP server with one sandboxed `bash` tool, for Claude Desktop, Claude Code, Cursor, VS Code or
+any other MCP client. `topwater` alone opens a shell on the simulated machine.
 
-A standalone binary, no .NET needed (from `0.1.0-preview.3`):
+```bash
+dotnet tool install -g Topwater.Cli --prerelease                      # needs .NET 8
+```
+
+From `0.1.0-preview.3` on, each release also carries a standalone binary that needs no .NET. That release is not
+out yet; once it is:
 
 ```bash
 curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, macOS
 ```
 
 ```powershell
-irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows: then topwater works in PowerShell and CMD
+irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows
 ```
 
-Or as a .NET tool: `dotnet tool install -g Topwater.Cli --prerelease`. The scripts check the download against the
-release's `SHA256SUMS`; binaries for every platform are on the [releases page](https://github.com/gr-ant/Topwater/releases).
-
-See [Command line and MCP server](docs/reference.md#command-line-and-mcp-server).
+See [Command line and MCP server](docs/cli.md) for the commands, the options and a Claude Desktop config.
 
 ## Connect it to a model
 
@@ -178,17 +176,19 @@ it, run the command and return the text.
 The tool takes one string argument, `command`. Files, variables and the working directory persist between calls.
 Use one shell per conversation; a shell is not safe to share between threads.
 
-Adapters do the wiring for common frameworks:
+Adapters do this wiring for common agent frameworks:
 
-- **.NET:** with Microsoft.Extensions.AI, `options.Tools = [shell.AsAIFunction()]` (package `Topwater.AI`). Semantic
-  Kernel takes the same function: `kernel.Plugins.AddFromFunctions("shell", [shell.AsAIFunction().AsKernelFunction()])`,
-  and so does Microsoft Agent Framework: `chatClient.AsAIAgent(tools: [shell.AsAIFunction()])`. The OpenAI and Anthropic
-  SDKs plug in through their `AsIChatClient()`; MCP clients use `topwater mcp`. See
-  [the reference](docs/reference.md#microsoft-agent-framework).
-- **Python:** LangChain and LangGraph, LlamaIndex, OpenAI Agents SDK, Claude Agent SDK, Pydantic AI, CrewAI,
-  smolagents and Google ADK, see [python/README.md](python/README.md#agent-frameworks).
-- **TypeScript:** Vercel AI SDK, OpenAI Agents, LangChain.js/LangGraph.js, Mastra and the Claude Agent SDK, see
-  [typescript/README.md](typescript/README.md#agent-frameworks).
+| | Frameworks | How |
+|---|---|---|
+| **.NET** | Microsoft.Extensions.AI, Semantic Kernel, Microsoft Agent Framework, the OpenAI and Anthropic SDKs | `shell.AsAIFunction()` from the `Topwater.AI` package. [Details](docs/integrations.md#microsoftextensionsai) |
+| **Python** | LangChain and LangGraph, LlamaIndex, OpenAI Agents SDK, Claude Agent SDK, Pydantic AI, CrewAI, smolagents, Google ADK | `bash_tool(shell)` from `topwater.integrations.<framework>`. [Details](python/README.md#agent-frameworks) |
+| **TypeScript** | Vercel AI SDK, OpenAI Agents, LangChain.js and LangGraph.js, Mastra, Claude Agent SDK | `bashTool(shell)` from `topwater/<framework>`. [Details](typescript/README.md#agent-frameworks) |
+| **Any MCP client** | Claude Desktop, Claude Code, Cursor, VS Code | [`topwater mcp`](docs/cli.md#mcp-server), no code |
+
+The Claude Agent SDK ships Claude Code's own tools, and its `Bash` runs on your computer. Use `bash_options(shell)`
+(Python) or `bashOptions(shell)` (TypeScript): they return options whose only tool is the Topwater shell, with the
+built-in tools and the developer's own Claude Code settings left out. See
+[Claude Agent SDK](docs/integrations.md#claude-agent-sdk).
 
 ## Add your own programs
 
@@ -198,49 +198,70 @@ Adapters do the wiring for common frameworks:
 | Tools described by JSON Schema | `shell.RegisterTools(...)` | `register_tools(shell, ...)` | `shell.registerTools(...)` |
 | An MCP server | `shell.MountMcpAsync(...)` (package `Topwater.Mcp`) | `topwater.mcp.mount_mcp(shell, ...)` | `shell.mountMcp(...)` |
 | An HTTP API, credentials hidden from the model | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `shell.registerApi(...)` |
-| [Web access](docs/reference.md#web-access) to sites you list, through `curl` and `wget` | `shell.AllowWeb(new WebPolicy { ... })` | `shell.allow_web(WebPolicy(...))` | `shell.allowWeb({ ... })` |
-| A real program from your machine | `shell.RegisterHostCommand("git")` | `register_host_command(shell, "git")` | not yet |
+| A real program from your machine | `shell.RegisterHostCommand("duckdb")` | `register_host_command(shell, "duckdb")` | not yet |
 
 An MCP server becomes one program with a subcommand per tool (`github list-issues --repo acme/api`), so its tool
 definitions are read on demand with `--help` rather than sent to the model up front. An API is called by alias,
 never by host, and the model never sees the credential (`api get jira /issue/PROJ-123 | jq .fields.status`).
+[Your programs](docs/programs.md) has the details.
 
-## Save, move and replay the machine
+## Save, move and replay
 
 | | .NET | Python | TypeScript |
 |---|---|---|---|
-| [Snapshots](docs/reference.md#snapshots): undo, save and load the machine | `shell.Snapshot()`, `Restore()`, `Fork()`, `Save()`, `Shell.Load()` | `shell.snapshot()`, `restore()`, `fork()`, `save()`, `Shell.load()` | `ShellSnapshot.capture(shell)`, `save()`, `load()`, `restore()`; no fork |
-| [Deterministic runs](docs/reference.md#deterministic-runs): a virtual clock and a seed | `StartTime`, `RandomSeed` | not yet | `startTime`, `randomSeed` |
-| [Recordings](docs/reference.md#recordings): record a session and replay it | `shell.StartRecording()`, `Recording.Load()`, `ReplayAsync()`; as a test with `Replay.AssertMatches()` or on real bash with `DockerTarget` (`Topwater.Replay`) | `shell.start_recording()`, `Recording.load()`, `replay()` | `startRecording(shell)`, `Recording.load()`, `replay()` |
-| [Containers](docs/reference.md#containers): turn the machine into a real Docker image, and a container back into a machine | `snapshot.BuildImageAsync(...)`, `ContainerImport.FromContainerAsync(...)` (`Topwater.Containers`) | `build_image(snapshot, ...)`, `from_container(...)` (`topwater.containers`) | not yet |
+| [Snapshots](docs/snapshots-and-recordings.md#snapshots): undo, fork, save and load the machine | `shell.Snapshot()`, `Restore()`, `Fork()`, `Save()`, `Shell.Load()` | `shell.snapshot()`, `restore()`, `fork()`, `save()`, `Shell.load()` | `ShellSnapshot.capture(shell)`, `save()`, `load()`, `restore()`; no fork |
+| [Deterministic runs](docs/snapshots-and-recordings.md#deterministic-runs): a virtual clock and a seed | `StartTime`, `RandomSeed` | not yet | `startTime`, `randomSeed` |
+| [Recordings](docs/snapshots-and-recordings.md#recordings): record a session and replay it | `shell.StartRecording()`, `Recording.Load()`, `ReplayAsync()` | `shell.start_recording()`, `Recording.load()`, `replay()` | `startRecording(shell)`, `Recording.load()`, `replay()` |
+| Recordings as regression tests, or replayed on real bash in Docker | `Replay.AssertMatches()`, `DockerTarget` (package `Topwater.Replay`) | not yet | not yet |
+| [Containers](docs/containers.md): the machine as a Docker image, and a container as a machine | `snapshot.BuildImageAsync(...)`, `ContainerImport.FromContainerAsync(...)` (package `Topwater.Containers`) | `build_image(snapshot, ...)`, `from_container(...)` (`topwater.containers`) | not yet |
 
-Snapshots and recordings are one file format, [`.topwater`](docs/reference.md#the-file-format): a zip with the machine,
-its file contents, and, for a recording, every call and checkpoints to roll back to. All three implementations read
-and write it, and still read the older snapshot zips and `.jsonl` recordings.
+Snapshots and recordings are one file, the [`.topwater` file](docs/snapshots-and-recordings.md#the-file-format): a zip
+with the machine and, for a recording, every call and checkpoints to roll back to. All three implementations read
+and write it, so a machine saved in one opens in another.
+
+The [replay viewer](https://gr-ant.github.io/Topwater/replay.html) opens a recording in the browser. Step through
+it turn by turn, see the files after each turn and a diff of what the turn changed, compare any two moments, and
+continue from any turn in a terminal. What you type there becomes a branch you can compare and download.
+
+An exported container image holds what the agent wrote, including a `~/.bashrc` that a shell in the image runs.
+Treat it as untrusted and run it as carefully as the agent itself.
 
 ## What is in the machine
 
-- **A shell language:** pipes, redirects, loops, functions, arrays, heredocs and scripts.
-- **More than 100 standard commands,** including `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff` and `tar`.
-- **An in-memory filesystem** laid out like Ubuntu, with a regular user who cannot `sudo`.
+- **A shell language:** pipes, redirects, loops, functions, arrays, heredocs, traps and scripts.
+- **About 140 commands,** among them `grep`, `sed`, `awk`, `jq`, `find`, `sort`, `diff`, `tar` and `zip`.
+- **`git`** for local repositories: commit, branch, diff, merge with conflict markers, stash. The `.git` folder is
+  git's own format, so real git reads it, and a repository carries over through snapshots and container exports.
 - **`to-markdown`** for reading Word, Excel, PowerPoint and HTML files.
-- **`git`** for local repositories: commit, branch, diff, merge with conflict markers, stash. Its `.git` is the real
-  on-disk format, so a repository carries over to real git through snapshots and container exports, and back for
-  repositories that are not packed.
+- **An in-memory filesystem** laid out like Ubuntu 24.04, with permissions, symbolic links and a regular user who
+  cannot `sudo`.
+- **Realistic behaviour.** Output and error messages follow bash 5.2 and the GNU tools on Ubuntu 24.04, so what the
+  model already knows about Linux holds.
 
-There is no Python or network access unless you add it (so no `git clone`, `fetch` or `push`). A missing command fails with a message that points the
-model at `help`. Background jobs and job control are not supported; the
-[reference](docs/reference.md#not-supported) has the full list.
+What is not there:
+
+| | |
+|---|---|
+| Python, Node, Perl, compilers | `command not found`, as bash prints it |
+| Network | None: no `curl`, `wget` or `ssh`, and `git clone`, `fetch` and `push` say so. The agent reaches outside only through the APIs, MCP servers and host programs you register |
+| Packages | `apt` and `dpkg` exist only to say that nothing can be installed |
+| Background jobs and job control | `cmd &` runs to completion |
+
+<!-- Web access: when allow-listed web access lands, add it to the Network row above. -->
+
+[The machine](docs/machine.md) lists the shell features, every command and the
+[differences from bash](docs/machine.md#not-supported).
 
 Each command is written from POSIX, the man pages and comparison against the real tool's output, never by copying
-or porting its source, and is checked by differential tests that run the real binary. The command set was audited
-for provenance in November 2026. All three implementations run one shared corpus of cases recorded from real bash
-and GNU tools ([`tests/corpus`](tests/corpus/README.md)), each with a short list of the cases it does not pass yet.
+or porting its source. The command set was audited for provenance in November 2026. All three implementations take
+their commands, options and messages from one [command spec](spec/README.md) and run one
+[shared corpus](tests/corpus/README.md) of cases recorded from real bash and GNU tools, each with a short list of
+the cases it does not pass yet.
 
 ## Safety
 
 **Simulated.** Shell commands are interpreted in your process and read and write only the in-memory filesystem.
-They cannot open host files, start processes or use the network, unless you allow a list of sites with `AllowWeb`.
+They cannot open host files, start processes or use the network.
 
 **Limited.** Every limit is on by default, with the same defaults in all three. When one is reached, the model gets
 a message that says what was cut off and what to do instead:
@@ -254,8 +275,8 @@ a message that says what was cut off and what to do instead:
 | Tool output returned to the model | 30,000 characters |
 
 Deep recursion and oversized archive extractions are also cut off, and in .NET so is a slow regular expression
-(one match is capped at 5 s). The [reference](docs/reference.md#limits-and-safety) lists every limit, its option
-and the measured memory use in .NET.
+(one match is capped at 5 s). [Limits and safety](docs/limits.md) lists every limit, its option and the measured
+memory use in .NET.
 
 **Real, and your responsibility:**
 
@@ -263,34 +284,36 @@ and the measured memory use in .NET.
 - **Host programs run with your process's permissions.** Topwater does not sandbox them unless you ask:
   `Launcher = HostSandbox.Bubblewrap()` in .NET, or `launcher=bubblewrap()` in Python, runs the program under
   bubblewrap with a private copy of the agent's files and no network. Read
-  [Real host programs](docs/reference.md#real-host-programs) before registering one.
-- **Python and TypeScript cannot interrupt a single regular-expression match.** In Python a catastrophically
-  backtracking pattern runs to completion; in Node only a pattern with backreferences can overrun the time limit.
-  Run the shell in a separate process or worker thread if you need a hard stop. Details are in
-  [python/README.md](python/README.md) and [typescript/README.md](typescript/README.md#differences-from-the-c-version).
+  [Real host programs](docs/programs.md#real-host-programs) before registering one.
+- **Python and TypeScript cannot always interrupt a single regular-expression match.** Run the shell in a separate
+  process or worker thread if you need a hard stop. See
+  [the differences](docs/limits.md#differences-in-python-and-typescript).
 
 ## Status
 
-Topwater is in preview. APIs may change before 1.0.
+Topwater is in preview. APIs may change before 1.0. [CHANGELOG.md](CHANGELOG.md) lists what changed.
 
 | | Where | State |
 |---|---|---|
-| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.2` |
-| **Python** | [`python/`](python/README.md) | preview, not on PyPI |
-| **TypeScript** | [`typescript/`](typescript/README.md) | preview, not on npm |
-| **Browser** | [`typescript/`](typescript/README.md#in-the-browser) | build it yourself; runs in a Web Worker |
+| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.2` published. `main` is `0.1.0-preview.3`, not released yet |
+| **Python** | [`python/`](python/README.md) | not on PyPI; install from the repository |
+| **TypeScript** | [`typescript/`](typescript/README.md) | not on npm; build from the repository |
+| **Browser** | [demo](https://gr-ant.github.io/Topwater/), [`typescript/`](typescript/README.md#in-the-browser) | the TypeScript build in a Web Worker |
 
-The `bc` calculator is in .NET only; the tables above show what Python and TypeScript do not have yet.
+This README describes `main`. `git`, symbolic links and the `.topwater` recording file are newer than the published
+.NET packages; to use them now, reference the projects in `src/` from a clone. The `bc` calculator is in .NET only,
+and the tables above show what Python and TypeScript do not have yet.
 
 ## Documentation
 
-- [Reference](docs/reference.md): the shell language, every command, your own commands, MCP, APIs, host programs,
-  snapshots, containers, recordings and limits. Examples use the .NET API.
-- [Python](python/README.md) and [TypeScript](typescript/README.md): how each port maps onto the reference, and
+- [docs/](docs/README.md): [the machine](docs/machine.md), [your programs](docs/programs.md),
+  [connecting to a model](docs/integrations.md), [command line and MCP server](docs/cli.md),
+  [snapshots and recordings](docs/snapshots-and-recordings.md), [containers](docs/containers.md) and
+  [limits and safety](docs/limits.md). Samples use the .NET API.
+- [Python](python/README.md) and [TypeScript](typescript/README.md): each package's API, its framework adapters and
   where it differs.
-- [Shared test corpus](tests/corpus/README.md): the recorded cases all three implementations run.
-- [Command spec](spec/README.md): the one list of commands, options, help texts and messages the three implementations
-  are generated from, and how to add or change a command.
+- [Command spec](spec/README.md) and [shared test corpus](tests/corpus/README.md): the one list of commands,
+  options and messages, and the recorded cases, that all three implementations share.
 
 ## Examples
 
@@ -303,25 +326,22 @@ URL=http://127.0.0.1:8765 dotnet run --project examples/WebShell   # the same, a
 
 Without `URL`, WebShell listens on all network interfaces.
 
-`examples/` also has three complete agents: one triages issues through an MCP server (`McpAgent`), one writes a
-Word document with the real OfficeCLI (`OfficeAgent`), and one answers questions over CSV files with the real DuckDB
-(`DuckDbAgent`). They need a Gemini API key. `AgentFrameworkAgent` is the shell in a Microsoft Agent Framework agent on
-OpenAI (`OPENAI_API_KEY`). `python/examples/` has Python examples, and the installed
-Python package has a web terminal: `python -m topwater.web --demo`. The TypeScript port builds a terminal and a
-recording viewer that run entirely [in the browser](typescript/README.md#in-the-browser).
+| Example | What it shows | Needs |
+|---|---|---|
+| `examples/McpAgent` | an agent that triages issues through an MCP server | a Gemini API key |
+| `examples/OfficeAgent` | an agent that writes a Word document with the real OfficeCLI | a Gemini API key |
+| `examples/DuckDbAgent` | an agent that answers questions over CSV files with the real DuckDB | a Gemini API key |
+| `examples/AgentFrameworkAgent` | the shell in a Microsoft Agent Framework agent | `OPENAI_API_KEY` |
+| `python/examples/` | Python agents and use cases | a Gemini API key |
+
+The installed Python package has a web terminal: `python -m topwater.web --demo`.
 
 ## Contributing
 
 Bug reports are most useful as the command that was run, what Topwater printed and what real bash prints.
 
-```bash
-dotnet test                                  # .NET
-(cd python && python -m pytest)              # Python
-(cd typescript && npm install && npm test)   # TypeScript
-```
-
-All three run the shared cases in `tests/corpus/`. Commands, options, help texts and messages live in `spec/`: edit
-the JSON there and run `python3 tools/spec-gen/gen.py` (see [spec/README.md](spec/README.md)).
+[AGENTS.md](AGENTS.md) has the rules for changing the repository: commands are specified in `spec/` first, the
+clean-room rule, the safety rules and how to run the tests.
 
 ## License
 
