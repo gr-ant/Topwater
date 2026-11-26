@@ -1,0 +1,938 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "git",
+  "category": "utility",
+  "summary": "Version control in local repositories: init, add, commit, log, diff, branch, merge, stash (no network or remotes)",
+  "version": "git version 2.43.0",
+  "help": [
+    "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]",
+    "",
+    "Version control for the files in this machine. Repositories are ordinary .git",
+    "directories in the format real git uses, so they can be copied out and used",
+    "elsewhere. There is no network: clone, fetch, pull, push and remotes are not",
+    "available.",
+    "",
+    "Start and save work:",
+    "   init       create a repository",
+    "   add        stage changes; rm, mv remove and rename tracked files",
+    "   commit     record the staged changes",
+    "   status     show what changed",
+    "   diff       show changes as patches or statistics",
+    "   restore    put back files from the index or a commit",
+    "   reset      move the branch or unstage files",
+    "   stash      set changes aside",
+    "   clean      delete untracked files",
+    "",
+    "History and branches:",
+    "   log, show  look at commits",
+    "   branch     list, create, rename, delete branches",
+    "   switch     change branch (checkout also restores files)",
+    "   merge      join histories (fast-forward or three-way with conflict markers)",
+    "   tag        name a commit",
+    "",
+    "Plumbing: rev-parse, rev-list, ls-files, cat-file, config.",
+    "",
+    "'git help <command>' or 'git <command> --help' describes one command."
+  ],
+  "parser": "custom",
+  "options": [
+    {"short": "C", "arg": "<path>", "description": "run as if started in <path>"},
+    {"short": "c", "arg": "<name>=<value>", "description": "set a configuration value for this command only"},
+    {"long": ["version"], "key": "\u0001", "description": "print the version"},
+    {"long": ["help"], "key": "\u0002", "description": "print this help"},
+    {"short": "P", "long": ["no-pager"], "description": "accepted and ignored (there is no pager)", "ignored": true}
+  ],
+  "exitCodes": {"1": "a comparison found differences, a merge has conflicts, or a recoverable error", "128": "a fatal error", "129": "a usage error (bad option)"},
+  "messages": {
+    "notRepo": "fatal: not a git repository (or any of the parent directories): .git",
+    "unknownCommand": "git: '{name}' is not a git command. See 'git --help'.",
+    "unsupported": "fatal: 'git {name}' is not available in this machine's git; 'git help' lists the commands it has",
+    "unknownGlobalOption": "unknown option: {option}",
+    "globalUsage": "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]",
+    "globalNeedsValue": "error: option '{option}' requires a value",
+    "cannotChdir": "fatal: cannot change to '{path}': No such file or directory",
+    "badConfigKey": "error: invalid config key: {key}",
+    "noHelp": "No manual entry for git-{name}",
+    "unknownOption": "error: unknown option `{option}'",
+    "unknownSwitch": "error: unknown switch `{option}'",
+    "optionNeedsValue": "error: option `{option}' requires a value",
+    "switchNeedsValue": "error: switch `{option}' requires a value",
+    "optionTakesNoValue": "error: option `{option}' takes no value",
+    "tooManyArguments": "fatal: too many arguments",
+    "badRevision": "fatal: ambiguous argument '{rev}': unknown revision or path not in the working tree.\nUse '--' to separate paths from revisions, like this:\n'git <command> [<revision>...] -- [<file>...]'",
+    "badDefaultRevision": "fatal: your current branch does not have any commits yet",
+    "notCommit": "fatal: '{rev}' is not a commit",
+    "pathNotInRevision": "fatal: path '{path}' does not exist in '{rev}'",
+    "notTree": "fatal: '{rev}' does not name a tree",
+    "ambiguousPrefix": "fatal: short object ID {prefix} is ambiguous",
+    "pathspecNoMatch": "fatal: pathspec '{path}' did not match any files",
+    "pathspecNoMatchKnown": "error: pathspec '{path}' did not match any file(s) known to git",
+    "outsideRepo": "fatal: {path}: '{path}' is outside repository at '{top}'",
+    "identityUnknown": "*** Please tell me who you are.\n\n  git config --global user.email \"you@example.com\"\n  git config --global user.name \"Your Name\"\n\nfatal: unable to auto-detect email address (got '{guess}')",
+    "emptyIdentName": "fatal: empty ident name (for <{email}>) not allowed",
+    "badDate": "fatal: invalid date format: {date}",
+    "badDateFormat": "fatal: unknown date format {format}",
+    "badPretty": "fatal: invalid --pretty format: {format}",
+    "autoMerging": "Auto-merging {path}",
+    "conflictContent": "CONFLICT (content): Merge conflict in {path}",
+    "conflictAddAdd": "CONFLICT (add/add): Merge conflict in {path}",
+    "conflictModifyDelete": "CONFLICT (modify/delete): {path} deleted in {deleted} and modified in {modified}.  Version {modified} of {path} left in tree.",
+    "binaryConflict": "warning: Cannot merge binary files: {path} ({ours} vs. {theirs})",
+    "missingObject": "fatal: object {object} is missing from the repository",
+    "corruptObject": "fatal: object {object} is corrupt",
+    "wrongType": "fatal: object {object} is not a {kind}",
+    "packedObjects": "fatal: this repository's history is packed (.git/objects/pack), which git here cannot read yet; the work tree files are intact, so do not delete .git (object {object})",
+    "badIndex": "fatal: index file corrupt ({why})",
+    "indexBadSignature": "bad signature",
+    "indexBadVersion": "index version {version} is not supported",
+    "indexBadChecksum": "checksum mismatch",
+    "indexTooMany": "too many entries",
+    "indexTruncated": "truncated entry",
+    "indexExtendedFlag": "extended flag in a version 2 index",
+    "indexBadExtension": "unsupported extension {name}",
+    "binaryDiffer": "Binary files {a} and {b} differ",
+    "needsMerge": "{path}: needs merge",
+    "graphNotLinear": "fatal: --graph draws only linear history here, and this history has merges or several branches; to see each commit's parents run git log --format='%h %p %s'",
+    "badSymbolicRef": "fatal: {path} points outside refs/: {target}",
+    "pathTooDeep": "fatal: invalid path '{path}': more than {limit} directories deep",
+    "patternTimeout": "fatal: pattern '{pattern}' took too long to match",
+    "badRegex": "fatal: invalid regular expression: {pattern}",
+    "badConfig": "fatal: bad config line {line} in a git configuration file",
+    "invalidPath": "fatal: invalid path '{path}'",
+    "symlinkInGitDir": "fatal: {path} is a symbolic link; git here does not follow links inside .git",
+    "tooLarge": "fatal: {what} is too large for this machine's limits",
+    "tooDeep": "fatal: tree {object} is nested too deeply",
+    "ioError": "fatal: {error}"
+  },
+  "subcommands": {
+    "init": {
+      "summary": "Set up a new repository (running it again in an existing one changes nothing)",
+      "usage": ["git init [-q] [-b <branch>] [<directory>]"],
+      "options": [
+        {"short": "q", "long": ["quiet"], "description": "print nothing on success"},
+        {"short": "b", "long": ["initial-branch"], "arg": "<name>", "description": "name the first branch <name> instead of init.defaultBranch or master"}
+      ],
+      "messages": {
+        "initialized": "Initialized empty Git repository in {path}",
+        "reinitialized": "Reinitialized existing Git repository in {path}",
+        "badBranchName": "fatal: invalid initial branch name: '{name}'"
+      }
+    },
+    "status": {
+      "summary": "Show staged, unstaged and untracked changes",
+      "usage": ["git status [<options>] [--] [<pathspec>...]"],
+      "options": [
+        {"short": "s", "long": ["short"], "description": "two status letters and a path per line"},
+        {"short": "b", "long": ["branch"], "description": "with --short, start with a ## line naming the branch"},
+        {"long": ["porcelain"], "key": "\u0001", "description": "the short format for scripts: paths from the top of the repository, quoted only when needed (also --porcelain=v1)"},
+        {"long": ["long"], "key": "\u0002", "description": "the full format (the default)", "ignored": true},
+        {"short": "u", "long": ["untracked-files"], "arg": "<mode>", "description": "which untracked files to list: no, normal (directories collapsed) or all; -u alone means all", "custom": true}
+      ],
+      "messages": {
+        "onBranch": "On branch {branch}",
+        "detachedAt": "HEAD detached at {commit}",
+        "noCommitsYet": "No commits yet",
+        "initialCommit": "Initial commit",
+        "unmergedHeader": "You have unmerged paths.\n  (fix conflicts and run \"git commit\")\n  (use \"git merge --abort\" to abort the merge)",
+        "mergeFixed": "All conflicts fixed but you are still merging.\n  (use \"git commit\" to conclude merge)",
+        "toBeCommitted": "Changes to be committed:",
+        "hintUnstage": "  (use \"git restore --staged <file>...\" to unstage)",
+        "hintUnstageNoCommits": "  (use \"git rm --cached <file>...\" to unstage)",
+        "unmergedPaths": "Unmerged paths:",
+        "hintResolve": "  (use \"git add <file>...\" to mark resolution)",
+        "notStaged": "Changes not staged for commit:",
+        "hintAdd": "  (use \"git add <file>...\" to update what will be committed)",
+        "hintAddRm": "  (use \"git add/rm <file>...\" to update what will be committed)",
+        "hintRestore": "  (use \"git restore <file>...\" to discard changes in working directory)",
+        "untrackedHeader": "Untracked files:",
+        "hintTrack": "  (use \"git add <file>...\" to include in what will be committed)",
+        "noChangesAdded": "no changes added to commit (use \"git add\" and/or \"git commit -a\")",
+        "nothingAddedUntracked": "nothing added to commit but untracked files present (use \"git add\" to track)",
+        "nothingToCommitInitial": "nothing to commit (create/copy files and use \"git add\" to track)",
+        "nothingToCommitClean": "nothing to commit, working tree clean",
+        "noCommitsOnBranch": "No commits yet on {branch}",
+        "labelNew": "new file:",
+        "labelModified": "modified:",
+        "labelDeleted": "deleted:",
+        "labelRenamed": "renamed:",
+        "labelTypechange": "typechange:",
+        "bothModified": "both modified:",
+        "bothAdded": "both added:",
+        "bothDeleted": "both deleted:",
+        "deletedByThem": "deleted by them:",
+        "deletedByUs": "deleted by us:",
+        "addedByUs": "added by us:",
+        "addedByThem": "added by them:"
+      }
+    },
+    "add": {
+      "summary": "Stage file contents for the next commit",
+      "usage": ["git add [<options>] [--] <pathspec>..."],
+      "options": [
+        {"short": "A", "long": ["all"], "description": "also stage removals and new files everywhere the pathspec reaches (the whole tree without one)"},
+        {"short": "u", "long": ["update"], "description": "stage changes and removals of tracked files only"},
+        {"short": "f", "long": ["force"], "description": "add files even when they are ignored"},
+        {"short": "n", "long": ["dry-run"], "description": "only say what would be added"},
+        {"short": "v", "long": ["verbose"], "description": "name each file as it is added"}
+      ],
+      "messages": {
+        "nothingSpecified": "Nothing specified, nothing added.\nhint: Maybe you wanted to say 'git add .'?\nhint: Turn this message off by running\nhint: \"git config advice.addEmptyPathspec false\"",
+        "ignoredPaths": "The following paths are ignored by one of your .gitignore files:\n{paths}\nhint: Use -f if you really want to add them.\nhint: Turn this message off by running\nhint: \"git config advice.addIgnoredFile false\"",
+        "nestedRepo": "fatal: '{path}' holds another repository; nested repositories (submodules) are not supported here"
+      }
+    },
+    "rm": {
+      "summary": "Remove files from the index and the work tree",
+      "usage": ["git rm [<options>] [--] <pathspec>..."],
+      "options": [
+        {"long": ["cached"], "key": "\u0001", "description": "only unstage: keep the file in the work tree"},
+        {"short": "r", "description": "remove directories recursively"},
+        {"short": "f", "long": ["force"], "description": "remove even when the file has changes"},
+        {"short": "q", "long": ["quiet"], "description": "print no file names"},
+        {"short": "n", "long": ["dry-run"], "description": "only list what would be removed"}
+      ],
+      "messages": {
+        "noPathspec": "No pathspec was given. Which files should I remove?",
+        "notRecursive": "fatal: not removing '{path}' recursively without -r",
+        "local": "error: the following file has local modifications:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+        "localMany": "error: the following files have local modifications:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+        "staged": "error: the following file has changes staged in the index:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+        "stagedMany": "error: the following files have changes staged in the index:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+        "stagedAndLocal": "error: the following file has staged content different from both the\nfile and the HEAD:\n{paths}\n(use -f to force removal)",
+        "stagedAndLocalMany": "error: the following files have staged content different from both the\nfile and the HEAD:\n{paths}\n(use -f to force removal)"
+      }
+    },
+    "mv": {
+      "summary": "Move or rename a tracked file or directory",
+      "usage": ["git mv [<options>] <source> <destination>", "git mv [<options>] <source>... <directory>"],
+      "options": [
+        {"short": "f", "long": ["force"], "description": "overwrite an existing destination"},
+        {"short": "n", "long": ["dry-run"], "description": "only say what would be moved"},
+        {"short": "v", "long": ["verbose"], "description": "name each move"}
+      ],
+      "messages": {
+        "usage": "error: need a source and a destination",
+        "badSource": "fatal: bad source, source={source}, destination={destination}",
+        "notUnderControl": "fatal: not under version control, source={source}, destination={destination}",
+        "destinationExists": "fatal: destination exists, source={source}, destination={destination}",
+        "destinationNotDir": "fatal: destination directory does not exist, source={path}"
+      }
+    },
+    "commit": {
+      "summary": "Record the staged changes as a new commit",
+      "usage": ["git commit [<options>] [--] [<pathspec>...]"],
+      "options": [
+        {"short": "m", "long": ["message"], "arg": "<msg>", "description": "the commit message; several -m make several paragraphs"},
+        {"short": "F", "long": ["file"], "arg": "<file>", "description": "read the message from <file> (- for standard input)"},
+        {"short": "a", "long": ["all"], "description": "first stage changes and removals of every tracked file"},
+        {"long": ["amend"], "key": "\u0001", "description": "replace the current commit (same parents; same message and author unless given)"},
+        {"long": ["allow-empty"], "key": "\u0002", "description": "commit even when nothing changed"},
+        {"long": ["allow-empty-message"], "key": "\u0003", "description": "allow an empty message"},
+        {"long": ["no-edit"], "key": "\u0004", "description": "keep the existing message (with --amend, or to conclude a merge)"},
+        {"long": ["author"], "key": "\u0005", "arg": "<author>", "description": "set the author, as 'Name <email>'"},
+        {"long": ["date"], "key": "\u0006", "arg": "<date>", "description": "set the author date"},
+        {"short": "q", "long": ["quiet"], "description": "print nothing on success"},
+        {"short": "n", "long": ["no-verify"], "description": "accepted and ignored (there are no hooks)", "ignored": true},
+        {"short": "s", "long": ["signoff"], "description": "accepted and ignored", "ignored": true}
+      ],
+      "messages": {
+        "noEditor": "error: Terminal is dumb, but EDITOR unset\nPlease supply the message using either -m or -F option.",
+        "editorCannotRun": "error: no editor can run in this machine; give the message with -m or -F (or use --no-edit)",
+        "emptyMessage": "Aborting commit due to empty commit message.",
+        "nothingToAmend": "fatal: You have nothing to amend.",
+        "amendDuringMerge": "fatal: You are in the middle of a merge -- cannot amend.",
+        "pathsWithAll": "fatal: paths '...' with -a does not make sense",
+        "pathspecUnknown": "error: pathspec '{path}' did not match any file(s) known to git",
+        "badAuthor": "fatal: --author '{author}' is not 'Name <email>' and matches no existing author",
+        "cannotReadMessage": "fatal: could not read log file '{file}': No such file or directory",
+        "unmergedFiles": "error: Committing is not possible because you have unmerged files.\nhint: Fix them up in the work tree, and then use 'git add/rm <file>'\nhint: as appropriate to mark resolution and make a commit.\nfatal: Exiting because of an unresolved conflict."
+      }
+    },
+    "log": {
+      "summary": "Show the commit history",
+      "usage": ["git log [<options>] [<revision-range>] [[--] <path>...]"],
+      "options": [
+        {"short": "n", "long": ["max-count"], "arg": "<n>", "description": "show at most <n> commits (also -<n>)"},
+        {"long": ["skip"], "key": "\u001b", "arg": "<n>", "description": "skip the first <n> commits"},
+        {"long": ["oneline"], "key": "\u000e", "description": "one line per commit: abbreviated id and subject"},
+        {"long": ["format", "pretty"], "key": "\u0010", "arg": "<format>", "description": "how to print each commit: oneline, short, medium, full, fuller, raw, or a format string with %H %h %s %an %ae %ad %d and similar placeholders (format: puts no newline after the last)"},
+        {"long": ["decorate"], "key": "\u0011", "description": "show the branches and tags that point at each commit"},
+        {"long": ["date"], "key": "\u0019", "arg": "<style>", "description": "how to print dates: default, short, iso, iso-strict, rfc, raw, unix or relative"},
+        {"long": ["abbrev-commit"], "key": "\u001a", "description": "abbreviate commit ids"},
+        {"short": "p", "long": ["patch"], "description": "show each commit's changes as a patch"},
+        {"short": "u", "description": "same as -p"},
+        {"long": ["stat"], "key": "\u0001", "description": "show a diffstat: changed lines per file as a +/- graph, then a summary line"},
+        {"long": ["shortstat"], "key": "\u0002", "description": "show only the diffstat's summary line"},
+        {"long": ["name-only"], "key": "\u0003", "description": "list only the names of changed files"},
+        {"long": ["name-status"], "key": "\u0004", "description": "list changed files with a status letter (A, M, D, R, T)"},
+        {"long": ["numstat"], "key": "\u0006", "description": "list added and removed line counts per file, tab-separated"},
+        {"long": ["summary"], "key": "\u001f", "description": "list created, deleted and renamed files and mode changes"},
+        {"short": "U", "long": ["unified"], "arg": "<n>", "description": "show <n> lines of context around each change instead of 3"},
+        {"long": ["graph"], "key": "\u000f", "description": "draw the history as a graph to the left (linear histories only)"},
+        {"long": ["all"], "key": "\u0012", "description": "start from every branch and tag as well as HEAD"},
+        {"long": ["reverse"], "key": "\u0013", "description": "oldest commit first"},
+        {"long": ["author"], "key": "\u0014", "arg": "<pattern>", "description": "only commits whose author matches the regular expression"},
+        {"long": ["grep"], "key": "\u0015", "arg": "<pattern>", "description": "only commits whose message matches the regular expression"},
+        {"long": ["first-parent"], "key": "\u0016", "description": "follow only the first parent of merge commits"},
+        {"long": ["no-merges"], "key": "\u0017", "description": "leave out merge commits"},
+        {"long": ["merges"], "key": "\u0018", "description": "show only merge commits"},
+        {"long": ["follow"], "key": "\u001c", "description": "accepted and ignored (renames are not followed)", "ignored": true},
+        {"long": ["since", "after"], "key": "\u001d", "arg": "<date>", "description": "only commits made at or after <date>"},
+        {"long": ["until", "before"], "key": "\u001e", "arg": "<date>", "description": "only commits made at or before <date>"},
+        {"short": "s", "long": ["no-patch"], "description": "show no changes"},
+        {"long": ["color"], "arg": "<when>", "description": "accepted and ignored, with or without =<when> (output is never colored)", "custom": true, "ignored": true}
+      ],
+      "messages": {
+        "noCommitsYet": "fatal: your current branch '{branch}' does not have any commits yet"
+      }
+    },
+    "show": {
+      "summary": "Show a commit (message and patch), tag, tree or file",
+      "usage": ["git show [<options>] [<object>...]"],
+      "options": [
+        {"long": ["oneline"], "key": "\u000e", "description": "one line per commit: abbreviated id and subject"},
+        {"long": ["format", "pretty"], "key": "\u0010", "arg": "<format>", "description": "how to print each commit: oneline, short, medium, full, fuller, raw, or a format string with %H %h %s %an %ae %ad %d and similar placeholders (format: puts no newline after the last)"},
+        {"long": ["decorate"], "key": "\u0011", "description": "show the branches and tags that point at each commit"},
+        {"long": ["date"], "key": "\u0019", "arg": "<style>", "description": "how to print dates: default, short, iso, iso-strict, rfc, raw, unix or relative"},
+        {"long": ["abbrev-commit"], "key": "\u001a", "description": "abbreviate commit ids"},
+        {"short": "p", "long": ["patch"], "description": "show each commit's changes as a patch"},
+        {"short": "u", "description": "same as -p"},
+        {"long": ["stat"], "key": "\u0001", "description": "show a diffstat: changed lines per file as a +/- graph, then a summary line"},
+        {"long": ["shortstat"], "key": "\u0002", "description": "show only the diffstat's summary line"},
+        {"long": ["name-only"], "key": "\u0003", "description": "list only the names of changed files"},
+        {"long": ["name-status"], "key": "\u0004", "description": "list changed files with a status letter (A, M, D, R, T)"},
+        {"long": ["numstat"], "key": "\u0006", "description": "list added and removed line counts per file, tab-separated"},
+        {"long": ["summary"], "key": "\u001f", "description": "list created, deleted and renamed files and mode changes"},
+        {"short": "U", "long": ["unified"], "arg": "<n>", "description": "show <n> lines of context around each change instead of 3"},
+        {"short": "s", "long": ["no-patch", "quiet"], "description": "show the commit without its changes"},
+        {"long": ["color"], "arg": "<when>", "description": "accepted and ignored, with or without =<when> (output is never colored)", "custom": true, "ignored": true}
+      ]
+    },
+    "diff": {
+      "summary": "Show changes between the work tree, the index and commits",
+      "usage": [
+        "git diff [<options>] [<commit>] [--] [<path>...]",
+        "git diff [<options>] --cached [<commit>] [--] [<path>...]",
+        "git diff [<options>] <commit> <commit> [--] [<path>...]",
+        "git diff [<options>] <commit>..<commit> [--] [<path>...]"
+      ],
+      "options": [
+        {"long": ["cached", "staged"], "key": "\b", "description": "compare the index with HEAD (or with <commit>)"},
+        {"long": ["stat"], "key": "\u0001", "description": "show a diffstat: changed lines per file as a +/- graph, then a summary line"},
+        {"long": ["shortstat"], "key": "\u0002", "description": "show only the diffstat's summary line"},
+        {"long": ["name-only"], "key": "\u0003", "description": "list only the names of changed files"},
+        {"long": ["name-status"], "key": "\u0004", "description": "list changed files with a status letter (A, M, D, R, T)"},
+        {"long": ["numstat"], "key": "\u0006", "description": "list added and removed line counts per file, tab-separated"},
+        {"long": ["summary"], "key": "\u001f", "description": "list created, deleted and renamed files and mode changes"},
+        {"short": "U", "long": ["unified"], "arg": "<n>", "description": "show <n> lines of context around each change instead of 3"},
+        {"long": ["quiet"], "key": "\u0005", "description": "print nothing; exit 1 when there are differences"},
+        {"long": ["exit-code"], "key": "\u0007", "description": "exit 1 when there are differences"},
+        {"short": "p", "long": ["patch"], "description": "show a patch (the default)", "ignored": true},
+        {"long": ["no-color"], "key": "\u0018", "description": "accepted and ignored (output is never colored)", "ignored": true},
+        {"long": ["color"], "arg": "<when>", "description": "accepted and ignored, with or without =<when> (output is never colored)", "custom": true, "ignored": true}
+      ],
+      "messages": {
+        "tooManyRevisions": "error: too many revisions; give at most two"
+      }
+    },
+    "branch": {
+      "summary": "Show, add, rename or remove branches",
+      "usage": [
+        "git branch [<options>] [--list] [<pattern>...]",
+        "git branch [-f] <name> [<start-point>]",
+        "git branch (-m | -M) [<old>] <new>",
+        "git branch (-d | -D) <name>..."
+      ],
+      "options": [
+        {"long": ["list"], "key": "\u0002", "description": "list branches (those matching the patterns, if given)"},
+        {"short": "a", "long": ["all"], "description": "list all branches (there are no remote ones)"},
+        {"short": "r", "long": ["remotes"], "description": "list remote-tracking branches (there are none)"},
+        {"short": "v", "long": ["verbose"], "description": "also show each branch's commit and subject"},
+        {"short": "d", "long": ["delete"], "description": "delete branches that are merged into HEAD"},
+        {"short": "D", "description": "delete branches even when not merged"},
+        {"short": "m", "long": ["move"], "description": "rename a branch (the current one when only <new> is given)"},
+        {"short": "M", "description": "rename a branch even over an existing one"},
+        {"short": "f", "long": ["force"], "description": "with a name: reset the branch to <start-point> if it exists; with -d: delete unmerged"},
+        {"long": ["show-current"], "key": "\u0001", "description": "print the current branch name (nothing when detached)"}
+      ],
+      "messages": {
+        "exists": "fatal: a branch named '{name}' already exists",
+        "invalidName": "fatal: '{name}' is not a valid branch name",
+        "notFound": "error: branch '{name}' not found",
+        "deleted": "Deleted branch {name} (was {commit}).",
+        "checkedOut": "error: cannot delete branch '{name}' used by worktree at '{path}'",
+        "notMerged": "error: the branch '{name}' is not fully merged.\nIf you are sure you want to delete it, run 'git branch -D {name}'",
+        "nameRequired": "fatal: branch name required",
+        "noSuchBranch": "fatal: no branch named '{name}'",
+        "renameArgs": "fatal: too many arguments for a rename operation",
+        "renameDetached": "fatal: cannot rename the current branch while not on any",
+        "tooManyArguments": "fatal: too many arguments",
+        "forceCurrent": "fatal: cannot force update the current branch.",
+        "notValidObject": "fatal: not a valid object name: '{name}'",
+        "detachedLabel": "(HEAD detached at {commit})"
+      }
+    },
+    "checkout": {
+      "summary": "Switch branches or restore files from the index or a commit",
+      "usage": [
+        "git checkout [-q] [-f] <branch>",
+        "git checkout [-q] [-f] [--detach] <commit>",
+        "git checkout [-q] [-f] (-b | -B) <new-branch> [<start-point>]",
+        "git checkout [<tree-ish>] [--] <pathspec>..."
+      ],
+      "options": [
+        {"short": "b", "arg": "<branch>", "description": "create <branch> at <start-point> (default HEAD) and switch to it"},
+        {"short": "B", "arg": "<branch>", "description": "like -b, but reset <branch> if it exists"},
+        {"long": ["detach"], "key": "\u0001", "description": "leave HEAD detached at the commit"},
+        {"short": "f", "long": ["force"], "description": "switch even if local changes would be lost (they are discarded)"},
+        {"short": "q", "long": ["quiet"], "description": "print no messages"}
+      ],
+      "messages": {
+        "switchedBranch": "Switched to branch '{branch}'",
+        "switchedNewBranch": "Switched to a new branch '{branch}'",
+        "switchedResetBranch": "Switched to and reset branch '{branch}'",
+        "alreadyOn": "Already on '{branch}'",
+        "headNowAt": "HEAD is now at {commit}",
+        "previousPosition": "Previous HEAD position was {commit}",
+        "localChanges": "error: Your local changes to the following files would be overwritten by {verb}:\n{paths}\n{advice}\nAborting",
+        "localChangesAdvice": "Please commit your changes or stash them before you switch branches.",
+        "localChangesAdviceMerge": "Please commit your changes or stash them before you merge.",
+        "untrackedOverwritten": "error: The following untracked working tree files would be overwritten by {verb}:\n{paths}\n{advice}\nAborting",
+        "untrackedAdvice": "Please move or remove them before you switch branches.",
+        "untrackedAdviceMerge": "Please move or remove them before you merge.",
+        "resolveIndexFirst": "error: you need to resolve your current index first\n{paths}",
+        "noPreviousBranch": "error: there is no previous branch to switch to",
+        "updatedFromIndex": "Updated {count} path from the index",
+        "updatedFromIndexMany": "Updated {count} paths from the index",
+        "updatedFromCommit": "Updated {count} path from {commit}",
+        "updatedFromCommitMany": "Updated {count} paths from {commit}",
+        "unmergedPath": "error: path '{path}' is unmerged"
+      }
+    },
+    "switch": {
+      "summary": "Switch branches",
+      "usage": [
+        "git switch [<options>] <branch>",
+        "git switch [<options>] (-c | -C) <new-branch> [<start-point>]",
+        "git switch [<options>] --detach [<commit>]"
+      ],
+      "options": [
+        {"short": "c", "long": ["create"], "arg": "<branch>", "description": "create <branch> and switch to it"},
+        {"short": "C", "long": ["force-create"], "arg": "<branch>", "description": "like -c, but reset <branch> if it exists"},
+        {"short": "d", "long": ["detach"], "description": "switch to a commit with HEAD detached"},
+        {"short": "f", "long": ["force", "discard-changes"], "description": "switch even if local changes would be lost (they are discarded)"},
+        {"short": "q", "long": ["quiet"], "description": "print no messages"}
+      ],
+      "messages": {
+        "missingBranch": "fatal: missing branch or commit argument",
+        "invalidReference": "fatal: invalid reference: {rev}",
+        "expectedBranch": "fatal: a branch is expected, got commit '{rev}'\nhint: If you want to detach HEAD at the commit, try again with the --detach option.",
+        "expectedBranchRef": "fatal: a branch is expected, got '{rev}'\nhint: If you want to detach HEAD at the commit, try again with the --detach option.",
+        "tooManyArguments": "fatal: only one reference expected"
+      }
+    },
+    "restore": {
+      "summary": "Restore files in the work tree or the index",
+      "usage": ["git restore [<options>] [--source=<tree>] [--staged] [--worktree] [--] <pathspec>..."],
+      "options": [
+        {"short": "s", "long": ["source"], "arg": "<tree>", "description": "take the contents from <tree> (default: the index for the work tree, HEAD for the index)"},
+        {"short": "S", "long": ["staged"], "description": "restore the index"},
+        {"short": "W", "long": ["worktree"], "description": "restore the work tree (the default; with --staged, both)"},
+        {"short": "q", "long": ["quiet"], "description": "print nothing", "ignored": true}
+      ],
+      "messages": {
+        "noPaths": "fatal: you must specify path(s) to restore",
+        "unmergedPath": "error: path '{path}' is unmerged"
+      }
+    },
+    "reset": {
+      "summary": "Move the current branch to a commit, or unstage paths",
+      "usage": ["git reset [--soft | --mixed | --hard] [-q] [<commit>]", "git reset [-q] [<commit>] [--] <pathspec>..."],
+      "options": [
+        {"long": ["soft"], "key": "\u0001", "description": "move the branch only; keep the index and work tree"},
+        {"long": ["mixed"], "key": "\u0002", "description": "move the branch and reset the index (the default)"},
+        {"long": ["hard"], "key": "\u0003", "description": "move the branch and reset the index and work tree, discarding local changes"},
+        {"short": "q", "long": ["quiet"], "description": "print nothing"}
+      ],
+      "messages": {
+        "headNowAt": "HEAD is now at {commit}",
+        "unstagedAfterReset": "Unstaged changes after reset:",
+        "conflictingModes": "fatal: options '--soft', '--mixed' and '--hard' cannot be used together",
+        "pathsWithMode": "fatal: Cannot do {mode} reset with paths."
+      }
+    },
+    "tag": {
+      "summary": "List, create or delete tags",
+      "usage": ["git tag [-l] [<pattern>...]", "git tag [-a] [-f] [-m <msg>] <name> [<commit>]", "git tag -d <name>..."],
+      "options": [
+        {"short": "l", "long": ["list"], "description": "list tags (those matching the patterns, if given)"},
+        {"short": "a", "long": ["annotate"], "description": "make an annotated tag object (needs -m or -F)"},
+        {"short": "m", "long": ["message"], "arg": "<msg>", "description": "the tag message (implies -a)"},
+        {"short": "F", "long": ["file"], "arg": "<file>", "description": "read the tag message from <file> (implies -a)"},
+        {"short": "d", "long": ["delete"], "description": "delete tags"},
+        {"short": "f", "long": ["force"], "description": "replace an existing tag"}
+      ],
+      "messages": {
+        "exists": "fatal: tag '{name}' already exists",
+        "invalidName": "fatal: '{name}' is not a valid tag name.",
+        "notFound": "error: tag '{name}' not found.",
+        "deleted": "Deleted tag '{name}' (was {commit})",
+        "updated": "Updated tag '{name}' (was {commit})",
+        "tooManyArguments": "fatal: too many arguments"
+      }
+    },
+    "merge": {
+      "summary": "Join another branch's history into the current branch",
+      "usage": ["git merge [<options>] <commit>", "git merge --abort", "git merge --continue"],
+      "options": [
+        {"long": ["no-ff"], "key": "\u0001", "description": "always make a merge commit, even when a fast-forward is possible"},
+        {"long": ["ff-only"], "key": "\u0002", "description": "only fast-forward; fail otherwise"},
+        {"long": ["ff"], "key": "\u0003", "description": "fast-forward when possible (the default)", "ignored": true},
+        {"short": "m", "long": ["message"], "arg": "<msg>", "description": "the merge commit's message"},
+        {"long": ["no-edit"], "key": "\u0006", "description": "accepted and ignored (the default message is used without an editor)", "ignored": true},
+        {"long": ["abort"], "key": "\u0004", "description": "give up a conflicted merge and return to the state before it"},
+        {"long": ["continue"], "key": "\u0005", "description": "conclude a merge once conflicts are resolved and staged"},
+        {"short": "q", "long": ["quiet"], "description": "print less"}
+      ],
+      "messages": {
+        "upToDate": "Already up to date.",
+        "strategyFailed": "Merge with strategy ort failed.",
+        "updating": "Updating {old}..{new}",
+        "fastForward": "Fast-forward",
+        "madeByOrt": "Merge made by the 'ort' strategy.",
+        "failed": "Automatic merge failed; fix conflicts and then commit the result.",
+        "notSomething": "merge: {name} - not something we can merge",
+        "noRemote": "fatal: No remote for the current branch.",
+        "notFastForward": "fatal: Not possible to fast-forward, aborting.",
+        "octopus": "fatal: merging more than one commit at a time is not supported here",
+        "noMergeToAbort": "fatal: There is no merge to abort (MERGE_HEAD missing).",
+        "noMergeInProgress": "fatal: There is no merge in progress (MERGE_HEAD missing).",
+        "unmergedFiles": "error: Merging is not possible because you have unmerged files.\nhint: Fix them up in the work tree, and then use 'git add/rm <file>'\nhint: as appropriate to mark resolution and make a commit.\nfatal: Exiting because of an unresolved conflict.",
+        "mergeHeadExists": "fatal: You have not concluded your merge (MERGE_HEAD exists).\nPlease, commit your changes before you merge."
+      }
+    },
+    "stash": {
+      "summary": "Set local changes aside and bring them back later",
+      "usage": [
+        "git stash [push [-m <message>] [-u] [-q]]",
+        "git stash save [<message>]",
+        "git stash (list | clear)",
+        "git stash (show | pop | apply | drop) [<stash>]"
+      ],
+      "options": [
+        {"short": "m", "long": ["message"], "arg": "<message>", "description": "describe the stash entry"},
+        {"short": "u", "long": ["include-untracked"], "description": "also stash (and remove) untracked files"},
+        {"short": "q", "long": ["quiet"], "description": "print less"},
+        {"short": "p", "long": ["patch"], "description": "with show: print a patch instead of a diffstat"},
+        {"long": ["stat"], "key": "\u0001", "description": "with show: print a diffstat (the default)"}
+      ],
+      "messages": {
+        "saved": "Saved working directory and index state {message}",
+        "noLocalChanges": "No local changes to save",
+        "noInitialCommit": "You do not have the initial commit yet",
+        "unmerged": "error: could not save the stash: you have unmerged files",
+        "noEntries": "No stash entries found.",
+        "noSuchEntry": "error: {name} is not a valid reference",
+        "notStash": "error: '{name}' is not a stash-like commit",
+        "dropped": "Dropped {name} ({commit})",
+        "keptEntry": "The stash entry is kept in case you need it again.",
+        "labelUpstream": "Updated upstream",
+        "labelStashed": "Stashed changes",
+        "wipMessage": "WIP on {description}",
+        "onMessage": "On {branch}: {message}",
+        "indexMessage": "index on {description}",
+        "untrackedMessage": "untracked files on {description}",
+        "upToDate": "Already up to date.",
+        "cannotApply": "error: could not apply the stash entry",
+        "untrackedExists": "error: {path} already exists, no checkout\nerror: could not restore untracked files from stash",
+        "unknownAction": "error: unknown subcommand: `{action}'"
+      }
+    },
+    "rev-parse": {
+      "summary": "Turn revisions into commit ids and report repository paths",
+      "usage": ["git rev-parse [<options>] [<revision>...]"],
+      "options": [
+        {"long": ["short"], "key": "\u0001", "description": "abbreviate ids (to 7 characters, or --short=<n>)"},
+        {"long": ["abbrev-ref"], "key": "\u0002", "description": "print a revision as a short branch name (HEAD when detached)"},
+        {"long": ["symbolic-full-name"], "key": "\u0003", "description": "print a revision as a full ref name"},
+        {"long": ["verify"], "key": "\u0004", "description": "require exactly one valid revision"},
+        {"short": "q", "long": ["quiet"], "description": "with --verify: fail silently"},
+        {"long": ["show-toplevel"], "key": "\u0005", "description": "print the work tree's top directory"},
+        {"long": ["show-prefix"], "key": "\u0006", "description": "print the path from the repository's top down to here"},
+        {"long": ["show-cdup"], "key": "\u0007", "description": "print the ../ path from the current directory to the top"},
+        {"long": ["git-dir"], "key": "\b", "description": "print the .git directory (relative when at the top)"},
+        {"long": ["absolute-git-dir"], "key": "\u000e", "description": "print the .git directory as an absolute path"},
+        {"long": ["git-common-dir"], "key": "\u000f", "description": "same as --git-dir"},
+        {"long": ["is-inside-work-tree"], "key": "\u0010", "description": "print true inside a work tree"},
+        {"long": ["is-inside-git-dir"], "key": "\u0011", "description": "print whether the current directory is inside .git"},
+        {"long": ["is-bare-repository"], "key": "\u0012", "description": "print false (repositories here always have a work tree)"}
+      ],
+      "messages": {
+        "needSingleRevision": "fatal: Needed a single revision"
+      }
+    },
+    "ls-files": {
+      "summary": "List files in the index (and optionally untracked ones)",
+      "usage": ["git ls-files [<options>] [--] [<path>...]"],
+      "options": [
+        {"short": "c", "long": ["cached"], "description": "list tracked files (the default)"},
+        {"short": "s", "long": ["stage"], "description": "show mode, object id and stage for each entry"},
+        {"short": "o", "long": ["others"], "description": "list untracked files"},
+        {"short": "m", "long": ["modified"], "description": "list tracked files that differ from the index"},
+        {"short": "d", "long": ["deleted"], "description": "list tracked files missing from the work tree"},
+        {"short": "u", "long": ["unmerged"], "description": "list unmerged entries, with stages"},
+        {"long": ["exclude-standard"], "key": "\u0001", "description": "with --others: leave out ignored files"},
+        {"long": ["full-name"], "key": "\u0002", "description": "show paths from the top of the repository, not the current directory"}
+      ]
+    },
+    "cat-file": {
+      "summary": "Print a repository object's type, size or contents",
+      "usage": ["git cat-file (-t | -s | -p | -e) <object>", "git cat-file <type> <object>"],
+      "options": [
+        {"short": "t", "description": "print the object's type"},
+        {"short": "s", "description": "print the object's size in bytes"},
+        {"short": "p", "description": "print the object's contents, readably"},
+        {"short": "e", "description": "exit 0 when the object exists, 1 otherwise, printing nothing"}
+      ],
+      "messages": {
+        "badUsage": "error: give one of -t, -s, -p or -e and an object, or a type and an object",
+        "notValid": "fatal: Not a valid object name {name}",
+        "badType": "fatal: invalid object type \"{kind}\"",
+        "badFile": "fatal: git cat-file {name}: bad file"
+      }
+    },
+    "config": {
+      "summary": "Read and write configuration (repository .git/config, global ~/.gitconfig)",
+      "usage": [
+        "git config [--global | --local] <name> [<value>]",
+        "git config [--global | --local] --get <name>",
+        "git config [--global | --local] --unset <name>",
+        "git config [--global | --local] (-l | --list)"
+      ],
+      "options": [
+        {"long": ["global"], "key": "\u0001", "description": "use ~/.gitconfig"},
+        {"long": ["local"], "key": "\u0002", "description": "use the repository's .git/config (the default for writing)"},
+        {"long": ["unset"], "key": "\u0003", "description": "remove the setting"},
+        {"long": ["get"], "key": "\u0004", "description": "print the value (exit 1 when unset)"},
+        {"short": "l", "long": ["list"], "description": "print every setting as name=value"},
+        {"long": ["bool"], "key": "\u0005", "description": "print the value as true or false"}
+      ],
+      "messages": {
+        "badBool": "fatal: bad boolean config value '{value}' for '{name}'",
+        "notInGitDir": "fatal: not in a git directory",
+        "wrongArgs": "error: wrong number of arguments",
+        "noSection": "error: key does not contain a section: {name}",
+        "invalidKey": "error: invalid key: {name}"
+      }
+    },
+    "clean": {
+      "summary": "Delete untracked files from the work tree",
+      "usage": ["git clean [-n] [-f] [-d] [-x | -X] [-q] [--] [<pathspec>...]"],
+      "options": [
+        {"short": "n", "long": ["dry-run"], "description": "only list what would be removed"},
+        {"short": "f", "long": ["force"], "description": "really delete (required unless clean.requireForce is false)"},
+        {"short": "d", "description": "also remove untracked directories"},
+        {"short": "x", "description": "also remove ignored files"},
+        {"short": "X", "description": "remove only ignored files"},
+        {"short": "q", "long": ["quiet"], "description": "print no file names"}
+      ],
+      "messages": {
+        "requireForce": "fatal: clean.requireForce defaults to true and neither -i, -n, nor -f given; refusing to clean",
+        "wouldRemove": "Would remove {path}",
+        "removing": "Removing {path}"
+      }
+    },
+    "rev-list": {
+      "summary": "List commit ids reachable from revisions, newest first",
+      "usage": ["git rev-list [<options>] <revision>... [[--] <path>...]"],
+      "options": [
+        {"long": ["count"], "key": "\u0001", "description": "print only how many commits there are"},
+        {"short": "n", "long": ["max-count"], "arg": "<n>", "description": "list at most <n> commits (also -<n>)"},
+        {"long": ["all"], "key": "\u0002", "description": "start from every branch and tag as well as HEAD"}
+      ],
+      "messages": {
+        "noRevisions": "fatal: no revisions given"
+      }
+    },
+    "help": {
+      "summary": "Show help for git or one of its commands",
+      "usage": ["git help [<command>]"]
+    },
+    "version": {
+      "summary": "Print the git version",
+      "usage": ["git version"]
+    },
+    "fetch": {
+      "summary": "Download from a remote (not available)",
+      "usage": ["git fetch"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step."
+      },
+      "unsupported": true
+    },
+    "pull": {
+      "summary": "Fetch and merge from a remote (not available)",
+      "usage": ["git pull"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step."
+      },
+      "unsupported": true
+    },
+    "push": {
+      "summary": "Upload to a remote (not available)",
+      "usage": ["git push"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step."
+      },
+      "unsupported": true
+    },
+    "submodule": {
+      "summary": "Manage submodules (not available)",
+      "usage": ["git submodule"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step."
+      },
+      "unsupported": true
+    },
+    "ls-remote": {
+      "summary": "List a remote's refs (not available)",
+      "usage": ["git ls-remote"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step."
+      },
+      "unsupported": true
+    },
+    "clone": {
+      "summary": "Copy a repository (needs a network: not available)",
+      "usage": ["git clone"],
+      "messages": {
+        "unsupported": "fatal: 'git clone' needs a network and this machine has none. To copy a repository in this machine, use cp -r <repository> <directory>."
+      },
+      "unsupported": true
+    },
+    "remote": {
+      "summary": "List remotes (there are none: this machine has no network)",
+      "usage": ["git remote [-v]"],
+      "options": [
+        {"short": "v", "long": ["verbose"], "description": "also show each remote's address (there are none)"}
+      ],
+      "messages": {
+        "noRemotes": "fatal: remotes are not available: this machine has no network. Commits stay in this machine's repository."
+      }
+    },
+    "rebase": {
+      "summary": "Reapply commits onto another base (not available)",
+      "usage": ["git rebase"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git merge, or git reset --soft <base> && git commit to squash"
+      },
+      "unsupported": true
+    },
+    "cherry-pick": {
+      "summary": "Apply a commit's changes (not available)",
+      "usage": ["git cherry-pick"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git show <commit> to see its changes and make them again, or git merge"
+      },
+      "unsupported": true
+    },
+    "revert": {
+      "summary": "Undo a commit with a new one (not available)",
+      "usage": ["git revert"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git checkout <commit>~1 -- <paths> && git commit"
+      },
+      "unsupported": true
+    },
+    "blame": {
+      "summary": "Show who changed each line (not available)",
+      "usage": ["git blame"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git log -p -- <file>"
+      },
+      "unsupported": true
+    },
+    "reflog": {
+      "summary": "Show reference logs (not available)",
+      "usage": ["git reflog"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; read .git/logs/HEAD"
+      },
+      "unsupported": true
+    },
+    "grep": {
+      "summary": "Search tracked files (not available)",
+      "usage": ["git grep"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use grep -rn <pattern> $(git ls-files)"
+      },
+      "unsupported": true
+    },
+    "ls-tree": {
+      "summary": "List a tree's entries (not available)",
+      "usage": ["git ls-tree"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git ls-files, or git show <commit>:<directory>"
+      },
+      "unsupported": true
+    },
+    "merge-base": {
+      "summary": "Find a common ancestor (not available)",
+      "usage": ["git merge-base"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git log --format='%h %p %s' to follow the parents"
+      },
+      "unsupported": true
+    },
+    "check-ignore": {
+      "summary": "Explain why a path is ignored (not available)",
+      "usage": ["git check-ignore"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git status --porcelain -uall and look for the path"
+      },
+      "unsupported": true
+    },
+    "hash-object": {
+      "summary": "Compute an object id (not available)",
+      "usage": ["git hash-object"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; add the file with git add, then git ls-files -s <file>"
+      },
+      "unsupported": true
+    },
+    "describe": {
+      "summary": "Name a commit after the nearest tag (not available)",
+      "usage": ["git describe"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git tag and git log --oneline --decorate"
+      },
+      "unsupported": true
+    },
+    "shortlog": {
+      "summary": "Summarize the log by author (not available)",
+      "usage": ["git shortlog"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git log --format='%an %s'"
+      },
+      "unsupported": true
+    },
+    "show-ref": {
+      "summary": "List refs (not available)",
+      "usage": ["git show-ref"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git branch -v and git tag"
+      },
+      "unsupported": true
+    },
+    "for-each-ref": {
+      "summary": "List refs with a format (not available)",
+      "usage": ["git for-each-ref"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git branch -v and git tag"
+      },
+      "unsupported": true
+    },
+    "apply": {
+      "summary": "Apply a patch (not available)",
+      "usage": ["git apply"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; edit the files directly"
+      },
+      "unsupported": true
+    },
+    "am": {
+      "summary": "Apply mailed patches (not available)",
+      "usage": ["git am"],
+      "messages": {
+        "unsupported": "fatal: 'git {name}' is not available in this machine's git; edit the files directly"
+      },
+      "unsupported": true
+    },
+    "bisect": {
+      "summary": "Search history for a change (not available)",
+      "usage": ["git bisect"],
+      "unsupported": true
+    },
+    "worktree": {
+      "summary": "Manage extra work trees (not available)",
+      "usage": ["git worktree"],
+      "unsupported": true
+    },
+    "gc": {
+      "summary": "Pack and clean up the repository (not available)",
+      "usage": ["git gc"],
+      "unsupported": true
+    },
+    "fsck": {
+      "summary": "Verify the object database (not available)",
+      "usage": ["git fsck"],
+      "unsupported": true
+    },
+    "format-patch": {
+      "summary": "Write commits as patch files (not available)",
+      "usage": ["git format-patch"],
+      "unsupported": true
+    },
+    "archive": {
+      "summary": "Export a tree as an archive (not available)",
+      "usage": ["git archive"],
+      "unsupported": true
+    },
+    "notes": {
+      "summary": "Attach notes to commits (not available)",
+      "usage": ["git notes"],
+      "unsupported": true
+    },
+    "symbolic-ref": {
+      "summary": "Read or change a symbolic ref (not available)",
+      "usage": ["git symbolic-ref"],
+      "unsupported": true
+    },
+    "update-ref": {
+      "summary": "Change a ref (not available)",
+      "usage": ["git update-ref"],
+      "unsupported": true
+    },
+    "write-tree": {
+      "summary": "Write the index as a tree (not available)",
+      "usage": ["git write-tree"],
+      "unsupported": true
+    },
+    "update-index": {
+      "summary": "Change the index directly (not available)",
+      "usage": ["git update-index"],
+      "unsupported": true
+    },
+    "diff-tree": {
+      "summary": "Compare trees (not available)",
+      "usage": ["git diff-tree"],
+      "unsupported": true
+    },
+    "name-rev": {
+      "summary": "Name a commit after a ref (not available)",
+      "usage": ["git name-rev"],
+      "unsupported": true
+    },
+    "var": {
+      "summary": "Show git variables (not available)",
+      "usage": ["git var"],
+      "unsupported": true
+    },
+    "prune": {
+      "summary": "Remove unreachable objects (not available)",
+      "usage": ["git prune"],
+      "unsupported": true
+    },
+    "whatchanged": {
+      "summary": "Show the log with changes (not available)",
+      "usage": ["git whatchanged"],
+      "unsupported": true
+    },
+    "count-objects": {
+      "summary": "Count loose objects (not available)",
+      "usage": ["git count-objects"],
+      "unsupported": true
+    }
+  },
+  "notes": "Implemented from the published repository format and observed behaviour of git 2.43 (Ubuntu 24.04); every text here is our own except the messages git prints. Unsupported subcommands are listed so they get a clear answer instead of 'not a git command'."
+}

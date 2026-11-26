@@ -9,6 +9,10 @@ internal static partial class CommandSpec
     /// <param name="Options">Args.Parse's (flags, valued, longs), or null when the command parses its own arguments.</param>
     internal sealed record Entry(string Name, string Summary, string? Help, string Version, bool StandardOptions, bool ShellBuiltin,
         bool ProgramFile, string ReportsAs, int UsageExitCode, string TryHelp, (string Flags, string Valued, string Longs)? Options,
+        IReadOnlyDictionary<string, string> Messages, IReadOnlyDictionary<string, SubEntry>? Subcommands = null);
+
+    /// <summary>One subcommand (git's): its help text, option table for the subcommand's parser, and messages.</summary>
+    internal sealed record SubEntry(string Name, string Summary, string Help, bool Unsupported, (string Flags, string Valued, string Longs) Options,
         IReadOnlyDictionary<string, string> Messages);
 
     static readonly IReadOnlyDictionary<string, string> Empty = new Dictionary<string, string>();
@@ -185,6 +189,408 @@ internal static partial class CommandSpec
             ["usage"] = "usage: getopts optstring name [arg ...]",
             ["illegalOption"] = "{script}: illegal option -- {option}",
             ["missingArgument"] = "{script}: option requires an argument -- {option}",
+        }),
+        ["git"] = new("git", "Version control in local repositories: init, add, commit, log, diff, branch, merge, stash (no network or remotes)", "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]\n\nVersion control for the files in this machine. Repositories are ordinary .git\ndirectories in the format real git uses, so they can be copied out and used\nelsewhere. There is no network: clone, fetch, pull, push and remotes are not\navailable.\n\nStart and save work:\n   init       create a repository\n   add        stage changes; rm, mv remove and rename tracked files\n   commit     record the staged changes\n   status     show what changed\n   diff       show changes as patches or statistics\n   restore    put back files from the index or a commit\n   reset      move the branch or unstage files\n   stash      set changes aside\n   clean      delete untracked files\n\nHistory and branches:\n   log, show  look at commits\n   branch     list, create, rename, delete branches\n   switch     change branch (checkout also restores files)\n   merge      join histories (fast-forward or three-way with conflict markers)\n   tag        name a commit\n\nPlumbing: rev-parse, rev-list, ls-files, cat-file, config.\n\n'git help <command>' or 'git <command> --help' describes one command.\n", "git version 2.43.0", true, false, true, "git", 1, "Try 'git --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["notRepo"] = "fatal: not a git repository (or any of the parent directories): .git",
+            ["unknownCommand"] = "git: '{name}' is not a git command. See 'git --help'.",
+            ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; 'git help' lists the commands it has",
+            ["unknownGlobalOption"] = "unknown option: {option}",
+            ["globalUsage"] = "usage: git [-C <path>] [-c <name>=<value>] [--version] [--help] <command> [<args>]",
+            ["globalNeedsValue"] = "error: option '{option}' requires a value",
+            ["cannotChdir"] = "fatal: cannot change to '{path}': No such file or directory",
+            ["badConfigKey"] = "error: invalid config key: {key}",
+            ["noHelp"] = "No manual entry for git-{name}",
+            ["unknownOption"] = "error: unknown option `{option}'",
+            ["unknownSwitch"] = "error: unknown switch `{option}'",
+            ["optionNeedsValue"] = "error: option `{option}' requires a value",
+            ["switchNeedsValue"] = "error: switch `{option}' requires a value",
+            ["optionTakesNoValue"] = "error: option `{option}' takes no value",
+            ["tooManyArguments"] = "fatal: too many arguments",
+            ["badRevision"] = "fatal: ambiguous argument '{rev}': unknown revision or path not in the working tree.\nUse '--' to separate paths from revisions, like this:\n'git <command> [<revision>...] -- [<file>...]'",
+            ["badDefaultRevision"] = "fatal: your current branch does not have any commits yet",
+            ["notCommit"] = "fatal: '{rev}' is not a commit",
+            ["pathNotInRevision"] = "fatal: path '{path}' does not exist in '{rev}'",
+            ["notTree"] = "fatal: '{rev}' does not name a tree",
+            ["ambiguousPrefix"] = "fatal: short object ID {prefix} is ambiguous",
+            ["pathspecNoMatch"] = "fatal: pathspec '{path}' did not match any files",
+            ["pathspecNoMatchKnown"] = "error: pathspec '{path}' did not match any file(s) known to git",
+            ["outsideRepo"] = "fatal: {path}: '{path}' is outside repository at '{top}'",
+            ["identityUnknown"] = "*** Please tell me who you are.\n\n  git config --global user.email \"you@example.com\"\n  git config --global user.name \"Your Name\"\n\nfatal: unable to auto-detect email address (got '{guess}')",
+            ["emptyIdentName"] = "fatal: empty ident name (for <{email}>) not allowed",
+            ["badDate"] = "fatal: invalid date format: {date}",
+            ["badDateFormat"] = "fatal: unknown date format {format}",
+            ["badPretty"] = "fatal: invalid --pretty format: {format}",
+            ["autoMerging"] = "Auto-merging {path}",
+            ["conflictContent"] = "CONFLICT (content): Merge conflict in {path}",
+            ["conflictAddAdd"] = "CONFLICT (add/add): Merge conflict in {path}",
+            ["conflictModifyDelete"] = "CONFLICT (modify/delete): {path} deleted in {deleted} and modified in {modified}.  Version {modified} of {path} left in tree.",
+            ["binaryConflict"] = "warning: Cannot merge binary files: {path} ({ours} vs. {theirs})",
+            ["missingObject"] = "fatal: object {object} is missing from the repository",
+            ["corruptObject"] = "fatal: object {object} is corrupt",
+            ["wrongType"] = "fatal: object {object} is not a {kind}",
+            ["packedObjects"] = "fatal: this repository's history is packed (.git/objects/pack), which git here cannot read yet; the work tree files are intact, so do not delete .git (object {object})",
+            ["badIndex"] = "fatal: index file corrupt ({why})",
+            ["indexBadSignature"] = "bad signature",
+            ["indexBadVersion"] = "index version {version} is not supported",
+            ["indexBadChecksum"] = "checksum mismatch",
+            ["indexTooMany"] = "too many entries",
+            ["indexTruncated"] = "truncated entry",
+            ["indexExtendedFlag"] = "extended flag in a version 2 index",
+            ["indexBadExtension"] = "unsupported extension {name}",
+            ["binaryDiffer"] = "Binary files {a} and {b} differ",
+            ["needsMerge"] = "{path}: needs merge",
+            ["graphNotLinear"] = "fatal: --graph draws only linear history here, and this history has merges or several branches; to see each commit's parents run git log --format='%h %p %s'",
+            ["badSymbolicRef"] = "fatal: {path} points outside refs/: {target}",
+            ["pathTooDeep"] = "fatal: invalid path '{path}': more than {limit} directories deep",
+            ["patternTimeout"] = "fatal: pattern '{pattern}' took too long to match",
+            ["badRegex"] = "fatal: invalid regular expression: {pattern}",
+            ["badConfig"] = "fatal: bad config line {line} in a git configuration file",
+            ["invalidPath"] = "fatal: invalid path '{path}'",
+            ["symlinkInGitDir"] = "fatal: {path} is a symbolic link; git here does not follow links inside .git",
+            ["tooLarge"] = "fatal: {what} is too large for this machine's limits",
+            ["tooDeep"] = "fatal: tree {object} is nested too deeply",
+            ["ioError"] = "fatal: {error}",
+        }, Subcommands: new Dictionary<string, SubEntry>(StringComparer.Ordinal)
+        {
+            ["add"] = new("add", "Stage file contents for the next commit", "usage: git add [<options>] [--] <pathspec>...\n\nStage file contents for the next commit.\n\n    -A, --all      also stage removals and new files everywhere the pathspec reaches (the whole tree without one)\n    -u, --update   stage changes and removals of tracked files only\n    -f, --force    add files even when they are ignored\n    -n, --dry-run  only say what would be added\n    -v, --verbose  name each file as it is added\n", false, ("Aufnv", "", "all=A,update=u,force=f,dry-run=n,verbose=v"), new Dictionary<string, string>
+            {
+                ["nothingSpecified"] = "Nothing specified, nothing added.\nhint: Maybe you wanted to say 'git add .'?\nhint: Turn this message off by running\nhint: \"git config advice.addEmptyPathspec false\"",
+                ["ignoredPaths"] = "The following paths are ignored by one of your .gitignore files:\n{paths}\nhint: Use -f if you really want to add them.\nhint: Turn this message off by running\nhint: \"git config advice.addIgnoredFile false\"",
+                ["nestedRepo"] = "fatal: '{path}' holds another repository; nested repositories (submodules) are not supported here",
+            }),
+            ["am"] = new("am", "Apply mailed patches (not available)", "usage: git am\n\nApply mailed patches (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; edit the files directly",
+            }),
+            ["apply"] = new("apply", "Apply a patch (not available)", "usage: git apply\n\nApply a patch (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; edit the files directly",
+            }),
+            ["archive"] = new("archive", "Export a tree as an archive (not available)", "usage: git archive\n\nExport a tree as an archive (not available).\n", true, ("", "", ""), Empty),
+            ["bisect"] = new("bisect", "Search history for a change (not available)", "usage: git bisect\n\nSearch history for a change (not available).\n", true, ("", "", ""), Empty),
+            ["blame"] = new("blame", "Show who changed each line (not available)", "usage: git blame\n\nShow who changed each line (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git log -p -- <file>",
+            }),
+            ["branch"] = new("branch", "Show, add, rename or remove branches", "usage: git branch [<options>] [--list] [<pattern>...]\n   or: git branch [-f] <name> [<start-point>]\n   or: git branch (-m | -M) [<old>] <new>\n   or: git branch (-d | -D) <name>...\n\nShow, add, rename or remove branches.\n\n    --list          list branches (those matching the patterns, if given)\n    -a, --all       list all branches (there are no remote ones)\n    -r, --remotes   list remote-tracking branches (there are none)\n    -v, --verbose   also show each branch's commit and subject\n    -d, --delete    delete branches that are merged into HEAD\n    -D              delete branches even when not merged\n    -m, --move      rename a branch (the current one when only <new> is given)\n    -M              rename a branch even over an existing one\n    -f, --force     with a name: reset the branch to <start-point> if it exists; with -d: delete unmerged\n    --show-current  print the current branch name (nothing when detached)\n", false, ("arvdDmMf", "", "list=\u0002,all=a,remotes=r,verbose=v,delete=d,move=m,force=f,show-current=\u0001"), new Dictionary<string, string>
+            {
+                ["exists"] = "fatal: a branch named '{name}' already exists",
+                ["invalidName"] = "fatal: '{name}' is not a valid branch name",
+                ["notFound"] = "error: branch '{name}' not found",
+                ["deleted"] = "Deleted branch {name} (was {commit}).",
+                ["checkedOut"] = "error: cannot delete branch '{name}' used by worktree at '{path}'",
+                ["notMerged"] = "error: the branch '{name}' is not fully merged.\nIf you are sure you want to delete it, run 'git branch -D {name}'",
+                ["nameRequired"] = "fatal: branch name required",
+                ["noSuchBranch"] = "fatal: no branch named '{name}'",
+                ["renameArgs"] = "fatal: too many arguments for a rename operation",
+                ["renameDetached"] = "fatal: cannot rename the current branch while not on any",
+                ["tooManyArguments"] = "fatal: too many arguments",
+                ["forceCurrent"] = "fatal: cannot force update the current branch.",
+                ["notValidObject"] = "fatal: not a valid object name: '{name}'",
+                ["detachedLabel"] = "(HEAD detached at {commit})",
+            }),
+            ["cat-file"] = new("cat-file", "Print a repository object's type, size or contents", "usage: git cat-file (-t | -s | -p | -e) <object>\n   or: git cat-file <type> <object>\n\nPrint a repository object's type, size or contents.\n\n    -t  print the object's type\n    -s  print the object's size in bytes\n    -p  print the object's contents, readably\n    -e  exit 0 when the object exists, 1 otherwise, printing nothing\n", false, ("tspe", "", ""), new Dictionary<string, string>
+            {
+                ["badUsage"] = "error: give one of -t, -s, -p or -e and an object, or a type and an object",
+                ["notValid"] = "fatal: Not a valid object name {name}",
+                ["badType"] = "fatal: invalid object type \"{kind}\"",
+                ["badFile"] = "fatal: git cat-file {name}: bad file",
+            }),
+            ["check-ignore"] = new("check-ignore", "Explain why a path is ignored (not available)", "usage: git check-ignore\n\nExplain why a path is ignored (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git status --porcelain -uall and look for the path",
+            }),
+            ["checkout"] = new("checkout", "Switch branches or restore files from the index or a commit", "usage: git checkout [-q] [-f] <branch>\n   or: git checkout [-q] [-f] [--detach] <commit>\n   or: git checkout [-q] [-f] (-b | -B) <new-branch> [<start-point>]\n   or: git checkout [<tree-ish>] [--] <pathspec>...\n\nSwitch branches or restore files from the index or a commit.\n\n    -b <branch>  create <branch> at <start-point> (default HEAD) and switch to it\n    -B <branch>  like -b, but reset <branch> if it exists\n    --detach     leave HEAD detached at the commit\n    -f, --force  switch even if local changes would be lost (they are discarded)\n    -q, --quiet  print no messages\n", false, ("fq", "bB", "detach=\u0001,force=f,quiet=q"), new Dictionary<string, string>
+            {
+                ["switchedBranch"] = "Switched to branch '{branch}'",
+                ["switchedNewBranch"] = "Switched to a new branch '{branch}'",
+                ["switchedResetBranch"] = "Switched to and reset branch '{branch}'",
+                ["alreadyOn"] = "Already on '{branch}'",
+                ["headNowAt"] = "HEAD is now at {commit}",
+                ["previousPosition"] = "Previous HEAD position was {commit}",
+                ["localChanges"] = "error: Your local changes to the following files would be overwritten by {verb}:\n{paths}\n{advice}\nAborting",
+                ["localChangesAdvice"] = "Please commit your changes or stash them before you switch branches.",
+                ["localChangesAdviceMerge"] = "Please commit your changes or stash them before you merge.",
+                ["untrackedOverwritten"] = "error: The following untracked working tree files would be overwritten by {verb}:\n{paths}\n{advice}\nAborting",
+                ["untrackedAdvice"] = "Please move or remove them before you switch branches.",
+                ["untrackedAdviceMerge"] = "Please move or remove them before you merge.",
+                ["resolveIndexFirst"] = "error: you need to resolve your current index first\n{paths}",
+                ["noPreviousBranch"] = "error: there is no previous branch to switch to",
+                ["updatedFromIndex"] = "Updated {count} path from the index",
+                ["updatedFromIndexMany"] = "Updated {count} paths from the index",
+                ["updatedFromCommit"] = "Updated {count} path from {commit}",
+                ["updatedFromCommitMany"] = "Updated {count} paths from {commit}",
+                ["unmergedPath"] = "error: path '{path}' is unmerged",
+            }),
+            ["cherry-pick"] = new("cherry-pick", "Apply a commit's changes (not available)", "usage: git cherry-pick\n\nApply a commit's changes (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git show <commit> to see its changes and make them again, or git merge",
+            }),
+            ["clean"] = new("clean", "Delete untracked files from the work tree", "usage: git clean [-n] [-f] [-d] [-x | -X] [-q] [--] [<pathspec>...]\n\nDelete untracked files from the work tree.\n\n    -n, --dry-run  only list what would be removed\n    -f, --force    really delete (required unless clean.requireForce is false)\n    -d             also remove untracked directories\n    -x             also remove ignored files\n    -X             remove only ignored files\n    -q, --quiet    print no file names\n", false, ("nfdxXq", "", "dry-run=n,force=f,quiet=q"), new Dictionary<string, string>
+            {
+                ["requireForce"] = "fatal: clean.requireForce defaults to true and neither -i, -n, nor -f given; refusing to clean",
+                ["wouldRemove"] = "Would remove {path}",
+                ["removing"] = "Removing {path}",
+            }),
+            ["clone"] = new("clone", "Copy a repository (needs a network: not available)", "usage: git clone\n\nCopy a repository (needs a network: not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git clone' needs a network and this machine has none. To copy a repository in this machine, use cp -r <repository> <directory>.",
+            }),
+            ["commit"] = new("commit", "Record the staged changes as a new commit", "usage: git commit [<options>] [--] [<pathspec>...]\n\nRecord the staged changes as a new commit.\n\n    -m, --message <msg>    the commit message; several -m make several paragraphs\n    -F, --file <file>      read the message from <file> (- for standard input)\n    -a, --all              first stage changes and removals of every tracked file\n    --amend                replace the current commit (same parents; same message and author unless given)\n    --allow-empty          commit even when nothing changed\n    --allow-empty-message  allow an empty message\n    --no-edit              keep the existing message (with --amend, or to conclude a merge)\n    --author <author>      set the author, as 'Name <email>'\n    --date <date>          set the author date\n    -q, --quiet            print nothing on success\n    -n, --no-verify        accepted and ignored (there are no hooks)\n    -s, --signoff          accepted and ignored\n", false, ("aqns", "mF\u0005\u0006", "message=m,file=F,all=a,amend=\u0001,allow-empty=\u0002,allow-empty-message=\u0003,no-edit=\u0004,author=\u0005,date=\u0006,quiet=q,no-verify=n,signoff=s"), new Dictionary<string, string>
+            {
+                ["noEditor"] = "error: Terminal is dumb, but EDITOR unset\nPlease supply the message using either -m or -F option.",
+                ["editorCannotRun"] = "error: no editor can run in this machine; give the message with -m or -F (or use --no-edit)",
+                ["emptyMessage"] = "Aborting commit due to empty commit message.",
+                ["nothingToAmend"] = "fatal: You have nothing to amend.",
+                ["amendDuringMerge"] = "fatal: You are in the middle of a merge -- cannot amend.",
+                ["pathsWithAll"] = "fatal: paths '...' with -a does not make sense",
+                ["pathspecUnknown"] = "error: pathspec '{path}' did not match any file(s) known to git",
+                ["badAuthor"] = "fatal: --author '{author}' is not 'Name <email>' and matches no existing author",
+                ["cannotReadMessage"] = "fatal: could not read log file '{file}': No such file or directory",
+                ["unmergedFiles"] = "error: Committing is not possible because you have unmerged files.\nhint: Fix them up in the work tree, and then use 'git add/rm <file>'\nhint: as appropriate to mark resolution and make a commit.\nfatal: Exiting because of an unresolved conflict.",
+            }),
+            ["config"] = new("config", "Read and write configuration (repository .git/config, global ~/.gitconfig)", "usage: git config [--global | --local] <name> [<value>]\n   or: git config [--global | --local] --get <name>\n   or: git config [--global | --local] --unset <name>\n   or: git config [--global | --local] (-l | --list)\n\nRead and write configuration (repository .git/config, global ~/.gitconfig).\n\n    --global    use ~/.gitconfig\n    --local     use the repository's .git/config (the default for writing)\n    --unset     remove the setting\n    --get       print the value (exit 1 when unset)\n    -l, --list  print every setting as name=value\n    --bool      print the value as true or false\n", false, ("l", "", "global=\u0001,local=\u0002,unset=\u0003,get=\u0004,list=l,bool=\u0005"), new Dictionary<string, string>
+            {
+                ["badBool"] = "fatal: bad boolean config value '{value}' for '{name}'",
+                ["notInGitDir"] = "fatal: not in a git directory",
+                ["wrongArgs"] = "error: wrong number of arguments",
+                ["noSection"] = "error: key does not contain a section: {name}",
+                ["invalidKey"] = "error: invalid key: {name}",
+            }),
+            ["count-objects"] = new("count-objects", "Count loose objects (not available)", "usage: git count-objects\n\nCount loose objects (not available).\n", true, ("", "", ""), Empty),
+            ["describe"] = new("describe", "Name a commit after the nearest tag (not available)", "usage: git describe\n\nName a commit after the nearest tag (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git tag and git log --oneline --decorate",
+            }),
+            ["diff"] = new("diff", "Show changes between the work tree, the index and commits", "usage: git diff [<options>] [<commit>] [--] [<path>...]\n   or: git diff [<options>] --cached [<commit>] [--] [<path>...]\n   or: git diff [<options>] <commit> <commit> [--] [<path>...]\n   or: git diff [<options>] <commit>..<commit> [--] [<path>...]\n\nShow changes between the work tree, the index and commits.\n\n    --cached, --staged  compare the index with HEAD (or with <commit>)\n    --stat              show a diffstat: changed lines per file as a +/- graph, then a summary line\n    --shortstat         show only the diffstat's summary line\n    --name-only         list only the names of changed files\n    --name-status       list changed files with a status letter (A, M, D, R, T)\n    --numstat           list added and removed line counts per file, tab-separated\n    --summary           list created, deleted and renamed files and mode changes\n    -U, --unified <n>   show <n> lines of context around each change instead of 3\n    --quiet             print nothing; exit 1 when there are differences\n    --exit-code         exit 1 when there are differences\n    -p, --patch         show a patch (the default)\n    --no-color          accepted and ignored (output is never colored)\n    --color <when>      accepted and ignored, with or without =<when> (output is never colored)\n", false, ("p", "U", "cached=\u0008,staged=\u0008,stat=\u0001,shortstat=\u0002,name-only=\u0003,name-status=\u0004,numstat=\u0006,summary=\u001f,unified=U,quiet=\u0005,exit-code=\u0007,patch=p,no-color=\u0018"), new Dictionary<string, string>
+            {
+                ["tooManyRevisions"] = "error: too many revisions; give at most two",
+            }),
+            ["diff-tree"] = new("diff-tree", "Compare trees (not available)", "usage: git diff-tree\n\nCompare trees (not available).\n", true, ("", "", ""), Empty),
+            ["fetch"] = new("fetch", "Download from a remote (not available)", "usage: git fetch\n\nDownload from a remote (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step.",
+            }),
+            ["for-each-ref"] = new("for-each-ref", "List refs with a format (not available)", "usage: git for-each-ref\n\nList refs with a format (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git branch -v and git tag",
+            }),
+            ["format-patch"] = new("format-patch", "Write commits as patch files (not available)", "usage: git format-patch\n\nWrite commits as patch files (not available).\n", true, ("", "", ""), Empty),
+            ["fsck"] = new("fsck", "Verify the object database (not available)", "usage: git fsck\n\nVerify the object database (not available).\n", true, ("", "", ""), Empty),
+            ["gc"] = new("gc", "Pack and clean up the repository (not available)", "usage: git gc\n\nPack and clean up the repository (not available).\n", true, ("", "", ""), Empty),
+            ["grep"] = new("grep", "Search tracked files (not available)", "usage: git grep\n\nSearch tracked files (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use grep -rn <pattern> $(git ls-files)",
+            }),
+            ["hash-object"] = new("hash-object", "Compute an object id (not available)", "usage: git hash-object\n\nCompute an object id (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; add the file with git add, then git ls-files -s <file>",
+            }),
+            ["help"] = new("help", "Show help for git or one of its commands", "usage: git help [<command>]\n\nShow help for git or one of its commands.\n", false, ("", "", ""), Empty),
+            ["init"] = new("init", "Set up a new repository (running it again in an existing one changes nothing)", "usage: git init [-q] [-b <branch>] [<directory>]\n\nSet up a new repository (running it again in an existing one changes nothing).\n\n    -q, --quiet                  print nothing on success\n    -b, --initial-branch <name>  name the first branch <name> instead of init.defaultBranch or master\n", false, ("q", "b", "quiet=q,initial-branch=b"), new Dictionary<string, string>
+            {
+                ["initialized"] = "Initialized empty Git repository in {path}",
+                ["reinitialized"] = "Reinitialized existing Git repository in {path}",
+                ["badBranchName"] = "fatal: invalid initial branch name: '{name}'",
+            }),
+            ["log"] = new("log", "Show the commit history", "usage: git log [<options>] [<revision-range>] [[--] <path>...]\n\nShow the commit history.\n\n    -n, --max-count <n>          show at most <n> commits (also -<n>)\n    --skip <n>                   skip the first <n> commits\n    --oneline                    one line per commit: abbreviated id and subject\n    --format, --pretty <format>  how to print each commit: oneline, short, medium, full, fuller, raw, or a format string with %H %h %s %an %ae %ad %d and similar placeholders (format: puts no newline after the last)\n    --decorate                   show the branches and tags that point at each commit\n    --date <style>               how to print dates: default, short, iso, iso-strict, rfc, raw, unix or relative\n    --abbrev-commit              abbreviate commit ids\n    -p, --patch                  show each commit's changes as a patch\n    -u                           same as -p\n    --stat                       show a diffstat: changed lines per file as a +/- graph, then a summary line\n    --shortstat                  show only the diffstat's summary line\n    --name-only                  list only the names of changed files\n    --name-status                list changed files with a status letter (A, M, D, R, T)\n    --numstat                    list added and removed line counts per file, tab-separated\n    --summary                    list created, deleted and renamed files and mode changes\n    -U, --unified <n>            show <n> lines of context around each change instead of 3\n    --graph                      draw the history as a graph to the left (linear histories only)\n    --all                        start from every branch and tag as well as HEAD\n    --reverse                    oldest commit first\n    --author <pattern>           only commits whose author matches the regular expression\n    --grep <pattern>             only commits whose message matches the regular expression\n    --first-parent               follow only the first parent of merge commits\n    --no-merges                  leave out merge commits\n    --merges                     show only merge commits\n    --follow                     accepted and ignored (renames are not followed)\n    --since, --after <date>      only commits made at or after <date>\n    --until, --before <date>     only commits made at or before <date>\n    -s, --no-patch               show no changes\n    --color <when>               accepted and ignored, with or without =<when> (output is never colored)\n", false, ("pus", "n\u001b\u0010\u0019U\u0014\u0015\u001d\u001e", "max-count=n,skip=\u001b,oneline=\u000e,format=\u0010,pretty=\u0010,decorate=\u0011,date=\u0019,abbrev-commit=\u001a,patch=p,stat=\u0001,shortstat=\u0002,name-only=\u0003,name-status=\u0004,numstat=\u0006,summary=\u001f,unified=U,graph=\u000f,all=\u0012,reverse=\u0013,author=\u0014,grep=\u0015,first-parent=\u0016,no-merges=\u0017,merges=\u0018,follow=\u001c,since=\u001d,after=\u001d,until=\u001e,before=\u001e,no-patch=s"), new Dictionary<string, string>
+            {
+                ["noCommitsYet"] = "fatal: your current branch '{branch}' does not have any commits yet",
+            }),
+            ["ls-files"] = new("ls-files", "List files in the index (and optionally untracked ones)", "usage: git ls-files [<options>] [--] [<path>...]\n\nList files in the index (and optionally untracked ones).\n\n    -c, --cached        list tracked files (the default)\n    -s, --stage         show mode, object id and stage for each entry\n    -o, --others        list untracked files\n    -m, --modified      list tracked files that differ from the index\n    -d, --deleted       list tracked files missing from the work tree\n    -u, --unmerged      list unmerged entries, with stages\n    --exclude-standard  with --others: leave out ignored files\n    --full-name         show paths from the top of the repository, not the current directory\n", false, ("csomdu", "", "cached=c,stage=s,others=o,modified=m,deleted=d,unmerged=u,exclude-standard=\u0001,full-name=\u0002"), Empty),
+            ["ls-remote"] = new("ls-remote", "List a remote's refs (not available)", "usage: git ls-remote\n\nList a remote's refs (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step.",
+            }),
+            ["ls-tree"] = new("ls-tree", "List a tree's entries (not available)", "usage: git ls-tree\n\nList a tree's entries (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git ls-files, or git show <commit>:<directory>",
+            }),
+            ["merge"] = new("merge", "Join another branch's history into the current branch", "usage: git merge [<options>] <commit>\n   or: git merge --abort\n   or: git merge --continue\n\nJoin another branch's history into the current branch.\n\n    --no-ff              always make a merge commit, even when a fast-forward is possible\n    --ff-only            only fast-forward; fail otherwise\n    --ff                 fast-forward when possible (the default)\n    -m, --message <msg>  the merge commit's message\n    --no-edit            accepted and ignored (the default message is used without an editor)\n    --abort              give up a conflicted merge and return to the state before it\n    --continue           conclude a merge once conflicts are resolved and staged\n    -q, --quiet          print less\n", false, ("q", "m", "no-ff=\u0001,ff-only=\u0002,ff=\u0003,message=m,no-edit=\u0006,abort=\u0004,continue=\u0005,quiet=q"), new Dictionary<string, string>
+            {
+                ["upToDate"] = "Already up to date.",
+                ["strategyFailed"] = "Merge with strategy ort failed.",
+                ["updating"] = "Updating {old}..{new}",
+                ["fastForward"] = "Fast-forward",
+                ["madeByOrt"] = "Merge made by the 'ort' strategy.",
+                ["failed"] = "Automatic merge failed; fix conflicts and then commit the result.",
+                ["notSomething"] = "merge: {name} - not something we can merge",
+                ["noRemote"] = "fatal: No remote for the current branch.",
+                ["notFastForward"] = "fatal: Not possible to fast-forward, aborting.",
+                ["octopus"] = "fatal: merging more than one commit at a time is not supported here",
+                ["noMergeToAbort"] = "fatal: There is no merge to abort (MERGE_HEAD missing).",
+                ["noMergeInProgress"] = "fatal: There is no merge in progress (MERGE_HEAD missing).",
+                ["unmergedFiles"] = "error: Merging is not possible because you have unmerged files.\nhint: Fix them up in the work tree, and then use 'git add/rm <file>'\nhint: as appropriate to mark resolution and make a commit.\nfatal: Exiting because of an unresolved conflict.",
+                ["mergeHeadExists"] = "fatal: You have not concluded your merge (MERGE_HEAD exists).\nPlease, commit your changes before you merge.",
+            }),
+            ["merge-base"] = new("merge-base", "Find a common ancestor (not available)", "usage: git merge-base\n\nFind a common ancestor (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git log --format='%h %p %s' to follow the parents",
+            }),
+            ["mv"] = new("mv", "Move or rename a tracked file or directory", "usage: git mv [<options>] <source> <destination>\n   or: git mv [<options>] <source>... <directory>\n\nMove or rename a tracked file or directory.\n\n    -f, --force    overwrite an existing destination\n    -n, --dry-run  only say what would be moved\n    -v, --verbose  name each move\n", false, ("fnv", "", "force=f,dry-run=n,verbose=v"), new Dictionary<string, string>
+            {
+                ["usage"] = "error: need a source and a destination",
+                ["badSource"] = "fatal: bad source, source={source}, destination={destination}",
+                ["notUnderControl"] = "fatal: not under version control, source={source}, destination={destination}",
+                ["destinationExists"] = "fatal: destination exists, source={source}, destination={destination}",
+                ["destinationNotDir"] = "fatal: destination directory does not exist, source={path}",
+            }),
+            ["name-rev"] = new("name-rev", "Name a commit after a ref (not available)", "usage: git name-rev\n\nName a commit after a ref (not available).\n", true, ("", "", ""), Empty),
+            ["notes"] = new("notes", "Attach notes to commits (not available)", "usage: git notes\n\nAttach notes to commits (not available).\n", true, ("", "", ""), Empty),
+            ["prune"] = new("prune", "Remove unreachable objects (not available)", "usage: git prune\n\nRemove unreachable objects (not available).\n", true, ("", "", ""), Empty),
+            ["pull"] = new("pull", "Fetch and merge from a remote (not available)", "usage: git pull\n\nFetch and merge from a remote (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step.",
+            }),
+            ["push"] = new("push", "Upload to a remote (not available)", "usage: git push\n\nUpload to a remote (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step.",
+            }),
+            ["rebase"] = new("rebase", "Reapply commits onto another base (not available)", "usage: git rebase\n\nReapply commits onto another base (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git merge, or git reset --soft <base> && git commit to squash",
+            }),
+            ["reflog"] = new("reflog", "Show reference logs (not available)", "usage: git reflog\n\nShow reference logs (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; read .git/logs/HEAD",
+            }),
+            ["remote"] = new("remote", "List remotes (there are none: this machine has no network)", "usage: git remote [-v]\n\nList remotes (there are none: this machine has no network).\n\n    -v, --verbose  also show each remote's address (there are none)\n", false, ("v", "", "verbose=v"), new Dictionary<string, string>
+            {
+                ["noRemotes"] = "fatal: remotes are not available: this machine has no network. Commits stay in this machine's repository.",
+            }),
+            ["reset"] = new("reset", "Move the current branch to a commit, or unstage paths", "usage: git reset [--soft | --mixed | --hard] [-q] [<commit>]\n   or: git reset [-q] [<commit>] [--] <pathspec>...\n\nMove the current branch to a commit, or unstage paths.\n\n    --soft       move the branch only; keep the index and work tree\n    --mixed      move the branch and reset the index (the default)\n    --hard       move the branch and reset the index and work tree, discarding local changes\n    -q, --quiet  print nothing\n", false, ("q", "", "soft=\u0001,mixed=\u0002,hard=\u0003,quiet=q"), new Dictionary<string, string>
+            {
+                ["headNowAt"] = "HEAD is now at {commit}",
+                ["unstagedAfterReset"] = "Unstaged changes after reset:",
+                ["conflictingModes"] = "fatal: options '--soft', '--mixed' and '--hard' cannot be used together",
+                ["pathsWithMode"] = "fatal: Cannot do {mode} reset with paths.",
+            }),
+            ["restore"] = new("restore", "Restore files in the work tree or the index", "usage: git restore [<options>] [--source=<tree>] [--staged] [--worktree] [--] <pathspec>...\n\nRestore files in the work tree or the index.\n\n    -s, --source <tree>  take the contents from <tree> (default: the index for the work tree, HEAD for the index)\n    -S, --staged         restore the index\n    -W, --worktree       restore the work tree (the default; with --staged, both)\n    -q, --quiet          print nothing\n", false, ("SWq", "s", "source=s,staged=S,worktree=W,quiet=q"), new Dictionary<string, string>
+            {
+                ["noPaths"] = "fatal: you must specify path(s) to restore",
+                ["unmergedPath"] = "error: path '{path}' is unmerged",
+            }),
+            ["rev-list"] = new("rev-list", "List commit ids reachable from revisions, newest first", "usage: git rev-list [<options>] <revision>... [[--] <path>...]\n\nList commit ids reachable from revisions, newest first.\n\n    --count              print only how many commits there are\n    -n, --max-count <n>  list at most <n> commits (also -<n>)\n    --all                start from every branch and tag as well as HEAD\n", false, ("", "n", "count=\u0001,max-count=n,all=\u0002"), new Dictionary<string, string>
+            {
+                ["noRevisions"] = "fatal: no revisions given",
+            }),
+            ["rev-parse"] = new("rev-parse", "Turn revisions into commit ids and report repository paths", "usage: git rev-parse [<options>] [<revision>...]\n\nTurn revisions into commit ids and report repository paths.\n\n    --short                abbreviate ids (to 7 characters, or --short=<n>)\n    --abbrev-ref           print a revision as a short branch name (HEAD when detached)\n    --symbolic-full-name   print a revision as a full ref name\n    --verify               require exactly one valid revision\n    -q, --quiet            with --verify: fail silently\n    --show-toplevel        print the work tree's top directory\n    --show-prefix          print the path from the repository's top down to here\n    --show-cdup            print the ../ path from the current directory to the top\n    --git-dir              print the .git directory (relative when at the top)\n    --absolute-git-dir     print the .git directory as an absolute path\n    --git-common-dir       same as --git-dir\n    --is-inside-work-tree  print true inside a work tree\n    --is-inside-git-dir    print whether the current directory is inside .git\n    --is-bare-repository   print false (repositories here always have a work tree)\n", false, ("q", "", "short=\u0001,abbrev-ref=\u0002,symbolic-full-name=\u0003,verify=\u0004,quiet=q,show-toplevel=\u0005,show-prefix=\u0006,show-cdup=\u0007,git-dir=\u0008,absolute-git-dir=\u000e,git-common-dir=\u000f,is-inside-work-tree=\u0010,is-inside-git-dir=\u0011,is-bare-repository=\u0012"), new Dictionary<string, string>
+            {
+                ["needSingleRevision"] = "fatal: Needed a single revision",
+            }),
+            ["revert"] = new("revert", "Undo a commit with a new one (not available)", "usage: git revert\n\nUndo a commit with a new one (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git checkout <commit>~1 -- <paths> && git commit",
+            }),
+            ["rm"] = new("rm", "Remove files from the index and the work tree", "usage: git rm [<options>] [--] <pathspec>...\n\nRemove files from the index and the work tree.\n\n    --cached       only unstage: keep the file in the work tree\n    -r             remove directories recursively\n    -f, --force    remove even when the file has changes\n    -q, --quiet    print no file names\n    -n, --dry-run  only list what would be removed\n", false, ("rfqn", "", "cached=\u0001,force=f,quiet=q,dry-run=n"), new Dictionary<string, string>
+            {
+                ["noPathspec"] = "No pathspec was given. Which files should I remove?",
+                ["notRecursive"] = "fatal: not removing '{path}' recursively without -r",
+                ["local"] = "error: the following file has local modifications:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+                ["localMany"] = "error: the following files have local modifications:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+                ["staged"] = "error: the following file has changes staged in the index:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+                ["stagedMany"] = "error: the following files have changes staged in the index:\n{paths}\n(use --cached to keep the file, or -f to force removal)",
+                ["stagedAndLocal"] = "error: the following file has staged content different from both the\nfile and the HEAD:\n{paths}\n(use -f to force removal)",
+                ["stagedAndLocalMany"] = "error: the following files have staged content different from both the\nfile and the HEAD:\n{paths}\n(use -f to force removal)",
+            }),
+            ["shortlog"] = new("shortlog", "Summarize the log by author (not available)", "usage: git shortlog\n\nSummarize the log by author (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git log --format='%an %s'",
+            }),
+            ["show"] = new("show", "Show a commit (message and patch), tag, tree or file", "usage: git show [<options>] [<object>...]\n\nShow a commit (message and patch), tag, tree or file.\n\n    --oneline                    one line per commit: abbreviated id and subject\n    --format, --pretty <format>  how to print each commit: oneline, short, medium, full, fuller, raw, or a format string with %H %h %s %an %ae %ad %d and similar placeholders (format: puts no newline after the last)\n    --decorate                   show the branches and tags that point at each commit\n    --date <style>               how to print dates: default, short, iso, iso-strict, rfc, raw, unix or relative\n    --abbrev-commit              abbreviate commit ids\n    -p, --patch                  show each commit's changes as a patch\n    -u                           same as -p\n    --stat                       show a diffstat: changed lines per file as a +/- graph, then a summary line\n    --shortstat                  show only the diffstat's summary line\n    --name-only                  list only the names of changed files\n    --name-status                list changed files with a status letter (A, M, D, R, T)\n    --numstat                    list added and removed line counts per file, tab-separated\n    --summary                    list created, deleted and renamed files and mode changes\n    -U, --unified <n>            show <n> lines of context around each change instead of 3\n    -s, --no-patch, --quiet      show the commit without its changes\n    --color <when>               accepted and ignored, with or without =<when> (output is never colored)\n", false, ("pus", "\u0010\u0019U", "oneline=\u000e,format=\u0010,pretty=\u0010,decorate=\u0011,date=\u0019,abbrev-commit=\u001a,patch=p,stat=\u0001,shortstat=\u0002,name-only=\u0003,name-status=\u0004,numstat=\u0006,summary=\u001f,unified=U,no-patch=s,quiet=s"), Empty),
+            ["show-ref"] = new("show-ref", "List refs (not available)", "usage: git show-ref\n\nList refs (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git branch -v and git tag",
+            }),
+            ["stash"] = new("stash", "Set local changes aside and bring them back later", "usage: git stash [push [-m <message>] [-u] [-q]]\n   or: git stash save [<message>]\n   or: git stash (list | clear)\n   or: git stash (show | pop | apply | drop) [<stash>]\n\nSet local changes aside and bring them back later.\n\n    -m, --message <message>  describe the stash entry\n    -u, --include-untracked  also stash (and remove) untracked files\n    -q, --quiet              print less\n    -p, --patch              with show: print a patch instead of a diffstat\n    --stat                   with show: print a diffstat (the default)\n", false, ("uqp", "m", "message=m,include-untracked=u,quiet=q,patch=p,stat=\u0001"), new Dictionary<string, string>
+            {
+                ["saved"] = "Saved working directory and index state {message}",
+                ["noLocalChanges"] = "No local changes to save",
+                ["noInitialCommit"] = "You do not have the initial commit yet",
+                ["unmerged"] = "error: could not save the stash: you have unmerged files",
+                ["noEntries"] = "No stash entries found.",
+                ["noSuchEntry"] = "error: {name} is not a valid reference",
+                ["notStash"] = "error: '{name}' is not a stash-like commit",
+                ["dropped"] = "Dropped {name} ({commit})",
+                ["keptEntry"] = "The stash entry is kept in case you need it again.",
+                ["labelUpstream"] = "Updated upstream",
+                ["labelStashed"] = "Stashed changes",
+                ["wipMessage"] = "WIP on {description}",
+                ["onMessage"] = "On {branch}: {message}",
+                ["indexMessage"] = "index on {description}",
+                ["untrackedMessage"] = "untracked files on {description}",
+                ["upToDate"] = "Already up to date.",
+                ["cannotApply"] = "error: could not apply the stash entry",
+                ["untrackedExists"] = "error: {path} already exists, no checkout\nerror: could not restore untracked files from stash",
+                ["unknownAction"] = "error: unknown subcommand: `{action}'",
+            }),
+            ["status"] = new("status", "Show staged, unstaged and untracked changes", "usage: git status [<options>] [--] [<pathspec>...]\n\nShow staged, unstaged and untracked changes.\n\n    -s, --short                   two status letters and a path per line\n    -b, --branch                  with --short, start with a ## line naming the branch\n    --porcelain                   the short format for scripts: paths from the top of the repository, quoted only when needed (also --porcelain=v1)\n    --long                        the full format (the default)\n    -u, --untracked-files <mode>  which untracked files to list: no, normal (directories collapsed) or all; -u alone means all\n", false, ("sb", "", "short=s,branch=b,porcelain=\u0001,long=\u0002"), new Dictionary<string, string>
+            {
+                ["onBranch"] = "On branch {branch}",
+                ["detachedAt"] = "HEAD detached at {commit}",
+                ["noCommitsYet"] = "No commits yet",
+                ["initialCommit"] = "Initial commit",
+                ["unmergedHeader"] = "You have unmerged paths.\n  (fix conflicts and run \"git commit\")\n  (use \"git merge --abort\" to abort the merge)",
+                ["mergeFixed"] = "All conflicts fixed but you are still merging.\n  (use \"git commit\" to conclude merge)",
+                ["toBeCommitted"] = "Changes to be committed:",
+                ["hintUnstage"] = "  (use \"git restore --staged <file>...\" to unstage)",
+                ["hintUnstageNoCommits"] = "  (use \"git rm --cached <file>...\" to unstage)",
+                ["unmergedPaths"] = "Unmerged paths:",
+                ["hintResolve"] = "  (use \"git add <file>...\" to mark resolution)",
+                ["notStaged"] = "Changes not staged for commit:",
+                ["hintAdd"] = "  (use \"git add <file>...\" to update what will be committed)",
+                ["hintAddRm"] = "  (use \"git add/rm <file>...\" to update what will be committed)",
+                ["hintRestore"] = "  (use \"git restore <file>...\" to discard changes in working directory)",
+                ["untrackedHeader"] = "Untracked files:",
+                ["hintTrack"] = "  (use \"git add <file>...\" to include in what will be committed)",
+                ["noChangesAdded"] = "no changes added to commit (use \"git add\" and/or \"git commit -a\")",
+                ["nothingAddedUntracked"] = "nothing added to commit but untracked files present (use \"git add\" to track)",
+                ["nothingToCommitInitial"] = "nothing to commit (create/copy files and use \"git add\" to track)",
+                ["nothingToCommitClean"] = "nothing to commit, working tree clean",
+                ["noCommitsOnBranch"] = "No commits yet on {branch}",
+                ["labelNew"] = "new file:",
+                ["labelModified"] = "modified:",
+                ["labelDeleted"] = "deleted:",
+                ["labelRenamed"] = "renamed:",
+                ["labelTypechange"] = "typechange:",
+                ["bothModified"] = "both modified:",
+                ["bothAdded"] = "both added:",
+                ["bothDeleted"] = "both deleted:",
+                ["deletedByThem"] = "deleted by them:",
+                ["deletedByUs"] = "deleted by us:",
+                ["addedByUs"] = "added by us:",
+                ["addedByThem"] = "added by them:",
+            }),
+            ["submodule"] = new("submodule", "Manage submodules (not available)", "usage: git submodule\n\nManage submodules (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            {
+                ["unsupported"] = "fatal: 'git {name}' needs a network and this machine has none. Commits stay in this machine's repository; skip this step.",
+            }),
+            ["switch"] = new("switch", "Switch branches", "usage: git switch [<options>] <branch>\n   or: git switch [<options>] (-c | -C) <new-branch> [<start-point>]\n   or: git switch [<options>] --detach [<commit>]\n\nSwitch branches.\n\n    -c, --create <branch>           create <branch> and switch to it\n    -C, --force-create <branch>     like -c, but reset <branch> if it exists\n    -d, --detach                    switch to a commit with HEAD detached\n    -f, --force, --discard-changes  switch even if local changes would be lost (they are discarded)\n    -q, --quiet                     print no messages\n", false, ("dfq", "cC", "create=c,force-create=C,detach=d,force=f,discard-changes=f,quiet=q"), new Dictionary<string, string>
+            {
+                ["missingBranch"] = "fatal: missing branch or commit argument",
+                ["invalidReference"] = "fatal: invalid reference: {rev}",
+                ["expectedBranch"] = "fatal: a branch is expected, got commit '{rev}'\nhint: If you want to detach HEAD at the commit, try again with the --detach option.",
+                ["expectedBranchRef"] = "fatal: a branch is expected, got '{rev}'\nhint: If you want to detach HEAD at the commit, try again with the --detach option.",
+                ["tooManyArguments"] = "fatal: only one reference expected",
+            }),
+            ["symbolic-ref"] = new("symbolic-ref", "Read or change a symbolic ref (not available)", "usage: git symbolic-ref\n\nRead or change a symbolic ref (not available).\n", true, ("", "", ""), Empty),
+            ["tag"] = new("tag", "List, create or delete tags", "usage: git tag [-l] [<pattern>...]\n   or: git tag [-a] [-f] [-m <msg>] <name> [<commit>]\n   or: git tag -d <name>...\n\nList, create or delete tags.\n\n    -l, --list           list tags (those matching the patterns, if given)\n    -a, --annotate       make an annotated tag object (needs -m or -F)\n    -m, --message <msg>  the tag message (implies -a)\n    -F, --file <file>    read the tag message from <file> (implies -a)\n    -d, --delete         delete tags\n    -f, --force          replace an existing tag\n", false, ("ladf", "mF", "list=l,annotate=a,message=m,file=F,delete=d,force=f"), new Dictionary<string, string>
+            {
+                ["exists"] = "fatal: tag '{name}' already exists",
+                ["invalidName"] = "fatal: '{name}' is not a valid tag name.",
+                ["notFound"] = "error: tag '{name}' not found.",
+                ["deleted"] = "Deleted tag '{name}' (was {commit})",
+                ["updated"] = "Updated tag '{name}' (was {commit})",
+                ["tooManyArguments"] = "fatal: too many arguments",
+            }),
+            ["update-index"] = new("update-index", "Change the index directly (not available)", "usage: git update-index\n\nChange the index directly (not available).\n", true, ("", "", ""), Empty),
+            ["update-ref"] = new("update-ref", "Change a ref (not available)", "usage: git update-ref\n\nChange a ref (not available).\n", true, ("", "", ""), Empty),
+            ["var"] = new("var", "Show git variables (not available)", "usage: git var\n\nShow git variables (not available).\n", true, ("", "", ""), Empty),
+            ["version"] = new("version", "Print the git version", "usage: git version\n\nPrint the git version.\n", false, ("", "", ""), Empty),
+            ["whatchanged"] = new("whatchanged", "Show the log with changes (not available)", "usage: git whatchanged\n\nShow the log with changes (not available).\n", true, ("", "", ""), Empty),
+            ["worktree"] = new("worktree", "Manage extra work trees (not available)", "usage: git worktree\n\nManage extra work trees (not available).\n", true, ("", "", ""), Empty),
+            ["write-tree"] = new("write-tree", "Write the index as a tree (not available)", "usage: git write-tree\n\nWrite the index as a tree (not available).\n", true, ("", "", ""), Empty),
         }),
         ["grep"] = new("grep", "Search text with regular expressions", null, "grep (GNU grep) 3.11", true, false, true, "grep", 2, "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n", ("acEFHhIiLlnoPqRrsUvwxZ", "ABCm", "after-context=A,text=a,before-context=B,context=C,count=c,extended-regexp=E,fixed-strings=F,with-filename=H,no-filename=h,binary-files=I,ignore-case=i,files-without-match=L,files-with-matches=l,max-count=m,line-number=n,only-matching=o,perl-regexp=P,quiet=q,silent=q,dereference-recursive=R,recursive=r,no-messages=s,color=U,colour=U,line-buffered=U,invert-match=v,word-regexp=w,line-regexp=x"), new Dictionary<string, string>
         {
