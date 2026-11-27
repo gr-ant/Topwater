@@ -31,7 +31,7 @@ from .shop import GROUP_DESCRIPTION, SPECS, Shop  # noqa: E402
 
 HOME = "/home/agent"
 IMAGE = "twbench-ubuntu:1"
-RUNDIR = ROOT / ".run"  # sockets, canaries; git-ignored
+RUNDIR = ROOT / ".run"  # canaries and logs; git-ignored
 FIXTURES = ROOT / "fixtures" / "home"
 SETUP_REPO = "(\n" + (ROOT / "fixtures" / "setup_repo.sh").read_text() + ")"  # a subshell: leaves no cd or set -e behind
 SHOP_HINT = (" This machine has the `shop` program, the store's order, customer, inventory, shipment, refund and report API: "
@@ -131,7 +131,7 @@ class ClassicArm(TopwaterArm):
                  {"type": "object", "properties": {"path": path, "content": {"type": "string", "description": "The complete new content of the file."}}, "required": ["path", "content"]}),
             tool("read_document", "Read a Word, Excel or PowerPoint file (.docx, .xlsx, .pptx) as Markdown.",
                  {"type": "object", "properties": {"path": path}, "required": ["path"]}),
-            tool("git", "Run git in a local repository (no network), e.g. args [\"log\", \"--oneline\"]. Supports log, show, diff, status, add, commit, grep, tag and the like.",
+            tool("git", "Run git in a local repository (no network), e.g. args [\"log\", \"--oneline\"]. Supports log, show, diff, status, add, commit, tag and the like.",
                  {"type": "object", "properties": {"args": {"type": "array", "items": {"type": "string"}, "description": "The arguments after `git`."},
                                                    "cwd": {"type": "string", "description": "The repository directory."}}, "required": ["args", "cwd"]}),
         ]
@@ -251,8 +251,7 @@ __tw_load() { printf %s "$1" | base64 -d | tar xzf - -C /home/agent; }
     def __init__(self, shop: Shop, tag: str):
         self.shop, self.tag, self.restarts = shop, tag, 0
         self.tools = [tool("bash", DESC_C, BASH_SCHEMA)]
-        RUNDIR.mkdir(exist_ok=True)
-        self.tmp = tempfile.mkdtemp(prefix="s", dir=RUNDIR)  # short: a Unix socket path must stay under 108 bytes
+        self.tmp = tempfile.mkdtemp(prefix="twb")  # the system temp dir keeps the socket path under AF_UNIX's 108 bytes
         os.chmod(self.tmp, 0o755)
         self.server = _Bridge(os.path.join(self.tmp, "app.sock"), _bridge_handler(shop_shell(shop), threading.Lock()))
         os.chmod(os.path.join(self.tmp, "app.sock"), 0o777)

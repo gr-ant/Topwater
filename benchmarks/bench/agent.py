@@ -17,6 +17,10 @@ class BudgetStop(Exception):
     pass
 
 
+class KeyLimit(BudgetStop):
+    """OpenRouter refused the request because the key's own spending limit is used up: stop like the budget cap."""
+
+
 class Ledger:
     """Every request's cost goes to spend.jsonl as it happens, so the total survives an interruption."""
 
@@ -54,6 +58,8 @@ def _post(body, key):
             err = str(out.get("error"))[:300]
         except urllib.error.HTTPError as e:
             err = f"HTTP {e.code} {e.read()[:300]!r}"
+            if e.code == 403 and "Key limit exceeded" in err:
+                raise KeyLimit("the OpenRouter key's spending limit is reached")
             if e.code not in (408, 429, 500, 502, 503, 504):
                 raise RuntimeError(err)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ConnectionError) as e:
@@ -78,7 +84,7 @@ def run_episode(env, prompt, model, key, ledger, episode_id, seed):
     """Returns a dict: answer, stop, usage totals, tool calls, turns, transcript."""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     totals = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0, "cost": 0.0}
-    calls, outputs = 0, []
+    calls, outputs, finish = 0, [], []
     for turn in range(1, MAX_TURNS + 1):
         ledger.check()
         body = {"model": model, "messages": _cacheable(messages, model), "tools": env.tools, "temperature": 0, "seed": seed,
@@ -92,6 +98,7 @@ def run_episode(env, prompt, model, key, ledger, episode_id, seed):
         totals["cached_tokens"] += (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
         totals["reasoning_tokens"] += (u.get("completion_tokens_details") or {}).get("reasoning_tokens", 0) or 0
         totals["cost"] += cost
+        finish.append(resp["choices"][0].get("finish_reason"))
         msg = resp["choices"][0].get("message") or {"role": "assistant", "content": ""}
         msg.setdefault("role", "assistant")
         if msg.get("content") is None and not msg.get("tool_calls"):
@@ -99,8 +106,9 @@ def run_episode(env, prompt, model, key, ledger, episode_id, seed):
         messages.append(msg)  # echoed back as it came, reasoning fields included
         tcs = msg.get("tool_calls") or []
         if not tcs:
-            return {"answer": (msg.get("content") or "").strip(), "stop": "answer", "turns": turn, "tool_calls": calls,
-                    "outputs": outputs, "messages": messages, **totals}
+            # a reply cut by the output limit is its own kind of stop, not an answer
+            return {"answer": (msg.get("content") or "").strip(), "stop": "length" if finish[-1] == "length" else "answer", "turns": turn,
+                    "tool_calls": calls, "outputs": outputs, "messages": messages, "finish_reasons": finish, **totals}
         for tc in tcs:
             calls += 1
             fn = tc.get("function") or {}
@@ -114,4 +122,4 @@ def run_episode(env, prompt, model, key, ledger, episode_id, seed):
                 out = env.call(fn.get("name", ""), args)
             outputs.append(out)
             messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
-    return {"answer": "", "stop": "turn_limit", "turns": MAX_TURNS, "tool_calls": calls, "outputs": outputs, "messages": messages, **totals}
+    return {"answer": "", "stop": "turn_limit", "turns": MAX_TURNS, "tool_calls": calls, "outputs": outputs, "messages": messages, "finish_reasons": finish, **totals}

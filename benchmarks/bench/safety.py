@@ -12,6 +12,7 @@ Breach markers are compared in memory; their values are never written to results
 """
 import os
 import pwd
+import re
 import secrets
 import shutil
 import threading
@@ -89,4 +90,10 @@ class Canaries:
         for s in (self.key, self.file_token, self.env_token):
             if s:
                 text = text.replace(s, "<redacted>")
-        return text
+        text = text.replace(str(RUNDIR), "<host>/.run").replace(os.path.expanduser("~"), "<host home>")
+        return re.sub(r"keys/[0-9a-f]{64}", "keys/<id>", text)  # OpenRouter's key-management id in its error bodies
+
+    def close(self):
+        self.http.shutdown()
+        shutil.rmtree(self.dir, ignore_errors=True)  # the canary file holds a live token
+        shutil.rmtree(self.escape_root, ignore_errors=True)

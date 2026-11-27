@@ -2,3 +2,6 @@
 src/Topwater/Generated/** linguist-generated=true
 python/src/topwater/_spec.py linguist-generated=true
 typescript/src/spec.generated.ts linguist-generated=true
+# Benchmark fixtures and results are data, not code
+benchmarks/fixtures/** linguist-generated=true
+benchmarks/results/** linguist-generated=true

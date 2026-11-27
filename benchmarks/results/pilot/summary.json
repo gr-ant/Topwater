@@ -1,0 +1,526 @@
+{
+ "episodes": 63,
+ "main_episodes": 54,
+ "safety_episodes": 9,
+ "success": {
+  "A/gemini": {
+   "k": 6,
+   "n": 6,
+   "p": 1.0,
+   "lo": 0.6096569663469354,
+   "hi": 0.9999999999999999
+  },
+  "A/sonnet": {
+   "k": 6,
+   "n": 6,
+   "p": 1.0,
+   "lo": 0.6096569663469354,
+   "hi": 0.9999999999999999
+  },
+  "A/terra": {
+   "k": 5,
+   "n": 6,
+   "p": 0.8333333333333334,
+   "lo": 0.43649056343635395,
+   "hi": 0.9699474141282697
+  },
+  "A/all": {
+   "k": 17,
+   "n": 18,
+   "p": 0.9444444444444444,
+   "lo": 0.7424220019799247,
+   "hi": 0.9901250641690756
+  },
+  "B/gemini": {
+   "k": 5,
+   "n": 6,
+   "p": 0.8333333333333334,
+   "lo": 0.43649056343635395,
+   "hi": 0.9699474141282697
+  },
+  "B/sonnet": {
+   "k": 5,
+   "n": 6,
+   "p": 0.8333333333333334,
+   "lo": 0.43649056343635395,
+   "hi": 0.9699474141282697
+  },
+  "B/terra": {
+   "k": 5,
+   "n": 6,
+   "p": 0.8333333333333334,
+   "lo": 0.43649056343635395,
+   "hi": 0.9699474141282697
+  },
+  "B/all": {
+   "k": 15,
+   "n": 18,
+   "p": 0.8333333333333334,
+   "lo": 0.6077750036164076,
+   "hi": 0.9416352959953425
+  },
+  "C/gemini": {
+   "k": 6,
+   "n": 6,
+   "p": 1.0,
+   "lo": 0.6096569663469354,
+   "hi": 0.9999999999999999
+  },
+  "C/sonnet": {
+   "k": 6,
+   "n": 6,
+   "p": 1.0,
+   "lo": 0.6096569663469354,
+   "hi": 0.9999999999999999
+  },
+  "C/terra": {
+   "k": 6,
+   "n": 6,
+   "p": 1.0,
+   "lo": 0.6096569663469354,
+   "hi": 0.9999999999999999
+  },
+  "C/all": {
+   "k": 18,
+   "n": 18,
+   "p": 1.0,
+   "lo": 0.8241154494176252,
+   "hi": 1.0
+  }
+ },
+ "paired": {
+  "A-B/all tasks/gemini": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-B/all tasks/sonnet": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-B/all tasks/terra": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 0,
+   "diff": 0.0,
+   "ci": [
+    0.0,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-B/all tasks/all": {
+   "pairs": 18,
+   "x_only": 2,
+   "y_only": 0,
+   "diff": 0.1111111111111111,
+   "ci": [
+    0.0,
+    0.3333333333333333
+   ],
+   "p_mcnemar": 0.5
+  },
+  "A-B/without long-tail/gemini": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-B/without long-tail/sonnet": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-B/without long-tail/terra": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 0,
+   "diff": 0.0,
+   "ci": [
+    0.0,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-B/without long-tail/all": {
+   "pairs": 18,
+   "x_only": 2,
+   "y_only": 0,
+   "diff": 0.1111111111111111,
+   "ci": [
+    0.0,
+    0.3333333333333333
+   ],
+   "p_mcnemar": 0.5
+  },
+  "A-C/all tasks/gemini": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 0,
+   "diff": 0.0,
+   "ci": [
+    0.0,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/all tasks/sonnet": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 0,
+   "diff": 0.0,
+   "ci": [
+    0.0,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/all tasks/terra": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 1,
+   "diff": -0.16666666666666666,
+   "ci": [
+    -0.5,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/all tasks/all": {
+   "pairs": 18,
+   "x_only": 0,
+   "y_only": 1,
+   "diff": -0.05555555555555555,
+   "ci": [
+    -0.16666666666666666,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/without long-tail/gemini": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 0,
+   "diff": 0.0,
+   "ci": [
+    0.0,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/without long-tail/sonnet": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 0,
+   "diff": 0.0,
+   "ci": [
+    0.0,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/without long-tail/terra": {
+   "pairs": 6,
+   "x_only": 0,
+   "y_only": 1,
+   "diff": -0.16666666666666666,
+   "ci": [
+    -0.5,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "A-C/without long-tail/all": {
+   "pairs": 18,
+   "x_only": 0,
+   "y_only": 1,
+   "diff": -0.05555555555555555,
+   "ci": [
+    -0.16666666666666666,
+    0.0
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/all tasks/gemini": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/all tasks/sonnet": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/all tasks/terra": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/all tasks/all": {
+   "pairs": 18,
+   "x_only": 3,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 0.25
+  },
+  "C-B/without long-tail/gemini": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/without long-tail/sonnet": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/without long-tail/terra": {
+   "pairs": 6,
+   "x_only": 1,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 1.0
+  },
+  "C-B/without long-tail/all": {
+   "pairs": 18,
+   "x_only": 3,
+   "y_only": 0,
+   "diff": 0.16666666666666666,
+   "ci": [
+    0.0,
+    0.5
+   ],
+   "p_mcnemar": 0.25
+  }
+ },
+ "cost": {
+  "A/gemini": {
+   "prompt": 13500.0,
+   "completion": 450.0,
+   "cached_share": 0.4023333333333333,
+   "cost": 0.021180166666666667,
+   "cost_per_success": 0.021180166666666667,
+   "turns": 4.666666666666667,
+   "tool_calls": 3.6666666666666665,
+   "wall_s": 38.15,
+   "median_tokens": 6732.5,
+   "tokens_per_success": 13950.0
+  },
+  "A/sonnet": {
+   "prompt": 9535.666666666666,
+   "completion": 735.1666666666666,
+   "cached_share": 0.7720138427657567,
+   "cost": 0.013517666666666666,
+   "cost_per_success": 0.013517666666666666,
+   "turns": 4.5,
+   "tool_calls": 4.0,
+   "wall_s": 8.533333333333333,
+   "median_tokens": 7850.5,
+   "tokens_per_success": 10270.833333333334
+  },
+  "A/terra": {
+   "prompt": 14121.666666666666,
+   "completion": 832.5,
+   "cached_share": 0.6775876312994217,
+   "cost": 0.0223085,
+   "cost_per_success": 0.0267702,
+   "turns": 5.666666666666667,
+   "tool_calls": 5.333333333333333,
+   "wall_s": 14.950000000000001,
+   "median_tokens": 5162.0,
+   "tokens_per_success": 17945.0
+  },
+  "A/all": {
+   "prompt": 12385.777777777777,
+   "completion": 672.5555555555555,
+   "cached_share": 0.601814805511698,
+   "cost": 0.019002111111111112,
+   "cost_per_success": 0.02011988235294118,
+   "turns": 4.944444444444445,
+   "tool_calls": 4.333333333333333,
+   "wall_s": 20.544444444444444,
+   "median_tokens": 5740.5,
+   "tokens_per_success": 13826.470588235294
+  },
+  "B/gemini": {
+   "prompt": 52988.5,
+   "completion": 3536.1666666666665,
+   "cached_share": 0.5976265290267385,
+   "cost": 0.08117100000000001,
+   "cost_per_success": 0.0974052,
+   "turns": 4.666666666666667,
+   "tool_calls": 6.833333333333333,
+   "wall_s": 85.96666666666665,
+   "median_tokens": 36374.0,
+   "tokens_per_success": 67829.6
+  },
+  "B/sonnet": {
+   "prompt": 30536.0,
+   "completion": 2828.6666666666665,
+   "cached_share": 0.6734510086455331,
+   "cost": 0.055267166666666666,
+   "cost_per_success": 0.0663206,
+   "turns": 3.6666666666666665,
+   "tool_calls": 5.333333333333333,
+   "wall_s": 17.8,
+   "median_tokens": 30756.5,
+   "tokens_per_success": 40037.6
+  },
+  "B/terra": {
+   "prompt": 78232.16666666667,
+   "completion": 1001.6666666666666,
+   "cached_share": 0.900281853372334,
+   "cost": 0.04559716666666667,
+   "cost_per_success": 0.054716600000000004,
+   "turns": 7.833333333333333,
+   "tool_calls": 9.333333333333334,
+   "wall_s": 34.516666666666666,
+   "median_tokens": 31507.5,
+   "tokens_per_success": 95080.6
+  },
+  "B/all": {
+   "prompt": 53918.88888888889,
+   "completion": 2455.5,
+   "cached_share": 0.7583170193912667,
+   "cost": 0.060678444444444445,
+   "cost_per_success": 0.07281413333333334,
+   "turns": 5.388888888888889,
+   "tool_calls": 7.166666666666667,
+   "wall_s": 46.09444444444444,
+   "median_tokens": 30756.5,
+   "tokens_per_success": 67649.26666666666
+  },
+  "C/gemini": {
+   "prompt": 15256.833333333334,
+   "completion": 528.6666666666666,
+   "cached_share": 0.402311532537333,
+   "cost": 0.02413816666666667,
+   "cost_per_success": 0.02413816666666667,
+   "turns": 4.5,
+   "tool_calls": 3.5,
+   "wall_s": 29.866666666666664,
+   "median_tokens": 6834.5,
+   "tokens_per_success": 15785.5
+  },
+  "C/sonnet": {
+   "prompt": 8895.5,
+   "completion": 724.1666666666666,
+   "cached_share": 0.7179098045828415,
+   "cost": 0.014148333333333332,
+   "cost_per_success": 0.014148333333333332,
+   "turns": 4.166666666666667,
+   "tool_calls": 3.6666666666666665,
+   "wall_s": 9.966666666666667,
+   "median_tokens": 7632.0,
+   "tokens_per_success": 9619.666666666666
+  },
+  "C/terra": {
+   "prompt": 11751.666666666666,
+   "completion": 408.1666666666667,
+   "cached_share": 0.5833640618352007,
+   "cost": 0.0176995,
+   "cost_per_success": 0.0176995,
+   "turns": 4.666666666666667,
+   "tool_calls": 5.833333333333333,
+   "wall_s": 11.933333333333332,
+   "median_tokens": 3949.0,
+   "tokens_per_success": 12159.833333333334
+  },
+  "C/all": {
+   "prompt": 11968.0,
+   "completion": 553.6666666666666,
+   "cached_share": 0.5397634432560903,
+   "cost": 0.018661999999999998,
+   "cost_per_success": 0.018661999999999998,
+   "turns": 4.444444444444445,
+   "tool_calls": 4.333333333333333,
+   "wall_s": 17.255555555555556,
+   "median_tokens": 5195.5,
+   "tokens_per_success": 12521.666666666666
+  }
+ },
+ "safety": {
+  "A": {
+   "safety_episodes": 3,
+   "attempted": 1,
+   "episodes_scanned": 21,
+   "breaches": []
+  },
+  "B": {
+   "safety_episodes": 3,
+   "attempted": 0,
+   "episodes_scanned": 21,
+   "breaches": []
+  },
+  "C": {
+   "safety_episodes": 3,
+   "attempted": 1,
+   "episodes_scanned": 21,
+   "breaches": []
+  }
+ },
+ "provider_blocked": [],
+ "rescored": [],
+ "total_cost": 1.80018
+}

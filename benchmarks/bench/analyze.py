@@ -10,7 +10,7 @@ import math
 import random
 from pathlib import Path
 
-ARMS = {"A": "Topwater bash", "B": "Classic tools", "C": "Docker bash"}
+ARMS = {"A": "Topwater bash", "B": "Function tools, no code", "C": "Docker bash"}
 MARGIN = 0.05  # non-inferiority margin from the README
 
 
@@ -35,7 +35,7 @@ def mcnemar(b, c):
 
 
 def pct(x):
-    return "n/a" if x != x else f"{100 * x:.1f}%"
+    return "n/a" if x != x else f"{100 * max(0.0, x):.1f}%"
 
 
 def load(out: Path):
@@ -153,18 +153,20 @@ def analyze(out: Path):
                  "cost": cost / n, "cost_per_success": cost / wins if wins else float("nan"),
                  "turns": sum(e["turns"] for e in sel) / n, "tool_calls": sum(e["tool_calls"] for e in sel) / n,
                  "wall_s": sum(e["wall_s"] for e in sel) / n,
+                 "median_tokens": sorted(e["prompt_tokens"] + e["completion_tokens"] for e in sel)[n // 2] if n % 2 else
+                                  sum(sorted(e["prompt_tokens"] + e["completion_tokens"] for e in sel)[n // 2 - 1: n // 2 + 1]) / 2,
                  "tokens_per_success": sum(e["prompt_tokens"] + e["completion_tokens"] for e in sel) / wins if wins else float("nan")}
             summary["cost"][f"{a}/{m}"] = d
-            rows.append([ARMS[a], m, f"{d['prompt']:,.0f}", f"{d['completion']:,.0f}", f"{100 * d['cached_share']:.0f}%", f"{d['tokens_per_success']:,.0f}",
+            rows.append([ARMS[a], m, f"{d['prompt']:,.0f}", f"{d['completion']:,.0f}", f"{100 * d['cached_share']:.0f}%", f"{d['median_tokens']:,.0f}", f"{d['tokens_per_success']:,.0f}",
                          f"${d['cost']:.4f}", f"${d['cost_per_success']:.4f}", f"{d['turns']:.1f}", f"{d['tool_calls']:.1f}", f"{d['wall_s']:.0f}"])
-    table(["arm", "model", "prompt tok", "completion tok", "cached", "tokens / success", "cost", "cost / success", "turns", "tool calls", "wall s"], rows)
+    table(["arm", "model", "prompt tok", "completion tok", "cached", "median tokens", "tokens / success", "cost", "cost / success", "turns", "tool calls", "wall s"], rows)
 
     # failures
     lines.append("### Failures by kind (capability tasks)\n")
     rows = []
     for a in arms:
         fails = [e for e in main if e["arm"] == a and not e["success"]]
-        kinds = collections.Counter("turn limit" if e["stop"] == "turn_limit" else
+        kinds = collections.Counter("turn limit" if e["stop"] == "turn_limit" else "cut by the output limit" if e["stop"] == "length" else
                                     "no file / wrong end state" if any(w in e["reason"] for w in ("file rows", "not JSON", "got []", "subject=", "refunds", "purchase orders", "listing", "left=", "rows=None")) and e["stop"] == "answer" else
                                     "wrong or missing answer" for e in fails)
         restarts = sum(e.get("restarts", 0) for e in main if e["arm"] == a)

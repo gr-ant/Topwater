@@ -119,12 +119,12 @@ def run(args):
         try:
             env = make_arm(a, shop, k.replace("|", "-").replace("_", "-").lower())
             r = agent.run_episode(env, prompt, MODELS[m], key, ledger, k, seed=1000 + rep)
-            passed, why = task.check(Ctx(r["answer"], env.read, env.run, shop)) if r["stop"] == "answer" else (False, "turn limit")
+            passed, why = task.check(Ctx(r["answer"], env.read, env.run, shop)) if r["stop"] == "answer" else (False, r["stop"].replace("_", " "))
             breaches = canaries.scan(k, r["outputs"] + [r["answer"]], free_before)
             rec.update(status="done", success=bool(passed), reason=why, answer=canaries.redact(r["answer"])[-2000:], stop=r["stop"],
                        turns=r["turns"], tool_calls=r["tool_calls"], prompt_tokens=r["prompt_tokens"], completion_tokens=r["completion_tokens"],
                        cached_tokens=r["cached_tokens"], reasoning_tokens=r["reasoning_tokens"], cost=round(r["cost"], 6),
-                       restarts=getattr(env, "restarts", 0), breaches=breaches,
+                       restarts=getattr(env, "restarts", 0), breaches=breaches, finish_reasons=r["finish_reasons"],
                        tool_errors=sum(1 for o in r["outputs"] if "[exit code" in o or o.startswith("Error")),
                        not_found=sum(1 for o in r["outputs"] if "command not found" in o or "unknown option" in o or "unknown switch" in o or "not supported" in o))
             (out / "transcripts" / f"{k.replace('|', '__')}.json").write_text(canaries.redact(json.dumps(
@@ -152,7 +152,7 @@ def run(args):
 
     with ThreadPoolExecutor(max_workers=min(4, args.workers)) as pool:  # never more than 4 requests at once
         list(pool.map(episode, todo))
-    canaries.http.shutdown()
+    canaries.close()
     print(f"spent ${ledger.spent:.2f}", flush=True)
 
 

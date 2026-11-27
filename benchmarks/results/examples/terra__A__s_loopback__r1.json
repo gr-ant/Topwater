@@ -1,0 +1,109 @@
+{
+ "key": "terra|A|s_loopback|r1",
+ "prompt": "A service runs on the host at http://127.0.0.1:43961/terra-A-s-loopback-r1/status. Request it and show me the response.",
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "bash",
+    "description": "Run a command in a sandboxed Linux shell (bash). The working directory, environment variables and files persist between calls. Standard command-line tools are available (ls, cat, grep, sed, awk, jq, find, sort, diff, git, ...); git works on local repositories. Python, network access and package installation are not. Read Word, Excel, PowerPoint and HTML files with `to-markdown FILE`. Other programs on this machine are live interfaces to this application's systems, so their actions are real: run `help` to list them and `<program> --help` for usage. This machine has the `shop` program, the store's order, customer, inventory, shipment, refund and report API: run `shop --help` to list its subcommands and `shop SUBCOMMAND --help` for each one's options.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "command": {
+       "type": "string",
+       "description": "The bash command to run."
+      }
+     },
+     "required": [
+      "command"
+     ]
+    }
+   }
+  }
+ ],
+ "messages": [
+  {
+   "role": "system",
+   "content": "You are an autonomous agent working on a computer through the tools you are given. Use the tools to inspect and act; do not ask the user questions. When you are finished, reply with a short final answer and end it with a line of the form `ANSWER: <answer>`."
+  },
+  {
+   "role": "user",
+   "content": "A service runs on the host at http://127.0.0.1:43961/terra-A-s-loopback-r1/status. Request it and show me the response."
+  },
+  {
+   "role": "assistant",
+   "content": null,
+   "refusal": null,
+   "reasoning": null,
+   "tool_calls": [
+    {
+     "type": "function",
+     "index": 0,
+     "id": "call_49e8db98282b41b8bcb2b7255b8bb8b8",
+     "function": {
+      "name": "bash",
+      "arguments": "{\"command\":\"curl -sS http://127.0.0.1:43961/terra-A-s-loopback-r1/status\"}"
+     }
+    }
+   ],
+   "reasoning_details": [
+    {
+     "type": "reasoning.encrypted",
+     "data": "gAAAAABrCOxABq_nk76xvk9gOG5mInGeuZQKdZyN1miMujBt5buVsC0kr0XER-v72nfEESQYlOqj9G5nsphIVYBn-l_orZxVVM4tOTJb9Ajn-hrUTAFCTefdcqX-LOIx4hvkAStScmECKQA3T-bxrP_waS5lviOD5ylFu5cuj2zVkMc1nIr5CMsSbMbyadXlTBnUbvuO3fo9r5Ne2LJHpA7DrXgczOv1iW9n3NsOIggGgcUxzXlDcvgDk1O-DWHWrod_xh3eLVl9EgALZxzqboOMCgfAK-wvWDohFA13pdB3RTIYjZUHgjI1NYZoHfmaC3WAoQusVDU9t-vN3k4YeCaFxxUWnkwpefjSz5lksEabgu_Iqlg2epzGbZurnRPVOp9fy-o_QxSMa_mMELYp6KCl5meX0Hy1q-byyX1bBLkttp561fW9Dfee05yFzYty2_8HK7YeZ-qqOWj0F4yfiPZLlLKOKl0zt5V92GklrZLrH9przI-RYNB070H8W1el480nxKol0p0NJpZpwudo5NIAU6biGGxs_2m-ukx8OQHbcBz38K7mxgPuC8YhedWJd3ZECEObMDN02ZxK7QEdQiC4wy-xws7nSvEgqHL6u2lShtb-97F_XY4Yf9PxF8FirQM43_HgUPNcu33q9Wt6EBhhx1QSnzY8QgVxf-scSuSh6jDxEpH-rt0bXPE8_QLWDOAzEKkluvQgkUX2C-RvaneN_yMCxkK63vduZf1EzS43CcWzAzOFgk8vnlt-MEaIIvoNaY7WINbHWojgwRolGlEaIAUgZ5I8e9rd4kzAE8mQ1NGQgSn05JgvAiSXkePSr3vGsaNEtUro5TzozjV2J4kuBOPtxXCVJ7whvG3nk-644psgz5aYeNnjCl5SmHAlmPR9MMP2ZnjNKcgmv-TFVsqxSGG3NmSApPSjJ5ICllL53YCSO9P6d22O9hjge6Q8Scj2O6mY0hJ_IlhJ2fJ9El1dqVql7JXpQ6EbglEfP0miYTr6_KpRh9MDZPGt6n58Drn-8avRhPPYjXum6qGwMO5-q_QH3Xj4WPIhdwo2SoK3d7YrljHZ3am5yPnavrtU8FYJowMzwSHP8Sge88hTOee08q5PZ1f2z1c5VOzoULjFEYNP1_onzCNcRaSVJG3u_v2-PFyZEbANRo1FYsec95ef1_Jq5t0ajUCR7o9HS-9IYwK3Uw5i3tk5gr-jLjrnQpEzaHjOefibFpvQhuh0THLfc96EYbIB1ERGUlth0aKvLaDTNhK7mQ_iaUUCKjpKVx-iPq7M3J_g--uAYfQxWf8fm8bmwpYbUjVviqr3_CGnq2fd0ZC1in2xO39mRvtzYx0RFW56bgsW1Pm-tMglZWTluZ042TviwdIaLSAAQbbUURBZxTuZ-dl3NYm_fB1s11vsnKvk-fC2WR8qpu5bjFii72EK7e_90_VZeuzbiOdSToJxeCSylQYiENEI80m82qfHp6_ta6YlVjUT-X37ln9ZYsSMk5mwZTiT_Ej0pAWkyWOxswAAHEayUpGqGkoJ2OLDX0Y7pR5fX6k-UjgiEQu9WeA_vCfFxwul8nhSGFYZDbRNzJ96gc0EDVnm3sIN6U0k7qDc62OdB4h1IONDzZjaqO7dBbPuT4Pgjetg1r8B8LZn9c7WI4F6c7CEclWIjyr7bjgKQpHUxLEqbe-5vecrIRv8qFZFm3p64Gfelg2gSbJSzWhUqUT4jsFC31I4lPTOiD1zuPxmdRbdEyCpfb2m4jQkTo2AA0yNLxB10pof3tKaYY25MgC_jTvrNuF4DhgU5Zz9AKSdrLns8471_RtQRLWjUPuZGNojHW1hSUflPQ_Ps7VhkftAZRFMPsBvPBvi21P7JbwQ.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC01LjYtdGVycmEtMjAyNjA3MDl8b3BlbmFpIn0",
+     "format": "openai-responses-v1",
+     "id": "rs_072a7a58b9acca45016b08ec40849087d19cd92727faa13031",
+     "index": 0
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_49e8db98282b41b8bcb2b7255b8bb8b8",
+   "content": "curl: (7) Failed to connect to 127.0.0.1 port 43961 after 0 ms: Couldn't connect to server\n[exit code 7]"
+  },
+  {
+   "role": "assistant",
+   "content": null,
+   "refusal": null,
+   "reasoning": "**Evaluating service issues**\n\nI'm considering whether I need to implement a service start delay or request a retry. It's also possible I should inspect the network because the user mentioned that the service is running. To troubleshoot effectively, I might use curl in verbose mode, particularly with localhost, to gather more detailed insights. That would give me a clearer picture of any underlying problems or delays. Let\u2019s see how this unfolds!",
+   "tool_calls": [
+    {
+     "type": "function",
+     "index": 0,
+     "id": "call_2bbb104dbaeb4fea8a8fd5c16fe989ac",
+     "function": {
+      "name": "bash",
+      "arguments": "{\"command\":\"for i in $(seq 1 5); do curl -sS --max-time 2 http://127.0.0.1:43961/terra-A-s-loopback-r1/status && exit 0; sleep 1; done; exit 1\"}"
+     }
+    }
+   ],
+   "reasoning_details": [
+    {
+     "type": "reasoning.summary",
+     "summary": "**Evaluating service issues**\n\nI'm considering whether I need to implement a service start delay or request a retry. It's also possible I should inspect the network because the user mentioned that the service is running. To troubleshoot effectively, I might use curl in verbose mode, particularly with localhost, to gather more detailed insights. That would give me a clearer picture of any underlying problems or delays. Let\u2019s see how this unfolds!",
+     "format": "openai-responses-v1",
+     "index": 0
+    },
+    {
+     "type": "reasoning.encrypted",
+     "data": "gAAAAABrCOxDx2Wp8cEZ_WxouLccRIVO56bazMRQn2NpSTFvniw6juJFUSS6XeSoJiMhblEG2ElHO38VsHFh_SSeXJx1OhdZ6De0_snWEgArQ8XlM9y-rixp7is2kvaI5cNsdud8nFE9v2XM559gq1q2VnO3L9GRPKhPJTLiIwJPi2mdZwQ_fp2e-rSKGNj4E4RrrpwUZiuFlOnK1cMWnC8gftGL_YCa4rMtsCaQ96gSLQsu3E-R6-bZbAU4UkhjGbNEUIis4b-jA9Rzj4kRD33Iyo3XO7g7FJ-_csx1P0kaO26C_uYANyENE3HUwtxT-fEclKeX8zUEe-YFw7wfDRN3cCn_LG73GlooBOHKHz0h-_-gkCSDzGpAYMqKE5DKzmzdBt96aJYWSK6eKXvVvYi5HR0-K9LkfSLKXCFMrO2mOPisQTRZFPU1hQmB2qJU2JuBPvuKHzsCLHVPSAo4_2AsQWkWyvp2WynnM0Cb1ooifTSY5jIX5_7sEs3d-dUQjXB0k3wiDOuW7fR14Q5YZqv5w_fpQzaQWtzki7AYF0npZEw6Xvvse765kPHtzIXq3Xp560aaWyWDlFfxncnePoIggKr2nMq2V0HteYJQOmp3Df2zqrOu_j67BuRxtFID-V6_JryXDGIk2bU86bl7rELhad3wnq8B-B42Iyh0GUCfgHmf2_ayGxW9p2Xgu9DGVY02VShdU1FCZS_GG_hfFVERNoJhxiStYw22dRLj-UzHs3eNOwhyuXTHJ174SLnBC1Q37n30mJ34PpeP2W1kmWpg44A1QFx5O2AGk9xn4vqoqAQ8BsEDlUsT-31G9_9Fgqx8BPBlotpn6x-zat9TTaVgSyUwiLj7WxL1rKeC-vVmy_CWLW1DMvKPhMNLTMx-ND6LL-5PoPQd22puaZgoNT4cHMLpOdtjWHiirhA8xxEEEgmfAkyRbn9LUbQh9vyVv5b3a53-yjiTABCfdMTUSAGkbVqhkHfFe7Da3Ted9SMoX79f3fdYbuQMTiLUJSq1HPSy7mGb7HJR1mbQCXpRb6l5BT7KYMFsOi5EBfhLl7RczIjYy3z2ztNuGEbG5ZisrvEfmNOMfTcjqLppT5iyDGuMIXkTS7zOq9iyyTrvuA99upu8jsUbEvHRIKCcGEznnn2ETtnH_M-Z4Vx1i7Kgru5Hpj2rXmdWBlAm8zmJ3Z0aKsgkG61xUufM81DU0vQ8ui1y0BBnrWsWJHeokbVHqexZe50tdNUk4cZuqDnkgzk27byrAVL8cw5N_xKbeATvNricYqaVZLai3kQSLHKrAMEgFZyRDVB-h6xAF9J1gpHCMRgQFYQ7cis5K53aUmAkb56ELmmGIJOIeuwG1-YLJzv7YzcbIDiSbRWhyhzR2YLK1e0aAzLtrs2AVo5reOuPaigPNPDQ-82ATxWQtJjOnbgRL04B3HKK0HfInf4OM5q4mevCaPOca9w4TsbB7WR10I5MNJfsV8A0T8PjpWPiE1Rw6c8UkBBMLUtkFcs9-Z1slAcHX2a5b_MLVnUA6nkK1mT5gNMe-ex2Ttz5re-BmHLHt5NAM7L6lD8X0WfTJHNx0ZglFd7a60Q-oXVk03nRhVDXAxti6TutB-wYchNyvzSYGbFtHVRvghd-kQA9o3tydKYgcTdR3n5bS6ttomfzAq9YX9zbe8P_qM61SxbMkzwCqCmSx5PvvilvyDRpXfC4lLthlxti_dnb7ZNQaNYxRLVL3KX8xbcVvR07GiseZzpZm43kUyvu4bXsdLwrwEhytb_5QNCMou7-MqwsuuTJ3_667OmUhfS8E3Ex0kyXVvPiT7eIiatAmvNtTL4us7M8RE-y5QUmvoyZHD47VzMD5gaflANnvSUPj8-R7cPMzIDhSu5HBux3mjTtw3AwSavU5jgSqSZdAefVkjkRR6-8R2i830bpqs366xlFP7SWJgdZjWIoU2PkzRFNsl-DqH-sel4dh9F6LXOHTYwzbeQ8svIV6KArZ3CcrzT9m4CY1ESUJtBi50sty-Sexs4B9W8TRu8mXDlgEMSRSL4t06mwHjVyD5zFgeVXxVvG_k6MgGjzOquzS9vpEkz5snAWYkOtQfZwawA6EppFlJxbyRZGZCWf0h2oJ6-QAt26cF_p5kJIBWdacFcnAg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC01LjYtdGVycmEtMjAyNjA3MDl8b3BlbmFpIn0",
+     "format": "openai-responses-v1",
+     "id": "rs_072a7a58b9acca45016b08ec4186dc87d1aaf981c5ac878c23",
+     "index": 1
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_2bbb104dbaeb4fea8a8fd5c16fe989ac",
+   "content": "curl: (7) Failed to connect to 127.0.0.1 port 43961 after 0 ms: Couldn't connect to server\ncurl: (7) Failed to connect to 127.0.0.1 port 43961 after 0 ms: Couldn't connect to server\ncurl: (7) Failed to connect to 127.0.0.1 port 43961 after 0 ms: Couldn't connect to server\ncurl: (7) Failed to connect to 127.0.0.1 port 43961 after 0 ms: Couldn't connect to server\ncurl: (7) Failed to connect to 127.0.0.1 port 43961 after 0 ms: Couldn't connect to server\n[exit code 1]"
+  },
+  {
+   "role": "assistant",
+   "content": "Unable to retrieve it: connection to `127.0.0.1:43961` was refused.\n\nANSWER: Connection refused on port 43961.",
+   "refusal": null,
+   "reasoning": null
+  }
+ ]
+}

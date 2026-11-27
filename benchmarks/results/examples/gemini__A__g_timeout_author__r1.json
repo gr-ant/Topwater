@@ -1,0 +1,142 @@
+{
+ "key": "gemini|A|g_timeout_author|r1",
+ "prompt": "In the git repository ~/repo, who changed the default TIMEOUT to 30, and what was the commit message?",
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "bash",
+    "description": "Run a command in a sandboxed Linux shell (bash). The working directory, environment variables and files persist between calls. Standard command-line tools are available (ls, cat, grep, sed, awk, jq, find, sort, diff, git, ...); git works on local repositories. Python, network access and package installation are not. Read Word, Excel, PowerPoint and HTML files with `to-markdown FILE`. Other programs on this machine are live interfaces to this application's systems, so their actions are real: run `help` to list them and `<program> --help` for usage. This machine has the `shop` program, the store's order, customer, inventory, shipment, refund and report API: run `shop --help` to list its subcommands and `shop SUBCOMMAND --help` for each one's options.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "command": {
+       "type": "string",
+       "description": "The bash command to run."
+      }
+     },
+     "required": [
+      "command"
+     ]
+    }
+   }
+  }
+ ],
+ "messages": [
+  {
+   "role": "system",
+   "content": "You are an autonomous agent working on a computer through the tools you are given. Use the tools to inspect and act; do not ask the user questions. When you are finished, reply with a short final answer and end it with a line of the form `ANSWER: <answer>`."
+  },
+  {
+   "role": "user",
+   "content": "In the git repository ~/repo, who changed the default TIMEOUT to 30, and what was the commit message?"
+  },
+  {
+   "role": "assistant",
+   "content": null,
+   "refusal": null,
+   "reasoning": null,
+   "tool_calls": [
+    {
+     "type": "function",
+     "index": 0,
+     "id": "call_15073358429980332111",
+     "function": {
+      "name": "bash",
+      "arguments": "{\"command\":\"cd ~/repo && git log -S \\\"TIMEOUT\\\" -p --all\"}"
+     }
+    }
+   ],
+   "reasoning_details": [
+    {
+     "type": "reasoning.encrypted",
+     "data": "AY89a1+7ln6+9bxk1eRuoDZxm1HYx4xkgX9cd9ypVYQ6NTh/j03ymRzkAeXiXf9z1HCDy/PLLCM6OF1spwi6ELGk6O1BZCepEQfD8iICknt7/E46JYh3lzRH/Q/+6miy6/LTOiWdQ0gCZVXOkQVvPpcnXwCYWrehlVT7sxrZnYeqH1aZ71mOJac9Xhek7J9IM1rekcaZhi3Y9WKPLIxDN4VK1Z1/knkbP6UvDxv7qdCQKiju+TE5WCDnxq6dU8B7QUdarz77e2JvLJweegk1aIU=.eyJlbmRwb2ludF9zbHVnIjoiZ29vZ2xlL2dlbWluaS00LWFyZ29uLTIwMjYxMDEzfGdvb2dsZS12ZXJ0ZXgvZ2xvYmFsIn0",
+     "format": "google-gemini-v1",
+     "id": "call_15073358429980332111",
+     "index": 0
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_15073358429980332111",
+   "content": "error: unknown switch `S'\nusage: git log [<options>] [<revision-range>] [[--] <path>...]\n\nShow the commit history.\n\n    -n, --max-count <n>          show at most <n> commits (also -<n>)\n    --skip <n>                   skip the first <n> commits\n    --oneline                    one line per commit: abbreviated id and subject\n    --format, --pretty <format>  how to print each commit: oneline, short, medium, full, fuller, raw, or a format string with %H %h %s %an %ae %ad %d and similar placeholders (format: puts no newline after the last)\n    --decorate                   show the branches and tags that point at each commit\n    --date <style>               how to print dates: default, short, iso, iso-strict, rfc, raw, unix or relative\n    --abbrev-commit              abbreviate commit ids\n    -p, --patch                  show each commit's changes as a patch\n    -u                           same as -p\n    --stat                       show a diffstat: changed lines per file as a +/- graph, then a summary line\n    --shortstat                  show only the diffstat's summary line\n    --name-only                  list only the names of changed files\n    --name-status                list changed files with a status letter (A, M, D, R, T)\n    --numstat                    list added and removed line counts per file, tab-separated\n    --summary                    list created, deleted and renamed files and mode changes\n    -U, --unified <n>            show <n> lines of context around each change instead of 3\n    --graph                      draw the history as a graph to the left (linear histories only)\n    --all                        start from every branch and tag as well as HEAD\n    --reverse                    oldest commit first\n    --author <pattern>           only commits whose author matches the regular expression\n    --grep <pattern>             only commits whose message matches the regular expression\n    --first-parent               follow only the first parent of merge commits\n    --no-merges                  leave out merge commits\n    --merges                     show only merge commits\n    --follow                     accepted and ignored (renames are not followed)\n    --since, --after <date>      only commits made at or after <date>\n    --until, --before <date>     only commits made at or before <date>\n    -s, --no-patch               show no changes\n    --color <when>               accepted and ignored, with or without =<when> (output is never colored)\n[exit code 129]"
+  },
+  {
+   "role": "assistant",
+   "content": null,
+   "refusal": null,
+   "reasoning": null,
+   "tool_calls": [
+    {
+     "type": "function",
+     "index": 0,
+     "id": "call_17386089157197574756",
+     "function": {
+      "name": "bash",
+      "arguments": "{\"command\":\"cd ~/repo && git log -p --all | grep -C 15 \\\"TIMEOUT\\\"\"}"
+     }
+    }
+   ],
+   "reasoning_details": [
+    {
+     "type": "reasoning.encrypted",
+     "data": "AY89a1+zcl7BY8cmh9+aGsFoyr7jfKJXi4pmWLjzOPtXUJ2CSn6hShzI+Qc0EVhFodakALnzjmOUsdxtjWMIOz/+QFUEyTnSrvkApikYjMfZp5Nbwcd2cxvy8G6wxJcRNX+zW9m51zlXiIDgvEwAGPJBWMPbOHAQMPrGq8z7d/YMZw0jr5CBimO3Q5J3nt1S0Qdd5LWyD3TXrElqHvsg7isPJDUglNzcXY2hacf0zOHp0u4XahT2odDLf1eHzH8dr1JPsGWDJh8V.eyJlbmRwb2ludF9zbHVnIjoiZ29vZ2xlL2dlbWluaS00LWFyZ29uLTIwMjYxMDEzfGdvb2dsZS12ZXJ0ZXgvZ2xvYmFsIn0",
+     "format": "google-gemini-v1",
+     "id": "call_17386089157197574756",
+     "index": 0
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_17386089157197574756",
+   "content": "--- a/src/billing.py\n+++ b/src/billing.py\n@@ -9,3 +9,7 @@ def invoice_total(lines, discount=0.0):\n def on_paid(invoice):\n     # customers recieve a receipt\n     return f'paid {invoice}'\n+\n+\n+def retry(payment, attempts):\n+    return [payment] * attempts\ndiff --git a/src/config.py b/src/config.py\nindex cba48bb..face7f3 100644\n--- a/src/config.py\n+++ b/src/config.py\n@@ -1,2 +1,2 @@\n TIMEOUT = 30\n-RETRIES = 3\n+RETRIES = 5\n\ncommit 3644c3b018fc298d7aec900738e452e28d1b80e0\nAuthor: Mara Lindqvist <dev@ledger.example>\nDate:   Tue Jun 30 09:00:00 2026 +0000\n\n    Release 1.1\n\ndiff --git a/VERSION b/VERSION\nindex d3827e7..9459d4b 100644\n--- a/VERSION\n+++ b/VERSION\n@@ -1 +1 @@\n-1.0\n--\n+def on_paid(invoice):\n+    # customers recieve a receipt\n+    return f'paid {invoice}'\n\ncommit 17afc2628014f9d97fe2cd49e37b2a911d19f00b\nAuthor: Tomasz Wierzbicki <dev@ledger.example>\nDate:   Thu May 14 11:05:00 2026 +0000\n\n    Raise default timeout\n\ndiff --git a/src/config.py b/src/config.py\nindex 78ab13c..cba48bb 100644\n--- a/src/config.py\n+++ b/src/config.py\n@@ -1,2 +1,2 @@\n-TIMEOUT = 10\n+TIMEOUT = 30\n RETRIES = 3\n\ncommit 3495eac17bc0293ed7505d983292f6540db3ed41\nAuthor: Mara Lindqvist <dev@ledger.example>\nDate:   Mon Apr 20 16:45:00 2026 +0000\n\n    Release 1.0\n\ndiff --git a/VERSION b/VERSION\nnew file mode 100644\nindex 0000000..d3827e7\n--- /dev/null\n+++ b/VERSION\n@@ -0,0 +1 @@\n+1.0\n--\ndiff --git a/README.md b/README.md\nnew file mode 100644\nindex 0000000..fe6aced\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1,3 @@\n+# Ledger service\n+\n+Keeps the books for the shop. Clients recieve a statement every month.\ndiff --git a/src/app.py b/src/app.py\nnew file mode 100644\nindex 0000000..aedc5bd\n--- /dev/null\n+++ b/src/app.py\n@@ -0,0 +1,5 @@\n+from config import TIMEOUT\n+\n+\n+def main():\n+    print('ledger up, timeout', TIMEOUT)\ndiff --git a/src/config.py b/src/config.py\nnew file mode 100644\nindex 0000000..78ab13c\n--- /dev/null\n+++ b/src/config.py\n@@ -0,0 +1,2 @@\n+TIMEOUT = 10\n+RETRIES = 3\n"
+  },
+  {
+   "role": "assistant",
+   "content": null,
+   "refusal": null,
+   "reasoning": null,
+   "tool_calls": [
+    {
+     "type": "function",
+     "index": 0,
+     "id": "call_11510109304343821780",
+     "function": {
+      "name": "bash",
+      "arguments": "{\"command\":\"cd ~/repo && git show --format=fuller 17afc2628014f9d97fe2cd49e37b2a911d19f00b\"}"
+     }
+    }
+   ],
+   "reasoning_details": [
+    {
+     "type": "reasoning.encrypted",
+     "data": "AY89a1/6FGm1bDEcTt5ZdkDg8zsd4EiKPl8KINIAxpYxTyWjV/ULLSvohjdKvWj4ah0MwOtOnQJ3Kf7btdxszDRUsxdp/CvX0ul37qGGClYK8KmIqqjvdU0lNvbODgWjvcP1aj3XihG7ohmvVv/3c3vd0XyIhNnJwdJTLbUXNIPAum/XlvTtveS+86jbyuk5eFREiC92jo6M9haactT5200DhwFlD+aKwsvELyVvty0vSiL+34Ftq58N+acCcTf75N7TFBCQAaQ4qhZF4AA6RISjugz+uOA0dBocq6iCo5W35EX+Qenncvebn8nA23IpZBwhZ5DGSGHQgRottvqZ2C8Y6kREeDVyU9KlftjBFgSXuiTkBXzbih0ym/ayTbzu0upldhbZ9DlE5P7qDugmfy0dh4uAYlB1DS5+1uUQ3g==.eyJlbmRwb2ludF9zbHVnIjoiZ29vZ2xlL2dlbWluaS00LWFyZ29uLTIwMjYxMDEzfGdvb2dsZS12ZXJ0ZXgvZ2xvYmFsIn0",
+     "format": "google-gemini-v1",
+     "id": "call_11510109304343821780",
+     "index": 0
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_11510109304343821780",
+   "content": "commit 17afc2628014f9d97fe2cd49e37b2a911d19f00b\nAuthor:     Tomasz Wierzbicki <dev@ledger.example>\nAuthorDate: Thu May 14 11:05:00 2026 +0000\nCommit:     Tomasz Wierzbicki <dev@ledger.example>\nCommitDate: Thu May 14 11:05:00 2026 +0000\n\n    Raise default timeout\n\ndiff --git a/src/config.py b/src/config.py\nindex 78ab13c..cba48bb 100644\n--- a/src/config.py\n+++ b/src/config.py\n@@ -1,2 +1,2 @@\n-TIMEOUT = 10\n+TIMEOUT = 30\n RETRIES = 3\n"
+  },
+  {
+   "role": "assistant",
+   "content": "The default `TIMEOUT` in `src/config.py` was changed from `10` to `30` by **Tomasz Wierzbicki** (`<dev@ledger.example>`) in commit `17afc2628014f9d97fe2cd49e37b2a911d19f00b`, with the commit message **\"Raise default timeout\"**.\n\nANSWER: Tomasz Wierzbicki, Raise default timeout",
+   "refusal": null,
+   "reasoning": null,
+   "reasoning_details": [
+    {
+     "type": "reasoning.encrypted",
+     "data": "AY89a18peMxdHwoOcD3+hFlR1ZX0ewbN038z+QodHlxjHhGX3Snsc8CzVaPEzivPHVSJneeIdDyiEDERgvqPzHU2FIS0tgjAtAq9QYMCsx2aH0bSvmh8FRvGflQFIulQTjn7LoyCn4ZlChTfVZb9i+hpPm7kTbbmjjwafHe1heX9q340GfOEHf+knZHaJrnmVWNdlyPdPsc26Blcb6P/clPrNPE2v+dqscQFDBIUjZ+9zxH96hyKBv1SFkMgMvHR1TxoM5Xjr8J+UI+MhPHGyVJeIvSDGfElSgwa0Efdtvk98MWlrnJqsGEb7EbkMP+iTFexv0lmj3ie7Rn7upDkScwaSYjmcpAK7qs7Jco8dNAYe7WYrPGaKFqrL0wCuPMfPwD+JaSfcg==.eyJlbmRwb2ludF9zbHVnIjoiZ29vZ2xlL2dlbWluaS00LWFyZ29uLTIwMjYxMDEzfGdvb2dsZS12ZXJ0ZXgvZ2xvYmFsIn0",
+     "format": "google-gemini-v1",
+     "index": 0
+    }
+   ]
+  }
+ ]
+}

@@ -311,6 +311,17 @@ memory use in .NET.
   process or worker thread if you need a hard stop. See [the
   differences](docs/limits.md#differences-in-python-and-typescript).
 
+## Benchmark
+
+We ran 26 small tasks once each with Claude Sonnet 5.5, GPT-5.6 Terra and Gemini 4 Argon: shop API queries and
+writes, file and log work, Office documents and git. One `bash` tool on Topwater solved 77 of 77 episodes and real
+bash in a Docker container 76 of 76; the tasks were too easy to tell the two apart. Function tools with no code
+execution (the same functions, plus file, document and git tools) solved 62 of 76. They matched bash on the API,
+document and git tasks and lost where the answer had to be computed over a file or needed a shell command, and they
+used 2.4 times the tokens at the median. In 47 safety episodes nothing on the host was read, written or reached.
+This is one partial run on tasks we wrote ourselves: [benchmarks/RESULTS.md](benchmarks/RESULTS.md) has the method,
+the intervals and the limits.
+
 ## Status
 
 Topwater is in preview. APIs may change before 1.0. [CHANGELOG.md](CHANGELOG.md) lists what changed.

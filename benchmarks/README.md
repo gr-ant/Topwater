@@ -112,6 +112,9 @@ Each repeat takes the tasks in its own seeded random order, all 9 model × arm c
 repeat covers a random subset of tasks with the arms balanced. The primary results are repeat 1. Repeat 2's episodes
 join the paired analysis only as complete (model, task, repeat) pairs, and the tables say how many there are.
 
+**What was actually run** differs from this plan. The OpenRouter key's own $10 lifetime limit stopped the main run
+after 26 of 36 capability tasks in repeat 1. See [RESULTS.md](RESULTS.md#what-was-actually-run).
+
 ## Metrics
 
 Per episode (`results/<run>/episodes.jsonl`): success and the checker's reason, the final answer, prompt, completion,
