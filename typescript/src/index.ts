@@ -9,3 +9,5 @@ export { toMarkdown, addDocument } from './commands/documents.js';
 export { ShellSnapshot, SnapshotError, SnapshotVersionError, SNAPSHOT_FORMAT_VERSION } from './snapshot.js';
 export { Recording, RecordingError, startRecording, RECORDING_FORMAT_VERSION, type RecordedCall, type RecordedOptions, type RecordingOptions, type ReplayDifference } from './recording.js';
 export { LocalFolderSource, MemorySource, MountConflictError, MountSourceError, type MountCallOptions, type MountSource, type MountEntry, type MountChange, type MountApplyResult, type MountInfo, type MountExchange, type MountMode, type MountCapability } from './mounts.js';
+export { PythonUnavailable } from './wasi.js';
+export type { PythonOptions } from './commands/python.js';

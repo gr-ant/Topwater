@@ -9,14 +9,16 @@ import { COMMANDS } from '../src/spec.generated.js';
 type Option = { short?: string; long?: string[]; arg?: string; ports?: string[] };
 type Spec = {
   name: string; summary: string; parser: string; ports?: string[]; help?: string[]; version?: string; standardOptions?: boolean;
-  shellBuiltin?: boolean; reportsAs?: string; usageExitCode?: number; tryHelp?: string[]; options?: Option[];
+  shellBuiltin?: boolean; enabledBy?: string; reportsAs?: string; usageExitCode?: number; tryHelp?: string[]; options?: Option[];
   subcommands?: Record<string, { summary: string; unsupported?: boolean; options?: Option[]; ports?: string[] }>;
 };
 const dir = new URL('../../spec/', import.meta.url).pathname;
 const defaults = JSON.parse(readFileSync(dir + 'shell.json', 'utf8')).defaults as { version: string; help: string[]; tryHelp: string[] };
-const specs = new Map<string, Spec>(readdirSync(dir + 'commands').filter(f => f.endsWith('.json')).sort()
+const all = new Map<string, Spec>(readdirSync(dir + 'commands').filter(f => f.endsWith('.json')).sort()
   .map(f => JSON.parse(readFileSync(dir + 'commands/' + f, 'utf8')) as Spec)
   .filter(c => (c.ports ?? ['ts']).includes('ts')).map(c => [c.name, c]));
+const specs = new Map([...all].filter(([, c]) => c.enabledBy === undefined)); // what every shell has
+const optIn = [...all.keys()].filter(n => all.get(n)!.enabledBy !== undefined).sort(); // what the host turns on (python3: allowPython)
 
 const lines = (ls: string[], name: string, summary = '') => ls.map(l => l.replaceAll('{name}', name).replaceAll('{summary}', summary) + '\n').join('');
 const q = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
@@ -33,6 +35,18 @@ it('the built-ins are exactly the spec commands', () => {
   expect([...specs.keys()].filter(n => !registered.has(n))).toEqual([]);  // in the spec, not registered
   expect([...registered].filter(n => !specs.has(n))).toEqual([]);        // registered, not in the spec (add it, or mark the port missing)
 });
+
+it('opt-in commands exist only once enabled', async () => {
+  expect(optIn.filter(n => new Shell().commands.has(n))).toEqual([]);
+  expect(optIn).toEqual(['python3']); // a new one needs its enabling call here
+  const sh = await new Shell().allowPython({ artifacts: new URL('../../assets/python-wasm/', import.meta.url) });
+  const c = all.get('python3')!;
+  expect(sh.commands.get('python3')!.description).toBe(c.summary);
+  expect((await sh.run('python3 --help')).stdout).toBe(lines(c.help!, 'python3'));
+  expect((await sh.run('python3 -h')).stdout).toBe(lines(c.help!, 'python3'));
+  expect((await sh.run('python3 --version')).stdout).toBe((await sh.run('python3 -V')).stdout);
+  expect((await sh.run('python3 --version')).stdout).toBe(c.version + '\n');
+}, 60_000);
 
 describe('help and version come from the spec', () => {
   for (const [name, c] of specs) it(name, async () => {
