@@ -435,6 +435,8 @@ def _grep(ctx):
     code = 1
     show_name = not a.has("h") and (a.has("H") or len(files) > 1 or walked)
     for name, text in inputs(ctx, files, errors, quiet=a.has("s")):
+        if name == "(standard input)" and a.value("\x07") is not None:
+            name = a.value("\x07")  # --label
         binary = "\0" in text and not a.has("a")  # GNU grep's test: a NUL byte
         if binary and a.has("I"):
             continue

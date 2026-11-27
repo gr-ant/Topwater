@@ -26,6 +26,13 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   --check` (trailing whitespace, a space before a tab in the indent, new blank lines at the end; exit 2), `git
   merge-base` (`-a`, `--octopus`, `--is-ancestor`) and `git fsck` (unreadable, missing and dangling objects, loose and
   packed).
+- **`git apply`, `git am`, `git format-patch` and `git bisect`.** `apply` takes unified diffs from `git diff` or
+  `diff -u` (`--check`, `--stat`, `--numstat`, `--summary`, `--index`, `--cached`, `-R`, `-p`); each hunk must match
+  exactly, at an offset if need be, and nothing is applied when one fails. `am` applies `format-patch` mailboxes as
+  commits with their authors (`--continue`, `--skip`, `--abort`, `--show-current-patch`). `bisect` has `start`,
+  `good`/`bad` (and `old`/`new`), `skip`, `reset`, `log` and `run`, where exit 125 skips a commit.
+- **`comm` and `join`, `grep --label`, `chmod --reference`.** New programs `comm` (`-1 -2 -3`, `--check-order`,
+  `--output-delimiter`, `--total`) and `join` (`-t -1 -2 -j -a -v -o -e -i`, `--header`).
 - **`tar --exclude`, `--owner`, `--group`, `--numeric-owner` and `--transform`.** `--exclude` takes a wildcard matched
   against the name or any run of its components; `--transform`/`--xform` renames members with `s/regex/replacement/`
   (flags `g`, `i`, `x`, a number). Repeated options now keep every value in all three ports.

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Topwater;
 
@@ -1040,6 +1041,9 @@ internal static partial class Builtins
             return code;
         });
 
+        shell.Register("comm", CommCmd);
+        shell.Register("join", JoinCmd);
+
         shell.Register("column", ctx =>
         {
             var a = Args.Parse(ctx.Args, CommandSpec.Of("column"));
@@ -1193,6 +1197,212 @@ internal static partial class Builtins
         if (s.Length == 0 || s[0] is not ('{' or '[')) return false;
         try { JsonDocument.Parse(t); return true; } catch (JsonException) { return false; }
     }
+    /// <summary>comm and join: the lines of exactly two files (- is stdin), or null after reporting an unreadable one.</summary>
+    static List<List<string>>? TwoInputs(CommandContext ctx, List<string> files, char sep = '\n')
+    {
+        if (files.Count < 2)
+            throw new UsageException(files.Count > 0 ? CommandSpec.Message(ctx.Name, "missingOperandAfter", ("operand", files[0])) : CommandSpec.Message(ctx.Name, "missingOperand"));
+        if (files.Count > 2) throw new UsageException(CommandSpec.Message(ctx.Name, "extraOperand", ("operand", files[2])));
+        var output = new List<List<string>>();
+        foreach (var f in files)
+        {
+            var got = Inputs(ctx, [f], () => { }).ToList();
+            if (got.Count == 0) return null;
+            var lines = got[0].Text.Split(sep).ToList();
+            if (lines.Count > 0 && lines[^1] == "") lines.RemoveAt(lines.Count - 1);
+            output.Add(lines);
+        }
+        return output;
+    }
+
+    static int CommCmd(CommandContext ctx)
+    {
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("comm"));
+        char sep = a.Has('z') ? '\0' : '\n';
+        if (TwoInputs(ctx, a.Positional, sep) is not [var left, var right]) return 1;
+        var delim = a.Value('\u0003') ?? "\t";
+        bool[] show = [!a.Has('1'), !a.Has('2'), !a.Has('3')];
+        string[] indent = ["", show[0] ? delim : "", string.Concat(Enumerable.Repeat(delim, (show[0] ? 1 : 0) + (show[1] ? 1 : 0)))];
+        bool check = !a.Has('\u0002'), strict = a.Has('\u0001');
+        var output = new List<string>();
+        int[] counts = [0, 0, 0];
+        string?[] last = [null, null];
+        bool[] unsorted = [false, false];
+        void Flush()
+        {
+            ctx.Stdout.Write(string.Concat(output.Select(x => x + sep)));
+            output.Clear();
+        }
+        // notes line as file k's latest; true the first time file k is found out of order
+        bool Disorder(int k, string line)
+        {
+            bool bad = check && last[k] != null && GitCore.Ordinal.Compare(line, last[k]) < 0 && !unsorted[k];
+            unsorted[k] |= bad;
+            last[k] = line;
+            return bad;
+        }
+        static bool Less(string x, string y) => GitCore.Ordinal.Compare(x, y) < 0;
+        int i = 0, j = 0;
+        while (i < left.Count || j < right.Count)
+        {
+            ctx.CancellationToken.ThrowIfCancellationRequested();
+            int col;
+            string line;
+            var bad = new List<int>();
+            if (j >= right.Count || (i < left.Count && Less(left[i], right[j])))
+            {
+                (col, line) = (0, left[i]);
+                if (Disorder(0, left[i])) bad.Add(0);
+                i++;
+            }
+            else if (i >= left.Count || Less(right[j], left[i]))
+            {
+                (col, line) = (1, right[j]);
+                if (Disorder(1, right[j])) bad.Add(1);
+                j++;
+            }
+            else
+            {
+                (col, line) = (2, left[i]);
+                if (Disorder(0, left[i])) bad.Add(0);
+                if (Disorder(1, right[j])) bad.Add(1);
+                i++;
+                j++;
+            }
+            if (bad.Count > 0 && strict)  // --check-order stops before the line out of order
+            {
+                Flush();
+                ctx.Stderr.WriteLine("comm: " + CommandSpec.Message("comm", "notSorted", ("n", (bad[0] + 1).ToString())));
+                return 1;
+            }
+            counts[col]++;
+            if (show[col]) output.Add(indent[col] + line);
+            foreach (var k in bad)  // otherwise the line goes out first, then the warning
+            {
+                Flush();
+                ctx.Stderr.WriteLine("comm: " + CommandSpec.Message("comm", "notSorted", ("n", (k + 1).ToString())));
+            }
+        }
+        if (a.Has('\u0004')) output.Add(string.Join(delim, counts) + delim + CommandSpec.Message("comm", "total"));
+        Flush();
+        if (unsorted.Any(u => u))
+        {
+            ctx.Stderr.WriteLine("comm: " + CommandSpec.Message("comm", "inputNotSorted"));
+            return 1;
+        }
+        return 0;
+    }
+
+    static int JoinCmd(CommandContext ctx)
+    {
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("join"));
+        var tab = a.Value('t') is { Length: > 0 } t0 ? t0 : null; // -t "" splits on blanks, as GNU join does
+        if (tab is { Length: > 1 }) throw new ShellException(CommandSpec.Message("join", "multiCharTab", ("value", tab)));
+        static int FieldNo(string v) =>
+            v.Length > 0 && v.All(char.IsAsciiDigit) && int.TryParse(v, out var n) && n >= 1 ? n - 1
+            : v.Length > 0 && v.All(char.IsAsciiDigit) && v.TrimStart('0').Length > 0 ? int.MaxValue  // past int: no line has that field
+            : throw new ShellException(CommandSpec.Message("join", "badField", ("value", v)));
+        int k1 = 0, k2 = 0;
+        if (a.Value('j') is { } jv) k1 = k2 = FieldNo(jv);
+        if (a.Value('1') is { } v1) k1 = FieldNo(v1);
+        if (a.Value('2') is { } v2) k2 = FieldNo(v2);
+        var unpaired = new HashSet<int>();
+        foreach (var v in a.All('a').Concat(a.All('v')))
+        {
+            if (v is not ("1" or "2")) throw new ShellException(CommandSpec.Message("join", "badFileNumberArg", ("value", v)));
+            unpaired.Add(v[0] - '0');
+        }
+        bool only = a.All('v').Count > 0;
+        List<(int Side, int N)>? fmt = null;
+        if (a.Value('o') is { } ov && ov != "auto")
+        {
+            fmt = [];
+            foreach (var spec in Regex.Split(ov.Trim(), "[ ,]+"))
+            {
+                var m = Regex.Match(spec, @"\A([0-9]+)\.([0-9]+)\z");
+                if (spec == "0") fmt.Add((0, 0));
+                else if (!m.Success || m.Groups[1].Value is not ("1" or "2")) throw new ShellException(CommandSpec.Message("join", "badFileNumber", ("spec", spec)));
+                else fmt.Add((m.Groups[1].Value[0] - '0', FieldNo(m.Groups[2].Value)));
+            }
+        }
+        if (TwoInputs(ctx, a.Positional) is not [var lefts, var rights]) return 1;
+        List<string> Fields(string line)
+        {
+            if (tab != null) return line.Split(tab[0]).ToList();
+            line = line.Trim(' ', '\t');  // GNU join's blanks: spaces and tabs only
+            return line.Length > 0 ? Regex.Split(line, "[ \t]+").ToList() : [];
+        }
+        var left = lefts.Select(Fields).ToList();
+        var right = rights.Select(Fields).ToList();
+        int[] keys = [k1, k2];
+        bool fold = a.Has('i');
+        string Key(List<string> f, int side)
+        {
+            var k = keys[side] < f.Count ? f[keys[side]] : "";
+            return fold ? k.ToLowerInvariant() : k;
+        }
+        if (a.Value('o') == "auto")
+            fmt = [(0, 0), .. Enumerable.Range(0, left.Count > 0 ? left[0].Count : 0).Where(n => n != k1).Select(n => (1, n)),
+                .. Enumerable.Range(0, right.Count > 0 ? right[0].Count : 0).Where(n => n != k2).Select(n => (2, n))];
+        var outSep = tab ?? " ";
+        var empty = a.Value('e') ?? "";
+        var lines = new List<string>();
+        void Emit(List<string>? f1, List<string>? f2)
+        {
+            var row = new List<string>();
+            var (src, k) = f1 != null ? (f1, k1) : (f2!, k2);
+            if (fmt != null)
+                foreach (var (side, n) in fmt)
+                {
+                    var f = side == 1 ? f1 : f2;
+                    if (side == 0) row.Add(k < src.Count ? src[k] : empty);
+                    else row.Add(f != null && n < f.Count ? f[n] : empty);
+                }
+            else
+            {
+                row.Add(k < src.Count ? src[k] : "");
+                row.AddRange((f1 ?? []).Where((_, n) => n != k1));
+                row.AddRange((f2 ?? []).Where((_, n) => n != k2));
+            }
+            lines.Add(string.Join(outSep, row));
+        }
+        int i = 0, j = 0;
+        if (a.Has('\u0001') && (left.Count > 0 || right.Count > 0))
+        {
+            Emit(left.Count > 0 ? left[0] : null, right.Count > 0 ? right[0] : null);
+            i = j = 1;
+        }
+        while (i < left.Count || j < right.Count)
+        {
+            ctx.CancellationToken.ThrowIfCancellationRequested();
+            var aKey = i < left.Count ? Key(left[i], 0) : null;
+            var bKey = j < right.Count ? Key(right[j], 1) : null;
+            if (bKey == null || (aKey != null && GitCore.Ordinal.Compare(aKey, bKey) < 0))
+            {
+                if (unpaired.Contains(1)) Emit(left[i], null);
+                i++;
+            }
+            else if (aKey == null || GitCore.Ordinal.Compare(bKey, aKey) < 0)
+            {
+                if (unpaired.Contains(2)) Emit(null, right[j]);
+                j++;
+            }
+            else
+            {
+                int i2 = i, j2 = j;
+                while (i2 < left.Count && Key(left[i2], 0) == aKey) i2++;
+                while (j2 < right.Count && Key(right[j2], 1) == aKey) j2++;
+                if (!only)
+                    for (int x = i; x < i2; x++)
+                        for (int y = j; y < j2; y++) Emit(left[x], right[y]);
+                if (lines.Count > 1_000_000) throw new ShellException("output too large");
+                (i, j) = (i2, j2);
+            }
+        }
+        ctx.Stdout.Write(string.Concat(lines.Select(x => x + "\n")));
+        return 0;
+    }
+
 }
 
 internal static class Diff
@@ -1373,19 +1583,37 @@ internal static class Chmod
     public static Task<int> Run(CommandContext ctx)
     {
         bool recursive = false, verbose = false, changes = false, quiet = false;
-        string? spec = null;
+        string? spec = null, reference = null;
         var files = new List<string>();
-        foreach (var arg in ctx.Args)
+        var args = new Queue<string>(ctx.Args);
+        while (args.TryDequeue(out var arg))
         {
-            if (arg is "-R" or "--recursive") recursive = true;
+            if (arg == "--reference" || arg.StartsWith("--reference=", StringComparison.Ordinal))
+            {
+                if (arg == "--reference" && args.Count == 0) throw new UsageException(CommandSpec.Message("chmod", "referenceNeedsArgument"));
+                reference = arg.Contains('=') ? arg[12..] : args.Dequeue();
+            }
+            else if (arg is "-R" or "--recursive") recursive = true;
             else if (arg is "-v" or "--verbose") verbose = true;
             else if (arg is "-c" or "--changes") changes = true;
             else if (arg is "-f" or "--silent" or "--quiet") quiet = true;
             else if (arg.StartsWith("--") && arg.Length > 2) throw new UsageException(CommandSpec.Message("chmod", "unrecognizedOption", ("option", arg)));
             else if (arg.Length > 1 && arg[0] == '-' && arg.FirstOrDefault(c => !"-rwxXstugoa+=,01234567".Contains(c)) is var bad and not '\0')
                 throw new UsageException(CommandSpec.Message("chmod", "invalidOption", ("option", bad.ToString())));
-            else if (spec == null) spec = arg; // may look like an option, e.g. -x or -w
+            else if (spec == null && reference == null) spec = arg; // may look like an option, e.g. -x or -w
             else files.Add(arg);
+        }
+        if (reference != null)
+        {
+            // --reference: the mode bits of that file instead of a mode
+            var rpath = ctx.ResolvePath(reference);
+            if (!ctx.Fs.Exists(rpath))
+            {
+                ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotStatReference", ("file", reference), ("reason", ctx.Fs.WhyMissing(rpath))));
+                return Task.FromResult(1);
+            }
+            spec = Convert.ToString(ctx.Fs.Stat(rpath).Mode & 0xFFF, 8);
+            if (files.Count == 0) throw new UsageException(CommandSpec.Message("chmod", "missingOperand"));
         }
         if (spec == null || files.Count == 0) throw new UsageException(spec == null ? CommandSpec.Message("chmod", "missingOperand") : CommandSpec.Message("chmod", "missingOperandAfter", ("operand", spec)));
         int code = 0;

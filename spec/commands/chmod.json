@@ -2,13 +2,15 @@
   "$schema": "../command.schema.json",
   "name": "chmod",
   "category": "utility",
-  "summary": "Set the permission bits of files",
+  "summary": "Set the permission bits of files (a mode, or --reference=FILE to copy another file's)",
   "parser": "custom",
   "messages": {
     "unrecognizedOption": "unrecognized option '{option}'",
     "missingOperandAfter": "missing operand after {operand:locale}",
     "cannotChangePermissions": "changing permissions of '{file}': Operation not permitted",
     "cannotAccess": "cannot access '{file}': {reason}",
-    "invalidMode": "invalid mode: '{mode}'"
+    "invalidMode": "invalid mode: '{mode}'",
+    "cannotStatReference": "failed to get attributes of '{file}': {reason}",
+    "referenceNeedsArgument": "option '--reference' requires an argument"
   }
 }

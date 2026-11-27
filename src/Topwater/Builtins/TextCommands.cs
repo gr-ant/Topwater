@@ -386,8 +386,9 @@ internal static partial class Builtins
             if (positional.Count > 0 && files.Count == 0) return error ? 2 : 1;
 
             bool showName = !a.Has('h') && (a.Has('H') || files.Count > 1 || walked);
-            foreach (var (name, text) in Inputs(ctx, files, () => error = true, quiet: a.Has('s')))
+            foreach (var (input, text) in Inputs(ctx, files, () => error = true, quiet: a.Has('s')))
             {
+                var name = input == "(standard input)" && a.Value('\u0007') is { } label ? label : input; // --label
                 bool binary = text.Contains('\0') && !a.Has('a'); // GNU grep's test: a NUL byte
                 if (binary && a.Has('I')) continue;
                 var lines = SplitLines(text);

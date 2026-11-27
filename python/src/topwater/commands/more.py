@@ -1107,9 +1107,15 @@ def chmod_parse(spec: str, mode: int, is_dir: bool, umask: int = 0) -> int:
 
 def _chmod(ctx):
     recursive = verbose = changes = quiet = False
-    spec, files = None, []
-    for arg in ctx.args:
-        if arg in ("-R", "--recursive"):
+    spec, files, reference = None, [], None
+    args = list(ctx.args)
+    while args:
+        arg = args.pop(0)
+        if arg == "--reference" or arg.startswith("--reference="):
+            if arg == "--reference" and not args:
+                raise UsageException(spec_message("chmod", "referenceNeedsArgument"))
+            reference = arg[12:] if "=" in arg else args.pop(0)
+        elif arg in ("-R", "--recursive"):
             recursive = True
         elif arg in ("-v", "--verbose"):
             verbose = True
@@ -1121,10 +1127,19 @@ def _chmod(ctx):
             raise UsageException(spec_message("chmod", "unrecognizedOption", option=arg))
         elif len(arg) > 1 and arg[0] == "-" and (bad := next((c for c in arg if c not in "-rwxXstugoa+=,01234567"), None)):
             raise UsageException(spec_message("chmod", "invalidOption", option=bad))
-        elif spec is None:
+        elif spec is None and reference is None:
             spec = arg  # may look like an option, e.g. -x or -w
         else:
             files.append(arg)
+    if reference is not None:
+        # --reference: the mode bits of that file instead of a mode
+        rpath = ctx.resolve(reference)
+        if not ctx.fs.exists(rpath):
+            ctx.error("chmod: " + spec_message("chmod", "cannotStatReference", file=reference, reason=ctx.fs.why_missing(rpath)))
+            return 1
+        spec = f"{ctx.fs.stat(rpath).mode & 0o7777:o}"
+        if spec is not None and len(files) == 0:
+            raise UsageException(spec_message("chmod", "missingOperand"))
     if spec is None or not files:
         raise UsageException(spec_message("chmod", "missingOperand") if spec is None else spec_message("chmod", "missingOperandAfter", operand=spec))
     code = 0
@@ -1302,6 +1317,185 @@ def _tac(ctx):
     for _, text in inputs(ctx, ctx.args, errors):
         write_lines(ctx.stdout, reversed(split_lines(text)))
     return 1 if errors.hit else 0
+
+
+def _two_inputs(ctx, files: list[str], sep: str = "\n"):
+    """comm and join: the lines of exactly two files (- is stdin), or None after reporting an unreadable one."""
+    if len(files) < 2:
+        raise UsageException(spec_message(ctx.name, "missingOperandAfter", operand=files[0]) if files else spec_message(ctx.name, "missingOperand"))
+    if len(files) > 2:
+        raise UsageException(spec_message(ctx.name, "extraOperand", operand=files[2]))
+    errors = _Errors()
+    out = []
+    for f in files:
+        got = list(inputs(ctx, [f], errors))
+        if not got:
+            return None
+        lines = got[0][1].split(sep)
+        if lines and lines[-1] == "":
+            lines.pop()
+        out.append(lines)
+    return out
+
+
+def _comm_cmd(ctx):
+    a = Args.parse(ctx.args, COMMANDS["comm"])
+    sep = "\0" if a.has("z") else "\n"
+    both = _two_inputs(ctx, a.positional, sep)
+    if both is None:
+        return 1
+    left, right = both
+    delim = a.value("\x03") if a.value("\x03") is not None else "\t"
+    show = [not a.has("1"), not a.has("2"), not a.has("3")]
+    indent = ["", delim * show[0], delim * (show[0] + show[1])]
+    check, strict = not a.has("\x02"), a.has("\x01")
+    out, counts, last, unsorted = [], [0, 0, 0], [None, None], [False, False]
+
+    def flush():
+        ctx.stdout.write("".join(x + sep for x in out))
+        out.clear()
+
+    def disorder(k: int, line: str) -> bool:
+        """Notes line as file k's latest; True the first time file k is found out of order."""
+        bad = check and last[k] is not None and line < last[k] and not unsorted[k]
+        unsorted[k] |= bad
+        last[k] = line
+        return bad
+    i = j = 0
+    while i < len(left) or j < len(right):
+        ctx.check_time()
+        if j >= len(right) or (i < len(left) and left[i] < right[j]):
+            col, line, bad = 0, left[i], [k for k in (0,) if disorder(0, left[i])]
+            i += 1
+        elif i >= len(left) or right[j] < left[i]:
+            col, line, bad = 1, right[j], [k for k in (1,) if disorder(1, right[j])]
+            j += 1
+        else:
+            col, line = 2, left[i]
+            bad = [k for k, x in ((0, left[i]), (1, right[j])) if disorder(k, x)]
+            i, j = i + 1, j + 1
+        if bad and strict:  # --check-order stops before the line out of order
+            flush()
+            ctx.error("comm: " + spec_message("comm", "notSorted", n=str(bad[0] + 1)))
+            return 1
+        counts[col] += 1
+        if show[col]:
+            out.append(indent[col] + line)
+        for k in bad:  # otherwise the line goes out first, then the warning
+            flush()
+            ctx.error("comm: " + spec_message("comm", "notSorted", n=str(k + 1)))
+    if a.has("\x04"):
+        out.append(delim.join(str(c) for c in counts) + delim + spec_message("comm", "total"))
+    flush()
+    if any(unsorted):
+        ctx.error("comm: " + spec_message("comm", "inputNotSorted"))
+        return 1
+    return 0
+
+
+def _join_cmd(ctx):
+    a = Args.parse(ctx.args, COMMANDS["join"])
+    tab = a.value("t") or None  # -t "" splits on blanks, as GNU join does
+    if tab is not None and len(tab) > 1:
+        raise ShellError(spec_message("join", "multiCharTab", value=tab))
+
+    def field_no(v: str) -> int:
+        if not v.isascii() or not v.isdigit() or int(v) < 1:
+            raise ShellError(spec_message("join", "badField", value=v))
+        return int(v) - 1
+    k1 = k2 = 0
+    if a.value("j") is not None:
+        k1 = k2 = field_no(a.value("j"))
+    if a.value("1") is not None:
+        k1 = field_no(a.value("1"))
+    if a.value("2") is not None:
+        k2 = field_no(a.value("2"))
+    unpaired = set()
+    for v in a.all("a") + a.all("v"):
+        if v not in ("1", "2"):
+            raise ShellError(spec_message("join", "badFileNumberArg", value=v))
+        unpaired.add(int(v))
+    only = {int(v) for v in a.all("v")}
+    fmt = None
+    if a.value("o") is not None and a.value("o") != "auto":
+        fmt = []
+        for spec in re.split(r"[ ,]+", a.value("o").strip()):
+            m = re.fullmatch(r"([0-9]+)\.([0-9]+)", spec)
+            if spec == "0":
+                fmt.append((0, 0))
+            elif not m or m.group(1) not in ("1", "2"):
+                raise ShellError(spec_message("join", "badFileNumber", spec=spec))
+            else:
+                fmt.append((int(m.group(1)), field_no(m.group(2))))
+    both = _two_inputs(ctx, a.positional)
+    if both is None:
+        return 1
+
+    def fields(line: str) -> list[str]:
+        if tab is not None:
+            return line.split(tab)
+        line = line.strip(" \t")  # GNU join's blanks: spaces and tabs only
+        return re.split(r"[ \t]+", line) if line else []
+    left, right = [[fields(x) for x in side] for side in both]
+    keys = (k1, k2)
+    fold = a.has("i")
+
+    def key(f: list[str], side: int) -> str:
+        k = f[keys[side]] if keys[side] < len(f) else ""
+        return k.lower() if fold else k
+    if a.value("o") == "auto":
+        fmt = [(0, 0)] + [(1, i) for i in range(len(left[0]) if left else 0) if i != k1] + \
+              [(2, i) for i in range(len(right[0]) if right else 0) if i != k2]
+    out_sep = tab if tab is not None else " "
+    empty = a.value("e") if a.value("e") is not None else ""
+    lines = []
+
+    def emit(f1, f2) -> None:
+        if fmt is not None:
+            row = []
+            for side, n in fmt:
+                f = f1 if side == 1 else f2
+                if side == 0:
+                    src, k = (f1, k1) if f1 is not None else (f2, k2)
+                    row.append(src[k] if k < len(src) else empty)
+                else:
+                    row.append(f[n] if f is not None and n < len(f) else empty)
+        else:
+            src, k = (f1, k1) if f1 is not None else (f2, k2)
+            row = [src[k] if k < len(src) else ""]
+            row += [x for i, x in enumerate(f1 or []) if i != k1] + [x for i, x in enumerate(f2 or []) if i != k2]
+        lines.append(out_sep.join(row))
+    i = j = 0
+    if a.has("\x01") and (left or right):
+        emit(left[0] if left else None, right[0] if right else None)
+        i = j = 1
+    while i < len(left) or j < len(right):
+        ctx.check_time()
+        a_key = key(left[i], 0) if i < len(left) else None
+        b_key = key(right[j], 1) if j < len(right) else None
+        if b_key is None or (a_key is not None and a_key < b_key):
+            if 1 in unpaired:
+                emit(left[i], None)
+            i += 1
+        elif a_key is None or b_key < a_key:
+            if 2 in unpaired:
+                emit(None, right[j])
+            j += 1
+        else:
+            i2, j2 = i, j
+            while i2 < len(left) and key(left[i2], 0) == a_key:
+                i2 += 1
+            while j2 < len(right) and key(right[j2], 1) == a_key:
+                j2 += 1
+            if not only:
+                for x in left[i:i2]:
+                    for y in right[j:j2]:
+                        emit(x, y)
+            if len(lines) > 1_000_000:
+                raise ShellError("output too large")
+            i, j = i2, j2
+    ctx.stdout.write("".join(x + "\n" for x in lines))
+    return 0
 
 
 def _paste(ctx):
@@ -1706,6 +1900,8 @@ def register(shell) -> None:
     r("rev", _rev)
     r("tac", _tac)
     r("paste", _paste)
+    r("comm", _comm_cmd)
+    r("join", _join_cmd)
     r("column", _column)
     r("base64", _base64)
     for name, algo in (("md5sum", "md5"), ("sha1sum", "sha1"), ("sha256sum", "sha256"), ("sha512sum", "sha512")):

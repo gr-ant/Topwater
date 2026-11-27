@@ -1,0 +1,24 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "comm",
+  "category": "text",
+  "summary": "Compare two sorted files line by line: lines only in the first, only in the second, and in both",
+  "parser": "args",
+  "options": [
+    {"short": "1", "description": "leave out the lines only in the first file"},
+    {"short": "2", "description": "leave out the lines only in the second file"},
+    {"short": "3", "description": "leave out the lines in both files"},
+    {"long": ["check-order"], "key": "\u0001", "description": "stop with an error at the first line out of sorted order"},
+    {"long": ["nocheck-order"], "key": "\u0002", "description": "do not check that the input is sorted"},
+    {"long": ["output-delimiter"], "key": "\u0003", "arg": "STR", "description": "separate the columns with STR instead of a tab"},
+    {"long": ["total"], "key": "\u0004", "description": "end with a line counting each column"},
+    {"short": "z", "long": ["zero-terminated"], "description": "lines end in NUL, not newline"}
+  ],
+  "notes": "Lines compare byte by byte, as in the C.UTF-8 locale. Exit status 1 when the input was not sorted.",
+  "messages": {
+    "notSorted": "file {n} is not in sorted order",
+    "inputNotSorted": "input is not in sorted order",
+    "missingOperandAfter": "missing operand after {operand:locale}",
+    "total": "total"
+  }
+}

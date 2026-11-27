@@ -1,0 +1,29 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "join",
+  "category": "text",
+  "summary": "Join the lines of two sorted files that share a key field",
+  "parser": "args",
+  "options": [
+    {"short": "t", "arg": "CHAR", "description": "fields are separated by CHAR (default: runs of blanks, printed as one space)"},
+    {"short": "1", "arg": "FIELD", "description": "the key is field FIELD of the first file (default 1)"},
+    {"short": "2", "arg": "FIELD", "description": "the key is field FIELD of the second file (default 1)"},
+    {"short": "j", "arg": "FIELD", "description": "the key is field FIELD of both files"},
+    {"short": "a", "arg": "FILENUM", "description": "also print the lines of file FILENUM (1 or 2) that have no match; may be repeated"},
+    {"short": "v", "arg": "FILENUM", "description": "print only the lines of file FILENUM that have no match"},
+    {"short": "o", "arg": "FORMAT", "description": "print the fields in FORMAT: a comma- or space-separated list of FILENUM.FIELD or 0 (the key), or auto (as many fields as each file's first line)"},
+    {"short": "e", "arg": "STRING", "description": "with -o, print STRING for a missing field"},
+    {"short": "i", "long": ["ignore-case"], "description": "compare keys without regard to case"},
+    {"long": ["header"], "key": "\u0001", "description": "treat the first line of each file as a header and print it joined, unchecked"},
+    {"long": ["check-order"], "key": "\u0002", "description": "accepted and ignored (the input is taken as sorted)", "ignored": true},
+    {"long": ["nocheck-order"], "key": "\u0003", "description": "accepted and ignored (the input is taken as sorted)", "ignored": true}
+  ],
+  "notes": "Keys compare byte by byte, as in the C.UTF-8 locale; unsorted input gives incomplete output without a warning.",
+  "messages": {
+    "missingOperandAfter": "missing operand after {operand:locale}",
+    "badFileNumber": "invalid file number in field spec: {spec:locale}",
+    "badField": "invalid field number: {value:locale}",
+    "badFileNumberArg": "invalid file number: {value:locale}",
+    "multiCharTab": "multi-character tab {value:locale}"
+  }
+}

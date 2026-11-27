@@ -1011,18 +1011,33 @@ export function registerFiles(shell: Shell) {
 
   reg('chmod', ctx => {
     let recursive = false, verbose = false, changes = false, quiet = false;
-    let spec: string | undefined;
+    let spec: string | undefined, reference: string | undefined;
     const files: string[] = [];
-    for (const arg of ctx.args) {
-      if (arg === '-R' || arg === '--recursive') recursive = true;
+    const args = [...ctx.args];
+    while (args.length) {
+      const arg = args.shift()!;
+      if (arg === '--reference' || arg.startsWith('--reference=')) {
+        if (arg === '--reference' && !args.length) throw new UsageException(specMessage('chmod', 'referenceNeedsArgument', {}));
+        reference = arg.includes('=') ? arg.slice(12) : args.shift()!;
+      } else if (arg === '-R' || arg === '--recursive') recursive = true;
       else if (arg === '-v' || arg === '--verbose') verbose = true;
       else if (arg === '-c' || arg === '--changes') changes = true;
       else if (arg === '-f' || arg === '--silent' || arg === '--quiet') quiet = true;
       else if (arg.startsWith('--') && arg.length > 2) throw new UsageException(specMessage('chmod', 'unrecognizedOption', { option: arg }));
       else if (arg.length > 1 && arg[0] === '-' && [...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c)) !== undefined)
         throw new UsageException(specMessage('chmod', 'invalidOption', { option: [...arg].find(c => !'-rwxXstugoa+=,01234567'.includes(c))! }));
-      else if (spec === undefined) spec = arg; // may look like an option, e.g. -x or -w
+      else if (spec === undefined && reference === undefined) spec = arg; // may look like an option, e.g. -x or -w
       else files.push(arg);
+    }
+    if (reference !== undefined) {
+      // --reference: the mode bits of that file instead of a mode
+      const rpath = ctx.resolvePath(reference);
+      if (!ctx.fs.exists(rpath)) {
+        ctx.stderr.write('chmod: ' + specMessage('chmod', 'cannotStatReference', { file: reference, reason: ctx.fs.whyMissing(rpath) }) + '\n');
+        return 1;
+      }
+      spec = (ctx.fs.stat(rpath).mode & 0o7777).toString(8);
+      if (files.length === 0) throw new UsageException(specMessage('chmod', 'missingOperand', {}));
     }
     if (spec === undefined || files.length === 0) throw new UsageException(spec === undefined ? specMessage('chmod', 'missingOperand', {}) : specMessage('chmod', 'missingOperandAfter', { operand: spec }));
     let code = 0;

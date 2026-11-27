@@ -69,13 +69,15 @@ internal static partial class CommandSpec
         {
             ["cannotAccess"] = "cannot access '{file}': {reason}",
         }),
-        ["chmod"] = new("chmod", "Set the permission bits of files", null, "chmod (GNU coreutils) 9.4", true, false, true, "chmod", 1, "Try 'chmod --help' for more information.\n", null, new Dictionary<string, string>
+        ["chmod"] = new("chmod", "Set the permission bits of files (a mode, or --reference=FILE to copy another file's)", null, "chmod (GNU coreutils) 9.4", true, false, true, "chmod", 1, "Try 'chmod --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["unrecognizedOption"] = "unrecognized option '{option}'",
             ["missingOperandAfter"] = "missing operand after {operand:locale}",
             ["cannotChangePermissions"] = "changing permissions of '{file}': Operation not permitted",
             ["cannotAccess"] = "cannot access '{file}': {reason}",
             ["invalidMode"] = "invalid mode: '{mode}'",
+            ["cannotStatReference"] = "failed to get attributes of '{file}': {reason}",
+            ["referenceNeedsArgument"] = "option '--reference' requires an argument",
         }),
         ["chown"] = new("chown", "Change file owner", null, "chown (GNU coreutils) 9.4", true, false, true, "chown", 1, "Try 'chown --help' for more information.\n", null, new Dictionary<string, string>
         {
@@ -95,6 +97,13 @@ internal static partial class CommandSpec
             ["invalidNumber"] = "invalid --{option} value '{value}'",
         }),
         ["column"] = new("column", "Format input into aligned columns (-t)", null, "column from util-linux 2.39.3", true, false, true, "column", 1, "Try 'column --help' for more information.\n", ("nt", "os", "output-separator=o,separator=s,table=t"), Empty),
+        ["comm"] = new("comm", "Compare two sorted files line by line: lines only in the first, only in the second, and in both", null, "comm (GNU coreutils) 9.4", true, false, true, "comm", 1, "Try 'comm --help' for more information.\n", ("123z", "\u0003", "check-order=\u0001,nocheck-order=\u0002,output-delimiter=\u0003,total=\u0004,zero-terminated=z"), new Dictionary<string, string>
+        {
+            ["notSorted"] = "file {n} is not in sorted order",
+            ["inputNotSorted"] = "input is not in sorted order",
+            ["missingOperandAfter"] = "missing operand after {operand:locale}",
+            ["total"] = "total",
+        }),
         ["command"] = new("command", "Run a command, or describe it with -v", null, "command (GNU coreutils) 9.4", false, true, false, "command", 1, "Try 'command --help' for more information.\n", null, Empty),
         ["continue"] = new("continue", "Next loop iteration", null, "continue (GNU coreutils) 9.4", false, true, false, "continue", 1, "Try 'continue --help' for more information.\n", null, Empty),
         ["cp"] = new("cp", "Make copies of files or whole directory trees", null, "cp (GNU coreutils) 9.4", true, false, true, "cp", 1, "Try 'cp --help' for more information.\n", ("abfdHLnpPRrvZ", "S", "force=f,dereference=L,no-dereference=P,suffix=S,recursive=r"), new Dictionary<string, string>
@@ -731,7 +740,7 @@ internal static partial class CommandSpec
             ["worktree"] = new("worktree", "Manage extra work trees (not available)", "usage: git worktree\n\nManage extra work trees (not available).\n", true, ("", "", ""), Empty),
             ["write-tree"] = new("write-tree", "Write the index as a tree (not available)", "usage: git write-tree\n\nWrite the index as a tree (not available).\n", true, ("", "", ""), Empty),
         }),
-        ["grep"] = new("grep", "Search text with regular expressions", null, "grep (GNU grep) 3.11", true, false, true, "grep", 2, "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n", ("acEFHhIiLlnoPqRrsUvwxZ", "ABCm", "after-context=A,text=a,before-context=B,context=C,count=c,extended-regexp=E,fixed-strings=F,with-filename=H,no-filename=h,binary-files=I,ignore-case=i,files-without-match=L,files-with-matches=l,max-count=m,line-number=n,only-matching=o,perl-regexp=P,quiet=q,silent=q,dereference-recursive=R,recursive=r,no-messages=s,color=U,colour=U,line-buffered=U,invert-match=v,word-regexp=w,line-regexp=x"), new Dictionary<string, string>
+        ["grep"] = new("grep", "Search text with regular expressions", null, "grep (GNU grep) 3.11", true, false, true, "grep", 2, "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.\n", ("acEFHhIiLlnoPqRrsUvwxZ", "ABC\u0007m", "after-context=A,text=a,before-context=B,context=C,count=c,extended-regexp=E,fixed-strings=F,with-filename=H,label=\u0007,no-filename=h,binary-files=I,ignore-case=i,files-without-match=L,files-with-matches=l,max-count=m,line-number=n,only-matching=o,perl-regexp=P,quiet=q,silent=q,dereference-recursive=R,recursive=r,no-messages=s,color=U,colour=U,line-buffered=U,invert-match=v,word-regexp=w,line-regexp=x"), new Dictionary<string, string>
         {
             ["openFailed"] = "{file}: {errno}",
             ["invalidRegex"] = "invalid regular expression: {detail}",
@@ -765,6 +774,14 @@ internal static partial class CommandSpec
         ["hostname"] = new("hostname", "Print the host name", null, "hostname (GNU coreutils) 9.4", true, false, true, "hostname", 1, "Try 'hostname --help' for more information.\n", null, Empty),
         ["id"] = new("id", "Show the user's and groups' ids", null, "id (GNU coreutils) 9.4", true, false, true, "id", 1, "Try 'id --help' for more information.\n", ("Ggnru", "", ""), Empty),
         ["jobs"] = new("jobs", "List background jobs (none are ever still running)", null, "jobs (GNU coreutils) 9.4", true, true, false, "jobs", 1, "Try 'jobs --help' for more information.\n", null, Empty),
+        ["join"] = new("join", "Join the lines of two sorted files that share a key field", null, "join (GNU coreutils) 9.4", true, false, true, "join", 1, "Try 'join --help' for more information.\n", ("i", "t12javoe", "ignore-case=i,header=\u0001,check-order=\u0002,nocheck-order=\u0003"), new Dictionary<string, string>
+        {
+            ["missingOperandAfter"] = "missing operand after {operand:locale}",
+            ["badFileNumber"] = "invalid file number in field spec: {spec:locale}",
+            ["badField"] = "invalid field number: {value:locale}",
+            ["badFileNumberArg"] = "invalid file number: {value:locale}",
+            ["multiCharTab"] = "multi-character tab {value:locale}",
+        }),
         ["jq"] = new("jq", "Command-line JSON processor", "jq - commandline JSON processor [version 1.7]\n\nUsage:\tjq [options] <jq filter> [file...]\n\tjq [options] --args <jq filter> [strings...]\n\tjq [options] --jsonargs <jq filter> [JSON_TEXTS...]\n\njq is a tool for processing JSON inputs, applying the given filter to\nits JSON text inputs and producing the filter's results as JSON on\nstandard output.\n\nThe simplest filter is ., which copies jq's input to its output\nunmodified except for formatting.\n\nExample:\n\n\t$ echo '{\"foo\": 0}' | jq .\n\t{\n\t  \"foo\": 0\n\t}\n", "jq-1.7.1", true, false, true, "jq", 1, "Try 'jq --help' for more information.\n", null, new Dictionary<string, string>
         {
             ["missingFilter"] = "Usage: jq [OPTIONS] FILTER [FILES...]",

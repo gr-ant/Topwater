@@ -7,6 +7,7 @@ import { globRegex } from '../glob.js';
 import { printfFormat, unescape } from '../format.js';
 import { VirtualFileSystem } from '../vfs.js';
 import { cannotRun } from './builtins.js';
+import { cmpCp } from './gitcore.js';
 
 const checkEvery = (ctx: CommandContext, i: number) => { if ((i & 7) === 0) ctx.checkTime(); };
 const lines2text = (lines: string[]) => (lines.length ? lines.join('\n') + '\n' : '');
@@ -129,7 +130,8 @@ function grep(ctx: CommandContext): number {
   const out = buffered(ctx);
   const invert = a.has('v');
   try {
-    for (const [name, text] of inputs(ctx, files, () => { error = true; }, quietErr)) {
+    for (let [name, text] of inputs(ctx, files, () => { error = true; }, quietErr)) {
+      if (name === '(standard input)' && a.value('\u0007') !== undefined) name = a.value('\u0007')!; // --label
       const binary = text.includes('\0') && !a.has('a');
       if (binary && a.has('I')) continue;
       const lines = splitLines(text);
@@ -704,6 +706,173 @@ function nl(ctx: CommandContext): number {
   return code;
 }
 
+/** comm and join: the lines of exactly two files (- is stdin), or null after reporting an unreadable one. */
+function twoInputs(ctx: CommandContext, files: string[], sep = '\n'): string[][] | null {
+  if (files.length < 2)
+    throw new UsageException(files.length ? specMessage(ctx.name, 'missingOperandAfter', { operand: files[0] }) : specMessage(ctx.name, 'missingOperand', {}));
+  if (files.length > 2) throw new UsageException(specMessage(ctx.name, 'extraOperand', { operand: files[2] }));
+  const out: string[][] = [];
+  for (const f of files) {
+    const got = [...inputs(ctx, [f], () => {})];
+    if (!got.length) return null;
+    const lines = got[0][1].split(sep);
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    out.push(lines);
+  }
+  return out;
+}
+
+const lessCp = (x: string, y: string) => cmpCp(x, y) < 0; // code point order, as the other ports compare
+
+function comm(ctx: CommandContext): number {
+  const a = Args.parse(ctx.args, specOf('comm'));
+  const sep = a.has('z') ? '\0' : '\n';
+  const both = twoInputs(ctx, a.positional, sep);
+  if (both === null) return 1;
+  const [left, right] = both;
+  const delim = a.value('\u0003') ?? '\t';
+  const show = [!a.has('1'), !a.has('2'), !a.has('3')];
+  const indent = ['', show[0] ? delim : '', delim.repeat(Number(show[0]) + Number(show[1]))];
+  const check = !a.has('\u0002'), strict = a.has('\u0001');
+  const out: string[] = [], counts = [0, 0, 0], last: (string | null)[] = [null, null], unsorted = [false, false];
+  const flush = () => { ctx.stdout.write(out.map(x => x + sep).join('')); out.length = 0; };
+  /** Notes line as file k's latest; true the first time file k is found out of order. */
+  const disorder = (k: number, line: string) => {
+    const bad = check && last[k] !== null && lessCp(line, last[k]!) && !unsorted[k];
+    unsorted[k] ||= bad;
+    last[k] = line;
+    return bad;
+  };
+  let i = 0, j = 0;
+  while (i < left.length || j < right.length) {
+    ctx.checkTime();
+    let col: number, line: string, bad: number[];
+    if (j >= right.length || (i < left.length && lessCp(left[i], right[j]))) {
+      [col, line, bad] = [0, left[i], disorder(0, left[i]) ? [0] : []];
+      i++;
+    } else if (i >= left.length || lessCp(right[j], left[i])) {
+      [col, line, bad] = [1, right[j], disorder(1, right[j]) ? [1] : []];
+      j++;
+    } else {
+      [col, line] = [2, left[i]];
+      bad = ([[0, left[i]], [1, right[j]]] as [number, string][]).filter(([k, x]) => disorder(k, x)).map(([k]) => k);
+      i++; j++;
+    }
+    if (bad.length && strict) { // --check-order stops before the line out of order
+      flush();
+      ctx.stderr.write('comm: ' + specMessage('comm', 'notSorted', { n: String(bad[0] + 1) }) + '\n');
+      return 1;
+    }
+    counts[col]++;
+    if (show[col]) out.push(indent[col] + line);
+    for (const k of bad) { // otherwise the line goes out first, then the warning
+      flush();
+      ctx.stderr.write('comm: ' + specMessage('comm', 'notSorted', { n: String(k + 1) }) + '\n');
+    }
+  }
+  if (a.has('\u0004')) out.push(counts.join(delim) + delim + specMessage('comm', 'total', {}));
+  flush();
+  if (unsorted.some(Boolean)) {
+    ctx.stderr.write('comm: ' + specMessage('comm', 'inputNotSorted', {}) + '\n');
+    return 1;
+  }
+  return 0;
+}
+
+function join(ctx: CommandContext): number {
+  const a = Args.parse(ctx.args, specOf('join'));
+  const tab = a.value('t') || undefined; // -t '' splits on blanks, as GNU join does
+  if (tab !== undefined && tab.length > 1) throw new ShellError(specMessage('join', 'multiCharTab', { value: tab }));
+  const fieldNo = (v: string) => {
+    if (!/^[0-9]+$/.test(v) || Number(v) < 1) throw new ShellError(specMessage('join', 'badField', { value: v }));
+    return Number(v) - 1;
+  };
+  let k1 = 0, k2 = 0;
+  if (a.value('j') !== undefined) k1 = k2 = fieldNo(a.value('j')!);
+  if (a.value('1') !== undefined) k1 = fieldNo(a.value('1')!);
+  if (a.value('2') !== undefined) k2 = fieldNo(a.value('2')!);
+  const unpaired = new Set<number>();
+  for (const v of [...a.all('a'), ...a.all('v')]) {
+    if (v !== '1' && v !== '2') throw new ShellError(specMessage('join', 'badFileNumberArg', { value: v }));
+    unpaired.add(Number(v));
+  }
+  const only = new Set(a.all('v').map(Number));
+  let fmt: [number, number][] | null = null;
+  const ov = a.value('o');
+  if (ov !== undefined && ov !== 'auto') {
+    fmt = [];
+    for (const spec of ov.trim().split(/[ ,]+/)) {
+      const m = /^([0-9]+)\.([0-9]+)$/.exec(spec);
+      if (spec === '0') fmt.push([0, 0]);
+      else if (!m || (m[1] !== '1' && m[1] !== '2')) throw new ShellError(specMessage('join', 'badFileNumber', { spec }));
+      else fmt.push([Number(m[1]), fieldNo(m[2])]);
+    }
+  }
+  const both = twoInputs(ctx, a.positional);
+  if (both === null) return 1;
+  const fields = (line: string) => {
+    if (tab !== undefined) return line.split(tab);
+    const t = line.replace(/^[ \t]+|[ \t]+$/g, ''); // GNU's blanks: spaces and tabs only
+    return t ? t.split(/[ \t]+/) : [];
+  };
+  const [left, right] = both.map(side => side.map(fields));
+  const keys = [k1, k2];
+  const fold = a.has('i');
+  const key = (f: string[], side: number) => {
+    const k = keys[side] < f.length ? f[keys[side]] : '';
+    return fold ? k.toLowerCase() : k;
+  };
+  if (ov === 'auto') {
+    fmt = [[0, 0]];
+    for (let i = 0; i < (left.length ? left[0].length : 0); i++) if (i !== k1) fmt.push([1, i]);
+    for (let i = 0; i < (right.length ? right[0].length : 0); i++) if (i !== k2) fmt.push([2, i]);
+  }
+  const outSep = tab ?? ' ';
+  const empty = a.value('e') ?? '';
+  const lines: string[] = [];
+  const emit = (f1: string[] | null, f2: string[] | null) => {
+    let row: string[];
+    const [src, k] = f1 !== null ? [f1, k1] : [f2!, k2];
+    if (fmt !== null) {
+      row = fmt.map(([side, n]) => {
+        if (side === 0) return k < src.length ? src[k] : empty;
+        const f = side === 1 ? f1 : f2;
+        return f !== null && n < f.length ? f[n] : empty;
+      });
+    } else {
+      row = [k < src.length ? src[k] : ''];
+      row.push(...(f1 ?? []).filter((_, i) => i !== k1), ...(f2 ?? []).filter((_, i) => i !== k2));
+    }
+    lines.push(row.join(outSep));
+  };
+  let i = 0, j = 0;
+  if (a.has('\u0001') && (left.length || right.length)) {
+    emit(left.length ? left[0] : null, right.length ? right[0] : null);
+    i = j = 1;
+  }
+  while (i < left.length || j < right.length) {
+    ctx.checkTime();
+    const aKey = i < left.length ? key(left[i], 0) : null;
+    const bKey = j < right.length ? key(right[j], 1) : null;
+    if (bKey === null || (aKey !== null && lessCp(aKey, bKey))) {
+      if (unpaired.has(1)) emit(left[i], null);
+      i++;
+    } else if (aKey === null || lessCp(bKey, aKey)) {
+      if (unpaired.has(2)) emit(null, right[j]);
+      j++;
+    } else {
+      let i2 = i, j2 = j;
+      while (i2 < left.length && key(left[i2], 0) === aKey) i2++;
+      while (j2 < right.length && key(right[j2], 1) === aKey) j2++;
+      if (!only.size) for (const x of left.slice(i, i2)) for (const y of right.slice(j, j2)) emit(x, y);
+      if (lines.length > 1_000_000) throw new ShellError('output too large');
+      [i, j] = [i2, j2];
+    }
+  }
+  ctx.stdout.write(lines.map(x => x + '\n').join(''));
+  return 0;
+}
+
 function paste(ctx: CommandContext): number {
   const a = Args.parse(ctx.args, specOf('paste'));
   let delims = [...unescape(a.value('d') ?? '\t')];
@@ -969,6 +1138,8 @@ export function registerText(shell: Shell): void {
     return code;
   });
   shell.register('paste', paste);
+  shell.register('comm', comm);
+  shell.register('join', join);
   shell.register('column', column);
   shell.register('seq', seq);
   shell.register('diff', diff);

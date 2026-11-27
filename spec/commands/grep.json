@@ -19,6 +19,7 @@
     {"short": "E", "long": ["extended-regexp"], "description": "treat the pattern as an extended regex"},
     {"short": "F", "long": ["fixed-strings"], "description": "treat the pattern as a fixed string"},
     {"short": "H", "long": ["with-filename"], "description": "prefix each match with its file name"},
+    {"long": ["label"], "key": "\u0007", "arg": "LABEL", "description": "call standard input LABEL in file name prefixes, -l and -c"},
     {"short": "h", "long": ["no-filename"], "description": "never prefix matches with file names"},
     {"short": "I", "long": ["binary-files"], "description": "skip files that look binary"},
     {"short": "i", "long": ["ignore-case"], "description": "match regardless of case"},
