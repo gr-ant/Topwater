@@ -1,0 +1,646 @@
+[
+  {
+    "id": "u001",
+    "name": "Delta Okafor",
+    "email": "user001@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-20",
+    "tags": [
+      "sso",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u002",
+    "name": "Cedar Tanaka",
+    "email": "user002@corp.example",
+    "role": "editor",
+    "active": false,
+    "last_login": "2026-08-22",
+    "tags": [
+      "legacy",
+      "beta"
+    ]
+  },
+  {
+    "id": "u003",
+    "name": "Iris Brennan",
+    "email": "user003@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-11-08",
+    "tags": [
+      "mfa",
+      "beta"
+    ]
+  },
+  {
+    "id": "u004",
+    "name": "Granite Kowalski",
+    "email": "user004@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-09-16",
+    "tags": [
+      "legacy"
+    ]
+  },
+  {
+    "id": "u005",
+    "name": "Juniper Ng",
+    "email": "user005@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-09-03",
+    "tags": [
+      "sso",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u006",
+    "name": "Summit Kowalski",
+    "email": "user006@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-09-06",
+    "tags": [
+      "sso",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u007",
+    "name": "Birch Silva",
+    "email": "user007@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-15",
+    "tags": []
+  },
+  {
+    "id": "u008",
+    "name": "Summit Silva",
+    "email": "user008@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-11-20",
+    "tags": [
+      "sso"
+    ]
+  },
+  {
+    "id": "u009",
+    "name": "Ember Larsen",
+    "email": "user009@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-09-08",
+    "tags": []
+  },
+  {
+    "id": "u010",
+    "name": "Ember Haddad",
+    "email": "user010@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-09-04",
+    "tags": [
+      "beta"
+    ]
+  },
+  {
+    "id": "u011",
+    "name": "Pioneer Silva",
+    "email": "user011@corp.example",
+    "role": "admin",
+    "active": false,
+    "last_login": "2026-10-19",
+    "tags": []
+  },
+  {
+    "id": "u012",
+    "name": "Granite Kowalski",
+    "email": "user012@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-08-14",
+    "tags": [
+      "legacy"
+    ]
+  },
+  {
+    "id": "u013",
+    "name": "Alder Haddad",
+    "email": "user013@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-11-16",
+    "tags": [
+      "mfa",
+      "beta"
+    ]
+  },
+  {
+    "id": "u014",
+    "name": "Alder Moreau",
+    "email": "user014@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-20",
+    "tags": [
+      "legacy",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u015",
+    "name": "Tundra Okafor",
+    "email": "user015@corp.example",
+    "role": "editor",
+    "active": false,
+    "last_login": "2026-11-10",
+    "tags": [
+      "mfa"
+    ]
+  },
+  {
+    "id": "u016",
+    "name": "Birch Okafor",
+    "email": "user016@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-11-22",
+    "tags": []
+  },
+  {
+    "id": "u017",
+    "name": "Orchid Silva",
+    "email": "user017@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-11",
+    "tags": [
+      "beta",
+      "sso"
+    ]
+  },
+  {
+    "id": "u018",
+    "name": "Delta Ng",
+    "email": "user018@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-10-25",
+    "tags": []
+  },
+  {
+    "id": "u019",
+    "name": "Iris Haddad",
+    "email": "user019@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-18",
+    "tags": [
+      "mfa",
+      "sso"
+    ]
+  },
+  {
+    "id": "u020",
+    "name": "Quarry Brennan",
+    "email": "user020@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-10-25",
+    "tags": [
+      "mfa"
+    ]
+  },
+  {
+    "id": "u021",
+    "name": "Pioneer Silva",
+    "email": "user021@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-10-24",
+    "tags": [
+      "legacy",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u022",
+    "name": "Tundra Kowalski",
+    "email": "user022@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-04",
+    "tags": [
+      "beta",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u023",
+    "name": "Pioneer Vasquez",
+    "email": "user023@corp.example",
+    "role": "admin",
+    "active": false,
+    "last_login": "2026-09-25",
+    "tags": []
+  },
+  {
+    "id": "u024",
+    "name": "Iris Moreau",
+    "email": "user024@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-09-09",
+    "tags": [
+      "sso"
+    ]
+  },
+  {
+    "id": "u025",
+    "name": "Summit Larsen",
+    "email": "user025@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-25",
+    "tags": [
+      "sso",
+      "legacy"
+    ]
+  },
+  {
+    "id": "u026",
+    "name": "Tundra Larsen",
+    "email": "user026@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-23",
+    "tags": [
+      "beta",
+      "legacy"
+    ]
+  },
+  {
+    "id": "u027",
+    "name": "Maple Haddad",
+    "email": "user027@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-08-11",
+    "tags": [
+      "legacy"
+    ]
+  },
+  {
+    "id": "u028",
+    "name": "Pioneer Tanaka",
+    "email": "user028@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-10-25",
+    "tags": []
+  },
+  {
+    "id": "u029",
+    "name": "Granite Brennan",
+    "email": "user029@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-08-12",
+    "tags": [
+      "beta"
+    ]
+  },
+  {
+    "id": "u030",
+    "name": "Delta Kowalski",
+    "email": "user030@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-09-06",
+    "tags": [
+      "legacy",
+      "sso"
+    ]
+  },
+  {
+    "id": "u031",
+    "name": "Pioneer Moreau",
+    "email": "user031@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-28",
+    "tags": [
+      "sso",
+      "beta"
+    ]
+  },
+  {
+    "id": "u032",
+    "name": "Delta Okafor",
+    "email": "user032@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-09-19",
+    "tags": []
+  },
+  {
+    "id": "u033",
+    "name": "Nimbus Ng",
+    "email": "user033@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-09-12",
+    "tags": [
+      "legacy"
+    ]
+  },
+  {
+    "id": "u034",
+    "name": "Raven Brennan",
+    "email": "user034@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-11-07",
+    "tags": [
+      "legacy",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u035",
+    "name": "Quarry Haddad",
+    "email": "user035@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-09-19",
+    "tags": [
+      "beta",
+      "sso"
+    ]
+  },
+  {
+    "id": "u036",
+    "name": "Summit Tanaka",
+    "email": "user036@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-10",
+    "tags": [
+      "sso"
+    ]
+  },
+  {
+    "id": "u037",
+    "name": "Granite Ng",
+    "email": "user037@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-10-14",
+    "tags": []
+  },
+  {
+    "id": "u038",
+    "name": "Ember Larsen",
+    "email": "user038@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-07",
+    "tags": [
+      "legacy"
+    ]
+  },
+  {
+    "id": "u039",
+    "name": "Delta Tanaka",
+    "email": "user039@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-10-28",
+    "tags": []
+  },
+  {
+    "id": "u040",
+    "name": "Kestrel Haddad",
+    "email": "user040@corp.example",
+    "role": "editor",
+    "active": false,
+    "last_login": "2026-10-16",
+    "tags": [
+      "beta",
+      "legacy"
+    ]
+  },
+  {
+    "id": "u041",
+    "name": "Delta Moreau",
+    "email": "user041@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-09-03",
+    "tags": []
+  },
+  {
+    "id": "u042",
+    "name": "Pioneer Silva",
+    "email": "user042@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-08-09",
+    "tags": [
+      "beta",
+      "sso"
+    ]
+  },
+  {
+    "id": "u043",
+    "name": "Quarry Okafor",
+    "email": "user043@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-11-06",
+    "tags": []
+  },
+  {
+    "id": "u044",
+    "name": "Kestrel Vasquez",
+    "email": "user044@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-08-11",
+    "tags": [
+      "mfa",
+      "beta"
+    ]
+  },
+  {
+    "id": "u045",
+    "name": "Ember Okafor",
+    "email": "user045@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-11-25",
+    "tags": [
+      "sso",
+      "legacy"
+    ]
+  },
+  {
+    "id": "u046",
+    "name": "Delta Tanaka",
+    "email": "user046@corp.example",
+    "role": "admin",
+    "active": true,
+    "last_login": "2026-08-27",
+    "tags": []
+  },
+  {
+    "id": "u047",
+    "name": "Ember Vasquez",
+    "email": "user047@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-10-27",
+    "tags": []
+  },
+  {
+    "id": "u048",
+    "name": "Harbor Haddad",
+    "email": "user048@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-10-16",
+    "tags": [
+      "sso"
+    ]
+  },
+  {
+    "id": "u049",
+    "name": "Maple Moreau",
+    "email": "user049@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-09-01",
+    "tags": []
+  },
+  {
+    "id": "u050",
+    "name": "Cedar Vasquez",
+    "email": "user050@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-11-10",
+    "tags": []
+  },
+  {
+    "id": "u051",
+    "name": "Cedar Ng",
+    "email": "user051@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-09-25",
+    "tags": []
+  },
+  {
+    "id": "u052",
+    "name": "Ember Larsen",
+    "email": "user052@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-11-20",
+    "tags": [
+      "legacy",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u053",
+    "name": "Raven Okafor",
+    "email": "user053@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-11-13",
+    "tags": []
+  },
+  {
+    "id": "u054",
+    "name": "Delta Brennan",
+    "email": "user054@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-08",
+    "tags": [
+      "sso",
+      "legacy"
+    ]
+  },
+  {
+    "id": "u055",
+    "name": "Lumen Brennan",
+    "email": "user055@corp.example",
+    "role": "viewer",
+    "active": false,
+    "last_login": "2026-08-12",
+    "tags": []
+  },
+  {
+    "id": "u056",
+    "name": "Delta Kowalski",
+    "email": "user056@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-10-19",
+    "tags": [
+      "sso",
+      "beta"
+    ]
+  },
+  {
+    "id": "u057",
+    "name": "Nimbus Haddad",
+    "email": "user057@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-08-04",
+    "tags": [
+      "beta",
+      "mfa"
+    ]
+  },
+  {
+    "id": "u058",
+    "name": "Kestrel Tanaka",
+    "email": "user058@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-09-15",
+    "tags": []
+  },
+  {
+    "id": "u059",
+    "name": "Fjord Okafor",
+    "email": "user059@corp.example",
+    "role": "editor",
+    "active": true,
+    "last_login": "2026-10-25",
+    "tags": []
+  },
+  {
+    "id": "u060",
+    "name": "Ember Larsen",
+    "email": "user060@corp.example",
+    "role": "viewer",
+    "active": true,
+    "last_login": "2026-09-26",
+    "tags": [
+      "legacy",
+      "beta"
+    ]
+  }
+]

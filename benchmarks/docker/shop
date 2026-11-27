@@ -1,0 +1,7 @@
+#!/bin/bash
+# Command-line client for the shop API: sends its arguments to the application over a local socket.
+resp=$(jq -cn '$ARGS.positional' --args -- "$@" | curl -sS --unix-socket /run/app/app.sock --data-binary @- http://app/shop) \
+  || { echo "shop: cannot reach the shop service" >&2; exit 1; }
+jq -j .stdout <<<"$resp"
+jq -j .stderr <<<"$resp" >&2
+exit "$(jq -r .exit <<<"$resp")"

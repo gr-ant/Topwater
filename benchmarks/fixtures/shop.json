@@ -1,0 +1,8179 @@
+{
+ "customers": [
+  {
+   "id": "C-0001",
+   "name": "Delta Partners",
+   "country": "NL",
+   "tier": "bronze",
+   "email": "delta.partners@example.com",
+   "joined": "2025-12-12"
+  },
+  {
+   "id": "C-0002",
+   "name": "Kestrel Supply",
+   "country": "US",
+   "tier": "bronze",
+   "email": "kestrel.supply@example.com",
+   "joined": "2025-02-13"
+  },
+  {
+   "id": "C-0003",
+   "name": "Quarry Works",
+   "country": "NL",
+   "tier": "silver",
+   "email": "quarry.works@example.com",
+   "joined": "2025-02-14"
+  },
+  {
+   "id": "C-0004",
+   "name": "Quarry Traders",
+   "country": "NL",
+   "tier": "gold",
+   "email": "quarry.traders@example.com",
+   "joined": "2025-10-16"
+  },
+  {
+   "id": "C-0005",
+   "name": "Delta Labs",
+   "country": "UK",
+   "tier": "gold",
+   "email": "delta.labs@example.com",
+   "joined": "2025-05-28"
+  },
+  {
+   "id": "C-0006",
+   "name": "Harbor Supply",
+   "country": "UK",
+   "tier": "silver",
+   "email": "harbor.supply@example.com",
+   "joined": "2025-08-17"
+  },
+  {
+   "id": "C-0007",
+   "name": "Tundra Supply",
+   "country": "NL",
+   "tier": "gold",
+   "email": "tundra.supply@example.com",
+   "joined": "2025-10-08"
+  },
+  {
+   "id": "C-0008",
+   "name": "Raven Partners",
+   "country": "FR",
+   "tier": "gold",
+   "email": "raven.partners@example.com",
+   "joined": "2025-12-17"
+  },
+  {
+   "id": "C-0009",
+   "name": "Nimbus Traders",
+   "country": "ES",
+   "tier": "bronze",
+   "email": "nimbus.traders@example.com",
+   "joined": "2025-10-14"
+  },
+  {
+   "id": "C-0010",
+   "name": "Summit Labs",
+   "country": "UK",
+   "tier": "bronze",
+   "email": "summit.labs@example.com",
+   "joined": "2025-04-28"
+  },
+  {
+   "id": "C-0011",
+   "name": "Raven Goods",
+   "country": "DE",
+   "tier": "silver",
+   "email": "raven.goods@example.com",
+   "joined": "2025-08-22"
+  },
+  {
+   "id": "C-0012",
+   "name": "Pioneer Collective",
+   "country": "UK",
+   "tier": "silver",
+   "email": "pioneer.collective@example.com",
+   "joined": "2025-09-09"
+  },
+  {
+   "id": "C-0013",
+   "name": "Orchid Works",
+   "country": "NL",
+   "tier": "bronze",
+   "email": "orchid.works@example.com",
+   "joined": "2025-05-18"
+  },
+  {
+   "id": "C-0014",
+   "name": "Harbor Collective",
+   "country": "ES",
+   "tier": "silver",
+   "email": "harbor.collective@example.com",
+   "joined": "2025-08-26"
+  },
+  {
+   "id": "C-0015",
+   "name": "Alder Works",
+   "country": "UK",
+   "tier": "bronze",
+   "email": "alder.works@example.com",
+   "joined": "2025-05-27"
+  },
+  {
+   "id": "C-0016",
+   "name": "Cedar Goods",
+   "country": "US",
+   "tier": "bronze",
+   "email": "cedar.goods@example.com",
+   "joined": "2025-03-21"
+  },
+  {
+   "id": "C-0017",
+   "name": "Delta Goods",
+   "country": "NL",
+   "tier": "gold",
+   "email": "delta.goods@example.com",
+   "joined": "2025-09-16"
+  },
+  {
+   "id": "C-0018",
+   "name": "Juniper Supply",
+   "country": "US",
+   "tier": "gold",
+   "email": "juniper.supply@example.com",
+   "joined": "2025-05-23"
+  },
+  {
+   "id": "C-0019",
+   "name": "Delta Supply",
+   "country": "UK",
+   "tier": "bronze",
+   "email": "delta.supply@example.com",
+   "joined": "2025-08-26"
+  },
+  {
+   "id": "C-0020",
+   "name": "Orchid Traders",
+   "country": "UK",
+   "tier": "silver",
+   "email": "orchid.traders@example.com",
+   "joined": "2025-01-27"
+  },
+  {
+   "id": "C-0021",
+   "name": "Alder Labs",
+   "country": "US",
+   "tier": "bronze",
+   "email": "alder.labs@example.com",
+   "joined": "2025-02-15"
+  },
+  {
+   "id": "C-0022",
+   "name": "Summit Goods",
+   "country": "ES",
+   "tier": "silver",
+   "email": "summit.goods@example.com",
+   "joined": "2025-09-09"
+  },
+  {
+   "id": "C-0023",
+   "name": "Kestrel Works",
+   "country": "UK",
+   "tier": "gold",
+   "email": "kestrel.works@example.com",
+   "joined": "2025-03-14"
+  },
+  {
+   "id": "C-0024",
+   "name": "Granite Collective",
+   "country": "ES",
+   "tier": "bronze",
+   "email": "granite.collective@example.com",
+   "joined": "2025-02-21"
+  },
+  {
+   "id": "C-0025",
+   "name": "Maple Collective",
+   "country": "US",
+   "tier": "gold",
+   "email": "maple.collective@example.com",
+   "joined": "2025-06-04"
+  },
+  {
+   "id": "C-0026",
+   "name": "Iris Works",
+   "country": "FR",
+   "tier": "silver",
+   "email": "iris.works@example.com",
+   "joined": "2025-07-05"
+  },
+  {
+   "id": "C-0027",
+   "name": "Lumen Supply",
+   "country": "UK",
+   "tier": "gold",
+   "email": "lumen.supply@example.com",
+   "joined": "2025-02-01"
+  },
+  {
+   "id": "C-0028",
+   "name": "Lumen Traders",
+   "country": "UK",
+   "tier": "silver",
+   "email": "lumen.traders@example.com",
+   "joined": "2025-02-20"
+  },
+  {
+   "id": "C-0029",
+   "name": "Maple Works",
+   "country": "FR",
+   "tier": "bronze",
+   "email": "maple.works@example.com",
+   "joined": "2025-10-02"
+  },
+  {
+   "id": "C-0030",
+   "name": "Cedar Traders",
+   "country": "NL",
+   "tier": "gold",
+   "email": "cedar.traders@example.com",
+   "joined": "2025-11-25"
+  },
+  {
+   "id": "C-0031",
+   "name": "Kestrel Outfitters",
+   "country": "ES",
+   "tier": "bronze",
+   "email": "kestrel.outfitters@example.com",
+   "joined": "2025-01-11"
+  },
+  {
+   "id": "C-0032",
+   "name": "Cedar Partners",
+   "country": "ES",
+   "tier": "silver",
+   "email": "cedar.partners@example.com",
+   "joined": "2025-08-23"
+  },
+  {
+   "id": "C-0033",
+   "name": "Juniper Labs",
+   "country": "ES",
+   "tier": "gold",
+   "email": "juniper.labs@example.com",
+   "joined": "2025-09-08"
+  },
+  {
+   "id": "C-0034",
+   "name": "Ember Goods",
+   "country": "UK",
+   "tier": "silver",
+   "email": "ember.goods@example.com",
+   "joined": "2025-10-23"
+  },
+  {
+   "id": "C-0035",
+   "name": "Harbor Labs",
+   "country": "NL",
+   "tier": "bronze",
+   "email": "harbor.labs@example.com",
+   "joined": "2025-07-22"
+  },
+  {
+   "id": "C-0036",
+   "name": "Cedar Labs",
+   "country": "FR",
+   "tier": "gold",
+   "email": "cedar.labs@example.com",
+   "joined": "2025-10-10"
+  },
+  {
+   "id": "C-0037",
+   "name": "Summit Traders",
+   "country": "NL",
+   "tier": "bronze",
+   "email": "summit.traders@example.com",
+   "joined": "2025-03-17"
+  },
+  {
+   "id": "C-0038",
+   "name": "Kestrel Labs",
+   "country": "FR",
+   "tier": "bronze",
+   "email": "kestrel.labs@example.com",
+   "joined": "2025-02-13"
+  },
+  {
+   "id": "C-0039",
+   "name": "Lumen Labs",
+   "country": "DE",
+   "tier": "bronze",
+   "email": "lumen.labs@example.com",
+   "joined": "2025-06-21"
+  },
+  {
+   "id": "C-0040",
+   "name": "Quarry Goods",
+   "country": "US",
+   "tier": "gold",
+   "email": "quarry.goods@example.com",
+   "joined": "2025-01-01"
+  }
+ ],
+ "products": [
+  {
+   "sku": "SKU-101",
+   "name": "Claw Hammer",
+   "category": "tools",
+   "price": 94.81,
+   "reorder_point": 20
+  },
+  {
+   "sku": "SKU-102",
+   "name": "Torque Wrench",
+   "category": "tools",
+   "price": 124.81,
+   "reorder_point": 25
+  },
+  {
+   "sku": "SKU-103",
+   "name": "Cordless Drill",
+   "category": "tools",
+   "price": 62.73,
+   "reorder_point": 10
+  },
+  {
+   "sku": "SKU-104",
+   "name": "Utility Knife",
+   "category": "tools",
+   "price": 92.58,
+   "reorder_point": 25
+  },
+  {
+   "sku": "SKU-105",
+   "name": "Spirit Level",
+   "category": "tools",
+   "price": 105.46,
+   "reorder_point": 15
+  },
+  {
+   "sku": "SKU-106",
+   "name": "Hex Key Set",
+   "category": "tools",
+   "price": 32.78,
+   "reorder_point": 30
+  },
+  {
+   "sku": "SKU-107",
+   "name": "Pruning Shears",
+   "category": "garden",
+   "price": 42.02,
+   "reorder_point": 30
+  },
+  {
+   "sku": "SKU-108",
+   "name": "Hose Reel",
+   "category": "garden",
+   "price": 64.54,
+   "reorder_point": 30
+  },
+  {
+   "sku": "SKU-109",
+   "name": "Seed Tray",
+   "category": "garden",
+   "price": 46.6,
+   "reorder_point": 10
+  },
+  {
+   "sku": "SKU-110",
+   "name": "Rain Barrel",
+   "category": "garden",
+   "price": 101.24,
+   "reorder_point": 10
+  },
+  {
+   "sku": "SKU-111",
+   "name": "Leaf Rake",
+   "category": "garden",
+   "price": 40.02,
+   "reorder_point": 15
+  },
+  {
+   "sku": "SKU-112",
+   "name": "Trowel",
+   "category": "garden",
+   "price": 13.87,
+   "reorder_point": 30
+  },
+  {
+   "sku": "SKU-113",
+   "name": "Chef Knife",
+   "category": "kitchen",
+   "price": 167.99,
+   "reorder_point": 10
+  },
+  {
+   "sku": "SKU-114",
+   "name": "Cast Iron Pan",
+   "category": "kitchen",
+   "price": 84.62,
+   "reorder_point": 15
+  },
+  {
+   "sku": "SKU-115",
+   "name": "Spice Rack",
+   "category": "kitchen",
+   "price": 90.19,
+   "reorder_point": 10
+  },
+  {
+   "sku": "SKU-116",
+   "name": "Cutting Board",
+   "category": "kitchen",
+   "price": 28.47,
+   "reorder_point": 30
+  },
+  {
+   "sku": "SKU-117",
+   "name": "Kettle",
+   "category": "kitchen",
+   "price": 44.06,
+   "reorder_point": 30
+  },
+  {
+   "sku": "SKU-118",
+   "name": "Colander",
+   "category": "kitchen",
+   "price": 161.66,
+   "reorder_point": 15
+  },
+  {
+   "sku": "SKU-119",
+   "name": "Desk Lamp",
+   "category": "lighting",
+   "price": 33.91,
+   "reorder_point": 15
+  },
+  {
+   "sku": "SKU-120",
+   "name": "LED Strip",
+   "category": "lighting",
+   "price": 73.86,
+   "reorder_point": 25
+  },
+  {
+   "sku": "SKU-121",
+   "name": "Lantern",
+   "category": "lighting",
+   "price": 98.74,
+   "reorder_point": 10
+  },
+  {
+   "sku": "SKU-122",
+   "name": "Floor Lamp",
+   "category": "lighting",
+   "price": 72.67,
+   "reorder_point": 15
+  },
+  {
+   "sku": "SKU-123",
+   "name": "Bulb Pack",
+   "category": "lighting",
+   "price": 65.87,
+   "reorder_point": 20
+  },
+  {
+   "sku": "SKU-124",
+   "name": "Night Light",
+   "category": "lighting",
+   "price": 86.72,
+   "reorder_point": 25
+  }
+ ],
+ "inventory": [
+  {
+   "sku": "SKU-101",
+   "warehouse": "BER",
+   "on_hand": 9
+  },
+  {
+   "sku": "SKU-101",
+   "warehouse": "LYO",
+   "on_hand": 14
+  },
+  {
+   "sku": "SKU-101",
+   "warehouse": "NYC",
+   "on_hand": 5
+  },
+  {
+   "sku": "SKU-102",
+   "warehouse": "BER",
+   "on_hand": 10
+  },
+  {
+   "sku": "SKU-102",
+   "warehouse": "LYO",
+   "on_hand": 16
+  },
+  {
+   "sku": "SKU-102",
+   "warehouse": "NYC",
+   "on_hand": 15
+  },
+  {
+   "sku": "SKU-103",
+   "warehouse": "BER",
+   "on_hand": 14
+  },
+  {
+   "sku": "SKU-103",
+   "warehouse": "LYO",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-103",
+   "warehouse": "NYC",
+   "on_hand": 16
+  },
+  {
+   "sku": "SKU-104",
+   "warehouse": "BER",
+   "on_hand": 16
+  },
+  {
+   "sku": "SKU-104",
+   "warehouse": "LYO",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-104",
+   "warehouse": "NYC",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-105",
+   "warehouse": "BER",
+   "on_hand": 6
+  },
+  {
+   "sku": "SKU-105",
+   "warehouse": "LYO",
+   "on_hand": 7
+  },
+  {
+   "sku": "SKU-105",
+   "warehouse": "NYC",
+   "on_hand": 0
+  },
+  {
+   "sku": "SKU-106",
+   "warehouse": "BER",
+   "on_hand": 2
+  },
+  {
+   "sku": "SKU-106",
+   "warehouse": "LYO",
+   "on_hand": 14
+  },
+  {
+   "sku": "SKU-106",
+   "warehouse": "NYC",
+   "on_hand": 20
+  },
+  {
+   "sku": "SKU-107",
+   "warehouse": "BER",
+   "on_hand": 10
+  },
+  {
+   "sku": "SKU-107",
+   "warehouse": "LYO",
+   "on_hand": 13
+  },
+  {
+   "sku": "SKU-107",
+   "warehouse": "NYC",
+   "on_hand": 17
+  },
+  {
+   "sku": "SKU-108",
+   "warehouse": "BER",
+   "on_hand": 21
+  },
+  {
+   "sku": "SKU-108",
+   "warehouse": "LYO",
+   "on_hand": 5
+  },
+  {
+   "sku": "SKU-108",
+   "warehouse": "NYC",
+   "on_hand": 0
+  },
+  {
+   "sku": "SKU-109",
+   "warehouse": "BER",
+   "on_hand": 11
+  },
+  {
+   "sku": "SKU-109",
+   "warehouse": "LYO",
+   "on_hand": 5
+  },
+  {
+   "sku": "SKU-109",
+   "warehouse": "NYC",
+   "on_hand": 11
+  },
+  {
+   "sku": "SKU-110",
+   "warehouse": "BER",
+   "on_hand": 17
+  },
+  {
+   "sku": "SKU-110",
+   "warehouse": "LYO",
+   "on_hand": 21
+  },
+  {
+   "sku": "SKU-110",
+   "warehouse": "NYC",
+   "on_hand": 18
+  },
+  {
+   "sku": "SKU-111",
+   "warehouse": "BER",
+   "on_hand": 17
+  },
+  {
+   "sku": "SKU-111",
+   "warehouse": "LYO",
+   "on_hand": 6
+  },
+  {
+   "sku": "SKU-111",
+   "warehouse": "NYC",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-112",
+   "warehouse": "BER",
+   "on_hand": 19
+  },
+  {
+   "sku": "SKU-112",
+   "warehouse": "LYO",
+   "on_hand": 22
+  },
+  {
+   "sku": "SKU-112",
+   "warehouse": "NYC",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-113",
+   "warehouse": "BER",
+   "on_hand": 17
+  },
+  {
+   "sku": "SKU-113",
+   "warehouse": "LYO",
+   "on_hand": 18
+  },
+  {
+   "sku": "SKU-113",
+   "warehouse": "NYC",
+   "on_hand": 6
+  },
+  {
+   "sku": "SKU-114",
+   "warehouse": "BER",
+   "on_hand": 18
+  },
+  {
+   "sku": "SKU-114",
+   "warehouse": "LYO",
+   "on_hand": 9
+  },
+  {
+   "sku": "SKU-114",
+   "warehouse": "NYC",
+   "on_hand": 18
+  },
+  {
+   "sku": "SKU-115",
+   "warehouse": "BER",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-115",
+   "warehouse": "LYO",
+   "on_hand": 21
+  },
+  {
+   "sku": "SKU-115",
+   "warehouse": "NYC",
+   "on_hand": 17
+  },
+  {
+   "sku": "SKU-116",
+   "warehouse": "BER",
+   "on_hand": 4
+  },
+  {
+   "sku": "SKU-116",
+   "warehouse": "LYO",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-116",
+   "warehouse": "NYC",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-117",
+   "warehouse": "BER",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-117",
+   "warehouse": "LYO",
+   "on_hand": 13
+  },
+  {
+   "sku": "SKU-117",
+   "warehouse": "NYC",
+   "on_hand": 5
+  },
+  {
+   "sku": "SKU-118",
+   "warehouse": "BER",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-118",
+   "warehouse": "LYO",
+   "on_hand": 21
+  },
+  {
+   "sku": "SKU-118",
+   "warehouse": "NYC",
+   "on_hand": 1
+  },
+  {
+   "sku": "SKU-119",
+   "warehouse": "BER",
+   "on_hand": 11
+  },
+  {
+   "sku": "SKU-119",
+   "warehouse": "LYO",
+   "on_hand": 5
+  },
+  {
+   "sku": "SKU-119",
+   "warehouse": "NYC",
+   "on_hand": 20
+  },
+  {
+   "sku": "SKU-120",
+   "warehouse": "BER",
+   "on_hand": 20
+  },
+  {
+   "sku": "SKU-120",
+   "warehouse": "LYO",
+   "on_hand": 3
+  },
+  {
+   "sku": "SKU-120",
+   "warehouse": "NYC",
+   "on_hand": 16
+  },
+  {
+   "sku": "SKU-121",
+   "warehouse": "BER",
+   "on_hand": 10
+  },
+  {
+   "sku": "SKU-121",
+   "warehouse": "LYO",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-121",
+   "warehouse": "NYC",
+   "on_hand": 18
+  },
+  {
+   "sku": "SKU-122",
+   "warehouse": "BER",
+   "on_hand": 2
+  },
+  {
+   "sku": "SKU-122",
+   "warehouse": "LYO",
+   "on_hand": 9
+  },
+  {
+   "sku": "SKU-122",
+   "warehouse": "NYC",
+   "on_hand": 10
+  },
+  {
+   "sku": "SKU-123",
+   "warehouse": "BER",
+   "on_hand": 5
+  },
+  {
+   "sku": "SKU-123",
+   "warehouse": "LYO",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-123",
+   "warehouse": "NYC",
+   "on_hand": 8
+  },
+  {
+   "sku": "SKU-124",
+   "warehouse": "BER",
+   "on_hand": 2
+  },
+  {
+   "sku": "SKU-124",
+   "warehouse": "LYO",
+   "on_hand": 0
+  },
+  {
+   "sku": "SKU-124",
+   "warehouse": "NYC",
+   "on_hand": 13
+  }
+ ],
+ "orders": [
+  {
+   "id": "O-1026",
+   "customer_id": "C-0039",
+   "placed_on": "2026-07-01",
+   "status": "delivered",
+   "total": 215.93,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 3,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 2,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1136",
+   "customer_id": "C-0012",
+   "placed_on": "2026-07-01",
+   "status": "open",
+   "total": 42.02,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 1,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1143",
+   "customer_id": "C-0030",
+   "placed_on": "2026-07-01",
+   "status": "shipped",
+   "total": 581.24,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1184",
+   "customer_id": "C-0028",
+   "placed_on": "2026-07-02",
+   "status": "refunded",
+   "total": 737.52,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1236",
+   "customer_id": "C-0032",
+   "placed_on": "2026-07-02",
+   "status": "delivered",
+   "total": 169.55,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1134",
+   "customer_id": "C-0019",
+   "placed_on": "2026-07-03",
+   "status": "open",
+   "total": 535.57,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 1,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 5,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1227",
+   "customer_id": "C-0033",
+   "placed_on": "2026-07-03",
+   "status": "shipped",
+   "total": 792.95,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 4,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 3,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 2,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1267",
+   "customer_id": "C-0025",
+   "placed_on": "2026-07-03",
+   "status": "open",
+   "total": 402.55,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 5,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1285",
+   "customer_id": "C-0027",
+   "placed_on": "2026-07-03",
+   "status": "cancelled",
+   "total": 271.83,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 5,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 2,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1177",
+   "customer_id": "C-0002",
+   "placed_on": "2026-07-05",
+   "status": "delivered",
+   "total": 296.22,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1047",
+   "customer_id": "C-0033",
+   "placed_on": "2026-07-06",
+   "status": "delivered",
+   "total": 148.68,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 4,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1098",
+   "customer_id": "C-0039",
+   "placed_on": "2026-07-06",
+   "status": "refunded",
+   "total": 443.32,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 4,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1178",
+   "customer_id": "C-0004",
+   "placed_on": "2026-07-06",
+   "status": "delivered",
+   "total": 718.86,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 5,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 1,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1192",
+   "customer_id": "C-0021",
+   "placed_on": "2026-07-06",
+   "status": "delivered",
+   "total": 205.47,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 3,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1082",
+   "customer_id": "C-0024",
+   "placed_on": "2026-07-07",
+   "status": "open",
+   "total": 368.02,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 2,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 5,
+     "unit_price": 44.06
+    }
+   ]
+  },
+  {
+   "id": "O-1140",
+   "customer_id": "C-0004",
+   "placed_on": "2026-07-07",
+   "status": "shipped",
+   "total": 478.58,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 5,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 4,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1214",
+   "customer_id": "C-0007",
+   "placed_on": "2026-07-07",
+   "status": "open",
+   "total": 98.34,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 3,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1008",
+   "customer_id": "C-0016",
+   "placed_on": "2026-07-08",
+   "status": "delivered",
+   "total": 523.57,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 3,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 4,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1156",
+   "customer_id": "C-0034",
+   "placed_on": "2026-07-08",
+   "status": "shipped",
+   "total": 220.87,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 3,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 1,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1255",
+   "customer_id": "C-0019",
+   "placed_on": "2026-07-08",
+   "status": "open",
+   "total": 633.5,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 5,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 3,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1087",
+   "customer_id": "C-0006",
+   "placed_on": "2026-07-09",
+   "status": "open",
+   "total": 394.96,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 4,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1252",
+   "customer_id": "C-0005",
+   "placed_on": "2026-07-09",
+   "status": "refunded",
+   "total": 306.76,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 3,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 1,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1180",
+   "customer_id": "C-0007",
+   "placed_on": "2026-07-10",
+   "status": "delivered",
+   "total": 318.59,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 4,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-116",
+     "qty": 5,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1183",
+   "customer_id": "C-0001",
+   "placed_on": "2026-07-10",
+   "status": "delivered",
+   "total": 101.24,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 1,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1263",
+   "customer_id": "C-0004",
+   "placed_on": "2026-07-10",
+   "status": "delivered",
+   "total": 971.25,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 5,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 5,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 5,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1073",
+   "customer_id": "C-0025",
+   "placed_on": "2026-07-11",
+   "status": "delivered",
+   "total": 176.24,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 4,
+     "unit_price": 44.06
+    }
+   ]
+  },
+  {
+   "id": "O-1161",
+   "customer_id": "C-0023",
+   "placed_on": "2026-07-11",
+   "status": "open",
+   "total": 712.52,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 4,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1089",
+   "customer_id": "C-0034",
+   "placed_on": "2026-07-12",
+   "status": "delivered",
+   "total": 358.46,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 5,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1221",
+   "customer_id": "C-0019",
+   "placed_on": "2026-07-12",
+   "status": "cancelled",
+   "total": 482.04,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 3,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1137",
+   "customer_id": "C-0035",
+   "placed_on": "2026-07-13",
+   "status": "delivered",
+   "total": 457.1,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 1,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1307",
+   "customer_id": "C-0020",
+   "placed_on": "2026-07-13",
+   "status": "delivered",
+   "total": 906.82,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 4,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1193",
+   "customer_id": "C-0027",
+   "placed_on": "2026-07-15",
+   "status": "delivered",
+   "total": 568.51,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 3,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 1,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1112",
+   "customer_id": "C-0027",
+   "placed_on": "2026-07-16",
+   "status": "delivered",
+   "total": 1314.23,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 3,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1119",
+   "customer_id": "C-0007",
+   "placed_on": "2026-07-17",
+   "status": "open",
+   "total": 712.52,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 4,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1257",
+   "customer_id": "C-0013",
+   "placed_on": "2026-07-17",
+   "status": "delivered",
+   "total": 378.67,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 3,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1142",
+   "customer_id": "C-0010",
+   "placed_on": "2026-07-18",
+   "status": "delivered",
+   "total": 474.12,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 4,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1155",
+   "customer_id": "C-0001",
+   "placed_on": "2026-07-18",
+   "status": "cancelled",
+   "total": 294.7,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 2,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1262",
+   "customer_id": "C-0037",
+   "placed_on": "2026-07-18",
+   "status": "shipped",
+   "total": 145.34,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 2,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1076",
+   "customer_id": "C-0016",
+   "placed_on": "2026-07-19",
+   "status": "refunded",
+   "total": 577.5,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 3,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 3,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1154",
+   "customer_id": "C-0004",
+   "placed_on": "2026-07-19",
+   "status": "refunded",
+   "total": 322.54,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 2,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1210",
+   "customer_id": "C-0018",
+   "placed_on": "2026-07-19",
+   "status": "delivered",
+   "total": 260.21,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 1,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1259",
+   "customer_id": "C-0022",
+   "placed_on": "2026-07-19",
+   "status": "delivered",
+   "total": 462.9,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 5,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1275",
+   "customer_id": "C-0005",
+   "placed_on": "2026-07-19",
+   "status": "delivered",
+   "total": 819.27,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 1,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1303",
+   "customer_id": "C-0031",
+   "placed_on": "2026-07-19",
+   "status": "cancelled",
+   "total": 982.62,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 2,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1253",
+   "customer_id": "C-0037",
+   "placed_on": "2026-07-20",
+   "status": "open",
+   "total": 337.05,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 3,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1273",
+   "customer_id": "C-0032",
+   "placed_on": "2026-07-20",
+   "status": "delivered",
+   "total": 347.04,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 3,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1304",
+   "customer_id": "C-0020",
+   "placed_on": "2026-07-20",
+   "status": "open",
+   "total": 27.74,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 2,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1160",
+   "customer_id": "C-0004",
+   "placed_on": "2026-07-21",
+   "status": "cancelled",
+   "total": 338.48,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 4,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1182",
+   "customer_id": "C-0016",
+   "placed_on": "2026-07-21",
+   "status": "shipped",
+   "total": 32.78,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 1,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1117",
+   "customer_id": "C-0030",
+   "placed_on": "2026-07-22",
+   "status": "delivered",
+   "total": 185.16,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1216",
+   "customer_id": "C-0033",
+   "placed_on": "2026-07-22",
+   "status": "delivered",
+   "total": 1124.68,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 5,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 3,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1166",
+   "customer_id": "C-0039",
+   "placed_on": "2026-07-23",
+   "status": "delivered",
+   "total": 405.33,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 2,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 5,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1059",
+   "customer_id": "C-0010",
+   "placed_on": "2026-07-24",
+   "status": "cancelled",
+   "total": 464.12,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 2,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1075",
+   "customer_id": "C-0003",
+   "placed_on": "2026-07-24",
+   "status": "open",
+   "total": 484.98,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1002",
+   "customer_id": "C-0026",
+   "placed_on": "2026-07-25",
+   "status": "open",
+   "total": 405.09,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 5,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1042",
+   "customer_id": "C-0014",
+   "placed_on": "2026-07-25",
+   "status": "refunded",
+   "total": 80.04,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 2,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1251",
+   "customer_id": "C-0028",
+   "placed_on": "2026-07-25",
+   "status": "shipped",
+   "total": 635.71,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 2,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 3,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1139",
+   "customer_id": "C-0029",
+   "placed_on": "2026-07-27",
+   "status": "open",
+   "total": 135.64,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1153",
+   "customer_id": "C-0027",
+   "placed_on": "2026-07-27",
+   "status": "shipped",
+   "total": 101.24,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 1,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1213",
+   "customer_id": "C-0013",
+   "placed_on": "2026-07-27",
+   "status": "open",
+   "total": 214.68,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 1,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1277",
+   "customer_id": "C-0008",
+   "placed_on": "2026-07-27",
+   "status": "delivered",
+   "total": 227.79,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 3,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 3,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1101",
+   "customer_id": "C-0020",
+   "placed_on": "2026-07-29",
+   "status": "delivered",
+   "total": 105.46,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 1,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1219",
+   "customer_id": "C-0034",
+   "placed_on": "2026-07-30",
+   "status": "refunded",
+   "total": 65.56,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1007",
+   "customer_id": "C-0020",
+   "placed_on": "2026-07-31",
+   "status": "shipped",
+   "total": 527.3,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1029",
+   "customer_id": "C-0006",
+   "placed_on": "2026-07-31",
+   "status": "open",
+   "total": 540.55,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 4,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 5,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 3,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1034",
+   "customer_id": "C-0018",
+   "placed_on": "2026-07-31",
+   "status": "delivered",
+   "total": 320.18,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 3,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 2,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1295",
+   "customer_id": "C-0026",
+   "placed_on": "2026-07-31",
+   "status": "delivered",
+   "total": 345.74,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 5,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1162",
+   "customer_id": "C-0018",
+   "placed_on": "2026-08-01",
+   "status": "delivered",
+   "total": 499.4,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 2,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1301",
+   "customer_id": "C-0033",
+   "placed_on": "2026-08-01",
+   "status": "cancelled",
+   "total": 250.12,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 5,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 1,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1053",
+   "customer_id": "C-0021",
+   "placed_on": "2026-08-02",
+   "status": "delivered",
+   "total": 590.63,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 5,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1208",
+   "customer_id": "C-0013",
+   "placed_on": "2026-08-02",
+   "status": "open",
+   "total": 807.69,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 3,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 3,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1044",
+   "customer_id": "C-0003",
+   "placed_on": "2026-08-04",
+   "status": "cancelled",
+   "total": 284.43,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1199",
+   "customer_id": "C-0002",
+   "placed_on": "2026-08-04",
+   "status": "delivered",
+   "total": 241.8,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 4,
+     "unit_price": 44.06
+    }
+   ]
+  },
+  {
+   "id": "O-1305",
+   "customer_id": "C-0040",
+   "placed_on": "2026-08-06",
+   "status": "open",
+   "total": 264.79,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 1,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1102",
+   "customer_id": "C-0010",
+   "placed_on": "2026-08-07",
+   "status": "shipped",
+   "total": 660.45,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 4,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 5,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1239",
+   "customer_id": "C-0025",
+   "placed_on": "2026-08-07",
+   "status": "open",
+   "total": 780.72,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 2,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 4,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1055",
+   "customer_id": "C-0003",
+   "placed_on": "2026-08-09",
+   "status": "open",
+   "total": 527.3,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1240",
+   "customer_id": "C-0018",
+   "placed_on": "2026-08-09",
+   "status": "delivered",
+   "total": 214.68,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 1,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1066",
+   "customer_id": "C-0013",
+   "placed_on": "2026-08-10",
+   "status": "delivered",
+   "total": 65.56,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1022",
+   "customer_id": "C-0025",
+   "placed_on": "2026-08-11",
+   "status": "open",
+   "total": 788.7,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 3,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1093",
+   "customer_id": "C-0002",
+   "placed_on": "2026-08-12",
+   "status": "delivered",
+   "total": 380.3,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 3,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 2,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1238",
+   "customer_id": "C-0028",
+   "placed_on": "2026-08-12",
+   "status": "refunded",
+   "total": 28.47,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 1,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1043",
+   "customer_id": "C-0036",
+   "placed_on": "2026-08-13",
+   "status": "delivered",
+   "total": 420.47,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1088",
+   "customer_id": "C-0040",
+   "placed_on": "2026-08-13",
+   "status": "open",
+   "total": 93.2,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1106",
+   "customer_id": "C-0014",
+   "placed_on": "2026-08-13",
+   "status": "open",
+   "total": 369.3,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 5,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1111",
+   "customer_id": "C-0032",
+   "placed_on": "2026-08-13",
+   "status": "refunded",
+   "total": 280.98,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 2,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1148",
+   "customer_id": "C-0008",
+   "placed_on": "2026-08-13",
+   "status": "shipped",
+   "total": 210.1,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 5,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1189",
+   "customer_id": "C-0013",
+   "placed_on": "2026-08-13",
+   "status": "open",
+   "total": 369.3,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 5,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1197",
+   "customer_id": "C-0009",
+   "placed_on": "2026-08-13",
+   "status": "delivered",
+   "total": 631.59,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 2,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 1,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 5,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1250",
+   "customer_id": "C-0031",
+   "placed_on": "2026-08-13",
+   "status": "delivered",
+   "total": 872.06,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1051",
+   "customer_id": "C-0002",
+   "placed_on": "2026-08-14",
+   "status": "refunded",
+   "total": 884.01,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 1,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 5,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1096",
+   "customer_id": "C-0006",
+   "placed_on": "2026-08-14",
+   "status": "delivered",
+   "total": 415.9,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 1,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1244",
+   "customer_id": "C-0014",
+   "placed_on": "2026-08-14",
+   "status": "delivered",
+   "total": 808.3,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 5,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1299",
+   "customer_id": "C-0037",
+   "placed_on": "2026-08-14",
+   "status": "delivered",
+   "total": 329.42,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 3,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 2,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1099",
+   "customer_id": "C-0012",
+   "placed_on": "2026-08-15",
+   "status": "shipped",
+   "total": 248.38,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 1,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 1,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1165",
+   "customer_id": "C-0013",
+   "placed_on": "2026-08-15",
+   "status": "delivered",
+   "total": 743.44,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 4,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1234",
+   "customer_id": "C-0027",
+   "placed_on": "2026-08-16",
+   "status": "cancelled",
+   "total": 169.55,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1045",
+   "customer_id": "C-0039",
+   "placed_on": "2026-08-17",
+   "status": "shipped",
+   "total": 672.68,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 3,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 3,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1281",
+   "customer_id": "C-0011",
+   "placed_on": "2026-08-17",
+   "status": "open",
+   "total": 778.28,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1023",
+   "customer_id": "C-0023",
+   "placed_on": "2026-08-18",
+   "status": "cancelled",
+   "total": 295.44,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1079",
+   "customer_id": "C-0031",
+   "placed_on": "2026-08-18",
+   "status": "delivered",
+   "total": 135.64,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1120",
+   "customer_id": "C-0010",
+   "placed_on": "2026-08-18",
+   "status": "shipped",
+   "total": 170.82,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 2,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 1,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 1,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1179",
+   "customer_id": "C-0013",
+   "placed_on": "2026-08-20",
+   "status": "delivered",
+   "total": 365.45,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-116",
+     "qty": 1,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 3,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1190",
+   "customer_id": "C-0008",
+   "placed_on": "2026-08-20",
+   "status": "delivered",
+   "total": 604.7,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 4,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 1,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1297",
+   "customer_id": "C-0018",
+   "placed_on": "2026-08-20",
+   "status": "open",
+   "total": 64.54,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 1,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1302",
+   "customer_id": "C-0019",
+   "placed_on": "2026-08-22",
+   "status": "shipped",
+   "total": 1164.08,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 5,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1064",
+   "customer_id": "C-0006",
+   "placed_on": "2026-08-23",
+   "status": "delivered",
+   "total": 828.56,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 4,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1109",
+   "customer_id": "C-0033",
+   "placed_on": "2026-08-23",
+   "status": "shipped",
+   "total": 1460.66,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 3,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1313",
+   "customer_id": "C-0001",
+   "placed_on": "2026-08-23",
+   "status": "delivered",
+   "total": 200.1,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1063",
+   "customer_id": "C-0024",
+   "placed_on": "2026-08-24",
+   "status": "delivered",
+   "total": 777.76,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 4,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1065",
+   "customer_id": "C-0040",
+   "placed_on": "2026-08-24",
+   "status": "shipped",
+   "total": 92.58,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 1,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1163",
+   "customer_id": "C-0034",
+   "placed_on": "2026-08-24",
+   "status": "delivered",
+   "total": 167.48,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 1,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 1,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1207",
+   "customer_id": "C-0015",
+   "placed_on": "2026-08-24",
+   "status": "shipped",
+   "total": 1103.04,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 5,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 3,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1217",
+   "customer_id": "C-0014",
+   "placed_on": "2026-08-24",
+   "status": "open",
+   "total": 262.13,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 1,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1270",
+   "customer_id": "C-0024",
+   "placed_on": "2026-08-24",
+   "status": "open",
+   "total": 679.39,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 4,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1320",
+   "customer_id": "C-0010",
+   "placed_on": "2026-08-24",
+   "status": "delivered",
+   "total": 197.48,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1083",
+   "customer_id": "C-0027",
+   "placed_on": "2026-08-25",
+   "status": "delivered",
+   "total": 930.34,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 1,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1086",
+   "customer_id": "C-0033",
+   "placed_on": "2026-08-25",
+   "status": "delivered",
+   "total": 1009.79,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 1,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 3,
+     "unit_price": 90.19
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1243",
+   "customer_id": "C-0023",
+   "placed_on": "2026-08-25",
+   "status": "delivered",
+   "total": 866.96,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 4,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1245",
+   "customer_id": "C-0026",
+   "placed_on": "2026-08-25",
+   "status": "delivered",
+   "total": 125.46,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1265",
+   "customer_id": "C-0007",
+   "placed_on": "2026-08-25",
+   "status": "shipped",
+   "total": 564.51,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 4,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1309",
+   "customer_id": "C-0020",
+   "placed_on": "2026-08-26",
+   "status": "delivered",
+   "total": 94.81,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 1,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1113",
+   "customer_id": "C-0023",
+   "placed_on": "2026-08-27",
+   "status": "delivered",
+   "total": 944.51,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 5,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 3,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1173",
+   "customer_id": "C-0011",
+   "placed_on": "2026-08-27",
+   "status": "delivered",
+   "total": 294.25,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 3,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 1,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1211",
+   "customer_id": "C-0022",
+   "placed_on": "2026-08-27",
+   "status": "open",
+   "total": 296.22,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1015",
+   "customer_id": "C-0036",
+   "placed_on": "2026-08-29",
+   "status": "delivered",
+   "total": 427.94,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 3,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1035",
+   "customer_id": "C-0030",
+   "placed_on": "2026-08-29",
+   "status": "shipped",
+   "total": 590.44,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 1,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1276",
+   "customer_id": "C-0015",
+   "placed_on": "2026-08-29",
+   "status": "delivered",
+   "total": 877.91,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 5,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 3,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1115",
+   "customer_id": "C-0032",
+   "placed_on": "2026-09-01",
+   "status": "shipped",
+   "total": 229.64,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 1,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 1,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 2,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1186",
+   "customer_id": "C-0003",
+   "placed_on": "2026-09-01",
+   "status": "delivered",
+   "total": 125.46,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1230",
+   "customer_id": "C-0009",
+   "placed_on": "2026-09-01",
+   "status": "delivered",
+   "total": 477.58,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 3,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 4,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1027",
+   "customer_id": "C-0005",
+   "placed_on": "2026-09-02",
+   "status": "delivered",
+   "total": 277.74,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 3,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1105",
+   "customer_id": "C-0021",
+   "placed_on": "2026-09-03",
+   "status": "shipped",
+   "total": 642.32,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1001",
+   "customer_id": "C-0008",
+   "placed_on": "2026-09-04",
+   "status": "open",
+   "total": 344.43,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 1,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1061",
+   "customer_id": "C-0006",
+   "placed_on": "2026-09-04",
+   "status": "cancelled",
+   "total": 539.61,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 5,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1124",
+   "customer_id": "C-0010",
+   "placed_on": "2026-09-04",
+   "status": "open",
+   "total": 406.92,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 1,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 3,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 2,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1312",
+   "customer_id": "C-0018",
+   "placed_on": "2026-09-04",
+   "status": "shipped",
+   "total": 779.99,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 5,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 2,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 2,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1018",
+   "customer_id": "C-0002",
+   "placed_on": "2026-09-06",
+   "status": "refunded",
+   "total": 65.87,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 1,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1038",
+   "customer_id": "C-0031",
+   "placed_on": "2026-09-07",
+   "status": "delivered",
+   "total": 957.91,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 3,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 5,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1168",
+   "customer_id": "C-0015",
+   "placed_on": "2026-09-07",
+   "status": "open",
+   "total": 250.92,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1175",
+   "customer_id": "C-0040",
+   "placed_on": "2026-09-07",
+   "status": "refunded",
+   "total": 715.22,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 2,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 4,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1223",
+   "customer_id": "C-0032",
+   "placed_on": "2026-09-07",
+   "status": "delivered",
+   "total": 197.48,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1311",
+   "customer_id": "C-0022",
+   "placed_on": "2026-09-07",
+   "status": "delivered",
+   "total": 378.86,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 1,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 2,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 2,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1152",
+   "customer_id": "C-0026",
+   "placed_on": "2026-09-09",
+   "status": "shipped",
+   "total": 545.84,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1174",
+   "customer_id": "C-0009",
+   "placed_on": "2026-09-09",
+   "status": "delivered",
+   "total": 323.19,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 5,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 1,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1274",
+   "customer_id": "C-0026",
+   "placed_on": "2026-09-09",
+   "status": "delivered",
+   "total": 1020.33,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 2,
+     "unit_price": 90.19
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 5,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1056",
+   "customer_id": "C-0009",
+   "placed_on": "2026-09-10",
+   "status": "delivered",
+   "total": 625.64,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 3,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1264",
+   "customer_id": "C-0015",
+   "placed_on": "2026-09-11",
+   "status": "shipped",
+   "total": 323.0,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 1,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 2,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1316",
+   "customer_id": "C-0037",
+   "placed_on": "2026-09-11",
+   "status": "delivered",
+   "total": 241.04,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 3,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 1,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1068",
+   "customer_id": "C-0018",
+   "placed_on": "2026-09-12",
+   "status": "delivered",
+   "total": 1146.01,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 5,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1260",
+   "customer_id": "C-0023",
+   "placed_on": "2026-09-12",
+   "status": "open",
+   "total": 605.21,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 1,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 3,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1005",
+   "customer_id": "C-0002",
+   "placed_on": "2026-09-13",
+   "status": "shipped",
+   "total": 404.96,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1107",
+   "customer_id": "C-0015",
+   "placed_on": "2026-09-14",
+   "status": "delivered",
+   "total": 325.36,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 3,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 2,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1110",
+   "customer_id": "C-0020",
+   "placed_on": "2026-09-16",
+   "status": "delivered",
+   "total": 433.6,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1147",
+   "customer_id": "C-0009",
+   "placed_on": "2026-09-16",
+   "status": "shipped",
+   "total": 1007.29,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 5,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1288",
+   "customer_id": "C-0013",
+   "placed_on": "2026-09-16",
+   "status": "cancelled",
+   "total": 691.3,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 4,
+     "unit_price": 90.19
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 3,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-116",
+     "qty": 5,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1125",
+   "customer_id": "C-0005",
+   "placed_on": "2026-09-17",
+   "status": "cancelled",
+   "total": 446.98,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 2,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 3,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1127",
+   "customer_id": "C-0034",
+   "placed_on": "2026-09-18",
+   "status": "delivered",
+   "total": 433.6,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1130",
+   "customer_id": "C-0013",
+   "placed_on": "2026-09-18",
+   "status": "open",
+   "total": 691.36,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1169",
+   "customer_id": "C-0018",
+   "placed_on": "2026-09-18",
+   "status": "delivered",
+   "total": 649.24,
+   "items": [
+    {
+     "sku": "SKU-114",
+     "qty": 3,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 3,
+     "unit_price": 90.19
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1198",
+   "customer_id": "C-0019",
+   "placed_on": "2026-09-18",
+   "status": "open",
+   "total": 197.48,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1224",
+   "customer_id": "C-0018",
+   "placed_on": "2026-09-18",
+   "status": "delivered",
+   "total": 741.84,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 4,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1003",
+   "customer_id": "C-0017",
+   "placed_on": "2026-09-19",
+   "status": "cancelled",
+   "total": 512.51,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 1,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-115",
+     "qty": 3,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1317",
+   "customer_id": "C-0039",
+   "placed_on": "2026-09-20",
+   "status": "cancelled",
+   "total": 641.42,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 2,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 5,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1077",
+   "customer_id": "C-0021",
+   "placed_on": "2026-09-21",
+   "status": "delivered",
+   "total": 392.56,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 4,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 2,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1040",
+   "customer_id": "C-0040",
+   "placed_on": "2026-09-22",
+   "status": "delivered",
+   "total": 168.08,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1050",
+   "customer_id": "C-0036",
+   "placed_on": "2026-09-22",
+   "status": "open",
+   "total": 338.07,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 3,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1071",
+   "customer_id": "C-0034",
+   "placed_on": "2026-09-22",
+   "status": "shipped",
+   "total": 541.6,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1104",
+   "customer_id": "C-0020",
+   "placed_on": "2026-09-22",
+   "status": "delivered",
+   "total": 860.15,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 3,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1031",
+   "customer_id": "C-0013",
+   "placed_on": "2026-09-23",
+   "status": "shipped",
+   "total": 637.56,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1235",
+   "customer_id": "C-0008",
+   "placed_on": "2026-09-24",
+   "status": "delivered",
+   "total": 433.6,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1131",
+   "customer_id": "C-0028",
+   "placed_on": "2026-09-25",
+   "status": "delivered",
+   "total": 382.94,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 1,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1287",
+   "customer_id": "C-0017",
+   "placed_on": "2026-09-25",
+   "status": "cancelled",
+   "total": 250.92,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1306",
+   "customer_id": "C-0005",
+   "placed_on": "2026-09-25",
+   "status": "delivered",
+   "total": 510.01,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 5,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 1,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 2,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1094",
+   "customer_id": "C-0037",
+   "placed_on": "2026-09-27",
+   "status": "refunded",
+   "total": 173.44,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 2,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1118",
+   "customer_id": "C-0007",
+   "placed_on": "2026-09-27",
+   "status": "cancelled",
+   "total": 729.08,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 3,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 3,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1123",
+   "customer_id": "C-0005",
+   "placed_on": "2026-09-28",
+   "status": "open",
+   "total": 499.24,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 4,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1069",
+   "customer_id": "C-0023",
+   "placed_on": "2026-09-29",
+   "status": "shipped",
+   "total": 673.82,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 5,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1215",
+   "customer_id": "C-0008",
+   "placed_on": "2026-09-29",
+   "status": "refunded",
+   "total": 284.43,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1150",
+   "customer_id": "C-0019",
+   "placed_on": "2026-10-01",
+   "status": "delivered",
+   "total": 511.13,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 5,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1209",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-01",
+   "status": "delivered",
+   "total": 124.81,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1226",
+   "customer_id": "C-0030",
+   "placed_on": "2026-10-01",
+   "status": "delivered",
+   "total": 879.01,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 5,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1054",
+   "customer_id": "C-0036",
+   "placed_on": "2026-10-02",
+   "status": "open",
+   "total": 956.02,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 5,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 2,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1146",
+   "customer_id": "C-0006",
+   "placed_on": "2026-10-02",
+   "status": "shipped",
+   "total": 582.01,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 5,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1200",
+   "customer_id": "C-0008",
+   "placed_on": "2026-10-02",
+   "status": "cancelled",
+   "total": 167.99,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 1,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1203",
+   "customer_id": "C-0009",
+   "placed_on": "2026-10-02",
+   "status": "refunded",
+   "total": 556.98,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 5,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1041",
+   "customer_id": "C-0001",
+   "placed_on": "2026-10-03",
+   "status": "delivered",
+   "total": 323.32,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1176",
+   "customer_id": "C-0004",
+   "placed_on": "2026-10-03",
+   "status": "open",
+   "total": 491.01,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 1,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 5,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1191",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-03",
+   "status": "cancelled",
+   "total": 1024.11,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 5,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 1,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1268",
+   "customer_id": "C-0012",
+   "placed_on": "2026-10-03",
+   "status": "delivered",
+   "total": 203.98,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 4,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 2,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1282",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-03",
+   "status": "open",
+   "total": 658.79,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 5,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1298",
+   "customer_id": "C-0015",
+   "placed_on": "2026-10-03",
+   "status": "delivered",
+   "total": 646.64,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1315",
+   "customer_id": "C-0017",
+   "placed_on": "2026-10-03",
+   "status": "delivered",
+   "total": 393.72,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 3,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1249",
+   "customer_id": "C-0019",
+   "placed_on": "2026-10-04",
+   "status": "open",
+   "total": 147.72,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 2,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1133",
+   "customer_id": "C-0031",
+   "placed_on": "2026-10-05",
+   "status": "delivered",
+   "total": 420.85,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 4,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 3,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1196",
+   "customer_id": "C-0034",
+   "placed_on": "2026-10-05",
+   "status": "delivered",
+   "total": 605.04,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 4,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1220",
+   "customer_id": "C-0026",
+   "placed_on": "2026-10-05",
+   "status": "delivered",
+   "total": 142.35,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 5,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1283",
+   "customer_id": "C-0008",
+   "placed_on": "2026-10-05",
+   "status": "refunded",
+   "total": 595.65,
+   "items": [
+    {
+     "sku": "SKU-117",
+     "qty": 5,
+     "unit_price": 44.06
+    },
+    {
+     "sku": "SKU-116",
+     "qty": 5,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 5,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1028",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-06",
+   "status": "delivered",
+   "total": 377.58,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 1,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 3,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1103",
+   "customer_id": "C-0015",
+   "placed_on": "2026-10-06",
+   "status": "open",
+   "total": 450.95,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 5,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1232",
+   "customer_id": "C-0036",
+   "placed_on": "2026-10-06",
+   "status": "open",
+   "total": 611.29,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 3,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 5,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1279",
+   "customer_id": "C-0018",
+   "placed_on": "2026-10-06",
+   "status": "refunded",
+   "total": 831.8,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1108",
+   "customer_id": "C-0026",
+   "placed_on": "2026-10-07",
+   "status": "delivered",
+   "total": 221.58,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 3,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1293",
+   "customer_id": "C-0006",
+   "placed_on": "2026-10-07",
+   "status": "open",
+   "total": 379.44,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 2,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 5,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 2,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1310",
+   "customer_id": "C-0014",
+   "placed_on": "2026-10-07",
+   "status": "delivered",
+   "total": 135.52,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 4,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 2,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1004",
+   "customer_id": "C-0022",
+   "placed_on": "2026-10-08",
+   "status": "shipped",
+   "total": 180.29,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 4,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1021",
+   "customer_id": "C-0013",
+   "placed_on": "2026-10-08",
+   "status": "delivered",
+   "total": 531.58,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 1,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1114",
+   "customer_id": "C-0024",
+   "placed_on": "2026-10-08",
+   "status": "delivered",
+   "total": 1040.42,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 5,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 4,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 4,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1149",
+   "customer_id": "C-0012",
+   "placed_on": "2026-10-08",
+   "status": "shipped",
+   "total": 431.86,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1222",
+   "customer_id": "C-0028",
+   "placed_on": "2026-10-08",
+   "status": "delivered",
+   "total": 454.28,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 2,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 2,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1280",
+   "customer_id": "C-0001",
+   "placed_on": "2026-10-08",
+   "status": "refunded",
+   "total": 327.94,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 2,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1020",
+   "customer_id": "C-0010",
+   "placed_on": "2026-10-09",
+   "status": "open",
+   "total": 543.62,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 5,
+     "unit_price": 44.06
+    }
+   ]
+  },
+  {
+   "id": "O-1116",
+   "customer_id": "C-0035",
+   "placed_on": "2026-10-09",
+   "status": "delivered",
+   "total": 333.14,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 5,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 2,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1036",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-11",
+   "status": "shipped",
+   "total": 931.07,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 4,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1048",
+   "customer_id": "C-0033",
+   "placed_on": "2026-10-11",
+   "status": "cancelled",
+   "total": 177.66,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 1,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1084",
+   "customer_id": "C-0011",
+   "placed_on": "2026-10-11",
+   "status": "open",
+   "total": 129.08,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 2,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1206",
+   "customer_id": "C-0009",
+   "placed_on": "2026-10-11",
+   "status": "open",
+   "total": 90.19,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 1,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1229",
+   "customer_id": "C-0003",
+   "placed_on": "2026-10-11",
+   "status": "shipped",
+   "total": 692.6,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 4,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1205",
+   "customer_id": "C-0023",
+   "placed_on": "2026-10-12",
+   "status": "shipped",
+   "total": 32.78,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 1,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1296",
+   "customer_id": "C-0030",
+   "placed_on": "2026-10-12",
+   "status": "shipped",
+   "total": 364.72,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 4,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 1,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1033",
+   "customer_id": "C-0022",
+   "placed_on": "2026-10-13",
+   "status": "delivered",
+   "total": 1092.98,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 5,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1237",
+   "customer_id": "C-0009",
+   "placed_on": "2026-10-13",
+   "status": "delivered",
+   "total": 189.62,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 2,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1289",
+   "customer_id": "C-0006",
+   "placed_on": "2026-10-13",
+   "status": "open",
+   "total": 291.64,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 1,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1319",
+   "customer_id": "C-0029",
+   "placed_on": "2026-10-13",
+   "status": "delivered",
+   "total": 197.48,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1058",
+   "customer_id": "C-0035",
+   "placed_on": "2026-10-14",
+   "status": "delivered",
+   "total": 882.78,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 3,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 5,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1126",
+   "customer_id": "C-0028",
+   "placed_on": "2026-10-14",
+   "status": "shipped",
+   "total": 169.55,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1129",
+   "customer_id": "C-0034",
+   "placed_on": "2026-10-14",
+   "status": "open",
+   "total": 473.58,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 5,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 4,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1157",
+   "customer_id": "C-0037",
+   "placed_on": "2026-10-14",
+   "status": "open",
+   "total": 981.74,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 5,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-124",
+     "qty": 2,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1141",
+   "customer_id": "C-0004",
+   "placed_on": "2026-10-15",
+   "status": "delivered",
+   "total": 620.5,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1266",
+   "customer_id": "C-0033",
+   "placed_on": "2026-10-15",
+   "status": "shipped",
+   "total": 841.4,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 3,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1300",
+   "customer_id": "C-0014",
+   "placed_on": "2026-10-15",
+   "status": "refunded",
+   "total": 197.74,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-117",
+     "qty": 3,
+     "unit_price": 44.06
+    }
+   ]
+  },
+  {
+   "id": "O-1009",
+   "customer_id": "C-0035",
+   "placed_on": "2026-10-16",
+   "status": "delivered",
+   "total": 210.92,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1078",
+   "customer_id": "C-0029",
+   "placed_on": "2026-10-16",
+   "status": "delivered",
+   "total": 56.94,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 2,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1128",
+   "customer_id": "C-0019",
+   "placed_on": "2026-10-16",
+   "status": "delivered",
+   "total": 1109.03,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 5,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1171",
+   "customer_id": "C-0004",
+   "placed_on": "2026-10-16",
+   "status": "open",
+   "total": 277.74,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 3,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1181",
+   "customer_id": "C-0006",
+   "placed_on": "2026-10-16",
+   "status": "shipped",
+   "total": 558.51,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 3,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1231",
+   "customer_id": "C-0038",
+   "placed_on": "2026-10-16",
+   "status": "delivered",
+   "total": 575.11,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 3,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1062",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-17",
+   "status": "delivered",
+   "total": 149.6,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 2,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1122",
+   "customer_id": "C-0031",
+   "placed_on": "2026-10-17",
+   "status": "open",
+   "total": 360.76,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 4,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1241",
+   "customer_id": "C-0031",
+   "placed_on": "2026-10-17",
+   "status": "open",
+   "total": 177.24,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 2,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1314",
+   "customer_id": "C-0029",
+   "placed_on": "2026-10-17",
+   "status": "open",
+   "total": 147.72,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 2,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1067",
+   "customer_id": "C-0018",
+   "placed_on": "2026-10-18",
+   "status": "delivered",
+   "total": 323.32,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1308",
+   "customer_id": "C-0033",
+   "placed_on": "2026-10-18",
+   "status": "open",
+   "total": 120.06,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1254",
+   "customer_id": "C-0003",
+   "placed_on": "2026-10-19",
+   "status": "delivered",
+   "total": 781.2,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1242",
+   "customer_id": "C-0024",
+   "placed_on": "2026-10-21",
+   "status": "open",
+   "total": 172.2,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 1,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 3,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1121",
+   "customer_id": "C-0030",
+   "placed_on": "2026-10-22",
+   "status": "open",
+   "total": 693.64,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 2,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1290",
+   "customer_id": "C-0021",
+   "placed_on": "2026-10-22",
+   "status": "open",
+   "total": 527.3,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1070",
+   "customer_id": "C-0036",
+   "placed_on": "2026-10-25",
+   "status": "cancelled",
+   "total": 468.04,
+   "items": [
+    {
+     "sku": "SKU-120",
+     "qty": 5,
+     "unit_price": 73.86
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 1,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1074",
+   "customer_id": "C-0026",
+   "placed_on": "2026-10-25",
+   "status": "open",
+   "total": 731.54,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 2,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-101",
+     "qty": 2,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1291",
+   "customer_id": "C-0032",
+   "placed_on": "2026-10-25",
+   "status": "delivered",
+   "total": 664.07,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 5,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 1,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1057",
+   "customer_id": "C-0010",
+   "placed_on": "2026-10-26",
+   "status": "delivered",
+   "total": 32.78,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 1,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1100",
+   "customer_id": "C-0031",
+   "placed_on": "2026-10-26",
+   "status": "refunded",
+   "total": 862.75,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 2,
+     "unit_price": 64.54
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 5,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1032",
+   "customer_id": "C-0023",
+   "placed_on": "2026-10-27",
+   "status": "delivered",
+   "total": 197.61,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 3,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1052",
+   "customer_id": "C-0034",
+   "placed_on": "2026-10-27",
+   "status": "delivered",
+   "total": 168.08,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 4,
+     "unit_price": 42.02
+    }
+   ]
+  },
+  {
+   "id": "O-1132",
+   "customer_id": "C-0037",
+   "placed_on": "2026-10-27",
+   "status": "delivered",
+   "total": 1164.97,
+   "items": [
+    {
+     "sku": "SKU-113",
+     "qty": 3,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 4,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 4,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1170",
+   "customer_id": "C-0021",
+   "placed_on": "2026-10-27",
+   "status": "delivered",
+   "total": 577.13,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 4,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 5,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1202",
+   "customer_id": "C-0025",
+   "placed_on": "2026-10-27",
+   "status": "cancelled",
+   "total": 628.4,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-108",
+     "qty": 3,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1258",
+   "customer_id": "C-0001",
+   "placed_on": "2026-10-27",
+   "status": "open",
+   "total": 869.25,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 3,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 5,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1145",
+   "customer_id": "C-0001",
+   "placed_on": "2026-10-28",
+   "status": "cancelled",
+   "total": 264.79,
+   "items": [
+    {
+     "sku": "SKU-103",
+     "qty": 4,
+     "unit_price": 62.73
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 1,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1204",
+   "customer_id": "C-0038",
+   "placed_on": "2026-10-28",
+   "status": "open",
+   "total": 578.97,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 5,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1225",
+   "customer_id": "C-0004",
+   "placed_on": "2026-10-28",
+   "status": "shipped",
+   "total": 322.7,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 5,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1228",
+   "customer_id": "C-0039",
+   "placed_on": "2026-10-28",
+   "status": "open",
+   "total": 964.74,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 4,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 4,
+     "unit_price": 167.99
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 1,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1292",
+   "customer_id": "C-0008",
+   "placed_on": "2026-10-28",
+   "status": "open",
+   "total": 889.74,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 4,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1016",
+   "customer_id": "C-0023",
+   "placed_on": "2026-10-30",
+   "status": "cancelled",
+   "total": 620.12,
+   "items": [
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 2,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 4,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1164",
+   "customer_id": "C-0020",
+   "placed_on": "2026-10-30",
+   "status": "delivered",
+   "total": 401.54,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 32.78
+    },
+    {
+     "sku": "SKU-113",
+     "qty": 2,
+     "unit_price": 167.99
+    }
+   ]
+  },
+  {
+   "id": "O-1188",
+   "customer_id": "C-0012",
+   "placed_on": "2026-10-30",
+   "status": "delivered",
+   "total": 160.08,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 4,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1011",
+   "customer_id": "C-0012",
+   "placed_on": "2026-10-31",
+   "status": "open",
+   "total": 293.3,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1046",
+   "customer_id": "C-0009",
+   "placed_on": "2026-10-31",
+   "status": "delivered",
+   "total": 125.43,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 3,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 1,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1039",
+   "customer_id": "C-0018",
+   "placed_on": "2026-11-01",
+   "status": "delivered",
+   "total": 314.43,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 2,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1294",
+   "customer_id": "C-0008",
+   "placed_on": "2026-11-01",
+   "status": "shipped",
+   "total": 305.22,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1261",
+   "customer_id": "C-0009",
+   "placed_on": "2026-11-02",
+   "status": "delivered",
+   "total": 536.79,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 2,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 5,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1167",
+   "customer_id": "C-0013",
+   "placed_on": "2026-11-03",
+   "status": "delivered",
+   "total": 277.65,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 2,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-123",
+     "qty": 3,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1248",
+   "customer_id": "C-0009",
+   "placed_on": "2026-11-03",
+   "status": "cancelled",
+   "total": 13.87,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 1,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1284",
+   "customer_id": "C-0028",
+   "placed_on": "2026-11-03",
+   "status": "shipped",
+   "total": 1150.51,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 3,
+     "unit_price": 90.19
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 4,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1286",
+   "customer_id": "C-0033",
+   "placed_on": "2026-11-03",
+   "status": "delivered",
+   "total": 808.3,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 5,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1030",
+   "customer_id": "C-0033",
+   "placed_on": "2026-11-04",
+   "status": "shipped",
+   "total": 238.54,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 2,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1158",
+   "customer_id": "C-0013",
+   "placed_on": "2026-11-04",
+   "status": "cancelled",
+   "total": 319.73,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 1,
+     "unit_price": 65.87
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 3,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1185",
+   "customer_id": "C-0038",
+   "placed_on": "2026-11-04",
+   "status": "open",
+   "total": 120.06,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 3,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1271",
+   "customer_id": "C-0025",
+   "placed_on": "2026-11-04",
+   "status": "open",
+   "total": 727.91,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 5,
+     "unit_price": 94.81
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 3,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1097",
+   "customer_id": "C-0006",
+   "placed_on": "2026-11-05",
+   "status": "refunded",
+   "total": 387.56,
+   "items": [
+    {
+     "sku": "SKU-122",
+     "qty": 3,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-119",
+     "qty": 5,
+     "unit_price": 33.91
+    }
+   ]
+  },
+  {
+   "id": "O-1014",
+   "customer_id": "C-0024",
+   "placed_on": "2026-11-08",
+   "status": "delivered",
+   "total": 346.88,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1060",
+   "customer_id": "C-0023",
+   "placed_on": "2026-11-08",
+   "status": "open",
+   "total": 28.47,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 1,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1187",
+   "customer_id": "C-0029",
+   "placed_on": "2026-11-08",
+   "status": "cancelled",
+   "total": 527.3,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 5,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1218",
+   "customer_id": "C-0009",
+   "placed_on": "2026-11-08",
+   "status": "delivered",
+   "total": 284.2,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 1,
+     "unit_price": 86.72
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 2,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1246",
+   "customer_id": "C-0015",
+   "placed_on": "2026-11-08",
+   "status": "delivered",
+   "total": 198.94,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 2,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 4,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1278",
+   "customer_id": "C-0023",
+   "placed_on": "2026-11-08",
+   "status": "cancelled",
+   "total": 346.88,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 4,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1095",
+   "customer_id": "C-0021",
+   "placed_on": "2026-11-10",
+   "status": "delivered",
+   "total": 56.94,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 2,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1138",
+   "customer_id": "C-0005",
+   "placed_on": "2026-11-10",
+   "status": "open",
+   "total": 740.69,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 4,
+     "unit_price": 101.24
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1194",
+   "customer_id": "C-0017",
+   "placed_on": "2026-11-10",
+   "status": "delivered",
+   "total": 200.1,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 5,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1013",
+   "customer_id": "C-0015",
+   "placed_on": "2026-11-11",
+   "status": "delivered",
+   "total": 270.15,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 1,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 2,
+     "unit_price": 72.67
+    }
+   ]
+  },
+  {
+   "id": "O-1017",
+   "customer_id": "C-0035",
+   "placed_on": "2026-11-11",
+   "status": "shipped",
+   "total": 348.36,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 1,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1172",
+   "customer_id": "C-0021",
+   "placed_on": "2026-11-11",
+   "status": "delivered",
+   "total": 193.62,
+   "items": [
+    {
+     "sku": "SKU-108",
+     "qty": 3,
+     "unit_price": 64.54
+    }
+   ]
+  },
+  {
+   "id": "O-1085",
+   "customer_id": "C-0003",
+   "placed_on": "2026-11-12",
+   "status": "cancelled",
+   "total": 167.07,
+   "items": [
+    {
+     "sku": "SKU-112",
+     "qty": 3,
+     "unit_price": 13.87
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 2,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1144",
+   "customer_id": "C-0013",
+   "placed_on": "2026-11-12",
+   "status": "cancelled",
+   "total": 377.0,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-107",
+     "qty": 3,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 1,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1233",
+   "customer_id": "C-0011",
+   "placed_on": "2026-11-12",
+   "status": "delivered",
+   "total": 249.62,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 2,
+     "unit_price": 124.81
+    }
+   ]
+  },
+  {
+   "id": "O-1247",
+   "customer_id": "C-0018",
+   "placed_on": "2026-11-12",
+   "status": "cancelled",
+   "total": 185.16,
+   "items": [
+    {
+     "sku": "SKU-104",
+     "qty": 2,
+     "unit_price": 92.58
+    }
+   ]
+  },
+  {
+   "id": "O-1072",
+   "customer_id": "C-0038",
+   "placed_on": "2026-11-13",
+   "status": "open",
+   "total": 139.8,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 3,
+     "unit_price": 46.6
+    }
+   ]
+  },
+  {
+   "id": "O-1080",
+   "customer_id": "C-0003",
+   "placed_on": "2026-11-13",
+   "status": "delivered",
+   "total": 56.94,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 2,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1081",
+   "customer_id": "C-0028",
+   "placed_on": "2026-11-13",
+   "status": "shipped",
+   "total": 717.12,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 2,
+     "unit_price": 105.46
+    },
+    {
+     "sku": "SKU-110",
+     "qty": 5,
+     "unit_price": 101.24
+    }
+   ]
+  },
+  {
+   "id": "O-1019",
+   "customer_id": "C-0003",
+   "placed_on": "2026-11-14",
+   "status": "shipped",
+   "total": 329.35,
+   "items": [
+    {
+     "sku": "SKU-123",
+     "qty": 5,
+     "unit_price": 65.87
+    }
+   ]
+  },
+  {
+   "id": "O-1049",
+   "customer_id": "C-0039",
+   "placed_on": "2026-11-14",
+   "status": "shipped",
+   "total": 397.77,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 1,
+     "unit_price": 28.47
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 5,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1151",
+   "customer_id": "C-0015",
+   "placed_on": "2026-11-14",
+   "status": "shipped",
+   "total": 484.98,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1269",
+   "customer_id": "C-0027",
+   "placed_on": "2026-11-14",
+   "status": "shipped",
+   "total": 463.12,
+   "items": [
+    {
+     "sku": "SKU-111",
+     "qty": 1,
+     "unit_price": 40.02
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 5,
+     "unit_price": 84.62
+    }
+   ]
+  },
+  {
+   "id": "O-1024",
+   "customer_id": "C-0021",
+   "placed_on": "2026-11-15",
+   "status": "open",
+   "total": 433.6,
+   "items": [
+    {
+     "sku": "SKU-124",
+     "qty": 5,
+     "unit_price": 86.72
+    }
+   ]
+  },
+  {
+   "id": "O-1091",
+   "customer_id": "C-0025",
+   "placed_on": "2026-11-15",
+   "status": "open",
+   "total": 243.11,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 2,
+     "unit_price": 90.19
+    },
+    {
+     "sku": "SKU-103",
+     "qty": 1,
+     "unit_price": 62.73
+    }
+   ]
+  },
+  {
+   "id": "O-1006",
+   "customer_id": "C-0008",
+   "placed_on": "2026-11-16",
+   "status": "open",
+   "total": 203.68,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 1,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 1,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1025",
+   "customer_id": "C-0033",
+   "placed_on": "2026-11-16",
+   "status": "cancelled",
+   "total": 32.78,
+   "items": [
+    {
+     "sku": "SKU-106",
+     "qty": 1,
+     "unit_price": 32.78
+    }
+   ]
+  },
+  {
+   "id": "O-1090",
+   "customer_id": "C-0015",
+   "placed_on": "2026-11-16",
+   "status": "shipped",
+   "total": 28.47,
+   "items": [
+    {
+     "sku": "SKU-116",
+     "qty": 1,
+     "unit_price": 28.47
+    }
+   ]
+  },
+  {
+   "id": "O-1135",
+   "customer_id": "C-0017",
+   "placed_on": "2026-11-16",
+   "status": "shipped",
+   "total": 937.06,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 4,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-104",
+     "qty": 3,
+     "unit_price": 92.58
+    },
+    {
+     "sku": "SKU-111",
+     "qty": 4,
+     "unit_price": 40.02
+    }
+   ]
+  },
+  {
+   "id": "O-1159",
+   "customer_id": "C-0035",
+   "placed_on": "2026-11-16",
+   "status": "shipped",
+   "total": 1104.52,
+   "items": [
+    {
+     "sku": "SKU-118",
+     "qty": 5,
+     "unit_price": 161.66
+    },
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1201",
+   "customer_id": "C-0008",
+   "placed_on": "2026-11-16",
+   "status": "open",
+   "total": 693.29,
+   "items": [
+    {
+     "sku": "SKU-119",
+     "qty": 4,
+     "unit_price": 33.91
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 1,
+     "unit_price": 72.67
+    },
+    {
+     "sku": "SKU-118",
+     "qty": 3,
+     "unit_price": 161.66
+    }
+   ]
+  },
+  {
+   "id": "O-1272",
+   "customer_id": "C-0016",
+   "placed_on": "2026-11-16",
+   "status": "shipped",
+   "total": 296.22,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 3,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1318",
+   "customer_id": "C-0013",
+   "placed_on": "2026-11-16",
+   "status": "shipped",
+   "total": 90.19,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 1,
+     "unit_price": 90.19
+    }
+   ]
+  },
+  {
+   "id": "O-1037",
+   "customer_id": "C-0001",
+   "placed_on": "2026-11-17",
+   "status": "shipped",
+   "total": 266.16,
+   "items": [
+    {
+     "sku": "SKU-107",
+     "qty": 3,
+     "unit_price": 42.02
+    },
+    {
+     "sku": "SKU-114",
+     "qty": 1,
+     "unit_price": 84.62
+    },
+    {
+     "sku": "SKU-112",
+     "qty": 4,
+     "unit_price": 13.87
+    }
+   ]
+  },
+  {
+   "id": "O-1256",
+   "customer_id": "C-0016",
+   "placed_on": "2026-11-17",
+   "status": "shipped",
+   "total": 94.81,
+   "items": [
+    {
+     "sku": "SKU-101",
+     "qty": 1,
+     "unit_price": 94.81
+    }
+   ]
+  },
+  {
+   "id": "O-1195",
+   "customer_id": "C-0011",
+   "placed_on": "2026-11-18",
+   "status": "open",
+   "total": 316.38,
+   "items": [
+    {
+     "sku": "SKU-105",
+     "qty": 3,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1012",
+   "customer_id": "C-0022",
+   "placed_on": "2026-11-19",
+   "status": "shipped",
+   "total": 493.7,
+   "items": [
+    {
+     "sku": "SKU-121",
+     "qty": 5,
+     "unit_price": 98.74
+    }
+   ]
+  },
+  {
+   "id": "O-1212",
+   "customer_id": "C-0002",
+   "placed_on": "2026-11-19",
+   "status": "shipped",
+   "total": 919.49,
+   "items": [
+    {
+     "sku": "SKU-102",
+     "qty": 5,
+     "unit_price": 124.81
+    },
+    {
+     "sku": "SKU-120",
+     "qty": 4,
+     "unit_price": 73.86
+    }
+   ]
+  },
+  {
+   "id": "O-1010",
+   "customer_id": "C-0035",
+   "placed_on": "2026-11-20",
+   "status": "open",
+   "total": 198.66,
+   "items": [
+    {
+     "sku": "SKU-109",
+     "qty": 2,
+     "unit_price": 46.6
+    },
+    {
+     "sku": "SKU-105",
+     "qty": 1,
+     "unit_price": 105.46
+    }
+   ]
+  },
+  {
+   "id": "O-1092",
+   "customer_id": "C-0016",
+   "placed_on": "2026-11-20",
+   "status": "open",
+   "total": 450.95,
+   "items": [
+    {
+     "sku": "SKU-115",
+     "qty": 5,
+     "unit_price": 90.19
+    }
+   ]
+  }
+ ],
+ "shipments": [
+  {
+   "id": "S-5001",
+   "order_id": "O-1026",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-03",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5002",
+   "order_id": "O-1143",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-03",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5003",
+   "order_id": "O-1184",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-04",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5004",
+   "order_id": "O-1236",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5005",
+   "order_id": "O-1227",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-06",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5006",
+   "order_id": "O-1177",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-08",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5007",
+   "order_id": "O-1047",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5008",
+   "order_id": "O-1098",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-08",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5009",
+   "order_id": "O-1178",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-07",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5010",
+   "order_id": "O-1192",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5011",
+   "order_id": "O-1140",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-10",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5012",
+   "order_id": "O-1008",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-10",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5013",
+   "order_id": "O-1156",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-11",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5014",
+   "order_id": "O-1252",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-10",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5015",
+   "order_id": "O-1180",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-12",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5016",
+   "order_id": "O-1183",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-13",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5017",
+   "order_id": "O-1263",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5018",
+   "order_id": "O-1073",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-12",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5019",
+   "order_id": "O-1089",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-13",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5020",
+   "order_id": "O-1137",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-15",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5021",
+   "order_id": "O-1307",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-15",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5022",
+   "order_id": "O-1193",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-17",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5023",
+   "order_id": "O-1112",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-18",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5024",
+   "order_id": "O-1257",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-18",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5025",
+   "order_id": "O-1142",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-19",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5026",
+   "order_id": "O-1262",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-21",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5027",
+   "order_id": "O-1076",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-21",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5028",
+   "order_id": "O-1154",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-20",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5029",
+   "order_id": "O-1210",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-22",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5030",
+   "order_id": "O-1259",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-21",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5031",
+   "order_id": "O-1275",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-20",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5032",
+   "order_id": "O-1273",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-21",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5033",
+   "order_id": "O-1182",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-23",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5034",
+   "order_id": "O-1117",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-24",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5035",
+   "order_id": "O-1216",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-24",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5036",
+   "order_id": "O-1166",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-25",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5037",
+   "order_id": "O-1042",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-26",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5038",
+   "order_id": "O-1251",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-26",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5039",
+   "order_id": "O-1153",
+   "carrier": "PostNL",
+   "shipped_on": "2026-07-28",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5040",
+   "order_id": "O-1277",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5041",
+   "order_id": "O-1101",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5042",
+   "order_id": "O-1219",
+   "carrier": "FedEx",
+   "shipped_on": "2026-07-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5043",
+   "order_id": "O-1007",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-28",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5044",
+   "order_id": "O-1034",
+   "carrier": "UPS",
+   "shipped_on": "2026-07-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5045",
+   "order_id": "O-1295",
+   "carrier": "DHL",
+   "shipped_on": "2026-07-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5046",
+   "order_id": "O-1162",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-03",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5047",
+   "order_id": "O-1053",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5048",
+   "order_id": "O-1199",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5049",
+   "order_id": "O-1102",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-09",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5050",
+   "order_id": "O-1240",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5051",
+   "order_id": "O-1066",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-12",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5052",
+   "order_id": "O-1093",
+   "carrier": "PostNL",
+   "shipped_on": "2026-08-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5053",
+   "order_id": "O-1238",
+   "carrier": "PostNL",
+   "shipped_on": "2026-08-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5054",
+   "order_id": "O-1043",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-15",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5055",
+   "order_id": "O-1111",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5056",
+   "order_id": "O-1148",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-15",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5057",
+   "order_id": "O-1197",
+   "carrier": "FedEx",
+   "shipped_on": "2026-08-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5058",
+   "order_id": "O-1250",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5059",
+   "order_id": "O-1051",
+   "carrier": "FedEx",
+   "shipped_on": "2026-08-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5060",
+   "order_id": "O-1096",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-17",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5061",
+   "order_id": "O-1244",
+   "carrier": "PostNL",
+   "shipped_on": "2026-08-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5062",
+   "order_id": "O-1299",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-15",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5063",
+   "order_id": "O-1099",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-18",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5064",
+   "order_id": "O-1165",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-18",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5065",
+   "order_id": "O-1045",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-18",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5066",
+   "order_id": "O-1079",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-21",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5067",
+   "order_id": "O-1120",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-20",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5068",
+   "order_id": "O-1179",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-23",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5069",
+   "order_id": "O-1190",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-21",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5070",
+   "order_id": "O-1302",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-24",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5071",
+   "order_id": "O-1064",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-26",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5072",
+   "order_id": "O-1109",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-26",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5073",
+   "order_id": "O-1313",
+   "carrier": "FedEx",
+   "shipped_on": "2026-08-25",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5074",
+   "order_id": "O-1063",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-25",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5075",
+   "order_id": "O-1065",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-27",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5076",
+   "order_id": "O-1163",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-25",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5077",
+   "order_id": "O-1207",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-26",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5078",
+   "order_id": "O-1320",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-25",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5079",
+   "order_id": "O-1083",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-26",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5080",
+   "order_id": "O-1086",
+   "carrier": "PostNL",
+   "shipped_on": "2026-08-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5081",
+   "order_id": "O-1243",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-26",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5082",
+   "order_id": "O-1245",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-27",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5083",
+   "order_id": "O-1265",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-26",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5084",
+   "order_id": "O-1309",
+   "carrier": "FedEx",
+   "shipped_on": "2026-08-27",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5085",
+   "order_id": "O-1113",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5086",
+   "order_id": "O-1173",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5087",
+   "order_id": "O-1015",
+   "carrier": "DHL",
+   "shipped_on": "2026-08-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5088",
+   "order_id": "O-1035",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-28",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5089",
+   "order_id": "O-1276",
+   "carrier": "UPS",
+   "shipped_on": "2026-08-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5090",
+   "order_id": "O-1115",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-04",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5091",
+   "order_id": "O-1186",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-03",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5092",
+   "order_id": "O-1230",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-04",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5093",
+   "order_id": "O-1027",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5094",
+   "order_id": "O-1105",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-05",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5095",
+   "order_id": "O-1312",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-06",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5096",
+   "order_id": "O-1018",
+   "carrier": "PostNL",
+   "shipped_on": "2026-09-07",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5097",
+   "order_id": "O-1038",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5098",
+   "order_id": "O-1175",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5099",
+   "order_id": "O-1223",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5100",
+   "order_id": "O-1311",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-10",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5101",
+   "order_id": "O-1152",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-10",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5102",
+   "order_id": "O-1174",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5103",
+   "order_id": "O-1274",
+   "carrier": "PostNL",
+   "shipped_on": "2026-09-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5104",
+   "order_id": "O-1056",
+   "carrier": "PostNL",
+   "shipped_on": "2026-09-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5105",
+   "order_id": "O-1264",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-12",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5106",
+   "order_id": "O-1316",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-12",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5107",
+   "order_id": "O-1068",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-13",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5108",
+   "order_id": "O-1005",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-15",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5109",
+   "order_id": "O-1107",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5110",
+   "order_id": "O-1110",
+   "carrier": "PostNL",
+   "shipped_on": "2026-09-18",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5111",
+   "order_id": "O-1147",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-19",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5112",
+   "order_id": "O-1127",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-20",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5113",
+   "order_id": "O-1169",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-20",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5114",
+   "order_id": "O-1224",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-19",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5115",
+   "order_id": "O-1077",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-24",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5116",
+   "order_id": "O-1040",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-23",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5117",
+   "order_id": "O-1071",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-25",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5118",
+   "order_id": "O-1104",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-23",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5119",
+   "order_id": "O-1031",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-26",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5120",
+   "order_id": "O-1235",
+   "carrier": "PostNL",
+   "shipped_on": "2026-09-27",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5121",
+   "order_id": "O-1131",
+   "carrier": "UPS",
+   "shipped_on": "2026-09-27",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5122",
+   "order_id": "O-1306",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-27",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5123",
+   "order_id": "O-1094",
+   "carrier": "PostNL",
+   "shipped_on": "2026-09-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5124",
+   "order_id": "O-1069",
+   "carrier": "DHL",
+   "shipped_on": "2026-09-28",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5125",
+   "order_id": "O-1215",
+   "carrier": "FedEx",
+   "shipped_on": "2026-09-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5126",
+   "order_id": "O-1150",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-02",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5127",
+   "order_id": "O-1209",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-03",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5128",
+   "order_id": "O-1226",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-04",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5129",
+   "order_id": "O-1146",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-05",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5130",
+   "order_id": "O-1203",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-03",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5131",
+   "order_id": "O-1041",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-06",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5132",
+   "order_id": "O-1268",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-06",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5133",
+   "order_id": "O-1298",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5134",
+   "order_id": "O-1315",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5135",
+   "order_id": "O-1133",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-07",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5136",
+   "order_id": "O-1196",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-07",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5137",
+   "order_id": "O-1220",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-06",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5138",
+   "order_id": "O-1283",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-06",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5139",
+   "order_id": "O-1028",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-07",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5140",
+   "order_id": "O-1279",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-07",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5141",
+   "order_id": "O-1108",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5142",
+   "order_id": "O-1310",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5143",
+   "order_id": "O-1004",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-11",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5144",
+   "order_id": "O-1021",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-10",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5145",
+   "order_id": "O-1114",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5146",
+   "order_id": "O-1149",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-10",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5147",
+   "order_id": "O-1222",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-09",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5148",
+   "order_id": "O-1280",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-10",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5149",
+   "order_id": "O-1116",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5150",
+   "order_id": "O-1036",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-14",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5151",
+   "order_id": "O-1229",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-13",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5152",
+   "order_id": "O-1205",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-15",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5153",
+   "order_id": "O-1296",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-13",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5154",
+   "order_id": "O-1033",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5155",
+   "order_id": "O-1237",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5156",
+   "order_id": "O-1319",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-16",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5157",
+   "order_id": "O-1058",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-17",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5158",
+   "order_id": "O-1126",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-17",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5159",
+   "order_id": "O-1141",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-18",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5160",
+   "order_id": "O-1266",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-18",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5161",
+   "order_id": "O-1300",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-17",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5162",
+   "order_id": "O-1009",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-19",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5163",
+   "order_id": "O-1078",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-17",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5164",
+   "order_id": "O-1128",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-19",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5165",
+   "order_id": "O-1181",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-18",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5166",
+   "order_id": "O-1231",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-17",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5167",
+   "order_id": "O-1062",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-20",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5168",
+   "order_id": "O-1067",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-19",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5169",
+   "order_id": "O-1254",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-20",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5170",
+   "order_id": "O-1291",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-26",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5171",
+   "order_id": "O-1057",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5172",
+   "order_id": "O-1100",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-27",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5173",
+   "order_id": "O-1032",
+   "carrier": "DHL",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5174",
+   "order_id": "O-1052",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5175",
+   "order_id": "O-1132",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5176",
+   "order_id": "O-1170",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5177",
+   "order_id": "O-1225",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-28",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5178",
+   "order_id": "O-1164",
+   "carrier": "UPS",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5179",
+   "order_id": "O-1188",
+   "carrier": "FedEx",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5180",
+   "order_id": "O-1046",
+   "carrier": "PostNL",
+   "shipped_on": "2026-10-28",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5181",
+   "order_id": "O-1039",
+   "carrier": "PostNL",
+   "shipped_on": "2026-11-02",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5182",
+   "order_id": "O-1294",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-03",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5183",
+   "order_id": "O-1261",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-03",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5184",
+   "order_id": "O-1167",
+   "carrier": "FedEx",
+   "shipped_on": "2026-11-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5185",
+   "order_id": "O-1284",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-05",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5186",
+   "order_id": "O-1286",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-05",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5187",
+   "order_id": "O-1030",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-05",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5188",
+   "order_id": "O-1097",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-06",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5189",
+   "order_id": "O-1014",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5190",
+   "order_id": "O-1218",
+   "carrier": "PostNL",
+   "shipped_on": "2026-11-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5191",
+   "order_id": "O-1246",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-11",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5192",
+   "order_id": "O-1095",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-12",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5193",
+   "order_id": "O-1194",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-13",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5194",
+   "order_id": "O-1013",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5195",
+   "order_id": "O-1017",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-14",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5196",
+   "order_id": "O-1172",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5197",
+   "order_id": "O-1233",
+   "carrier": "PostNL",
+   "shipped_on": "2026-11-13",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5198",
+   "order_id": "O-1080",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-14",
+   "status": "delivered"
+  },
+  {
+   "id": "S-5199",
+   "order_id": "O-1081",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-16",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5200",
+   "order_id": "O-1019",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-16",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5201",
+   "order_id": "O-1049",
+   "carrier": "PostNL",
+   "shipped_on": "2026-11-16",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5202",
+   "order_id": "O-1151",
+   "carrier": "PostNL",
+   "shipped_on": "2026-11-16",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5203",
+   "order_id": "O-1269",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-16",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5204",
+   "order_id": "O-1090",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-17",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5205",
+   "order_id": "O-1135",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-18",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5206",
+   "order_id": "O-1159",
+   "carrier": "FedEx",
+   "shipped_on": "2026-11-19",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5207",
+   "order_id": "O-1272",
+   "carrier": "PostNL",
+   "shipped_on": "2026-11-19",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5208",
+   "order_id": "O-1318",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-17",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5209",
+   "order_id": "O-1037",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-19",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5210",
+   "order_id": "O-1256",
+   "carrier": "DHL",
+   "shipped_on": "2026-11-18",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5211",
+   "order_id": "O-1012",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-20",
+   "status": "in_transit"
+  },
+  {
+   "id": "S-5212",
+   "order_id": "O-1212",
+   "carrier": "UPS",
+   "shipped_on": "2026-11-22",
+   "status": "in_transit"
+  }
+ ]
+}

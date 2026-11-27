@@ -1,0 +1,24 @@
+#!/bin/bash
+# Converts Word, Excel and PowerPoint files to Markdown, using the application's converter over a local socket.
+out=; args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o) out=$2; shift 2 ;;
+    -o?*) out=${1#-o}; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+tmp=$(mktemp) || exit 1
+trap 'rm -f "$tmp" "$tmp.b"' EXIT
+jq -n --arg cwd "$PWD" '{cwd: $cwd, args: $ARGS.positional, files: {}}' --args -- "${args[@]}" > "$tmp"
+for a in "${args[@]}"; do
+  if [ -f "$a" ]; then
+    base64 -w0 -- "$a" > "$tmp.b"
+    jq --arg p "$(realpath -- "$a")" --rawfile d "$tmp.b" '.files[$p] = $d' "$tmp" > "$tmp.n" && mv "$tmp.n" "$tmp"
+  fi
+done
+resp=$(curl -sS --unix-socket /run/app/app.sock --data-binary @"$tmp" http://app/to-markdown) \
+  || { echo "to-markdown: cannot reach the converter" >&2; exit 1; }
+if [ -n "$out" ]; then jq -j .stdout <<<"$resp" > "$out"; else jq -j .stdout <<<"$resp"; fi
+jq -j .stderr <<<"$resp" >&2
+exit "$(jq -r .exit <<<"$resp")"
