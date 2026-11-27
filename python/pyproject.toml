@@ -36,6 +36,7 @@ pydantic-ai = ["pydantic-ai-slim>=2.0"]
 crewai = ["crewai>=1.0"]
 smolagents = ["smolagents>=1.20"]
 google-adk = ["google-adk>=2.0"]
+python = ["topwater-python>=0.1.0"]  # python3 (Shell.allow_python): the interpreter and wasmtime, kept out of this package
 
 [project.urls]
 Homepage = "https://github.com/gr-ant/Topwater"
