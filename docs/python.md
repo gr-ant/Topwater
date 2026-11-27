@@ -19,7 +19,7 @@ add-on package, so the core packages stay small and dependency-free.
 |---|---|---|---|
 | Install | `dotnet add package Topwater.Python` | `pip install 'topwater[python]'` | `npm install topwater-python` |
 | Enable | `shell.AllowPython(new PythonOptions { ... })` | `shell.allow_python(PythonOptions(...))` | `await shell.allowPython({ ... })` |
-| Status | to come | available | to come |
+| Status | available | available | to come |
 
 ```python
 from topwater import Shell
@@ -33,20 +33,32 @@ rows = list(csv.DictReader(open("/tmp/parts.csv")))
 print(sum(int(r["qty"]) for r in rows))'""").stdout)     # 8
 ```
 
+```csharp
+using Topwater;
+using Topwater.Python;
+
+var shell = new Shell().AllowPython();               // or AllowPython(new PythonOptions { MaxMemory = 128L << 20 })
+```
+
 `topwater[python]` installs `topwater-python`, which holds the interpreter (`python.wasm.xz`, `python314.zip`) and
 depends on [`wasmtime`](https://pypi.org/project/wasmtime/). The core `topwater` package imports neither until
-`allow_python` is called. The .NET add-on will be a `Topwater.Python` package depending on the `Wasmtime` NuGet
-package; the npm one a separate package that needs no runtime dependency, since Node and browsers have WebAssembly.
+`allow_python` is called. The .NET add-on is the `Topwater.Python` package: it carries the interpreter inside its
+assembly and depends on the [`Wasmtime`](https://www.nuget.org/packages/Wasmtime) NuGet package; the core `Topwater`
+package references neither. .NET has no xz decoder, so the add-on carries the same module gzipped (`python.wasm.gz`,
+written reproducibly from the vendored file by `tools/python-wasm/gzip_module.py`) and checks the decompressed module's
+SHA-256. The npm add-on will be a separate package that needs no runtime dependency, since Node and browsers have
+WebAssembly.
 
 `allow_python` compiles the interpreter the first time a process uses it (2 to 3 seconds) and keeps it for every
-shell after that; each call then costs a few milliseconds. It raises `PythonUnavailable` in your code when the add-on
-is missing or its files do not match the hashes Topwater expects, rather than failing in front of the agent.
+shell after that; each call then costs a few milliseconds. It raises `PythonUnavailable` (.NET:
+`PythonUnavailableException`) in your code when the add-on is missing or its files do not match the hashes Topwater
+expects, rather than failing in front of the agent.
 
 | `PythonOptions` | Default | |
 |---|---|---|
-| `max_memory` | 256 MB | WebAssembly memory for one call. The interpreter starts at about 40 MB; past the limit a program gets `MemoryError` |
-| `artifacts` | the add-on's | A folder holding `python.wasm.xz` and `python314.zip` (the repository's `assets/python-wasm`) |
-| `cache_dir` | none | A folder of yours where the compiled interpreter is kept between processes, so only the first process compiles it. It holds machine code: give it the same trust as your own program files |
+| `max_memory` (`MaxMemory`) | 256 MB | WebAssembly memory for one call. The interpreter starts at about 40 MB; past the limit a program gets `MemoryError` |
+| `artifacts` (`Artifacts`) | the add-on's | A folder holding `python.wasm.xz` and `python314.zip` (the repository's `assets/python-wasm`); for .NET, `python.wasm.gz` and `python314.zip` |
+| `cache_dir` (`CacheDir`) | none | A folder of yours where the compiled interpreter is kept between processes, so only the first process compiles it. It holds machine code: give it the same trust as your own program files |
 
 Until `allow_python` is called, `python3` is `command not found`, as on a fresh Ubuntu image. There is no `python`
 alias (Ubuntu has none without the `python-is-python3` package), no `pip` and no interactive prompt.
@@ -83,7 +95,7 @@ behaviour the two share. Beyond the version:
 | Output | streamed | collected and written when the program ends (pipelines in the machine run one stage after another anyway) |
 | Reading a mounted file the command did not name | — | fetched from the source while the program waits ([mounts](#mounts-web-access-snapshots-and-recordings)) |
 | `os.getuid()` and other process calls | the real ids | absent, as in any WASI build of Python |
-| `random`, `time` | — | real randomness and the real clock, like `date` and `$RANDOM` in Topwater's Python port, which has no virtual clock |
+| `random`, `time` | — | real randomness and the real clock, like `date` and `$RANDOM` in Topwater's Python port, which has no virtual clock. In .NET the wall clock is the shell's, so a shell with `StartTime` shows its virtual time; randomness stays real |
 
 ## Limits
 
@@ -115,7 +127,7 @@ or thread.
 - **The interpreter** is checked against pinned SHA-256 hashes every time it is loaded.
 - **Hostile programs** (a busy loop, a huge allocation, deep recursion, a file that fills the disk, symbolic link
   loops, `..` paths, closing or exhausting descriptors) fail inside Python or end the program; the tests in
-  `python/tests/test_python.py` cover each.
+  `python/tests/test_python.py` and `tests/Topwater.Tests/PythonTests.cs` cover each.
 
 ## Mounts, web access, snapshots and recordings
 
@@ -129,9 +141,10 @@ the recording's `configure` callback (`recording.shell_at(n, configure=lambda s:
 
 ## Porting
 
-The Python port is the reference (`python/src/topwater/wasi.py`, `python/src/topwater/commands/python.py`). The C# and
-TypeScript ports implement the same contract, mirrored in `tools/layout.json` (`Wasi.cs`, `Builtins/PythonCommand.cs`;
-`wasi.ts`, `commands/python.ts`):
+The Python port is the reference (`python/src/topwater/wasi.py`, `python/src/topwater/commands/python.py`). The C# port
+follows it in the add-on (`src/Topwater.Python/Wasi.cs` and `PythonCommand.cs`; the core keeps only the registrar,
+`Builtins/PythonCommand.cs`, so it never references Wasmtime), and TypeScript will (`wasi.ts`, `commands/python.ts`),
+mirrored in `tools/layout.json`. The contract:
 
 - **Guest contract** (bashkit's): instantiate the module with only `wasi_snapshot_preview1` and `bashkit` imports,
   call `_initialize` if exported, then `bashkit_run() -> i32` (the exit status, unless `proc_exit` ends it first). argv
@@ -144,7 +157,8 @@ TypeScript ports implement the same contract, mirrored in `tools/layout.json` (`
 - **HTTP bridge**: `bashkit.http_request(ptr, len, timeout_ms, out_len_ptr)` and `bashkit.http_take(ptr, len)`;
   the record layout is in `wasi.py` (http bridge section). Requests go through the port's web session, one hop each.
 - **Limits**: epoch interruption (10 ms ticks) for time, the store's memory limit, a 2 MB WebAssembly stack, the
-  shell's output and disk limits.
+  shell's output and disk limits. .NET checks the deadline and the call's cancellation (`timeout N`) at every tick
+  through the store's epoch callback, since `timeout` ends a call by cancelling it.
 - **TypeScript** runs the guest synchronously, so a time limit on the main thread needs a worker: the guest runs in a
   Worker, and its WASI calls reach the filesystem on the main thread through a `SharedArrayBuffer` and `Atomics.wait`;
   the main thread can terminate the worker at the deadline. Browsers need cross-origin isolation (COOP/COEP headers)

@@ -12,7 +12,8 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   ships in a separate add-on (`pip install 'topwater[python]'`, which brings `wasmtime`); the core package stays
   dependency-free. Topwater implements the WebAssembly system interface itself over the virtual filesystem, so
   permissions, the disk cap and mount modes hold as for any command. Time, memory, stack, output and descriptors are
-  bounded. .NET (`Topwater.Python`) and TypeScript follow. See [Python](docs/python.md).
+  bounded. .NET has it too (`Topwater.Python`, `using Topwater.Python; shell.AllowPython()`, which brings `Wasmtime`);
+  TypeScript follows. See [Python](docs/python.md).
 - **Mounted sources.** A host can show an outside store of files as a directory in the machine:
   `shell.MountAsync("/mnt/notes", source, MountMode.Staged)` (Python `shell.mount`, TypeScript `shell.mount`). A source
   is a small class with `list`, `stat`, `read` and, if it can, `write`, `delete`, `rename` and `mkdir`; its credentials
