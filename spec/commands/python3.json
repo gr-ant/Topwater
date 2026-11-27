@@ -1,0 +1,43 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "python3",
+  "category": "language",
+  "summary": "Run Python 3 programs in a WebAssembly sandbox",
+  "ports": ["py"],
+  "enabledBy": "allow_python",
+  "version": "Python 3.14.8",
+  "help": [
+    "usage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...",
+    "Runs CPython 3.14, compiled to WebAssembly, on this machine's files.",
+    "",
+    "  -c cmd   run the program given as a string (ends the options)",
+    "  -m mod   run a library module as a script (ends the options)",
+    "  file     run the program in a file",
+    "  -        read the program from standard input, as with no file at all",
+    "  arg ...  handed to the program in sys.argv[1:]",
+    "  -W arg   set a warnings filter",
+    "  -x       skip the first line of the program",
+    "  -h       show this help (also -? and --help)",
+    "  -V       show the version (also --version)",
+    "",
+    "Accepted and ignored: -b -B -d -E -i -I -O -P -q -R -s -S -u -v -X opt",
+    "Only the standard library is there: no pip, subprocesses, threads or sockets.",
+    "HTTP (urllib.request, requests, httpx) reaches only what the web policy allows."
+  ],
+  "parser": "custom",
+  "exitCodes": {
+    "0": "the program finished",
+    "1": "an uncaught exception, or the interpreter stopped (out of memory, out of stack)",
+    "2": "a bad command line, or the program file could not be opened",
+    "124": "the call's time limit ended the program"
+  },
+  "messages": {
+    "unavailable": "the Python add-on is not available: {reason}",
+    "fatal": "fatal error: {reason}",
+    "stackOverflow": "fatal error: the interpreter ran out of stack",
+    "stopped": "fatal error: the program was stopped at the time limit",
+    "writeBack": "could not save {file}, which the program left open: {errno}",
+    "httpFailed": "{method} {url}: {reason}"
+  },
+  "notes": "Opt-in: the host turns it on (allow_python) and installs the add-on that carries the interpreter (docs/python.md). The guest is bashkit's CPython build; its driver (_bashkit_boot) parses the rest of the command line, so those options and usage errors are its own. Real python3 on ubuntu:24.04 is 3.12: --version differs on purpose."
+}

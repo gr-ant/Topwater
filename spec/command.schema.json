@@ -49,6 +49,7 @@
       "type": "object", "additionalProperties": { "$ref": "#/$defs/subcommand" },
       "description": "For a command with subcommands (git): one entry per subcommand name. The command uses parser 'custom' and dispatches itself; each subcommand parses with its own generated option table. See spec/README.md."
     },
+    "enabledBy": { "type": "string", "minLength": 1, "description": "The command exists only after the host application turns it on with this call (the Python name: allow_python is AllowPython in .NET and allowPython in TypeScript). Absent: always registered. For documentation and the drift tests." },
     "notes": { "type": "string", "description": "Free text for maintainers." }
   },
   "$defs": {
