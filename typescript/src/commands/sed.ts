@@ -1,4 +1,3 @@
-import type { Shell } from '../shell.js';
 import { ShellError, cannotRead, specFormat, specMessage, specOf, splitLines, reason, tooLarge, type CommandContext } from '../command.js';
 import { GETOPT } from '../spec.generated.js';
 import { CLASS_SYNTAX, posixRegexError, posixToJs } from '../regex.js';
@@ -616,8 +615,4 @@ export function run(ctx: CommandContext): number {
     return null;
   });
   return q ?? (files.some(f => f !== '-' && ctx.fs.isDirectory(ctx.resolvePath(f))) ? 4 : error ? 2 : 0); // 4: a read error (a directory)
-}
-
-export function registerSed(shell: Shell): void {
-  shell.register('sed', run);
 }

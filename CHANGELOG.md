@@ -44,6 +44,11 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   in `find -name`, `case` and `tar --exclude` are now stopped by the call's time limit like other patterns.
 - **jq `def`.** Functions with filter and `$value` parameters, recursion and lexical scope (Python and C#; the
   TypeScript port had them). Nesting stops at 100 calls with "recursion too deep", the same in every port.
+- **TypeScript: `Shell`'s internal members now show their types in the `.d.ts`.** The shell's source is split into
+  `shell/*.ts` parts (see [docs/architecture.md](docs/architecture.md)). The 97 members that were `private`
+  (`execScript`, `expandWords`, `cwdPath`, `lineno`, ...) are now typed members marked `@internal`, like the ones that
+  already were; they appear in `dist/shell.d.ts` and the new `dist/shell/*.d.ts`, are not public API and may change.
+  The public members and the package entry points' types are unchanged.
 
 ## 0.1.0-preview.4 (2026-11-26)
 

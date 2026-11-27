@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { makeEnv } from './harness.js';
-import { registerSed } from '../src/commands/sed.js';
+import { registerText } from '../src/commands/text.js';
 
 function env() {
   const e = makeEnv();
-  registerSed(e.shell as any);
+  registerText(e.shell as any); // registers sed
   return e;
 }
 
