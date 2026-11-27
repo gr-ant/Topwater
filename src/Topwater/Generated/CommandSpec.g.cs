@@ -322,16 +322,63 @@ internal static partial class CommandSpec
                 ["ignoredPaths"] = "The following paths are ignored by one of your .gitignore files:\n{paths}\nhint: Use -f if you really want to add them.\nhint: Turn this message off by running\nhint: \"git config advice.addIgnoredFile false\"",
                 ["nestedRepo"] = "fatal: '{path}' holds another repository; nested repositories (submodules) are not supported here",
             }),
-            ["am"] = new("am", "Apply mailed patches (not available)", "usage: git am\n\nApply mailed patches (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            ["am"] = new("am", "Apply patches from mailbox files (as git format-patch writes them) as commits", "usage: git am [-q] [<mbox>...]\n   or: git am (--continue | --skip | --abort | --show-current-patch[=diff])\n\nApply patches from mailbox files (as git format-patch writes them) as commits.\n\n    -q, --quiet                print nothing but errors\n    --continue, --resolved     commit the current patch from the index after fixing it by hand, then go on\n    --skip                     drop the current patch and go on with the next\n    --abort                    stop and put the branch back where it was before git am\n    --show-current-patch diff  print the patch that stopped (=diff: only its diff)\n", false, ("q", "", "quiet=q,continue=\u0001,resolved=\u0001,skip=\u0002,abort=\u0003"), new Dictionary<string, string>
             {
-                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; edit the files directly",
+                ["applying"] = "Applying: {subject}",
+                ["patchFailedAt"] = "Patch failed at {number} {subject}",
+                ["showHint"] = "hint: Use 'git am --show-current-patch=diff' to see the failed patch",
+                ["resolveHint"] = "When you have resolved this problem, run \"git am --continue\".\nIf you prefer to skip this patch, run \"git am --skip\" instead.\nTo restore the original branch and stop patching, run \"git am --abort\".",
+                ["inProgress"] = "fatal: previous rebase directory .git/rebase-apply still exists but mbox given.",
+                ["notInProgress"] = "fatal: Resolve operation not in progress, we are not resuming.",
+                ["noChanges"] = "No changes - did you forget to use 'git add'?\nIf there is nothing left to stage, chances are that something else\nalready introduced the same changes; you might want to skip this patch.",
+                ["notPatch"] = "Patch format detection failed.",
+                ["emptyPatch"] = "Patch is empty.",
+                ["dirtyIndex"] = "fatal: Dirty index: cannot apply patches (dirty: {paths})",
+                ["cannotOpen"] = "fatal: could not open '{file}' for reading: {errno}",
+                ["movedHead"] = "You seem to have moved HEAD since the last 'am' failure.\nNot rewinding to ORIG_HEAD",
             }),
-            ["apply"] = new("apply", "Apply a patch (not available)", "usage: git apply\n\nApply a patch (not available).\n", true, ("", "", ""), new Dictionary<string, string>
+            ["apply"] = new("apply", "Apply a patch (unified diffs from git diff or diff -u) to the work tree or the index", "usage: git apply [<options>] [<patch>...]\n\nApply a patch (unified diffs from git diff or diff -u) to the work tree or the index.\n\n    --stat         print a diffstat of the patch instead of applying it\n    --numstat      print added and removed line counts per file instead of applying\n    --summary      list created, deleted and renamed files and mode changes instead of applying\n    --check        only check that the patch applies; change nothing\n    --index        apply to both the index and the work tree (the files must match the index)\n    --cached       apply to the index only, leaving the work tree alone\n    --apply        apply even when --stat, --numstat or --summary is given\n    -R, --reverse  apply the patch in reverse\n    -p <n>         drop <n> leading path components from the names in the patch (default 1)\n    -v, --verbose  report each file checked and each hunk applied at an offset\n", false, ("Rv", "p", "stat=\u0001,numstat=\u0002,summary=\u0003,check=\u0004,index=\u0005,cached=\u0006,apply=\u0007,reverse=R,verbose=v"), new Dictionary<string, string>
             {
-                ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; edit the files directly",
+                ["cannotOpen"] = "error: can't open patch '{file}': {errno}",
+                ["noPatches"] = "error: No valid patches in input (allow with \"--allow-empty\")",
+                ["corrupt"] = "error: corrupt patch at line {line}",
+                ["binary"] = "error: cannot apply binary patch to '{path}': binary patches are not supported in this machine's git",
+                ["patchFailed"] = "error: patch failed: {path}:{line}",
+                ["doesNotApply"] = "error: {path}: patch does not apply",
+                ["alreadyExists"] = "error: {path}: already exists in working directory",
+                ["alreadyInIndex"] = "error: {path}: already exists in index",
+                ["noSuchFile"] = "error: {path}: No such file or directory",
+                ["notInIndex"] = "error: {path}: does not exist in index",
+                ["notMatchIndex"] = "error: {path}: does not match index",
+                ["checking"] = "Checking patch {path}...",
+                ["appliedCleanly"] = "Applied patch {path} cleanly.",
+                ["hunkOffset"] = "Hunk #{number} succeeded at {line} (offset {offset}).",
+                ["searching"] = "error: while searching for:\n{lines}",
             }),
             ["archive"] = new("archive", "Export a tree as an archive (not available)", "usage: git archive\n\nExport a tree as an archive (not available).\n", true, ("", "", ""), Empty),
-            ["bisect"] = new("bisect", "Search history for a change (not available)", "usage: git bisect\n\nSearch history for a change (not available).\n", true, ("", "", ""), Empty),
+            ["bisect"] = new("bisect", "Find the commit that introduced a change by binary search", "usage: git bisect start [<bad> [<good>...]]\n   or: git bisect (good | bad | old | new) [<rev>...]\n   or: git bisect skip [<rev>...]\n   or: git bisect reset [<commit>]\n   or: git bisect log\n   or: git bisect run <cmd> [<arg>...]\n\nFind the commit that introduced a change by binary search.\n", false, ("", "", ""), new Dictionary<string, string>
+            {
+                ["needStart"] = "You need to start by \"git bisect start\"\n",
+                ["statusBoth"] = "status: waiting for both good and bad commits",
+                ["statusGood"] = "status: waiting for good commit(s), bad commit known",
+                ["statusBad"] = "status: waiting for bad commit, {count} good commit known",
+                ["statusBadMany"] = "status: waiting for bad commit, {count} good commits known",
+                ["bisecting"] = "Bisecting: {revisions} left to test after this (roughly {steps})",
+                ["current"] = "[{commit}] {subject}",
+                ["firstBad"] = "{commit} is the first bad commit",
+                ["logFirstBad"] = "# first bad commit: [{commit}] {subject}",
+                ["bothGoodAndBad"] = "{commit} was both good and bad",
+                ["badRev"] = "error: Bad rev input: {rev}",
+                ["notBisecting"] = "We are not bisecting.",
+                ["logNotBisecting"] = "error: We are not bisecting.",
+                ["running"] = "running {command}",
+                ["runFailed"] = "error: bisect run failed: exit code {code} from {command} is < 0 or >= 128",
+                ["runFound"] = "bisect found first bad commit",
+                ["runCannotContinue"] = "error: bisect run cannot continue any more",
+                ["onlySkipped"] = "There are only 'skip'ped commits left to test.\nThe first bad commit could be any of:\n{commits}\nWe cannot bisect more!",
+                ["needCommand"] = "fatal: need a command",
+                ["notAvailable"] = "error: 'git bisect {action}' is not available in this machine's git; use start, good, bad, skip, reset, log or run",
+            }),
             ["blame"] = new("blame", "Show who changed each line (not available)", "usage: git blame\n\nShow who changed each line (not available).\n", true, ("", "", ""), new Dictionary<string, string>
             {
                 ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git log -p -- <file>",
@@ -448,7 +495,7 @@ internal static partial class CommandSpec
             {
                 ["unsupported"] = "fatal: 'git {name}' is not available in this machine's git; use git branch -v and git tag",
             }),
-            ["format-patch"] = new("format-patch", "Write commits as patch files (not available)", "usage: git format-patch\n\nWrite commits as patch files (not available).\n", true, ("", "", ""), Empty),
+            ["format-patch"] = new("format-patch", "Write commits as mailbox patches that git am can apply", "usage: git format-patch [-o <dir> | --stdout] [-<n>] (<since> | <revision-range>)\n\nWrite commits as mailbox patches that git am can apply.\n\n    -o, --output-directory <dir>  write the files into <dir> instead of the current directory\n    --stdout                      print all the patches as one mailbox instead of writing files\n    -n, --max-count <n>           only the <n> newest commits (also -<n>; -1 alone means the last commit)\n", false, ("", "on", "output-directory=o,stdout=\u0001,max-count=n"), Empty),
             ["fsck"] = new("fsck", "Check the object database: every object readable, everything reachable present", "usage: git fsck [--no-dangling] [--full] [--connectivity-only]\n\nCheck the object database: every object readable, everything reachable present.\n\n    --dangling           list unreachable objects nothing else points to (the default; --no-dangling turns it off)\n    --full               accepted and ignored (loose and packed objects are always checked)\n    --connectivity-only  accepted and ignored (objects are always read in full)\n", false, ("", "", "dangling=\u0001,full=\u0002,connectivity-only=\u0003"), new Dictionary<string, string>
             {
                 ["dangling"] = "dangling {kind} {object}",

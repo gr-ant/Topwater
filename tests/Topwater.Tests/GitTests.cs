@@ -432,4 +432,27 @@ public class GitTests
         Assert.Equal(0, r.ExitCode);
         Assert.Equal("EvilName x\n", r.Stdout);
     }
+
+    [Fact]
+    public async Task ApplyRefusesPathsOutsideTheWorkTree()
+    {
+        var sh = await Repo();
+        foreach (var name in new[] { "../escape", ".git/config", "/etc/passwd" })
+        {
+            sh.Fs.WriteAllBytes("/tmp/p.diff", Encoding.UTF8.GetBytes($"--- a/{name}\n+++ b/{name}\n@@ -0,0 +1 @@\n+x\n".Replace("a//", "a/").Replace("b//", "b/")));
+            var r = await sh.RunAsync("cd /tmp/w && git apply /tmp/p.diff; echo $?");
+            Assert.NotEqual("0", r.Stdout.Trim().Split('\n')[^1]);
+        }
+        Assert.False(sh.Fs.Exists("/tmp/escape"));
+        Assert.DoesNotContain("x\n", (await sh.RunAsync("cat /tmp/w/.git/config")).Stdout);
+    }
+
+    [Fact]
+    public async Task BisectRunWithSkipsStillFindsTheCommit()
+    {
+        var sh = await Repo();
+        var r = await sh.RunAsync("cd /tmp/w && for i in 2 3 4 5 6; do echo $i > f; git commit -qam c$i; done; git bisect start HEAD HEAD~5 >/dev/null; "
+            + "git bisect run sh -c 'n=$(cat f); [ $n = 3 ] && exit 125; [ $n -lt 5 ]' | tail -1; git log -1 --format=%s");
+        Assert.Equal("bisect found first bad commit\nc5\n", r.Stdout);
+    }
 }

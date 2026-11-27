@@ -285,3 +285,20 @@ def test_editor_settings_and_identity_cleanup():
     assert r.stdout == "one\n"
     r = sh.run("GIT_AUTHOR_NAME=$'Evil\\nName <x>' git commit -q --allow-empty -m n && git log -1 --format='%an' && git status -s")
     assert r.exit_code == 0 and r.stdout == "EvilName x\n"
+
+
+def test_apply_refuses_paths_outside_the_work_tree():
+    sh = repo()
+    for name in ("../escape", ".git/config", "/etc/passwd"):
+        sh.fs.write_bytes("/tmp/p.diff", f"--- a/{name}\n+++ b/{name}\n@@ -0,0 +1 @@\n+x\n".replace("a//", "a/").replace("b//", "b/").encode())
+        r = sh.run("cd /tmp/w && git apply /tmp/p.diff; echo $?")
+        assert r.stdout.strip().splitlines()[-1] != "0", name
+    assert not sh.fs.exists("/tmp/escape")
+    assert sh.run("cat /tmp/w/.git/config").stdout.count("x\n") == 0
+
+
+def test_bisect_run_with_skips_still_finds_the_commit():
+    sh = repo()
+    r = sh.run("cd /tmp/w && for i in 2 3 4 5 6; do echo $i > f; git commit -qam c$i; done; git bisect start HEAD HEAD~5 >/dev/null; "
+               "git bisect run sh -c 'n=$(cat f); [ $n = 3 ] && exit 125; [ $n -lt 5 ]' | tail -1; git log -1 --format=%s")
+    assert r.stdout == "bisect found first bad commit\nc5\n", r.stderr

@@ -304,7 +304,7 @@ internal static partial class Git
     }
 
     /// <summary>Commits reachable from starts, newest commit date first (ties: first seen first), each once.</summary>
-    static List<string> WalkOrder(Repo repo, IEnumerable<string> starts)
+    static List<string> WalkOrder(Repo repo, IEnumerable<string> starts, HashSet<string>? limitSet = null)
     {
         var heap = new PriorityQueue<string, (long, long)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -318,7 +318,7 @@ internal static partial class Git
             if (output.Count > MaxWalk) throw Fatal("tooLarge", ("what", "history"));
             if (output.Count % 256 == 0) repo.Check();
             foreach (var p in repo.Commit(c).Parents)
-                if (seen.Add(p)) heap.Enqueue(p, (-CommitTime(repo, p), counter++));
+                if ((limitSet == null || limitSet.Contains(p)) && seen.Add(p)) heap.Enqueue(p, (-CommitTime(repo, p), counter++));
         }
         return output;
     }
@@ -331,7 +331,7 @@ internal static partial class Git
     sealed class Cmd(CommandContext ctx, string cwd, List<(string, string)> overrides)
     {
         public readonly CommandContext Ctx = ctx;
-        public readonly string Cwd = cwd;
+        public string Cwd = cwd;  // bisect run follows the shell when the command deleted it
         public readonly List<(string Key, string Value)> Overrides = overrides;
         Repo? _repo;
         public Dictionary<string, List<string>>? Decor;
@@ -441,7 +441,7 @@ internal static partial class Git
 
     public static void Register(Shell shell) => shell.Register("git", Run);
 
-    static int Run(CommandContext ctx)
+    static async Task<int> Run(CommandContext ctx)
     {
         var args = ctx.Args.ToList();
         var cwd = ctx.Shell.Cwd;
@@ -525,7 +525,8 @@ internal static partial class Git
         var g = new Cmd(ctx, cwd, overrides);
         try
         {
-            return Handlers[sub](g, rest);
+            // bisect run awaits the commands it runs
+            return AsyncHandlers.TryGetValue(sub, out var run) ? await run(g, rest) : Handlers[sub](g, rest);
         }
         catch (RegexMatchTimeoutException e)
         {
@@ -545,8 +546,11 @@ internal static partial class Git
         }
     }
 
+    static readonly Dictionary<string, Func<Cmd, List<string>, Task<int>>> AsyncHandlers = new(StringComparer.Ordinal) { ["bisect"] = GitBisect };
+
     static readonly Dictionary<string, Func<Cmd, List<string>, int>> Handlers = new(StringComparer.Ordinal)
     {
+        ["apply"] = GitApply, ["am"] = GitAm, ["format-patch"] = GitFormatPatch,
         ["merge-base"] = GitMergeBase, ["fsck"] = GitFsck,
         ["remote"] = GitRemote, ["init"] = GitInit, ["status"] = GitStatus, ["add"] = GitAdd, ["rm"] = GitRm, ["mv"] = GitMv, ["commit"] = GitCommit, ["log"] = GitLog,
         ["show"] = GitShow, ["diff"] = GitDiff, ["branch"] = GitBranch, ["checkout"] = GitCheckout, ["switch"] = GitSwitch, ["restore"] = GitRestore,

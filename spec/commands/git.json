@@ -881,25 +881,101 @@
       "unsupported": true
     },
     "apply": {
-      "summary": "Apply a patch (not available)",
-      "usage": ["git apply"],
+      "summary": "Apply a patch (unified diffs from git diff or diff -u) to the work tree or the index",
+      "usage": ["git apply [<options>] [<patch>...]"],
+      "options": [
+        {"long": ["stat"], "key": "\u0001", "description": "print a diffstat of the patch instead of applying it"},
+        {"long": ["numstat"], "key": "\u0002", "description": "print added and removed line counts per file instead of applying"},
+        {"long": ["summary"], "key": "\u0003", "description": "list created, deleted and renamed files and mode changes instead of applying"},
+        {"long": ["check"], "key": "\u0004", "description": "only check that the patch applies; change nothing"},
+        {"long": ["index"], "key": "\u0005", "description": "apply to both the index and the work tree (the files must match the index)"},
+        {"long": ["cached"], "key": "\u0006", "description": "apply to the index only, leaving the work tree alone"},
+        {"long": ["apply"], "key": "\u0007", "description": "apply even when --stat, --numstat or --summary is given"},
+        {"short": "R", "long": ["reverse"], "description": "apply the patch in reverse"},
+        {"short": "p", "arg": "<n>", "description": "drop <n> leading path components from the names in the patch (default 1)"},
+        {"short": "v", "long": ["verbose"], "description": "report each file checked and each hunk applied at an offset"}
+      ],
+      "notes": "Every hunk must match its context exactly, though it may sit some lines away from where the patch says (an offset). There is no fuzz: a patch whose context has changed fails, and nothing is applied when any file fails. Binary patches are refused.",
       "messages": {
-        "unsupported": "fatal: 'git {name}' is not available in this machine's git; edit the files directly"
-      },
-      "unsupported": true
+        "cannotOpen": "error: can't open patch '{file}': {errno}",
+        "noPatches": "error: No valid patches in input (allow with \"--allow-empty\")",
+        "corrupt": "error: corrupt patch at line {line}",
+        "binary": "error: cannot apply binary patch to '{path}': binary patches are not supported in this machine's git",
+        "patchFailed": "error: patch failed: {path}:{line}",
+        "doesNotApply": "error: {path}: patch does not apply",
+        "alreadyExists": "error: {path}: already exists in working directory",
+        "alreadyInIndex": "error: {path}: already exists in index",
+        "noSuchFile": "error: {path}: No such file or directory",
+        "notInIndex": "error: {path}: does not exist in index",
+        "notMatchIndex": "error: {path}: does not match index",
+        "checking": "Checking patch {path}...",
+        "appliedCleanly": "Applied patch {path} cleanly.",
+        "hunkOffset": "Hunk #{number} succeeded at {line} (offset {offset}).",
+        "searching": "error: while searching for:\n{lines}"
+      }
     },
     "am": {
-      "summary": "Apply mailed patches (not available)",
-      "usage": ["git am"],
+      "summary": "Apply patches from mailbox files (as git format-patch writes them) as commits",
+      "usage": [
+        "git am [-q] [<mbox>...]",
+        "git am (--continue | --skip | --abort | --show-current-patch[=diff])"
+      ],
+      "options": [
+        {"short": "q", "long": ["quiet"], "description": "print nothing but errors"},
+        {"long": ["continue", "resolved"], "key": "\u0001", "description": "commit the current patch from the index after fixing it by hand, then go on"},
+        {"long": ["skip"], "key": "\u0002", "description": "drop the current patch and go on with the next"},
+        {"long": ["abort"], "key": "\u0003", "description": "stop and put the branch back where it was before git am"},
+        {"long": ["show-current-patch"], "arg": "diff", "description": "print the patch that stopped (=diff: only its diff)", "custom": true}
+      ],
+      "notes": "Each message's From and Date become the commit's author, its Subject (without the [PATCH] prefix) and body the commit message, and its diff is applied to the index and the work tree as git apply --index does. A patch that does not apply stops git am with the work tree unchanged; the state is kept in .git/rebase-apply. Mailbox headers in RFC 2047 encoding are not decoded.",
       "messages": {
-        "unsupported": "fatal: 'git {name}' is not available in this machine's git; edit the files directly"
-      },
-      "unsupported": true
+        "applying": "Applying: {subject}",
+        "patchFailedAt": "Patch failed at {number} {subject}",
+        "showHint": "hint: Use 'git am --show-current-patch=diff' to see the failed patch",
+        "resolveHint": "When you have resolved this problem, run \"git am --continue\".\nIf you prefer to skip this patch, run \"git am --skip\" instead.\nTo restore the original branch and stop patching, run \"git am --abort\".",
+        "inProgress": "fatal: previous rebase directory .git/rebase-apply still exists but mbox given.",
+        "notInProgress": "fatal: Resolve operation not in progress, we are not resuming.",
+        "noChanges": "No changes - did you forget to use 'git add'?\nIf there is nothing left to stage, chances are that something else\nalready introduced the same changes; you might want to skip this patch.",
+        "notPatch": "Patch format detection failed.",
+        "emptyPatch": "Patch is empty.",
+        "dirtyIndex": "fatal: Dirty index: cannot apply patches (dirty: {paths})",
+        "cannotOpen": "fatal: could not open '{file}' for reading: {errno}",
+        "movedHead": "You seem to have moved HEAD since the last 'am' failure.\nNot rewinding to ORIG_HEAD"
+      }
     },
     "bisect": {
-      "summary": "Search history for a change (not available)",
-      "usage": ["git bisect"],
-      "unsupported": true
+      "summary": "Find the commit that introduced a change by binary search",
+      "usage": [
+        "git bisect start [<bad> [<good>...]]",
+        "git bisect (good | bad | old | new) [<rev>...]",
+        "git bisect skip [<rev>...]",
+        "git bisect reset [<commit>]",
+        "git bisect log",
+        "git bisect run <cmd> [<arg>...]"
+      ],
+      "notes": "bisect run runs the command at each step: exit 0 marks the commit good, 125 skips it, 1 to 127 mark it bad, anything else stops the search. A step picks the commit that splits the remaining ones most evenly; with skipped commits the next best is taken, which may differ from real git's choice.",
+      "messages": {
+        "needStart": "You need to start by \"git bisect start\"\n",
+        "statusBoth": "status: waiting for both good and bad commits",
+        "statusGood": "status: waiting for good commit(s), bad commit known",
+        "statusBad": "status: waiting for bad commit, {count} good commit known",
+        "statusBadMany": "status: waiting for bad commit, {count} good commits known",
+        "bisecting": "Bisecting: {revisions} left to test after this (roughly {steps})",
+        "current": "[{commit}] {subject}",
+        "firstBad": "{commit} is the first bad commit",
+        "logFirstBad": "# first bad commit: [{commit}] {subject}",
+        "bothGoodAndBad": "{commit} was both good and bad",
+        "badRev": "error: Bad rev input: {rev}",
+        "notBisecting": "We are not bisecting.",
+        "logNotBisecting": "error: We are not bisecting.",
+        "running": "running {command}",
+        "runFailed": "error: bisect run failed: exit code {code} from {command} is < 0 or >= 128",
+        "runFound": "bisect found first bad commit",
+        "runCannotContinue": "error: bisect run cannot continue any more",
+        "onlySkipped": "There are only 'skip'ped commits left to test.\nThe first bad commit could be any of:\n{commits}\nWe cannot bisect more!",
+        "needCommand": "fatal: need a command",
+        "notAvailable": "error: 'git bisect {action}' is not available in this machine's git; use start, good, bad, skip, reset, log or run"
+      }
     },
     "worktree": {
       "summary": "Manage extra work trees (not available)",
@@ -933,9 +1009,15 @@
       }
     },
     "format-patch": {
-      "summary": "Write commits as patch files (not available)",
-      "usage": ["git format-patch"],
-      "unsupported": true
+      "summary": "Write commits as mailbox patches that git am can apply",
+      "usage": ["git format-patch [-o <dir> | --stdout] [-<n>] (<since> | <revision-range>)"],
+      "options": [
+        {"short": "o", "long": ["output-directory"], "arg": "<dir>", "description": "write the files into <dir> instead of the current directory"},
+        {"long": ["stdout"], "key": "\u0001", "description": "print all the patches as one mailbox instead of writing files"},
+        {"short": "n", "long": ["max-count"], "arg": "<n>", "description": "only the <n> newest commits (also -<n>; -1 alone means the last commit)"}
+      ],
+      "notes": "Each commit becomes NNNN-subject.patch: the From line, author, date, [PATCH n/m] subject, message, diffstat and patch. Merge commits are left out. Non-ASCII headers are written as UTF-8, not RFC 2047 encoded.",
+      "messages": {}
     },
     "archive": {
       "summary": "Export a tree as an archive (not available)",

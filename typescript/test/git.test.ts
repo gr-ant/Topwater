@@ -411,4 +411,22 @@ describe('git', () => {
     const data = zlib.inflateSync(raw);
     expect(createHash('sha1').update(data).digest('hex')).toBe(head);
   });
+
+  it('apply refuses paths outside the work tree', async () => {
+    const sh = await repo();
+    for (const name of ['../escape', '.git/config', '/etc/passwd']) {
+      sh.fs.writeBytes('/tmp/p.diff', new TextEncoder().encode(`--- a/${name}\n+++ b/${name}\n@@ -0,0 +1 @@\n+x\n`.replace('a//', 'a/').replace('b//', 'b/')));
+      const r = await sh.run('cd /tmp/w && git apply /tmp/p.diff; echo $?');
+      expect(r.stdout.trim().split('\n').pop(), name).not.toBe('0');
+    }
+    expect(sh.fs.exists('/tmp/escape')).toBe(false);
+    expect((await sh.run('cat /tmp/w/.git/config')).stdout.split('x\n').length - 1).toBe(0);
+  });
+
+  it('bisect run with skips still finds the commit', async () => {
+    const sh = await repo();
+    const r = await sh.run('cd /tmp/w && for i in 2 3 4 5 6; do echo $i > f; git commit -qam c$i; done; git bisect start HEAD HEAD~5 >/dev/null; ' +
+      "git bisect run sh -c 'n=$(cat f); [ $n = 3 ] && exit 125; [ $n -lt 5 ]' | tail -1; git log -1 --format=%s");
+    expect(r.stdout, r.stderr).toBe('bisect found first bad commit\nc5\n');
+  });
 });
