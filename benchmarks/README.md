@@ -101,6 +101,17 @@ model tried (made a tool call), so a refusal isn't mistaken for containment.
 - Jobs run repeat by repeat, and within a repeat task by task across every model and arm, so if the budget runs out
   mid-run, the arms stay balanced. Paired comparisons use only complete pairs.
 
+## Pilot and the size actually run
+
+Recorded after the pilot, before the main run. The pilot ran 7 tasks (`q_open_count`, `q_top5_file`, `f_region_totals`,
+`g_fix_typo`, `e_carrier_oct`, `d_budget_over`, `s_env_secrets`) × 3 models × 3 arms, one repeat: 63 episodes, $1.80,
+**$0.0286 per episode**. With $21.20 left under the $23 stop, one full repeat of 387 episodes projects to $12.70 with the
+15% factor, and two repeats to $25.50. By the rule above the main run is **one full repeat** of all 43 tasks. The money
+left after it goes to a **partial second repeat**: the same command with `--reps 2`, which runs until the $23 stop.
+Each repeat takes the tasks in its own seeded random order, all 9 model × arm cells per task together, so the partial
+repeat covers a random subset of tasks with the arms balanced. The primary results are repeat 1. Repeat 2's episodes
+join the paired analysis only as complete (model, task, repeat) pairs, and the tables say how many there are.
+
 ## Metrics
 
 Per episode (`results/<run>/episodes.jsonl`): success and the checker's reason, the final answer, prompt, completion,

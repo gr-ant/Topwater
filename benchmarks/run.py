@@ -98,7 +98,8 @@ def run(args):
     models = [m.strip() for m in args.models.split(",")]
     arms = [a.strip() for a in args.arms.split(",")]
     tasks = TASKS if args.tasks == "all" else [BY_ID[t.strip()] for t in args.tasks.split(",")]
-    jobs = [(rep, t, m, a) for rep in range(1, args.reps + 1) for t in tasks for m in models for a in arms]
+    import random  # each repeat takes the tasks in its own seeded order, so a repeat cut short by the budget still spans the categories
+    jobs = [(rep, t, m, a) for rep in range(1, args.reps + 1) for t in random.Random(rep).sample(tasks, len(tasks)) for m in models for a in arms]
     todo = [j for j in jobs if f"{j[2]}|{j[3]}|{j[1].id}|r{j[0]}" not in done]
     print(f"{len(jobs)} episodes in the design, {len(jobs) - len(todo)} already done, {len(todo)} to run; "
           f"spent so far ${ledger.spent:.2f} of ${args.budget:.2f}", flush=True)
