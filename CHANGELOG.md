@@ -5,6 +5,17 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 
 ## Unreleased
 
+- **Microsoft Graph connector (Python).** `topwater.connectors.graph.GraphSource(token, site=...)` mounts a SharePoint
+  site (its document libraries, lists and subsites) or a drive (`drive="me"` for OneDrive) through Graph v1.0. Files are
+  their real bytes; a list is a folder of `Title.md` items with the columns as front matter (read-only columns shown,
+  choices checked); subsites are folders you can work inside but not create, rename or delete. Mounted staged, moves,
+  renames, uploads (upload sessions above 4 MB), new folders, item edits and deletes (to the recycle bin) become a change
+  set checked with `If-Match` per entry; a move to another library or site is a copy and a delete, and `note(change)`
+  says so. The token comes from your function, goes only to Graph, and never to a download link. Throttling is waited
+  out within bounds; no dependencies. The C# and TypeScript ports follow [the design note](docs/connectors/graph-design.md).
+  See [OneDrive and SharePoint](docs/connectors/graph.md) and `python/examples/sharepoint_restructure.py`.
+- **Mounts:** a path several unlisted directories deep is listed all the way down before the command that names it;
+  the first command after mounting a large source failed with "not listed yet" two levels past what was listed.
 - **Mounted sources.** A host can show an outside store of files as a directory in the machine:
   `shell.MountAsync("/mnt/notes", source, MountMode.Staged)` (Python `shell.mount`, TypeScript `shell.mount`). A source
   is a small class with `list`, `stat`, `read` and, if it can, `write`, `delete`, `rename` and `mkdir`; its credentials

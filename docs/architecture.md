@@ -112,6 +112,7 @@ A dash means the port has no such module; §8 records why.
 | `containers.py`, `mcp.py`, `web.py` (the web terminal) | Python | |
 | `regex.ts`, `md5.ts`, `sha1.ts`, `compress.ts`, `inflate.ts` | TS | The platform has no POSIX regex, hashes or zlib built in |
 | `integrations/*` | Python, TS | Per-framework adapters; each list has its own frameworks |
+| `connectors/graph.py`, `connectors/common.py` | Python | The Microsoft Graph mount source and what connectors share; C# and TS follow it (§10) |
 | `Bc.cs` | C# | Not ported yet |
 
 ## 3. The shell split
@@ -559,3 +560,10 @@ The rest is hooks where each port already does the same job: a `loader` on the f
 copy), fetching around the handler call in `Invoke` and for `<` / `>>` redirections, listing restored mounts at the
 start of `Run`, the host API in the shell's registration section, and the `mounts` entries in the snapshot and
 recording formats.
+
+**Connectors** are mount sources for outside stores. They live in the core package when they need nothing beyond the
+platform (HTTP from the standard library), in a `connectors` folder: Python `topwater/connectors/graph.py`
+(`topwater.connectors.graph.GraphSource`), C# `Connectors/GraphSource.cs` (namespace `Topwater.Connectors`), TS
+`connectors/graph.ts`. What every connector shares (the HTTP client with backoff, front matter, names from titles) is
+`connectors/common.py` (C# `Connectors/ConnectorCommon.cs`, TS `connectors/common.ts`). Python is the reference; each
+connector has a design note in `docs/connectors/` that the other ports implement.
