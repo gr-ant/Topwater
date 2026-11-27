@@ -24,6 +24,7 @@ for (const [area, cases] of Object.entries(areas)) {
       if (reason) { it.skip(`${name} [skipped: ${reason}]`, () => {}); continue; }
       it(name, async () => {
         const sh = new Shell();
+        if (area === 'python') await sh.allowPython({ artifacts: new URL('../../assets/python-wasm/', import.meta.url) }); // python3 is opt-in: its area runs with it enabled
         await sh.run('mkdir -p /tmp/w && cd /tmp/w && hash -r');
         if (c.setup != null) await sh.run(c.setup);
         const r = await sh.run(c.script);
