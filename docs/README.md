@@ -9,6 +9,7 @@ and say where each implementation differs.
 | [The machine](machine.md) | The shell language, the built-in programs, `git`, files and permissions, documents, what is not there |
 | [Your programs](programs.md) | Your functions, JSON Schema tools, MCP servers, authenticated HTTP APIs and real host programs as commands |
 | [Web access](web.md) | `curl` and `wget` to the sites you allow: the policy, the guarantees, recordings |
+| [Mounted sources](mounts.md) | Outside files as a folder: modes, change sets, writing a source, safety |
 | [Connect to a model](integrations.md) | The tool definition, and the adapters for agent frameworks |
 | [Command line and MCP server](cli.md) | The `topwater` command: install, commands, options, MCP clients |
 | [Snapshots and recordings](snapshots-and-recordings.md) | Undo, fork, save and load; deterministic runs; record and replay; the `.topwater` file |

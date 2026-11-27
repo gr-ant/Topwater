@@ -223,6 +223,7 @@ there is no network, and there is no `ssh`.
 The host can open it in four ways:
 
 - [Web access](web.md): `curl` and `wget` reach the sites the host lists, and only those.
+- [Mounted sources](mounts.md): folders from outside the machine, and the `mount` command that lists them.
 - [An HTTP API](programs.md#authenticated-api-calls) called by alias, with a credential the agent never sees.
 - [An MCP server](programs.md#mcp-servers).
 - [A real host program](programs.md#real-host-programs).

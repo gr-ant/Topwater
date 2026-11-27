@@ -18,6 +18,9 @@ access allowed, nothing the agent types reaches the host.
   not.
 - **Web access reaches the sites you list.** The agent can read anything there, and send what it has read to any
   allowed site with an allowed method. [Web access](web.md) lists the guarantees.
+- **Mounted sources reach the stores you mount.** The agent reads what a source lists, and in staged and live mode
+  your application (or, in live mode, the shell) writes its changes back. [Mounted sources](mounts.md#safety-and-limits)
+  lists the guarantees.
 - **Host programs run with your process's permissions.** Topwater does not sandbox them unless you ask. Read
   [Real host programs](programs.md#real-host-programs) before registering one.
 - **Files you load are untrusted.** Snapshots, recordings and container imports are checked and bounded
