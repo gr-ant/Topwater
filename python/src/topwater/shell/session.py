@@ -114,7 +114,7 @@ class SessionPart:
         self._next_pid = s["next_pid"]
         self._variable_chars = sum(len(k) + len(v) for k, v in self.env.items()) + \
             sum(len(k) + len(v) for a in self.arrays.values() for k, v in a.items.items())
-        self._cwd = s["cwd"] if self.fs.is_dir(s["cwd"]) else "/"
+        self._cwd = s["cwd"] if self.fs.is_dir(s["cwd"]) or self._mounts.find(s["cwd"]) else "/"  # a mount is listed at the next call
         # program files for exactly this shell's commands: the snapshot may come from a shell (or port) with others
         with self.fs.as_root():
             for d in ("/usr/bin/", "/bin/"):

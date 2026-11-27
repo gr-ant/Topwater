@@ -96,9 +96,9 @@ class LocalFolderSource(MountSource):
         if normalize("/", path) != path or "\0" in path:
             raise ValueError(f"{path}: not a canonical path")
         full = self._root + path if path != "/" else self._root
-        # every directory on the way must be a real one: a link swapped in after listing could lead out of root
+        # no symbolic link on the way, the last name included: one swapped in after listing could lead out of root
         cur = self._root
-        for seg in path.split("/")[1:-1]:
+        for seg in path.split("/")[1:] if path != "/" else ():
             cur = os.path.join(cur, seg)
             if os.path.islink(cur):
                 raise FileNotFoundError(path)
@@ -147,7 +147,7 @@ class LocalFolderSource(MountSource):
         self._check(path, expected_version)
         full = self._host(path)
         tmp = f"{full}.topwater-{os.getpid()}.tmp"
-        with open(tmp, "wb") as f:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644), "wb") as f:
             f.write(data)
         os.replace(tmp, full)
         return self._entry("", os.lstat(full)).version

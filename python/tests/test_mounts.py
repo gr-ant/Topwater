@@ -214,6 +214,17 @@ def test_snapshot_keeps_the_definition_and_the_changes_not_the_files():
     assert r.conflict and r.failed.path == "/b.txt"
 
 
+def test_a_working_directory_inside_a_mount_survives_a_restore():
+    src = MemorySource({"d/a.txt": "a\n"})
+    sh = Shell()
+    sh.mount("/mnt/s", src)
+    sh.run("cd /mnt/s/d")
+    snap = sh.snapshot()
+    sh.run("cd /")
+    sh.restore(snap)
+    assert sh.run("pwd; cat a.txt").stdout == "/mnt/s/d\na\n"
+
+
 def test_fork_uses_the_same_source():
     src = MemorySource({"a.txt": "a\n"})
     sh = Shell()
