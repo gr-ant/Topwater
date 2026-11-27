@@ -24,7 +24,7 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           prefix="${v%%-*}"; suffix=""; [ "$v" != "$prefix" ] && suffix="${v#*-}"
-          for p in src/Topwater src/Topwater.AI src/Topwater.Mcp src/Topwater.Containers src/Topwater.Replay src/Topwater.Cli; do
+          for p in src/Topwater src/Topwater.AI src/Topwater.Mcp src/Topwater.Containers src/Topwater.Replay src/Topwater.Python src/Topwater.Cli; do
             dotnet pack "$p" -c Release -o out -p:VersionPrefix="$prefix" -p:VersionSuffix="$suffix"
           done
       - name: NuGet login (OIDC to a one-hour API key)
@@ -66,7 +66,8 @@ jobs:
           name: topwater-${{ matrix.rid }}
           path: dist/*
 
-  # The Python package, tested and built on every release with no publishing rights. pypi uploads exactly these files.
+  # The Python package and its python3 add-on (topwater-python), tested and built on every release with no publishing
+  # rights. pypi and pypi-addon upload exactly these files.
   python-package:
     runs-on: ubuntu-latest
     permissions:
@@ -81,25 +82,37 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
-      - run: pip install pytest build twine
+      - run: pip install pytest build twine wasmtime==51.0.0   # wasmtime for python3's tests (tests/test_python.py)
       - run: python -m pytest -q
       - name: Set the version from the tag
-        # v0.1.0-preview.4 -> 0.1.0a4 (PEP 440 alpha; plain "preview" would normalize to rc4), v0.1.0 -> 0.1.0
+        # v0.1.0-preview.4 -> 0.1.0a4 (PEP 440 alpha; plain "preview" would normalize to rc4), v0.1.0 -> 0.1.0. The core's
+        # python extra and the add-on's topwater dependency are pinned to it with ==: a >= would skip a preview release
         run: |
           v="${GITHUB_REF_NAME#v}"
           [[ "$v" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(-preview\.(0|[1-9][0-9]*))?$ ]] || { echo "no PEP 440 form for $v" >&2; exit 1; }
           py="${BASH_REMATCH[1]}${BASH_REMATCH[6]:+a${BASH_REMATCH[6]}}"
-          sed -i "s/^version = \".*\"/version = \"$py\"/" pyproject.toml
-          grep -x "version = \"$py\"" pyproject.toml
+          a=addons/topwater-python/pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"$py\"/" pyproject.toml "$a"
+          sed -i "s/\"topwater-python==[^\"]*\"/\"topwater-python==$py\"/" pyproject.toml
+          sed -i "s/\"topwater==[^\"]*\"/\"topwater==$py\"/" "$a"
+          grep -x "version = \"$py\"" pyproject.toml && grep -x "version = \"$py\"" "$a"
+          grep -F "\"topwater-python==$py\"" pyproject.toml && grep -F "\"topwater==$py\"" "$a"
       - run: python -m build
-      - run: twine check --strict dist/*
+      - run: python -m build addons/topwater-python --outdir addon-dist   # copies the interpreter (symbolic links) in
+      - run: twine check --strict dist/* addon-dist/*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: python-package
           path: python/dist/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-addon-package   # not topwater-*: github-release takes those as binaries
+          path: python/addon-dist/*
+          if-no-files-found: error
 
-  # The npm package, tested and packed on every release with no publishing rights. npm publishes exactly this tarball.
+  # The npm package and its python3 add-on (topwater-python), tested and packed on every release with no publishing
+  # rights. npm and npm-addon publish exactly these tarballs.
   npm-package:
     runs-on: ubuntu-latest
     permissions:
@@ -120,10 +133,24 @@ jobs:
       - name: Set the version from the tag
         run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
       - run: npm pack   # builds through prepack and lists the files
+      - name: Pack the add-on, its peer pinned to this same version (a range would skip a preview release)
+        working-directory: typescript/addons/topwater-python
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          npm version --no-git-tag-version "$v"
+          npm pkg set "peerDependencies.topwater=$v"
+          npm pack   # copies the interpreter in through prepack
+          mv "topwater-python-$v.tgz" ../../addon-topwater-python.tgz
+      - run: mv "topwater-${GITHUB_REF_NAME#v}.tgz" topwater.tgz   # exact names: topwater-*.tgz would match the add-on's too
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: npm-package
-          path: typescript/topwater-*.tgz
+          path: typescript/topwater.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-addon-package   # not topwater-*: github-release takes those as binaries
+          path: typescript/addon-topwater-python.tgz
           if-no-files-found: error
 
   # PyPI trusted publishing: a publisher on pypi.org (project topwater, owner gr-ant, repository Topwater, workflow
@@ -145,6 +172,25 @@ jobs:
           # first upload only: an API token while the PyPI project does not exist yet; empty (secret removed) means
           # trusted publishing through this job's OIDC token, which is the steady state
           password: ${{ secrets.PYPI_API_TOKEN }}
+
+  # The python3 add-on on PyPI (project topwater-python), after the core it pins exists: the same trusted publishing,
+  # with a publisher for topwater-python (owner gr-ant, repository Topwater, workflow release.yml, no environment).
+  pypi-addon:
+    needs: [pypi, python-package]
+    if: vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # for the PyPI OIDC exchange
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-addon-package
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          # first upload only, as for the core: a token scoped to topwater-python (or the account) while the project
+          # does not exist yet; empty means trusted publishing
+          password: ${{ secrets.PYPI_ADDON_API_TOKEN }}
 
   # npm trusted publishing: npm accepts this job's OIDC token for the package topwater (repository gr-ant/Topwater,
   # workflow release.yml) and adds provenance. Off until the repository variable PUBLISH_NPM is 'true'.
@@ -169,7 +215,30 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           tag=latest; case "$GITHUB_REF_NAME" in *-*) tag=next ;; esac
-          npm publish ./topwater-*.tgz --ignore-scripts --provenance --access public --tag "$tag"
+          npm publish ./topwater.tgz --ignore-scripts --provenance --access public --tag "$tag"
+
+  # The python3 add-on on npm (package topwater-python), after the core it pins as a peer exists: the same trusted
+  # publishing, with topwater-python trusting this workflow.
+  npm-addon:
+    needs: [npm, npm-package]
+    if: vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # for the npm OIDC exchange and provenance
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-addon-package
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # first publish only, as for the core
+        run: |
+          tag=latest; case "$GITHUB_REF_NAME" in *-*) tag=next ;; esac
+          npm publish ./addon-topwater-python.tgz --ignore-scripts --provenance --access public --tag "$tag"
 
   # The container image ghcr.io/gr-ant/topwater for linux/amd64 and linux/arm64, made from the binaries job's Linux
   # binaries: docker/Dockerfile only copies them in, so there is no emulation and no repository code runs here.
