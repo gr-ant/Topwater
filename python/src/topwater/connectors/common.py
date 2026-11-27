@@ -1,6 +1,6 @@
-"""What the connectors share (docs/connectors/graph-design.md, "Shared with the Notion connector"): one HTTP client with
-backoff and bounds for a web API, record fields shown as front matter (a SharePoint list item, a Notion database row),
-and names made safe for a file system. Every port keeps the same pieces with the same rules."""
+"""What the connectors share (docs/connectors/README.md): one HTTP client with backoff and bounds for a web API, record
+fields shown as front matter (a SharePoint list item, a Notion database row), and names made safe for a file system.
+Every port keeps the same pieces with the same rules."""
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +18,23 @@ MAX_RETRY_AFTER = 60.0  # seconds; a longer Retry-After fails the request instea
 MAX_RESPONSE = 32_000_000  # bytes of one JSON response
 SLASH = "∕"  # DIVISION SLASH stands for "/" in a name made from a title
 NAME_BYTES = 200  # a name made from a title is cut to this, leaving room for " (2)" and an extension
+
+# What the shared pieces say; {service} is the connector's name for its service ("Notion", "Microsoft Graph"). Each
+# connector's own messages stay in its MESSAGES table; this one becomes spec/connectors/common.json later.
+MESSAGES = {
+    "noAnswer": "{service} did not answer",
+    "noAnswerWrite": "{service} did not answer; the change may or may not have been made",
+    "busy": "{service} is busy (HTTP {status}); tried {tries} times",
+    "waitTooLong": "{service} asked to wait {seconds} seconds (HTTP {status})",
+    "responseTooLarge": "{service} sent a response too large to use",
+    "notJson": "{service} sent a response that isn't a JSON object (HTTP {status})",
+    "frontMatterOpen": "{path}: front matter: no closing ---",
+    "frontMatterLine": "{path}: front matter: one `name: value` per line",
+}
+
+
+def msg(key: str, **values) -> str:
+    return MESSAGES[key].format(**{k: str(v) for k, v in values.items()})
 
 
 # ---------- requests ----------
@@ -83,13 +100,13 @@ class Api:
                 if method == "GET" and not last:
                     await asyncio.sleep(2 ** attempt)
                     continue
-                raise MountSourceError(f"{self.service} did not answer" + ("" if method == "GET" else "; the change may or may not have been made")) from None
+                raise MountSourceError(msg("noAnswer" if method == "GET" else "noAnswerWrite", service=self.service)) from None
             if status == 429 or status == 503 or (status >= 500 and method == "GET"):
                 if last:
-                    raise MountSourceError(f"{self.service} is busy (HTTP {status}); tried {MAX_RETRIES + 1} times")
+                    raise MountSourceError(msg("busy", service=self.service, status=status, tries=MAX_RETRIES + 1))
                 after = retry_after(rh)
                 if after is not None and after > MAX_RETRY_AFTER:
-                    raise MountSourceError(f"{self.service} asked to wait {int(after)} seconds (HTTP {status})")
+                    raise MountSourceError(msg("waitTooLong", service=self.service, seconds=int(after), status=status))
                 pause = after if after is not None else 2.0 ** attempt
                 self._next = max(self._next, time.monotonic() + pause)  # every request waits, not only this one
                 await asyncio.sleep(pause)
@@ -105,7 +122,7 @@ class Api:
         data = json.dumps(body).encode() if body is not None else b"" if method in ("POST", "PUT", "PATCH") else None  # 411 without a length
         status, _, raw = await self.send(method, url, data, hs)
         if len(raw) > MAX_RESPONSE:
-            raise MountSourceError(f"{self.service} sent a response too large to use")
+            raise MountSourceError(msg("responseTooLarge", service=self.service))
         if status >= 400:
             try:
                 answer = json.loads(raw) if raw else {}
@@ -119,7 +136,7 @@ class Api:
         except ValueError:
             answer = None
         if not isinstance(answer, dict):
-            raise MountSourceError(f"{self.service} sent a response that isn't a JSON object (HTTP {status})")
+            raise MountSourceError(msg("notJson", service=self.service, status=status))
         return answer
 
 
@@ -163,7 +180,7 @@ def split_front_matter(path: str, text: str) -> tuple[dict | None, str]:
     while end != -1 and text[end + 4:end + 5] not in ("\n", ""):
         end = text.find("\n---", end + 4)
     if end == -1:
-        raise MountSourceError(f"{path}: front matter: no closing ---")
+        raise MountSourceError(msg("frontMatterOpen", path=path))
     out: dict = {}
     lines = text[4:end].split("\n")
     i = 0
@@ -183,7 +200,7 @@ def split_front_matter(path: str, text: str) -> tuple[dict | None, str]:
             key, sep, rest = ln.partition(":")
             rest = sep + rest
         if not isinstance(key, str) or not rest.startswith(":"):
-            raise MountSourceError(f"{path}: front matter: one `name: value` per line")
+            raise MountSourceError(msg("frontMatterLine", path=path))
         raw = rest[1:].strip()
         if raw:
             out[key.strip()] = scalar(raw)

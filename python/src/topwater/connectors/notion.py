@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
-import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -23,21 +21,16 @@ from urllib.parse import urlencode
 
 from ..commands import spec_format
 from ..mounts import CAPABILITIES, MountConflictError, MountEntry, MountSource, MountSourceError
-from ..webaccess import TransportError, pinned_transport
+from .common import SLASH, Api, ApiError, front_matter, safe_name, split_front_matter
 
 NOTION_VERSION = "2026-03-11"
 API_URL = "https://api.notion.com"
 RATE = 3.0  # requests a second, Notion's documented average
-MAX_RETRIES = 4  # tries after the first, for a rate limit or an answer Notion asks to retry
-MAX_RETRY_AFTER = 60.0  # seconds; a longer Retry-After fails the request
-MAX_RESPONSE = 32_000_000  # bytes of one response
 MAX_PAGE_BYTES = 1_000_000  # bytes of text one write may send
 MAX_LIST_REQUESTS = 50  # requests one listing of a page's children or a database's rows may take (5,000 blocks or rows)
-NAME_BYTES = 200  # a title longer than this is cut, leaving room for " (2)" and ".md"
 PREFETCH_SECONDS = 60.0  # a page's children, fetched to see whether it is a folder, serve its own listing this long
 INDEX = "index.md"
 END = ("", 0)  # where a tag goes back when its page had no text: after the new text
-SLASH = "∕"  # DIVISION SLASH stands for "/" in a name
 SWAP = re.compile(r"\.topwater-swap-\d+$")  # the framework's temporary names (docs/mounts.md, change sets)
 # a page's own child pages and databases: tags at the start of a line; nested ones (in a toggle, a column) are indented
 _CHILD_TAG = re.compile(r'^<(page|database)\s[^>\n]*?url="[^"]*"[^>\n]*>.*?</\1>', re.S | re.M)
@@ -47,13 +40,7 @@ EDITABLE_TYPES = frozenset({"rich_text", "number", "select", "status", "multi_se
 
 # What the agent (or the host) is told, by key; a later spec/connectors/notion.json holds this table for every port.
 MESSAGES = {
-    # requests
-    "noAnswer": "Notion did not answer",
-    "noAnswerWrite": "Notion did not answer; the change may or may not have been made",
-    "responseTooLarge": "Notion sent a response too large to use",
-    "busy": "Notion is busy (HTTP {status}); tried {tries} times",
-    "waitTooLong": "Notion asked to wait {seconds} seconds (HTTP {status})",
-    "notJson": "Notion sent a response that isn't a JSON object (HTTP {status})",
+    # requests (failures of the request itself are common.MESSAGES)
     "noMarkdown": "Notion sent a page without its Markdown",
     "noId": "Notion sent a page without an id",
     "noDataSource": "a database's data source is no longer in Notion",
@@ -77,8 +64,6 @@ MESSAGES = {
     "sourceFolder": "{path}: the folder of a data source can't be changed here",
     "truncated": "{path}: the page is too long to edit as Markdown",
     "goneAfterChange": "{path}: no longer in Notion after the change",
-    "frontMatterOpen": "{path}: front matter: no closing ---",
-    "frontMatterLine": "{path}: front matter: one `name: value` per line",
     "noProperty": "{path}: no property {name} in this database",
     "computed": "{path}: {name}: can't be changed here ({type} is set by Notion)",
     "expected": "{path}: {name}: expected {what}",
@@ -96,12 +81,6 @@ def _msg(key: str, **values) -> str:
 
 class _Missing(MountSourceError):
     """A path that names nothing in Notion."""
-
-
-class _ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str):
-        super().__init__(f"HTTP {status} {code}: {message}")
-        self.status, self.code, self.message = status, code, message
 
 
 @dataclass
@@ -142,10 +121,8 @@ class NotionSource(MountSource):
             raise ValueError("api_url: an https URL")
         self.id = id if id is not None else self._root
         self.capabilities = CAPABILITIES
-        self._token, self._transport = token, transport or pinned_transport
-        self._interval, self._timeout, self._api = 1.0 / rate, timeout, api_url.rstrip("/")
-        self._lock: tuple | None = None  # (event loop, lock): a lock belongs to one loop
-        self._next = 0.0
+        self._http = Api("Notion", token, transport, timeout=timeout, rate=rate)
+        self._api = api_url.rstrip("/")
         self._folders: dict[str, _Folder] = {}  # source path -> folder, as listed
         self._prefetched: dict[str, tuple[float, list]] = {}  # page id -> (when, its child page and database blocks)
         self._seen: dict[str, bytes] = {}  # page id -> hash of the file the agent read
@@ -155,61 +132,16 @@ class NotionSource(MountSource):
     # ----- requests -----
 
     async def _request(self, method: str, path: str, body: dict | None = None, query: dict | None = None) -> dict:
-        """One API call, rate limited, retried on 429 (any method) and on 5xx or no answer (GET only, which repeats safely;
-        503 for any method, which Notion sends before doing anything)."""
-        loop = asyncio.get_running_loop()
-        if self._lock is None or self._lock[0] is not loop:
-            self._lock = (loop, asyncio.Lock())
+        """One API call through common.Api: rate limited, retried on 429 and 503 (any method) and on other 5xx or no answer
+        (GET only, which repeats safely)."""
         url = self._api + path + ("?" + urlencode(query) if query else "")
-        data = None if body is None else json.dumps(body).encode()
-        for attempt in range(MAX_RETRIES + 1):
-            async with self._lock[1]:
-                wait = self._next - time.monotonic()
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                self._next = max(self._next, time.monotonic()) + self._interval
-            token = self._token() if callable(self._token) else self._token
-            if inspect.isawaitable(token):
-                token = await token
-            headers = [("Authorization", f"Bearer {token}"), ("Notion-Version", NOTION_VERSION), ("Accept", "application/json")]
-            if data is not None:
-                headers.append(("Content-Type", "application/json"))
-            last = attempt == MAX_RETRIES
-            try:
-                status, _, rh, raw = await asyncio.to_thread(self._transport, method, url, headers, data, self._timeout, MAX_RESPONSE)
-            except (TransportError, TimeoutError, OSError):
-                if method == "GET" and not last:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-                raise MountSourceError(_msg("noAnswer" if method == "GET" else "noAnswerWrite")) from None
-            if len(raw) > MAX_RESPONSE:
-                raise MountSourceError(_msg("responseTooLarge"))
-            if status == 429 or (status >= 500 and (method == "GET" or status == 503)):
-                if last:
-                    raise MountSourceError(_msg("busy", status=status, tries=MAX_RETRIES + 1))
-                after = _retry_after(rh)
-                if after is not None and after > MAX_RETRY_AFTER:
-                    raise MountSourceError(_msg("waitTooLong", seconds=int(after), status=status))
-                pause = after if after is not None else 2.0 ** attempt
-                self._next = max(self._next, time.monotonic() + pause)  # every request waits, not only this one
-                await asyncio.sleep(pause)
-                continue
-            try:
-                answer = json.loads(raw)
-            except ValueError:
-                answer = None
-            if not isinstance(answer, dict):
-                raise MountSourceError(_msg("notJson", status=status))
-            if status >= 400:
-                raise _ApiError(status, _text(answer.get("code"), 100), _text(answer.get("message"), 1000))
-            return answer
-        raise AssertionError("not reached")
+        return await self._http.json(method, url, body, [("Notion-Version", NOTION_VERSION)])
 
     async def _get(self, path: str, **query) -> dict | None:
         """A GET whose 404 is None."""
         try:
             return await self._request("GET", path, query=query or None)
-        except _ApiError as e:
+        except ApiError as e:
             if e.status == 404:
                 return None
             raise
@@ -287,7 +219,7 @@ class NotionSource(MountSource):
             if page is not None:
                 return _Item("page", self._root, _title(page), True, _stamp(page), _when(page), _text(page.get("created_time"), 64))
             db = await self._get(f"/v1/databases/{self._root}")
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal("/", e)) from None
         if db is None or db.get("in_trash"):
             raise MountSourceError(_msg("noRoot"))
@@ -386,7 +318,7 @@ class NotionSource(MountSource):
                 f = await self._folder(path)
             else:
                 await self._fill(f, path, max_entries)
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
         return [MountEntry(n, i.is_dir, None, i.modified, i.version) for n, i in list(f.names.items())[:max_entries]]
 
@@ -405,7 +337,7 @@ class NotionSource(MountSource):
             page = await self._page(it.id)
         except _Missing:
             return None
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
         if page is None:
             return None
@@ -420,7 +352,7 @@ class NotionSource(MountSource):
             if it is None or it.is_dir:
                 raise _Missing(f"{path}: not found in Notion")
             data = (await self._view(it, path))[0]
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
         if len(data) > max_bytes:
             raise MountSourceError(_msg("readTooLarge", path=path))
@@ -455,7 +387,7 @@ class NotionSource(MountSource):
             if it is None:
                 raise MountConflictError(_msg("gone", path=path))
             return await self._update(it, path, text, expected_version)
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
 
     async def _create(self, f: _Folder, path: str, name: str, text: str) -> str:
@@ -466,7 +398,7 @@ class NotionSource(MountSource):
         props: dict = {}
         body, key = text, "title"
         if ds is not None:
-            fm, body = _split_front(path, text)
+            fm, body = split_front_matter(path, text)
             schema = await self._schema(ds)
             props = _props_payload(path, fm, schema, {})
             key = next((k for k, v in schema.items() if isinstance(v, dict) and v.get("type") == "title"), "title")
@@ -503,7 +435,7 @@ class NotionSource(MountSource):
         if cut:
             raise MountSourceError(_msg("truncated", path=path))
         if it.kind == "row":
-            fm, body = _split_front(path, text)
+            fm, body = split_front_matter(path, text)
             ds = _parse_id((page.get("parent") or {}).get("data_source_id"))
             changes = _props_payload(path, fm, await self._schema(ds) if ds else {}, page.get("properties") or {})
             _check_tags(path, body, md)
@@ -551,7 +483,7 @@ class NotionSource(MountSource):
                 if not it.is_dir and self._version(it.id, page) != expected_version:
                     raise MountConflictError(_msg("edited", path=path))
                 await self._request("PATCH", f"/v1/pages/{it.id}", {"in_trash": True})
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
         del f.names[name]
         f.sticky.pop(it.id, None)
@@ -604,7 +536,7 @@ class NotionSource(MountSource):
                     if page is not None and _stamp(page) != before:
                         self._ours.setdefault(it.id, {})[_stamp(page)] = before  # our own rename is not an edit by someone else
                 it.kind = "row" if ds is not None else "page"
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
         del f.names[name]
         f.sticky.pop(it.id, None)
@@ -628,7 +560,7 @@ class NotionSource(MountSource):
                 return None
             title = _unname(SWAP.sub("", name))
             page = await self._request("POST", "/v1/pages", {"parent": self._parent_ref(f, path)[0], "properties": {"title": {"title": _rich(title)}}})
-        except _ApiError as e:
+        except ApiError as e:
             raise MountSourceError(_refusal(path, e)) from None
         pid = _parse_id(page.get("id"))
         if pid is None:
@@ -643,13 +575,8 @@ class NotionSource(MountSource):
 # ----- names -----
 
 def _name(title: str) -> str:
-    """A title as a name: control characters become spaces, "/" a division slash; empty is "Untitled"; long ones are cut."""
-    t = "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in title).replace("/", SLASH).strip()
-    t = t or "Untitled"
-    if t in (".", ".."):
-        t = f"({t})"
-    b = t.encode("utf-8", "replace")
-    return b[:NAME_BYTES].decode("utf-8", "ignore").rstrip() if len(b) > NAME_BYTES else t
+    """A title as a name (common.safe_name); empty is "Untitled"."""
+    return safe_name(title, "Untitled")
 
 
 def _unname(base: str) -> str:
@@ -776,15 +703,8 @@ def _decode(path: str, data: bytes) -> str:
 # ----- properties as front matter -----
 
 def _front(props: dict) -> str:
-    """A row's properties (all but the title, which is the file name) as YAML front matter, one `name: JSON value` a line."""
-    lines = []
-    for name in sorted(props):
-        p = props[name]
-        if not isinstance(p, dict) or p.get("type") == "title":
-            continue
-        key = name if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_ .()/-]*", name) and not name.endswith(" ") else json.dumps(name, ensure_ascii=False)
-        lines.append(f"{key}: {json.dumps(_value(p), ensure_ascii=False)}\n")
-    return "---\n" + "".join(lines) + "---\n"
+    """A row's properties (all but the title, which is the file name) as front matter (common.front_matter)."""
+    return front_matter({n: _value(p) for n, p in props.items() if isinstance(p, dict) and p.get("type") != "title"})
 
 
 def _value(p: dict):
@@ -812,66 +732,6 @@ def _value(p: dict):
     if t == "unique_id" and isinstance(v, dict):
         return f"{v['prefix']}-{v.get('number')}" if v.get("prefix") else v.get("number")
     return v if v is None or isinstance(v, (bool, int, float, str)) else None
-
-
-def _split_front(path: str, text: str) -> tuple[dict | None, str]:
-    """(the front matter's values, or None without one; the text after it)."""
-    if not text.startswith("---\n"):
-        return None, text
-    end = text.find("\n---", 3)
-    while end != -1 and text[end + 4:end + 5] not in ("\n", ""):
-        end = text.find("\n---", end + 4)
-    if end == -1:
-        raise MountSourceError(_msg("frontMatterOpen", path=path))
-    out: dict = {}
-    lines = text[4:end].split("\n")
-    i = 0
-    while i < len(lines):
-        ln = lines[i]
-        i += 1
-        if not ln.strip() or ln.lstrip().startswith("#"):
-            continue
-        key, rest = None, ""
-        if ln.startswith('"'):
-            try:
-                key, k = json.JSONDecoder().raw_decode(ln)
-                rest = ln[k:]
-            except ValueError:
-                pass
-        elif not ln[:1].isspace():
-            key, sep, rest = ln.partition(":")
-            rest = sep + rest
-        if not isinstance(key, str) or not rest.startswith(":"):
-            raise MountSourceError(_msg("frontMatterLine", path=path))
-        raw = rest[1:].strip()
-        if raw:
-            out[key.strip()] = _scalar(raw)
-            continue
-        items = []
-        while i < len(lines) and lines[i].lstrip().startswith("- "):
-            items.append(_scalar(lines[i].lstrip()[2:].strip()))
-            i += 1
-        out[key.strip()] = items or None
-    return out, text[end + 4:].lstrip("\n")
-
-
-def _scalar(raw: str):
-    """A front matter value: JSON, or the YAML an agent may write instead (plain text, [a, b], true, ~)."""
-    try:
-        return json.loads(raw)
-    except ValueError:
-        pass
-    if raw in ("~", "Null", "NULL"):
-        return None
-    if raw in ("True", "TRUE", "yes", "Yes"):
-        return True
-    if raw in ("False", "FALSE", "no", "No"):
-        return False
-    if raw.startswith("[") and raw.endswith("]"):
-        return [x.strip().strip("'\"") for x in raw[1:-1].split(",") if x.strip()]
-    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
-        return raw[1:-1].replace("''", "'")
-    return raw
 
 
 def _props_payload(path: str, fm: dict | None, schema: dict, current: dict) -> dict:
@@ -995,17 +855,7 @@ def _cursor(got: dict, previous: str | None) -> str | None:
     return c if got.get("has_more") is True and isinstance(c, str) and 0 < len(c) <= 1000 and c != previous else None
 
 
-def _retry_after(headers) -> float | None:
-    for k, v in headers or ():
-        if str(k).lower() == "retry-after":
-            try:
-                return max(float(v), 0.0)
-            except ValueError:
-                return None
-    return None
-
-
-def _refusal(path: str, e: _ApiError) -> str:
+def _refusal(path: str, e: ApiError) -> str:
     if e.status == 401:
         return _msg("unauthorized")
     if e.status in (403, 404):

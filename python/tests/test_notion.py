@@ -14,6 +14,8 @@ import pytest
 from notion_fake import FakeNotion
 from topwater import Shell
 from topwater.connectors import notion as nt
+from topwater.connectors import common
+from topwater.connectors.common import split_front_matter
 from topwater.connectors.notion import NotionSource
 from topwater.mounts import MountConflictError, MountSourceError
 
@@ -108,7 +110,7 @@ def test_names_are_safe_unique_and_stable():
     assert nt._name(".") == "(.)" and nt._name("..") == "(..)"
     assert nt._name("a\0b\nc") == "a b c"
     long = nt._name("é" * 300)
-    assert len(long.encode()) <= nt.NAME_BYTES and long == "é" * 100
+    assert len(long.encode()) <= common.NAME_BYTES and long == "é" * 100
     items = [nt._Item("page", f"id{i}", t, d, created=str(i)) for i, (t, d) in enumerate([("Notes", False), ("Notes", False), ("Notes (2)", False), ("Notes", True)])]
     names = nt._names(items, {}, reserve="index.md")
     assert {n: i.id for n, i in names.items()} == {"Notes": "id3", "Notes (2).md": "id2", "Notes (3).md": "id1", "Notes.md": "id0"}
@@ -120,7 +122,10 @@ def test_names_are_safe_unique_and_stable():
 def test_every_message_is_used_and_filled():
     code = Path(nt.__file__).read_text(encoding="utf-8").split("def _msg", 1)[1]
     assert [k for k in nt.MESSAGES if f'"{k}"' not in code] == []
-    assert nt._msg("busy", status=429, tries=5) == "Notion is busy (HTTP 429); tried 5 times"
+    assert nt._msg("noRoot") == "the root page is not in Notion, or not shared with the integration"
+    shared = Path(common.__file__).read_text(encoding="utf-8").split("def msg", 1)[1]
+    assert [k for k in common.MESSAGES if f'"{k}"' not in shared] == []
+    assert common.msg("busy", service="Notion", status=429, tries=5) == "Notion is busy (HTTP 429); tried 5 times"
 
 
 def test_ids_come_from_ids_and_urls_only():
@@ -132,13 +137,13 @@ def test_ids_come_from_ids_and_urls_only():
 
 
 def test_front_matter_reads_json_and_the_yaml_an_agent_writes():
-    fm, body = nt._split_front("/r.md", '---\nDone: true\nType: Retro\nTags: [a, "b"]\nList:\n  - x\n  - y\n"Odd: name": 3\n# note\nEmpty:\n---\n\nbody\n---\nmore')
+    fm, body = split_front_matter("/r.md", '---\nDone: true\nType: Retro\nTags: [a, "b"]\nList:\n  - x\n  - y\n"Odd: name": 3\n# note\nEmpty:\n---\n\nbody\n---\nmore')
     assert fm == {"Done": True, "Type": "Retro", "Tags": ["a", "b"], "List": ["x", "y"], "Odd: name": 3, "Empty": None}
     assert body == "body\n---\nmore"
-    assert nt._split_front("/r.md", "no front\n") == (None, "no front\n")
+    assert split_front_matter("/r.md", "no front\n") == (None, "no front\n")
     for bad in ("---\nDone: true\n", "---\n  indented: 1\n---\n", "---\nno colon\n---\n"):
         with pytest.raises(MountSourceError, match="front matter"):
-            nt._split_front("/r.md", bad)
+            split_front_matter("/r.md", bad)
     props = {"Name": {"type": "title", "title": []}, "Odd: name": {"type": "number", "number": 3}, "F": {"type": "formula", "formula": {"type": "string", "string": "x"}}}
     assert nt._front(props) == '---\nF: "x"\n"Odd: name": 3\n---\n'
 
@@ -245,7 +250,7 @@ def test_a_write_that_got_no_answer_is_not_repeated():
             sent.append(url)
             raise TransportError("reset")
         return fake(method, url, *a)
-    src._transport = flaky
+    src._http._transport = flaky
     r = sh.run("echo hi > /mnt/n/Wiki/Onboarding.md")
     assert "the change may or may not have been made" in r.stderr and len(sent) == 1
 
@@ -337,12 +342,12 @@ def test_children_survive_any_edit_of_the_parent():
 def test_the_source_never_sends_allow_deleting_content():
     fake, sh, src = _mounted("live")
     seen = []
-    real = src._transport
+    real = src._http._transport
 
     def spy(method, url, headers, body, *a):
         seen.append(body or b"")
         return real(method, url, headers, body, *a)
-    src._transport = spy
+    src._http._transport = spy
     sh.run("echo x > /mnt/n/Projects/index.md; mkdir /mnt/n/Wiki/X; echo y > /mnt/n/Wiki/X/index.md")
     assert seen and not any(b"allow_deleting_content" in b for b in seen)
 
