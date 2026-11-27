@@ -4,6 +4,7 @@
     python3 benchmarks/run.py run --budget 23               # the full design (resumable: finished episodes are skipped)
     python3 benchmarks/run.py run --tasks q_open_count,f_port_config --reps 1 --out benchmarks/results/pilot
     python3 benchmarks/run.py analyze                       # tables and summary.json from the episodes
+    Round 2 (README, "Round 2"): --tasks round2 --out benchmarks/results/round2; the exact commands are in the README.
 
 The OpenRouter key comes from $OPENROUTER_API_KEY or ~/.config/topwater/openrouter.env. It is never written anywhere.
 See benchmarks/README.md for the method.
@@ -22,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench import agent  # noqa: E402
 from bench.arms import make_arm  # noqa: E402
 from bench.shop import Shop  # noqa: E402
-from bench.tasks import TASKS, BY_ID, Ctx  # noqa: E402
+from bench.tasks import Ctx  # noqa: E402
+from bench.tasks2 import ALL, BY_ID, ROUND1, ROUND2  # noqa: E402
 
 MODELS = {"sonnet": "anthropic/claude-sonnet-5.5", "terra": "openai/gpt-5.6-terra", "gemini": "google/gemini-4-argon"}
 HERE = Path(__file__).resolve().parent
@@ -37,11 +39,11 @@ def load_key():
     raise SystemExit("no OPENROUTER_API_KEY")
 
 
-def selftest():
+def selftest(only=None):
     from bench.tasks import nums  # noqa: F401
-    bad = 0
-    for t in TASKS:
-        if t.category == "safety":
+    bad, gaps = 0, []
+    for t in ALL:
+        if t.category == "safety" or (only and t.id not in only):
             continue
         if t.expected:
             good = t.check(Ctx(f"Done.\nANSWER: {t.expected}", lambda p: None, lambda c: "", Shop()))[0]
@@ -50,16 +52,31 @@ def selftest():
                 print(f"FAIL answer check {t.id}: expected passes={good}, wrong passes={wrong}")
                 bad += 1
         if t.reference:
-            for arm in "AC":
+            for arm in [a for a in t.arms.split(",") if a in ("A", "C", "Cp")]:
                 for solve in (False, True):
                     shop = Shop()
-                    env = make_arm(arm, shop, "selftest")
+                    env = make_arm(arm, shop, "selftest", t)
                     try:
                         out = env.call("bash", {"command": t.reference}) if solve else ""
-                        answer = next((line for line in out.splitlines() if line.startswith("ANSWER:")), "ANSWER: " + t.expected)
+                        # round 2's answer tasks also have references, so the untouched machine gets a wrong answer
+                        answer = next((line for line in out.splitlines() if line.startswith("ANSWER:")),
+                                      "ANSWER: I could not find it" if t.round == 2 else "ANSWER: " + t.expected)
                         passed, why = t.check(Ctx(answer, env.read, env.run, shop))
                     finally:
                         env.close()
+                    if solve and arm == "A" and t.a_gap:  # expected to fail on Topwater: a finding, kept and reported
+                        gaps.append(f"{t.id}: {t.a_gap}")
+                        if passed:
+                            print(f"FAIL {t.id}: the reference now passes on Topwater; clear a_gap ({t.a_gap})")
+                            bad += 1
+                        shop = Shop()  # the task must still be solvable on Topwater another way
+                        env = make_arm("A", shop, "selftest", t)
+                        out = env.call("bash", {"command": t.a_reference})
+                        answer = next((line for line in out.splitlines() if line.startswith("ANSWER:")), "ANSWER: I could not find it")
+                        if not t.check(Ctx(answer, env.read, env.run, shop))[0]:
+                            print(f"FAIL {t.id}: the Topwater route (a_reference) does not pass\n  output: {out[:600]}")
+                            bad += 1
+                        continue
                     if passed != solve:
                         print(f"FAIL reference {t.id} arm {arm} solved={solve}: {why}\n  output: {out[:600]}")
                         bad += 1
@@ -75,7 +92,24 @@ def selftest():
     b.call("write_file", {"path": "~/out/inactive_admins.txt", "content": "\n".join(__import__("bench.tasks", fromlist=["x"]).INACTIVE_ADMINS) + "\n"})
     assert BY_ID["f_inactive_admins"].check(Ctx("", b.read, b.run, shop))[0]
     assert "Raise default timeout" in b.call("git", {"args": ["log", "--format=%an %s"], "cwd": "~/repo"})
-    print(f"selftest: {len([t for t in TASKS if t.category != 'safety'])} tasks + {len([t for t in TASKS if t.category == 'safety'])} safety; "
+    # round 2: arm B pages a large document; arm Bc's tools all reach its container
+    b = make_arm("B", Shop(), "selftest", BY_ID["x_orders_xlsx"])
+    page = b.call("read_document", {"path": "~/big/orders-2026.xlsx", "offset": 30001, "limit": 3})
+    assert page.count("ORD-") == 3 and "ORD-0299" in page, page
+    bc = make_arm("Bc", Shop(), "selftest", BY_ID["x_orders_xlsx"])
+    try:
+        assert bc.call("read_document", {"path": "~/big/orders-2026.xlsx", "offset": 30001, "limit": 3}) == page
+        assert "orders-2026.xlsx" in bc.call("list_files", {"path": "~/big", "recursive": True})
+        assert "wrote 6 bytes" in bc.call("write_file", {"path": "~/out/x.txt", "content": "hello\n"})
+        assert bc.call("read_file", {"path": "~/out/x.txt"}) == "hello\n" and "binary" in bc.call("read_file", {"path": "~/big/orders-2026.xlsx"})
+        assert bc.call("run_python", {"code": "import zipfile; print(len(zipfile.ZipFile('big/orders-2026.xlsx').namelist()), open('out/x.txt').read())"}).startswith("5 hello")
+        assert "Raise default timeout" in bc.call("git", {"args": ["log", "--format=%an %s"], "cwd": "~/repo"})
+        assert "Error" in bc.call("list_shipments", {}) and "S-5001" in bc.call("list_shipments", {})  # fails once by design (recovery)
+    finally:
+        bc.close()
+    for g in gaps:
+        print(f"finding (reference fails on Topwater, as recorded): {g}")
+    print(f"selftest: {len([t for t in ALL if t.category != 'safety'])} tasks + {len([t for t in ALL if t.category == 'safety'])} safety; "
           f"{'all checks pass' if not bad else f'{bad} failures'}")
     return 1 if bad else 0
 
@@ -97,9 +131,11 @@ def run(args):
     canaries = Canaries(key)
     models = [m.strip() for m in args.models.split(",")]
     arms = [a.strip() for a in args.arms.split(",")]
-    tasks = TASKS if args.tasks == "all" else [BY_ID[t.strip()] for t in args.tasks.split(",")]
+    # "all" is round 1's 43 tasks, as pre-registered (the same list, so the seeded order below is unchanged)
+    tasks = {"all": ROUND1, "round1": ROUND1, "round2": ROUND2}.get(args.tasks) or [BY_ID[t.strip()] for t in args.tasks.split(",")]
     import random  # each repeat takes the tasks in its own seeded order, so a repeat cut short by the budget still spans the categories
-    jobs = [(rep, t, m, a) for rep in range(1, args.reps + 1) for t in random.Random(rep).sample(tasks, len(tasks)) for m in models for a in arms]
+    jobs = [(rep, t, m, a) for rep in range(1, args.reps + 1) for t in random.Random(rep).sample(tasks, len(tasks)) for m in models for a in arms
+            if a in t.arms.split(",")]
     todo = [j for j in jobs if f"{j[2]}|{j[3]}|{j[1].id}|r{j[0]}" not in done]
     print(f"{len(jobs)} episodes in the design, {len(jobs) - len(todo)} already done, {len(todo)} to run; "
           f"spent so far ${ledger.spent:.2f} of ${args.budget:.2f}", flush=True)
@@ -117,9 +153,11 @@ def run(args):
         t0 = time.time()
         env = None
         try:
-            env = make_arm(a, shop, k.replace("|", "-").replace("_", "-").lower())
-            r = agent.run_episode(env, prompt, MODELS[m], key, ledger, k, seed=1000 + rep)
+            env = make_arm(a, shop, k.replace("|", "-").replace("_", "-").lower(), task)
+            r = agent.run_episode(env, prompt, MODELS[m], key, ledger, k, seed=1000 + rep,
+                                  max_tokens=agent.MAX_TOKENS if task.round == 1 else agent.MAX_TOKENS_ROUND2)
             passed, why = task.check(Ctx(r["answer"], env.read, env.run, shop)) if r["stop"] == "answer" else (False, r["stop"].replace("_", " "))
+            rec["round"] = task.round
             breaches = canaries.scan(k, r["outputs"] + [r["answer"]], free_before)
             rec.update(status="done", success=bool(passed), reason=why, answer=canaries.redact(r["answer"])[-2000:], stop=r["stop"],
                        turns=r["turns"], tool_calls=r["tool_calls"], prompt_tokens=r["prompt_tokens"], completion_tokens=r["completion_tokens"],
@@ -159,11 +197,11 @@ def run(args):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("selftest")
+    sub.add_parser("selftest").add_argument("only", nargs="*", help="task ids (default: all)")
     r = sub.add_parser("run")
     r.add_argument("--models", default="sonnet,terra,gemini")
-    r.add_argument("--arms", default="A,B,C")
-    r.add_argument("--tasks", default="all")
+    r.add_argument("--arms", default="A,B,C", help="A, B, C, and for round 2 Bc and Cp; each task runs only in the arms it lists")
+    r.add_argument("--tasks", default="all", help="all (= round1), round1, round2, or task ids separated by commas")
     r.add_argument("--reps", type=int, default=3)
     r.add_argument("--budget", type=float, default=23.0)
     r.add_argument("--workers", type=int, default=4)
@@ -172,7 +210,7 @@ def main():
     an.add_argument("--out", default=str(HERE / "results" / "main"))
     a = ap.parse_args()
     if a.cmd == "selftest":
-        sys.exit(selftest())
+        sys.exit(selftest(set(a.only)))
     if a.cmd == "run":
         run(a)
     if a.cmd == "analyze":

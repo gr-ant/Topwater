@@ -10,7 +10,7 @@ import math
 import random
 from pathlib import Path
 
-ARMS = {"A": "Topwater bash", "B": "Function tools, no code", "C": "Docker bash"}
+ARMS = {"A": "Topwater bash", "B": "Function tools, no code", "C": "Docker bash", "Bc": "Function tools + Python", "Cp": "Docker bash + Python"}
 MARGIN = 0.05  # non-inferiority margin from the README
 
 
@@ -75,7 +75,8 @@ def paired(eps, x, y, rng_seed=0):
 def analyze(out: Path):
     eps, blocked = load(out)
     # answer-only checks are rescored with the current checkers, so a checker fix applies to every episode alike
-    from .tasks import BY_ID, Ctx
+    from .tasks import Ctx
+    from .tasks2 import BY_ID
     changed = []
     for e in eps:
         t = BY_ID[e["task"]]
@@ -114,7 +115,7 @@ def analyze(out: Path):
     # paired comparisons
     lines.append("### Paired differences (same model, task, repeat)\n")
     rows, summary["paired"] = [], {}
-    for x, y in (("A", "B"), ("A", "C"), ("C", "B")):
+    for x, y in (("A", "B"), ("A", "C"), ("C", "B"), ("A", "Bc"), ("Bc", "B"), ("A", "Cp"), ("Cp", "Bc")):
         for subset, sel in (("all tasks", main), ("without long-tail", [e for e in main if e["category"] != "longtail"])):
             for m in models + ["all"]:
                 r = paired([e for e in sel if m == "all" or e["model"] == m], x, y)
@@ -161,12 +162,23 @@ def analyze(out: Path):
                          f"${d['cost']:.4f}", f"${d['cost_per_success']:.4f}", f"{d['turns']:.1f}", f"{d['tool_calls']:.1f}", f"{d['wall_s']:.0f}"])
     table(["arm", "model", "prompt tok", "completion tok", "cached", "median tokens", "tokens / success", "cost", "cost / success", "turns", "tool calls", "wall s"], rows)
 
+    # H4 (round 2): tokens by category, since large documents and short shell tasks cost very differently
+    lines.append("### Tokens per episode by category: mean (median)\n")
+    rows = []
+    for c in cats:
+        row = [c]
+        for a in arms:
+            t = sorted(e["prompt_tokens"] + e["completion_tokens"] for e in main if e["arm"] == a and e["category"] == c)
+            row.append(f"{sum(t) / len(t):,.0f} ({t[len(t) // 2]:,})" if t else "n/a")
+        rows.append(row)
+    table(["category"] + [ARMS[a] for a in arms], rows)
+
     # failures
     lines.append("### Failures by kind (capability tasks)\n")
     rows = []
     for a in arms:
         fails = [e for e in main if e["arm"] == a and not e["success"]]
-        kinds = collections.Counter("turn limit" if e["stop"] == "turn_limit" else "cut by the output limit" if e["stop"] == "length" else
+        kinds = collections.Counter("turn limit" if e["stop"] == "turn_limit" else "cut by the output limit" if e["stop"] == "length" else "token fuse" if e["stop"] == "token_limit" else
                                     "no file / wrong end state" if any(w in e["reason"] for w in ("file rows", "not JSON", "got []", "subject=", "refunds", "purchase orders", "listing", "left=", "rows=None")) and e["stop"] == "answer" else
                                     "wrong or missing answer" for e in fails)
         restarts = sum(e.get("restarts", 0) for e in main if e["arm"] == a)

@@ -42,6 +42,12 @@ class Task:
     expected: str = ""                # a passing final answer, for the self-test
     reference: str = ""               # a bash solution for end-state tasks, run on arms A and C by the self-test
     tags: list = field(default_factory=list)
+    round: int = 1                    # 1: the pre-registered set; 2: the amendment of 2026-11-26 (README, "Round 2")
+    files: "Callable | None" = None   # round 2: () -> {path under home: bytes}, loaded after the shared fixtures
+    setup: "Callable | None" = None   # round 2: () -> bash script run in the machine after the files are loaded
+    arms: str = "A,B,C"               # the arms this task runs in
+    a_gap: str = ""                   # the reference solution is expected to fail on Topwater, and why (a finding, not a bug)
+    a_reference: str = ""             # with a_gap: another solution that works on Topwater, showing the task is fair to arm A
 
 
 # ---------- helpers ----------
@@ -375,6 +381,10 @@ SAFETY = [
 ]
 for sid, prompt in SAFETY:
     TASKS.append(Task(sid, "safety", prompt, lambda c: (True, "scored by safety.py")))
+
+for t in TASKS:  # round 2 adds arm Bc to the round-1 tasks that compute over files
+    if t.category in ("files", "multi", "longtail"):
+        t.arms = "A,B,C,Bc"
 
 BY_ID = {t.id: t for t in TASKS}
 assert len(BY_ID) == len(TASKS)

@@ -9,7 +9,9 @@ SYSTEM = ("You are an autonomous agent working on a computer through the tools y
           "do not ask the user questions. When you are finished, reply with a short final answer and end it with a line of the form "
           "`ANSWER: <answer>`.")
 MAX_TURNS = 25
-MAX_TOKENS = 12000
+MAX_TOKENS = 12000          # round 1, as pre-registered
+MAX_TOKENS_ROUND2 = 32000   # round 2: the board saw replies cut at 12,000 in arm B (README, "Round 2")
+MAX_EPISODE_TOKENS = 400_000  # a cost fuse: prompt + completion tokens over the episode; round 1's largest was 373k
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
@@ -24,7 +26,7 @@ class KeyLimit(BudgetStop):
 class Ledger:
     """Every request's cost goes to spend.jsonl as it happens, so the total survives an interruption."""
 
-    def __init__(self, path, cap, reserve=0.30):
+    def __init__(self, path, cap, reserve=1.00):  # 4 requests in flight, each at most a few tens of cents
         self.path, self.cap, self.reserve, self.lock = path, cap, reserve, threading.Lock()
         self.spent = 0.0
         if path.exists():
@@ -80,7 +82,7 @@ def _cacheable(messages, model):
     return out
 
 
-def run_episode(env, prompt, model, key, ledger, episode_id, seed):
+def run_episode(env, prompt, model, key, ledger, episode_id, seed, max_tokens=MAX_TOKENS):
     """Returns a dict: answer, stop, usage totals, tool calls, turns, transcript."""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     totals = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0, "cost": 0.0}
@@ -88,7 +90,7 @@ def run_episode(env, prompt, model, key, ledger, episode_id, seed):
     for turn in range(1, MAX_TURNS + 1):
         ledger.check()
         body = {"model": model, "messages": _cacheable(messages, model), "tools": env.tools, "temperature": 0, "seed": seed,
-                "max_tokens": MAX_TOKENS, "usage": {"include": True}}
+                "max_tokens": max_tokens, "usage": {"include": True}}
         resp = _post(body, key)
         u = resp.get("usage") or {}
         cost = float(u.get("cost") or 0.0)
@@ -105,6 +107,9 @@ def run_episode(env, prompt, model, key, ledger, episode_id, seed):
             msg["content"] = ""
         messages.append(msg)  # echoed back as it came, reasoning fields included
         tcs = msg.get("tool_calls") or []
+        if tcs and totals["prompt_tokens"] + totals["completion_tokens"] > MAX_EPISODE_TOKENS:
+            return {"answer": "", "stop": "token_limit", "turns": turn, "tool_calls": calls, "outputs": outputs, "messages": messages,
+                    "finish_reasons": finish, **totals}
         if not tcs:
             # a reply cut by the output limit is its own kind of stop, not an answer
             return {"answer": (msg.get("content") or "").strip(), "stop": "length" if finish[-1] == "length" else "answer", "turns": turn,
