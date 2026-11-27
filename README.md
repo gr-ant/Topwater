@@ -6,13 +6,14 @@
 </p>
 
 <p align="center">
-  One <code>bash</code> tool for your LLM agent, backed by a simulated Linux machine that runs inside your application.
+  A simulated Linux shell for LLM agents: one <code>bash</code> tool, running inside your application, with no
+  container.
 </p>
 
 <p align="center">
   <a href="https://www.nuget.org/packages/Topwater"><img alt="NuGet" src="https://img.shields.io/nuget/vpre/Topwater?label=NuGet"></a>
   <a href="https://pypi.org/project/topwater/"><img alt="PyPI" src="https://img.shields.io/pypi/v/topwater?include_prereleases&label=PyPI"></a>
-  <a href="https://www.npmjs.com/package/topwater"><img alt="npm" src="https://img.shields.io/npm/v/topwater?label=npm"></a>
+  <a href="https://www.npmjs.com/package/topwater"><img alt="npm" src="https://img.shields.io/npm/v/topwater/next?label=npm"></a>
   <a href="https://github.com/gr-ant/Topwater/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/gr-ant/Topwater/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
@@ -23,9 +24,10 @@
   <a href="https://gr-ant.github.io/Topwater/replay.html">Replay viewer</a>
 </p>
 
-Topwater is a library for **.NET**, **Python** and **TypeScript**. You register your functions, MCP servers and
-HTTP APIs. The model sees them as command-line programs on a small Linux machine and reaches all of them through a
-single tool:
+Topwater gives a model the interface it knows best, a bash prompt on Ubuntu, without giving it a computer. The shell,
+the filesystem and about 140 programs are interpreted in your process, against memory, with every limit on. You
+register your functions, MCP servers and HTTP APIs, and the model sees them as command-line programs on that machine
+and reaches all of them through a single tool:
 
 ```console
 agent@topwater:~$ help | grep orders
@@ -46,6 +48,27 @@ agent@topwater:~$ orders --status open | jq length
 - **Nothing real by default.** Commands are interpreted in your process against an in-memory filesystem, with
   limits on time, memory, disk and output. See [Safety](#safety).
 
+What else is in the box:
+
+- **Three native implementations that behave the same:** .NET, Python (standard library only) and TypeScript (no
+  runtime dependencies, also in the browser). One [command spec](spec/README.md) and one
+  [corpus](tests/corpus/README.md) of about 2,000 cases recorded from bash and the GNU tools on Ubuntu 24.04 keep them
+  honest; every port passes all of them except `bc` (in .NET only) and one `zip` ratio in TypeScript.
+- **Real git.** `git` works on repositories in git's own on-disk format, so real git reads what the agent commits,
+  and repositories copied in from a clone work too.
+- **Documents.** `to-markdown` turns Word, Excel, PowerPoint and HTML files into text the model can `grep`.
+- **[Web access](docs/web.md) under a policy.** `curl` and `wget` reach only the sites and methods you list, with
+  credentials the model never sees.
+- **[Mounts](docs/mounts.md).** Show a host folder, an Obsidian vault or your own store as a directory: read-only,
+  staged (the agent's edits become a change set you review and apply) or live.
+- **[Snapshots, recordings and replay](docs/snapshots-and-recordings.md).** Undo, fork, save and load the machine;
+  record a session, replay it as a regression test, or step through it in the
+  [replay viewer](https://gr-ant.github.io/Topwater/replay.html).
+- **No-code use.** The `topwater` CLI and MCP server, as a .NET tool, standalone binaries or a Docker image.
+- **Framework adapters** for Microsoft.Extensions.AI, Semantic Kernel, LangChain, LlamaIndex, the OpenAI Agents SDK,
+  the Claude Agent SDK, the Vercel AI SDK, Mastra and more.
+- **[A benchmark](#benchmark)** against function tools and real bash in Docker, on three models.
+
 ## Quickstart
 
 Each example registers one function and runs the command a model would send. All three print `2`.
@@ -58,7 +81,7 @@ Requires .NET 8 or later.
 dotnet add package Topwater --prerelease
 ```
 
-This installs `0.1.0-preview.4`; [CHANGELOG.md](CHANGELOG.md) says what changed.
+This installs `0.1.0-preview.5`; [CHANGELOG.md](CHANGELOG.md) says what changed.
 
 ```csharp
 using Topwater;
@@ -116,8 +139,10 @@ Inside async code, use `await topwater.execute_tool(shell, command)` instead of 
 Requires Node 22.3 or later. No runtime dependencies; the package is an ES module.
 
 ```bash
-npm install topwater
+npm install topwater@next
 ```
+
+Previews are on npm's `next` tag; plain `npm install topwater` still gets `0.1.0-preview.4`.
 
 ```ts
 import { Shell, BashTool } from 'topwater';
@@ -150,7 +175,7 @@ any other MCP client. `topwater` alone opens a shell on the simulated machine.
 dotnet tool install -g Topwater.Cli --prerelease                      # needs .NET 8
 ```
 
-From `0.1.0-preview.3` on, each release also carries a standalone binary that needs no .NET:
+Each release also carries a standalone binary that needs no .NET:
 
 ```bash
 curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, macOS
@@ -160,8 +185,8 @@ curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, m
 irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows
 ```
 
-From `0.1.0-preview.5` on, also as a container image (linux/amd64 and linux/arm64; Docker Desktop on macOS and Windows
-runs it too), with nothing to install but Docker:
+And a container image (linux/amd64 and linux/arm64; Docker Desktop on macOS and Windows runs it too), with nothing to
+install but Docker:
 
 ```bash
 docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp
@@ -334,29 +359,30 @@ method, the intervals and the limits.
 
 ## Status
 
-Topwater is in preview. APIs may change before 1.0. [CHANGELOG.md](CHANGELOG.md) lists what changed.
+Topwater is an experimental preview, maintained lightly. It works and is tested, but APIs and file formats may still
+change, and new features are parked rather than in progress. [CHANGELOG.md](CHANGELOG.md) lists what changed, and
+[ROADMAP.md](ROADMAP.md) what is parked on branches and what was never started.
 
 | | Where | State |
 |---|---|---|
-| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.4` |
-| **Python** | PyPI: [topwater](https://pypi.org/project/topwater/) | `0.1.0a4` (`pip install --pre topwater`) |
-| **TypeScript** | npm: [topwater](https://www.npmjs.com/package/topwater) | `0.1.0-preview.4` |
+| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.5` |
+| **Python** | PyPI: [topwater](https://pypi.org/project/topwater/) | `0.1.0a5` (`pip install --pre topwater`) |
+| **TypeScript** | npm: [topwater](https://www.npmjs.com/package/topwater) | `0.1.0-preview.5` (`npm install topwater@next`) |
 | **Browser** | [demo](https://gr-ant.github.io/Topwater/), [`typescript/`](typescript/README.md#in-the-browser) | the TypeScript build in a Web Worker |
 
-This README describes `main`. `git`, web access, symbolic links and the `.topwater` recording file are newer than
-the published .NET packages; to use them now, reference the projects in `src/` from a clone. The `bc` calculator is
-in .NET only, and the tables above show what Python and TypeScript do not have yet.
+The `bc` calculator is in .NET only, and the tables above show what Python and TypeScript do not have yet.
 
 ## Documentation
 
 - [docs/](docs/README.md): [the machine](docs/machine.md), [your programs](docs/programs.md),
-  [web access](docs/web.md), [connecting to a model](docs/integrations.md), [command line and MCP server](docs/cli.md),
-  [snapshots and recordings](docs/snapshots-and-recordings.md), [containers](docs/containers.md) and
-  [limits and safety](docs/limits.md). Samples use the .NET API.
+  [web access](docs/web.md), [mounted sources](docs/mounts.md), [connecting to a model](docs/integrations.md),
+  [command line and MCP server](docs/cli.md), [snapshots and recordings](docs/snapshots-and-recordings.md),
+  [containers](docs/containers.md) and [limits and safety](docs/limits.md). Samples use the .NET API.
 - [Python](python/README.md) and [TypeScript](typescript/README.md): each package's API, its framework adapters and
   where it differs.
 - [Command spec](spec/README.md) and [shared test corpus](tests/corpus/README.md): the one list of commands,
   options and messages, and the recorded cases, that all three implementations share.
+- [Source layout](docs/architecture.md): how the three implementations mirror each other, file by file.
 
 ## Examples
 
@@ -375,9 +401,26 @@ Without `URL`, WebShell listens on all network interfaces.
 | `examples/OfficeAgent` | an agent that writes a Word document with the real OfficeCLI | a Gemini API key |
 | `examples/DuckDbAgent` | an agent that answers questions over CSV files with the real DuckDB | a Gemini API key |
 | `examples/AgentFrameworkAgent` | the shell in a Microsoft Agent Framework agent | `OPENAI_API_KEY` |
+| `examples/Harness` | six everyday tasks under different wordings of the tool description | a Gemini or OpenRouter API key |
 | `python/examples/` | Python agents and use cases | a Gemini API key |
 
 The installed Python package has a web terminal: `python -m topwater.web --demo`.
+
+## Related projects
+
+Other virtual shells and filesystems for agents, each worth a look:
+
+| Project | What it is | How Topwater differs |
+|---|---|---|
+| [just-bash](https://github.com/vercel-labs/just-bash) (Vercel Labs) | A simulated bash with an in-memory filesystem, in TypeScript, with optional `curl`, Python, JavaScript and `sqlite3` | Native in .NET and Python too; `git`; no interpreters inside the machine |
+| [bashkit](https://github.com/everruns/bashkit) | A virtual bash and filesystem in Rust, with Python, JavaScript and WebAssembly bindings and experimental git, Python and SQLite | A separate native implementation per language, .NET among them, instead of one core with bindings |
+| [gbash](https://github.com/ewhauser/gbash) | A sandbox-only bash-like runtime in Go, with a virtual filesystem, allowlisted `curl`, read-only host mounts and a WebAssembly build | For .NET, Python and TypeScript; `git`; mounts that can take changes for review |
+| [AgentFS](https://github.com/tursodatabase/agentfs) (Turso) | A filesystem for agents kept in one SQLite file, with SDKs, a FUSE/NFS mount and an integration for just-bash | A whole machine (shell, programs, git) rather than storage; its state is a `.topwater` file |
+| [Mirage](https://github.com/strukto-ai/mirage) (strukto.ai) | A virtual terminal that mounts about 60 services (S3, Google Drive, Slack, databases, ...) as one filesystem, with virtual CLIs, profiles and a policy engine; it publishes the [AgentVFS](https://agentvfs.org) interface | No built-in services beyond a host folder; you write a small source class. The shell follows Ubuntu's bash and GNU tools closely |
+
+What Topwater adds across the board: three native implementations held to one corpus recorded from real bash,
+git in its real on-disk format, staged mounts whose changes come back as a change set, and recordings that replay
+in a viewer or as tests.
 
 ## Contributing
 
