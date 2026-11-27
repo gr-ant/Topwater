@@ -656,6 +656,11 @@ public class MountTests
         Assert.Equal("", (await fresh.RunAsync(awk)).Stdout); // f0.txt was not fetched: fetched after the command
         Assert.Equal("30\n", (await fresh.RunAsync(awk)).Stdout);
         Assert.Equal("32\n12\n", (await sh.RunAsync("cat /mnt/s/d3/f2.txt; find /mnt/s -type f | wc -l")).Stdout);
+        var deep = new Shell();
+        var deepFiles = new Dictionary<string, object?> { ["a/b/c/f.txt"] = "deep\n" };
+        for (int i = 0; i < 5; i++) deepFiles[$"z{i}.txt"] = "";
+        await deep.MountAsync("/mnt/s", new MemorySource(deepFiles));
+        Assert.Equal("deep\n", (await deep.RunAsync("cat /mnt/s/a/b/c/f.txt")).Stdout); // every unlisted directory on the way is listed first
     });
 
     [Fact]

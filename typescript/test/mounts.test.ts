@@ -501,6 +501,9 @@ describe('review 046', () => {
     expect((await fresh.run(awk)).stdout).toBe(''); // f0.txt was not fetched: fetched after the command
     expect((await fresh.run(awk)).stdout).toBe('30\n');
     expect((await sh.run('cat /mnt/s/d3/f2.txt; find /mnt/s -type f | wc -l')).stdout).toBe('32\n12\n');
+    const deep = new Shell();
+    await deep.mount('/mnt/s', new MemorySource({ 'a/b/c/f.txt': 'deep\n', ...Object.fromEntries([0, 1, 2, 3, 4].map(i => [`z${i}.txt`, ''])) }));
+    expect((await deep.run('cat /mnt/s/a/b/c/f.txt')).stdout).toBe('deep\n'); // every unlisted directory on the way is listed first
   }));
 
   it('a restore from a file does not list everything in one call', () => withListBudget(3, async () => {

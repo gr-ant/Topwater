@@ -514,6 +514,9 @@ def test_a_large_source_is_listed_in_parts(monkeypatch):
     assert fresh.run(awk).stdout == ""  # f0.txt was not fetched: fetched after the command
     assert fresh.run(awk).stdout == "30\n"
     assert sh.run("cat /mnt/s/d3/f2.txt; find /mnt/s -type f | wc -l").stdout == "32\n12\n"
+    deep = Shell()
+    deep.mount("/mnt/s", MemorySource({"a/b/c/f.txt": "deep\n", **{f"z{i}.txt": "" for i in range(5)}}))
+    assert deep.run("cat /mnt/s/a/b/c/f.txt").stdout == "deep\n"  # every unlisted directory on the way is listed first
 
 
 def test_a_restore_from_a_file_does_not_list_everything_in_one_call(monkeypatch):

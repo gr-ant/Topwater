@@ -641,6 +641,7 @@ class _Mount:
             bp = at.get(id(node))
             if node.unlisted is not None and bp is not None:
                 await self.grow([(bp, node, bp.count("/") if bp != "/" else 0)], budget, deep=deep and name is None)
+                at = {id(b.node): p for p, b in self.base.items()}  # the directories it just placed, for the next name
             elif name is None and deep:
                 queue = [(at[id(n)], n, 0) for n in _dirs_under(node) if n.unlisted is not None and id(n) in at]
                 await self.grow(queue, budget)
