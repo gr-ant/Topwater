@@ -574,10 +574,21 @@ def test_the_tool_description_names_the_mounts():
     assert "`/mnt/vault` is a folder from outside, read-only." in d and "`/mnt/notes` is a folder from outside; your changes" in d
 
 
+def test_a_replaced_folder_whose_files_moved_out():
+    src = MemorySource({"a/x.md": "x\n", "a/y.md": "y\n", "b/z.md": "z\n", "c.md": "c\n", "d/e/f.md": "f\n"})
+    sh = Shell()
+    sh.mount("/mnt/s", src, "staged")
+    sh.run("echo n > /mnt/s/b/w4.md; mv /mnt/s/a /mnt/s/tmpx && mv /mnt/s/d /mnt/s/a && mv /mnt/s/tmpx /mnt/s/d; mkdir /mnt/s/d/n7; "
+           "mv /mnt/s/d/y.md /mnt/s/m0; rm -r /mnt/s/d; echo n > /mnt/s/a/w3.md")
+    assert sh.apply_changes("/mnt/s").failed is None
+    assert src.tree() == {"/a": None, "/a/e": None, "/a/e/f.md": b"f\n", "/a/w3.md": b"n\n", "/b": None, "/b/w4.md": b"n\n",
+                          "/b/z.md": b"z\n", "/c.md": b"c\n", "/m0": b"y\n"}
+
+
 def test_random_change_sets_apply_to_what_the_mount_shows():
     """Random mkdir, mv, rm and edits on a staged mount: applying the change set makes the source match the mount."""
     import random
-    for seed in range(60):
+    for seed in range(120):
         rnd = random.Random(seed)
         src = MemorySource({"a/x.md": "x\n", "a/y.md": "y\n", "b/z.md": "z\n", "c.md": "c\n", "d/e/f.md": "f\n"})
         sh = Shell()

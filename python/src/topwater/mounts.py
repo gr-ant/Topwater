@@ -820,7 +820,14 @@ class _Mount:
             return None if p in self.absent else self.old_version(p)
 
         def drop(q: str) -> None:
-            """q is gone and something else stands where it was: delete it, and what was below it, first."""
+            """q is gone and something else stands where it was: delete it, and what was below it, first. Entries below it
+            that still exist elsewhere and move later go to a temporary name at the top first."""
+            keep = sorted(g for g, b in self.base.items() if g.startswith(q + "/") and id(b.node) in in_tree and g not in moved_done)
+            for g in keep:
+                if not any(g.startswith(k + "/") for k in keep):
+                    tmp = f"/.topwater-move-{next(swap)}"
+                    ops.append(MountChange("rename", now_at(g), to=tmp, version=self.old_version(g)))
+                    renames.append((now_at(g), tmp))
             for g in gone:
                 if (g == q or g.startswith(q + "/")) and g not in dropped:
                     dropped.add(g)
