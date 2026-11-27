@@ -404,7 +404,7 @@ async function exchanges(list: unknown, where: string, blob: (hash: unknown, siz
 
 function mountEntryJson(y: MountEntry) {
   const when = y.modified instanceof Date ? y.modified.getTime() : y.modified;
-  return dropUndefined({ name: y.name, type: y.isDir ? 'dir' : 'file', size: y.size ?? 0, mtime: when == null ? undefined : formatTime(when), version: y.version ?? '' });
+  return dropUndefined({ name: y.name, type: y.isDir ? 'dir' : 'file', size: y.size ?? undefined, mtime: when == null ? undefined : formatTime(when), version: y.version ?? '' });
 }
 
 /** Recorded source exchanges, checked: canonical paths, known operations, entries of the right shape, bodies as blobs. */
@@ -421,8 +421,8 @@ async function mountExchanges(raw: unknown, where: string, blob: (hash: unknown,
     return (v ?? null) as string | null;
   };
   const entry = (y: any): MountEntry => {
-    const size = y?.size ?? 0;
-    if (!(y && typeof y === 'object' && typeof y.name === 'string' && (y.type === 'dir' || y.type === 'file') && Number.isSafeInteger(size) && size >= 0
+    const size = y?.size ?? null;
+    if (!(y && typeof y === 'object' && typeof y.name === 'string' && (y.type === 'dir' || y.type === 'file') && (size === null || Number.isSafeInteger(size) && size >= 0)
       && typeof (y.version ?? '') === 'string')) throw bad(`${where}: bad entry`);
     return { name: y.name, isDir: y.type === 'dir', size, modified: y.mtime == null ? null : time(y.mtime, where + ': mtime'), version: version(y.version ?? '', 'version')! };
   };

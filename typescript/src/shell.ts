@@ -379,8 +379,15 @@ export class Shell implements ArithHost {
   /** Applies the pending changes, or the ones given (from pendingChanges), in order, stopping at the first conflict or failure. */
   applyChanges(path: string, changes?: MountChange[] | null): Promise<MountApplyResult> { return this.mountTable.get(path).apply(changes); }
 
-  /** Drops a mount's pending changes: its files are the source's again (fetched again when read). */
+  /** Drops a mount's pending changes, and the ones a loaded snapshot brought: its files are the source's again. */
   discardChanges(path: string): void { this.mountTable.discard(path); }
+
+  /** The changes a snapshot loaded from a file brought for this mount (as untrusted as the file): not in the files, never
+   * applied, until acceptSnapshotChanges. */
+  snapshotChanges(path: string): MountChange[] { return [...this.mountTable.get(path).held]; }
+
+  /** Puts a loaded snapshot's changes into the mount's files, where they become pending changes like the agent's. */
+  acceptSnapshotChanges(path: string): Promise<void> { return this.mountTable.accept(path); }
 
   /** Lists the source again, keeping the pending changes. */
   refreshMount(path: string): Promise<void> { return this.mountTable.refresh(path); }
@@ -414,7 +421,10 @@ export class Shell implements ArithHost {
       try {
         if (this.mountTable.items.size) await this.mountTable.prepare();
         code = await this.execTopLevel(parse(commandLine), io);
-      } finally { await this.runExitTrap(io); }
+      } finally {
+        await this.runExitTrap(io);
+        if (this.mountTable.items.size && this.remainingMs() > 0) await this.mountTable.settle(io.err);
+      }
     } catch (e) {
       if (e instanceof ParseError) { raw(`bash: ${e.message}\n`); code = 2; }
       else if (e instanceof ExitSignal) code = e.code;

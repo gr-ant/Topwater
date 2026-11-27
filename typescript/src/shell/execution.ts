@@ -312,6 +312,7 @@ export class ExecutionPart {
             code = 1;
           }
         }
+        if (this.mountTable.items.size && this.remainingMs() > 0) await this.mountTable.settle(io.err); // live mode: what the command and its redirections wrote
       }
       return code;
     } finally { this.callDepth--; }

@@ -60,6 +60,8 @@ class Names extends Map<string, Node> {
 export class Dir extends Node {
   /** when a name was last added, removed or replaced */
   listed = ++changeClock;
+  /** a mounted directory not listed yet (mounts.ts): unlisted(node) notes it and returns why */
+  unlisted: ((node: Dir) => string) | null = null;
   readonly children: Map<string, Node> = new Names(this);
 }
 class LinkNode extends Node {
@@ -245,6 +247,7 @@ export class VirtualFileSystem {
       if (seg === '' || seg === '.') continue;
       const dir = chain[chain.length - 1].dir;
       if (!permits(dir, user, 1)) return fail(ERRNO.EACCES);
+      if (dir.unlisted && seg !== '..') return fail(dir.unlisted(dir));
       if (seg === '..') { if (chain.length > 1) chain.pop(); continue; }
       const final = todo.every(t => t === '' || t === '.'), bare = todo.length === 0; // bare: no trailing slash, which would mean a directory
       const next = dir.children.get(seg);
@@ -574,7 +577,11 @@ export class VirtualFileSystem {
   /** Entry names in a directory, sorted by code unit (like `LC_ALL=C ls`). */
   list(path: string): string[] {
     const { node, why } = this.find(path);
-    if (node instanceof Dir) { this.require(node, 4, path); return [...node.children.keys()].sort(ordinal); }
+    if (node instanceof Dir) {
+      this.require(node, 4, path);
+      if (node.unlisted) throw new ShellError(`${path}: ${node.unlisted(node)}`);
+      return [...node.children.keys()].sort(ordinal);
+    }
     throw new ShellError(`${path}: ${node === null ? why : ERRNO.ENOTDIR}`);
   }
 
@@ -585,6 +592,7 @@ export class VirtualFileSystem {
     if (path === '/') throw new ShellError("it is dangerous to operate recursively on '/'");
     const { node, why } = this.find(path, false);
     if (!node) throw new ShellError(`${path}: ${why}`);
+    if (node instanceof Dir && node.unlisted) throw new ShellError(`${path}: ${node.unlisted(node)}`); // what is in it is not known yet
     if (node instanceof Dir && node.children.size > 0 && !recursive) throw new ShellError(`${path}: ${ERRNO.ENOTEMPTY}`);
     const { parent, name } = this.place(path);
     if (node instanceof Dir) this.requireTreeRemovable(node, path);
@@ -602,6 +610,7 @@ export class VirtualFileSystem {
     this.require(d, 3, path + '/' + first);
     for (const [name, child] of d.children) {
       this.requireNotSticky(d, child, path + '/' + name);
+      if (child instanceof Dir && child.unlisted) throw new ShellError(`${path}/${name}: ${child.unlisted(child)}`);
       if (child instanceof Dir) this.requireTreeRemovable(child, path + '/' + name);
     }
   }
@@ -652,6 +661,7 @@ export class VirtualFileSystem {
         return f;
       }
       const dir = n as Dir;
+      if (dir.unlisted) throw new ShellError(`${path}: ${dir.unlisted(dir)}`);
       const copy = Object.assign(new Dir(), { owner, mode: this.runAs === null ? n.mode : n.mode & ~this.umask, modified: this.store.clock() });
       copying.add(dir);
       for (const [k, v] of dir.children) { const c = clone(v, path + '/' + k); if (c) copy.children.set(k, c); }

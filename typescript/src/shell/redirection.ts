@@ -96,7 +96,7 @@ export class RedirectionPart {
     if (r.op === '<<') return new StdinBuffer(await this.expandSingle(r.here!.body, io));
     if (r.op === '<<<') return new StdinBuffer((await this.expandSingle(r.target!, io)) + '\n');
     const target = await this.expandSingle(r.target!, io);
-    if (this.mountTable.items.size) await this.mountTable.before('<', [], target);
+    if (this.mountTable.items.size) await this.mountTable.before('<', [], io.err, target);
     const path = this.resolvePath(target);
     if (path === '/dev/stdin') return io.stdin;
     try { return new StdinBuffer(this.agentFs.readPipeText(path)); } catch (e) {
@@ -119,7 +119,7 @@ export class RedirectionPart {
     if (target === '') throw new ShellError(': No such file or directory');
     if (this.agentFs.isDirectory(path)) throw new ShellError(`${target}: Is a directory`);
     if (this.noclobber && (r.op === '>' || r.op === '&>') && this.agentFs.isFile(path)) throw new ShellError(diagnostic('noclobber', { target: target }));
-    if (r.op.endsWith('>>') && this.mountTable.items.size) await this.mountTable.before('>>', [], target);
+    if (r.op.endsWith('>>') && this.mountTable.items.size) await this.mountTable.before('>>', [], io.err, target);
     try {
       if (!r.op.endsWith('>>') || !this.agentFs.exists(path)) this.agentFs.writeText(path, ''); // truncate on open, like bash
     } catch (e) {

@@ -10,8 +10,9 @@ import { VirtualFileSystem, type VfsEntry } from './vfs.js';
 import { MAX_VERSION, MOUNT_MODES, mountChange, type MountChange, type MountState } from './mounts.js';
 
 /** The newest format version this writes and loads. Version 2 added symbolic links (type "symlink" with a "target") and hard
- * links (a "link" naming the entry's first path); a snapshot without links is still written as version 1. */
-export const SNAPSHOT_FORMAT_VERSION = 2;
+ * links (a "link" naming the entry's first path), version 3 mounts (docs/mounts.md); a snapshot without either is still written
+ * as version 1, one with links but no mounts as version 2. */
+export const SNAPSHOT_FORMAT_VERSION = 3;
 const FORMAT = 'topwater-snapshot';
 const enc = new TextEncoder();
 
@@ -184,7 +185,7 @@ async function manifestOf(snap: ShellSnapshot, content: (e: VfsEntry) => Promise
   const mounts = [];
   for (const d of st.mounts ?? []) {
     const changes = [];
-    for (const c of d.changes) {
+    for (const c of [...d.held, ...d.changes]) { // every change in a file waits for the host when loaded
       const [blob, size] = c.kind === 'write' && c.content?.length ? await content({ data: c.content } as VfsEntry) : [];
       changes.push({ kind: c.kind, path: c.path, to: c.to ?? undefined, version: c.version ?? undefined, size, blob });
     }
@@ -192,7 +193,8 @@ async function manifestOf(snap: ShellSnapshot, content: (e: VfsEntry) => Promise
   }
   const names = [...new Set([...st.variables.keys(), ...st.arrays.keys(), ...st.attributes.keys()])].sort(ordinal);
   return dropEmpty({
-    format: FORMAT, version: links ? SNAPSHOT_FORMAT_VERSION : 1, created: formatTime(snap.created), user: snap.user, hostname: snap.hostname, cwd: st.cwd, files,
+    format: FORMAT, version: mounts.length ? 3 : links ? 2 : 1, // a reader that doesn't know mounts would load the machine without them
+    created: formatTime(snap.created), user: snap.user, hostname: snap.hostname, cwd: st.cwd, files,
     variables: names.map(n => dropEmpty({
       name: n, value: st.variables.get(n), attrs: st.attributes.get(n), exported: isExported(st, n),
       array: st.arrays.has(n) ? (a => ({ assoc: a.assoc || undefined, next: a.next || undefined, items: a.items }))(st.arrays.get(n)!) : undefined,
@@ -514,7 +516,7 @@ function readMounts(raw: unknown, o: Limits, blobBytes: (entry: string, size: nu
       }
       changes.push(mountChange(c.kind, cp, { to, version: c.kind !== 'mkdir' ? version : null, content }));
     }
-    out.push({ path: at, mode: d.mode, type: d.type, id: d.id, changes });
+    out.push({ path: at, mode: d.mode, type: d.type, id: d.id, changes, held: [] });
   }
   return out;
 }
