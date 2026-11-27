@@ -9,7 +9,15 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   linux/arm64 (tags: the version, `preview`, and `latest` for releases without a preview suffix):
   `docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp`. It is the standalone Linux binary on Ubuntu's chiseled .NET
   base, runs as a non-root user in `/data`, and carries an SBOM and a signed build provenance attestation. CI builds
-  it and smoke-tests a run, an MCP session and `--state` on every push. See [Docker](docs/cli.md#docker).
+  it for amd64 and arm64 and smoke-tests a run, an MCP session and `--state` on every push. See
+  [Docker](docs/cli.md#docker).
+- **`topwater mcp` answers what it has read before it stops.** When its input closed, the server used to stop at once
+  and cancel the requests still running, so `printf ... | topwater mcp` printed no answers and exited 0. It now
+  answers every request already read (up to one call limit plus 10 s), then stops.
+- **A `--state` file that cannot be written is an error.** `shell`, `run` and `mcp` used to log "could not save" and
+  exit 0, losing the machine; they now check at start that the file can be written (exit code 2 with the path), and a
+  save that fails later makes them exit with 1. `export` and `snapshot save`, which only read `--state`, are
+  unchanged.
 
 ## 0.1.0-preview.4 (2026-11-26)
 

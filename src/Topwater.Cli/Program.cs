@@ -171,7 +171,7 @@ static class Cli
             if (output != "(no output)") io.Out.Write(output.EndsWith('\n') ? output : output + "\n");
             machine.Save();
         }
-        if (!machine.Close() && exitCode == 0) exitCode = 1; // an export that failed
+        if (!machine.Close() && exitCode == 0) exitCode = 1; // a save or an export that failed
         return exitCode;
     }
 
@@ -181,7 +181,7 @@ static class Cli
         io.Out.Write(result.Stdout);
         io.Err.Write(result.Stderr);
         if (result.Trailer != null) io.Err.WriteLine(result.Trailer);
-        if (!machine.Close() && result.ExitCode == 0) return 1; // an export that failed
+        if (!machine.Close() && result.ExitCode == 0) return 1; // a save or an export that failed
         return result.ExitCode;
     }
 
@@ -208,14 +208,15 @@ static class Cli
         // a client stopping the server sends SIGTERM (or closes stdin); either way the state is saved and exports run
         using var onTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, c => { c.Cancel = true; stop.Cancel(); });
         using var onInt = PosixSignalRegistration.Create(PosixSignal.SIGINT, c => { c.Cancel = true; stop.Cancel(); });
+        var ok = true;
         try
         {
-            await using var server = McpServerCommand.Create(machine, new StdioServerTransport("topwater"));
+            await using var server = McpServerCommand.Create(machine, Console.OpenStandardInput(), new BufferedStream(Console.OpenStandardOutput()));
             await server.RunAsync(stop.Token);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
-        finally { machine.Close(); }
-        return 0;
+        finally { ok = machine.Close(); }
+        return ok ? 0 : 1;   // a state file or an export that could not be written
     }
 
     static async Task<int> SnapshotCommand(string[] args, Io io, CancellationToken ct)
@@ -227,7 +228,7 @@ static class Cli
         {
             case "save":
             {
-                var machine = Machine.Open(o, io.Err);
+                var machine = Machine.Open(o, io.Err, saves: false);
                 Machine.SaveTo(machine.Shell, file);
                 io.Out.WriteLine($"saved {file}");
                 return 0;
@@ -294,7 +295,7 @@ static class Cli
             io.Out.WriteLine($"exported {file} ({recording.Calls.Count} calls)");
             return Task.FromResult(0);
         }
-        var machine = Machine.Open(o, io.Err);
+        var machine = Machine.Open(o, io.Err, saves: false);
         Write(file, machine.Shell.Save);
         io.Out.WriteLine($"exported {file}");
         return Task.FromResult(0);

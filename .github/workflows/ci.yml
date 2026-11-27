@@ -55,10 +55,16 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-  # The container image (docker/Dockerfile) on linux/amd64, built from a standalone binary as the release does, and
-  # smoke-tested: a run, an MCP session over stdio, --state on a mounted folder, a non-root user.
+  # The container image (docker/Dockerfile) on linux/amd64 and linux/arm64, each built from a standalone binary as the
+  # release does and smoke-tested on its own architecture: a run, an MCP session over stdio, --state, a non-root user.
   docker:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, rid: linux-x64, arch: amd64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, arch: arm64 }
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -66,9 +72,9 @@ jobs:
           dotnet-version: 8.0.x
       - name: Build the image
         run: |
-          dotnet publish src/Topwater.Cli -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:GenerateDocumentationFile=false -o pub
-          mkdir -p ctx/linux-amd64 && cp pub/Topwater.Cli ctx/linux-amd64/topwater
-          docker buildx build --load --platform linux/amd64 -f docker/Dockerfile -t topwater:ci ctx
+          dotnet publish src/Topwater.Cli -c Release -r ${{ matrix.rid }} --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:GenerateDocumentationFile=false -o pub
+          mkdir -p ctx/linux-${{ matrix.arch }} && cp pub/Topwater.Cli ctx/linux-${{ matrix.arch }}/topwater
+          docker buildx build --load --platform linux/${{ matrix.arch }} -f docker/Dockerfile -t topwater:ci ctx
       - run: docker/smoke-test.sh topwater:ci
 
   # The standalone topwater binary on each desktop system, and the install scripts' syntax.

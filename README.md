@@ -160,7 +160,8 @@ curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, m
 irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows
 ```
 
-From `0.1.0-preview.5` on, also as a container image for Linux (amd64 and arm64), with nothing to install but Docker:
+From `0.1.0-preview.5` on, also as a container image (linux/amd64 and linux/arm64; Docker Desktop on macOS and Windows
+runs it too), with nothing to install but Docker:
 
 ```bash
 docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp

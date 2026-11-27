@@ -63,7 +63,7 @@ Every command takes the same options:
 
 | Option | Effect |
 |---|---|
-| `--state FILE` | Load the machine from FILE if it exists. Save it after every command (through a temporary file) and on exit |
+| `--state FILE` | Load the machine from FILE if it exists. Save it after every command (through a temporary file) and on exit. If FILE's folder cannot be written, `shell`, `run` and `mcp` stop at start (exit code 2); a save that fails later makes them exit with 1 |
 | `--from FILE` | Start from FILE when there is no `--state` file yet. FILE is never written |
 | `--import HOST:PATH` | Copy a host file or directory into the machine at start, owned by the agent. A copy, not a mount; symlinks are skipped. Refused if it would not fit on the simulated disk. Repeatable |
 | `--export PATH:HOST` | Copy PATH out to the host on exit. Overwrites same-named files, deletes nothing, never writes through a host symlink or outside HOST. Repeatable |
@@ -79,7 +79,8 @@ lost: start from it with `--from`, or copy its machine to a new state file with 
 `topwater mcp` serves one tool, `bash`, with one string argument `command`. The name, schema and output text are
 those of `BashTool`, `[exit code N]` and limit notes included. The description is `BashTool`'s without the last
 sentence about the app's own programs, since the standalone server has none. Calls run one at a time. Logs go to
-stderr.
+stderr. When its input closes, the server answers every request it has already read, then stops, so a script can pipe
+requests in and close the pipe.
 
 Claude Desktop (`claude_desktop_config.json`, under Settings > Developer > Edit Config):
 

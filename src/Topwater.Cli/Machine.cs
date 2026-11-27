@@ -37,8 +37,11 @@ sealed class Machine
 
     Machine(MachineOptions options, Shell shell, TextWriter log) { _options = options; Shell = shell; _log = log; }
 
-    /// <summary>Opens the machine. Throws <see cref="CliException"/> for a bad state file or import.</summary>
-    public static Machine Open(MachineOptions options, TextWriter log)
+    /// <summary>
+    /// Opens the machine. Throws <see cref="CliException"/> for a bad state file or import, or, unless the caller only
+    /// reads it (<paramref name="saves"/> false), a state file that cannot be written.
+    /// </summary>
+    public static Machine Open(MachineOptions options, TextWriter log, bool saves = true)
     {
         var shell = new Shell(options.ToShellOptions());
         RefuseHistory(options.State, shell.Options);
@@ -55,6 +58,7 @@ sealed class Machine
                 throw new CliException($"{state}: {e.Message}");
             }
         }
+        if (saves && options.State is { } path) CheckWritable(path);
         foreach (var (host, vfs) in options.Imports) Import(shell, host, vfs);
         return new Machine(options, shell, log);
     }
@@ -81,19 +85,36 @@ sealed class Machine
                 $"Start from it with --from {state} (never written), or copy its machine into a new state file with: topwater import {state} --state NEW");
     }
 
-    /// <summary>Writes the state file, if there is one. Called after every command so a killed process loses at most one.</summary>
-    public void Save()
+    /// <summary>
+    /// Fails at start, not at the first save, when the state file cannot be written: in a container or under an MCP client
+    /// a failed save is easy to miss, and the machine would be gone at the next start.
+    /// </summary>
+    static void CheckWritable(string state)
     {
-        if (_options.State is not { } state) return;
-        try { SaveTo(Shell, state); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.WriteLine($"topwater: could not save {state}: {e.Message}"); }
+        var temp = state + ".tmp";   // the file SaveTo writes first
+        try
+        {
+            using (File.Create(temp)) { }
+            File.Delete(temp);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            throw new CliException($"--state {state}: cannot be written: {e.Message}");
+        }
     }
 
-    /// <summary>Saves the state, then copies each <c>--export</c> path out to the host; false if an export failed.</summary>
+    /// <summary>Writes the state file, if there is one; false if that failed. Called after every command so a killed process loses at most one.</summary>
+    public bool Save()
+    {
+        if (_options.State is not { } state) return true;
+        try { SaveTo(Shell, state); return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.WriteLine($"topwater: could not save {state}: {e.Message}"); return false; }
+    }
+
+    /// <summary>Saves the state, then copies each <c>--export</c> path out to the host; false if the save or an export failed.</summary>
     public bool Close()
     {
-        Save();
-        bool ok = true;
+        bool ok = Save();
         foreach (var (vfs, host) in _options.Exports)
         {
             try { Export(Shell, vfs, host, _log); }

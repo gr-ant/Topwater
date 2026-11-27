@@ -235,6 +235,13 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
           create-storage-record: false   # storage records are for organization accounts
+      - name: Warn while the package is private
+        # an anonymous pull token, as any user gets: no repository token is sent
+        run: |
+          t=$(curl -fsS "https://ghcr.io/token?scope=repository:gr-ant/topwater:pull" | jq -r .token) || t=
+          curl -fsS -o /dev/null -H "Authorization: Bearer $t" -H "Accept: application/vnd.oci.image.index.v1+json" \
+            "https://ghcr.io/v2/gr-ant/topwater/manifests/${{ steps.meta.outputs.version }}" \
+            || echo "::warning::ghcr.io/gr-ant/topwater is not public: docker pull fails for everyone else. Packages > topwater > Package settings > Change visibility."
 
   github-release:
     needs: [publish, binaries]

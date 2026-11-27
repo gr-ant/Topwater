@@ -26,7 +26,7 @@ public sealed class CliTests : IDisposable
     static async Task<(McpClient Client, Func<Task> Stop)> Connect(Machine machine)
     {
         Pipe toServer = new(), toClient = new();
-        var server = McpServerCommand.Create(machine, new ModelContextProtocol.Server.StreamServerTransport(toServer.Reader.AsStream(), toClient.Writer.AsStream()));
+        var server = McpServerCommand.Create(machine, toServer.Reader.AsStream(), toClient.Writer.AsStream());
         var stop = new CancellationTokenSource();
         var running = server.RunAsync(stop.Token);
         var client = await McpClient.CreateAsync(new StreamClientTransport(toServer.Writer.AsStream(), toClient.Reader.AsStream()));
@@ -83,6 +83,66 @@ public sealed class CliTests : IDisposable
         var (again, stop2) = await Connect(Machine.Open(options, TextWriter.Null));
         try { Assert.Equal("/tmp\nkept\n", await Bash(again, "pwd; cat ~/notes.txt")); }
         finally { await stop2(); }
+    }
+
+    [Fact]
+    public async Task McpServerAnswersEveryRequestReadBeforeEndOfInput()
+    {
+        // a script that pipes its requests in and closes the pipe, as `printf ... | topwater mcp` does
+        Pipe toServer = new(), toClient = new();
+        var server = McpServerCommand.Create(Machine.Open(new MachineOptions(), TextWriter.Null), toServer.Reader.AsStream(), toClient.Writer.AsStream());
+        var output = new StreamReader(toClient.Reader.AsStream()).ReadToEndAsync();
+        var running = server.RunAsync();
+        string[] lines =
+        [
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}""",
+            """{"jsonrpc":"2.0","method":"notifications/initialized"}""",
+            """{"jsonrpc":"2.0","id":2,"method":"tools/list"}""",
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bash","arguments":{"command":"sleep 0.3; echo slow"}}}""",
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"bash","arguments":{"command":"echo fast"}}}""",
+        ];
+        await toServer.Writer.WriteAsync(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n"));
+        await toServer.Writer.CompleteAsync();
+        await running.WaitAsync(TimeSpan.FromSeconds(30));
+        await server.DisposeAsync();
+        await toClient.Writer.CompleteAsync();
+
+        var answers = (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => JsonDocument.Parse(l).RootElement)
+            .Where(m => m.TryGetProperty("id", out _)).ToDictionary(m => m.GetProperty("id").GetInt32());
+        Assert.Equal([1, 2, 3, 4], answers.Keys.Order());
+        Assert.Equal("topwater", answers[1].GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString());
+        Assert.Equal("bash", answers[2].GetProperty("result").GetProperty("tools")[0].GetProperty("name").GetString());
+        Assert.Equal("slow\n", answers[3].GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString());
+        Assert.Equal("fast\n", answers[4].GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task StateThatCannotBeWrittenFailsAtStart()
+    {
+        File.WriteAllText(P("file"), "");
+        var state = Path.Combine(P("file"), "machine.topwater");   // a folder that is a file: never writable
+        foreach (var command in new[] { new[] { "run", "--state", state, "echo ran" }, ["mcp", "--state", state], ["shell", "--state", state] })
+        {
+            var (code, stdout, stderr) = await Cli(command);
+            Assert.Equal(2, code);
+            Assert.Equal("", stdout);
+            Assert.Contains($"--state {state}: cannot be written", stderr);
+        }
+        // the commands that only read --state still do
+        await Cli("run", "--state", P("m.topwater"), "echo kept > f");
+        Assert.Equal(0, (await Cli("export", "--state", P("m.topwater"), P("copy.topwater"))).Code);
+        Assert.False(File.Exists(P("m.topwater.tmp")));
+    }
+
+    [Fact]
+    public void FailedSaveMakesCloseFail()
+    {
+        Directory.CreateDirectory(P("sub"));
+        var log = new StringWriter();
+        var machine = Machine.Open(new MachineOptions { State = Path.Combine(P("sub"), "m.topwater") }, log);
+        Directory.Delete(P("sub"));   // gone after the start check
+        Assert.False(machine.Close());   // run, shell and mcp then exit 1
+        Assert.Contains("could not save", log.ToString());
     }
 
     [Fact]
