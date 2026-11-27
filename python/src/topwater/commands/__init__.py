@@ -248,7 +248,7 @@ def unescape(s: str, keep_unknown: bool = False, echo: bool = False) -> str:
 
 
 def register_all(shell) -> None:
-    from . import archive, awk, binary, documents, files, git, jq, more, net, text
+    from . import archive, awk, binary, documents, files, gitrevisions, jq, more, net, text
 
     files.register(shell)
     text.register(shell)
@@ -260,7 +260,7 @@ def register_all(shell) -> None:
     documents.register(shell)
     binary.register(shell)
     archive.register(shell)
-    git.register(shell)
+    gitrevisions.register(shell)
     net.register(shell)
 
 
