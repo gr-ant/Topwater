@@ -51,7 +51,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p browser/tsconfig.json",
     "test": "vitest run",
     "build:browser": "node scripts/build-browser.mjs",
-    "test:browser": "node scripts/browser-check.mjs"
+    "test:browser": "node scripts/browser-check.mjs && node scripts/browser-python-check.mjs"
   },
   "devDependencies": {
     "@langchain/core": "^1.5.1",

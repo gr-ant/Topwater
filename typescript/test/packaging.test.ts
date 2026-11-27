@@ -36,3 +36,21 @@ test('each built module imports alone', async () => {
     rmSync(out, { recursive: true, force: true });
   }
 }, 60_000);
+
+// python3's interpreter ships in its own package (addons/topwater-python): the core neither carries it nor depends on it
+test('the python add-on carries the interpreter and needs nothing; the core carries neither', async () => {
+  const core = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  expect(core.dependencies).toBeUndefined();
+  expect(core.files.some((f: string) => /assets|wasm|addons/.test(f))).toBe(false);
+  const dir = fileURLToPath(new URL('../addons/topwater-python/', import.meta.url));
+  const addon = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+  expect([addon.dependencies, Object.keys(addon.peerDependencies)]).toEqual([undefined, ['topwater']]);
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const [packed] = JSON.parse(execFileSync(npm, ['pack', '--dry-run', '--json'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+  expect(packed.files.map((f: { path: string }) => f.path).sort()).toEqual(['LICENSE', 'README.md', 'index.d.ts', 'index.js',
+    'interpreter/PROVENANCE', 'interpreter/THIRD_PARTY_LICENSES.md', 'interpreter/python.wasm.gz', 'interpreter/python314.zip', 'package.json']);
+  const { Shell } = await import('../src/index.js');
+  const { artifacts } = await import(pathToFileURL(join(dir, 'index.js')).href);
+  const sh = await new Shell().allowPython({ artifacts });
+  expect((await sh.run("python3 -c 'print(6*7)'")).stdout).toBe('42\n');
+}, 60_000);
