@@ -20,8 +20,11 @@ This page covers the TypeScript API. The [main README](https://github.com/gr-ant
 The package is an ES module:
 
 ```bash
-npm install topwater
+npm install topwater@next
 ```
+
+Previews are published under npm's `next` tag; plain `npm install topwater` gets the `latest` tag, which stays at the
+first preview published (`0.1.0-preview.4`) until a release without a preview suffix.
 
 ## Quickstart
 

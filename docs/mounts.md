@@ -1,7 +1,7 @@
 # Mounted sources
 
-A mount shows an outside store of files (a folder on the host, an Obsidian vault, and later Notion, SharePoint or
-anything else with pages and folders) as a directory in the machine. The agent uses ordinary commands on it: `ls`,
+A mount shows an outside store of files (a folder on the host, an Obsidian vault, or anything else with pages and
+folders that you write a source for) as a directory in the machine. The agent uses ordinary commands on it: `ls`,
 `cat`, `grep -r`, `find`, `cp`, `mv`, `rm`, `to-markdown`. Your application decides what the agent's changes do: nothing
 (read-only), a change set you review and apply (staged), or writes straight through (live).
 
@@ -114,7 +114,7 @@ object, only the files it lists.
 
 | Member | Required | |
 |---|---|---|
-| `type`, `id` | yes | `type` names the kind of store (`local-folder`, `notion`); `id` is your name for this one (a workspace, a site). Both are saved in snapshots, so they must not hold secrets. |
+| `type`, `id` | yes | `type` names the kind of store (`local-folder`, `wiki`); `id` is your name for this one (a workspace, a site). Both are saved in snapshots, so they must not hold secrets. |
 | `capabilities` | yes | which of `write`, `delete`, `rename`, `mkdir` it supports; empty for a read-only source. Staged and live mounts need `write`. |
 | `list(path, maxEntries)` | yes | the entries of a directory: `name`, `isDir`, `size` (null: not known until read), `modified`, `version`. More than `maxEntries` are not used, so a source that pages can stop there. |
 | `stat(path)` | yes | one entry, or null when missing |

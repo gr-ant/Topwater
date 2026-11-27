@@ -26,5 +26,7 @@ Elsewhere in the repository:
 | [spec/topwater-file](../spec/topwater-file/README.md) | JSON Schemas for the `.topwater` file |
 | [tests/corpus](../tests/corpus/README.md) | The cases recorded from real bash that all three implementations run |
 | [tests/web](../tests/web/README.md) | The `curl` and `wget` cases recorded from the real programs |
+| [docs/architecture.md](architecture.md) | The source layout: how the three implementations mirror each other |
 | [CHANGELOG.md](../CHANGELOG.md) | What changed between releases |
+| [ROADMAP.md](../ROADMAP.md) | What is parked on branches, and ideas not started |
 | [AGENTS.md](../AGENTS.md) | Rules for contributors, human or AI |
