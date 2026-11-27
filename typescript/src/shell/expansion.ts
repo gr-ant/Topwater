@@ -7,7 +7,7 @@ import { evalArith, ArithError } from '../arith.js';
 import { escapeGlob, hasWildcard, globRegex, globBody, cachedRegex, expandGlob, braceExpand } from '../glob.js';
 import { quoteValue, unescape } from '../format.js';
 import { diagnostic } from '../spec.generated.js';
-import { attributeFlags } from '../commands/builtins.js';
+import { attributeFlags } from '../commands/variables.js';
 import { type Io, BadSubstitution, LineAbort, ExitSignal } from './types.js';
 import { BufferWriter } from './redirection.js';
 import { arrayRef, splitOnce, SCRATCH } from './variables.js';

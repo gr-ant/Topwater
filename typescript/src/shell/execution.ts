@@ -7,7 +7,7 @@ import { evalArith } from '../arith.js';
 import { globRegex } from '../glob.js';
 import { posixToJs } from '../regex.js';
 import { DIAGNOSTICS, diagnostic } from '../spec.generated.js';
-import { testUnary, testNewer } from '../commands/builtins.js';
+import { testUnary, testNewer } from '../commands/scripting.js';
 import { type Io, ShellArray, ControlFlow, LineAbort, LoopControl, ReturnSignal, ExitSignal, type FunctionDef, type NewProcess } from './types.js';
 import { BufferWriter, FileSink, SwitchWriter } from './redirection.js';
 

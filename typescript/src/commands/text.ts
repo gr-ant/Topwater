@@ -6,8 +6,9 @@ import { escapeRegex, posixRegexError, posixToJs } from '../regex.js';
 import { globRegex } from '../glob.js';
 import { printfFormat, unescape } from '../format.js';
 import { VirtualFileSystem } from '../vfs.js';
-import { cannotRun } from './builtins.js';
+import { cannotRun } from '../command.js';
 import { cmpCp } from './gitcore.js';
+import { run } from './sed.js';
 
 const checkEvery = (ctx: CommandContext, i: number) => { if ((i & 7) === 0) ctx.checkTime(); };
 const lines2text = (lines: string[]) => (lines.length ? lines.join('\n') + '\n' : '');
@@ -1130,15 +1131,16 @@ export function registerText(shell: Shell): void {
   shell.register('tr', tr);
   shell.register('tee', tee);
   shell.register('xargs', xargs);
+  shell.register('sed', run);
   shell.register('nl', nl);
-  shell.register('tac', ctx => {
-    let code = 0;
-    ctx.stdout.write([...inputs(ctx, ctx.args, () => { code = 1; })].map(x => lines2text(splitLines(x[1]).reverse())).join(''));
-    return code;
-  });
   shell.register('rev', ctx => {
     let code = 0;
     ctx.stdout.write([...inputs(ctx, ctx.args, () => { code = 1; })].map(x => lines2text(splitLines(x[1]).map(l => [...l].reverse().join('')))).join(''));
+    return code;
+  });
+  shell.register('tac', ctx => {
+    let code = 0;
+    ctx.stdout.write([...inputs(ctx, ctx.args, () => { code = 1; })].map(x => lines2text(splitLines(x[1]).reverse())).join(''));
     return code;
   });
   shell.register('paste', paste);

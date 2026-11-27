@@ -500,7 +500,7 @@ function bufferedRun(target: Sink, f: (out: Sink) => number | null): number | nu
   try { return f({ write: s => { parts.push(s); } }); } finally { target.write(parts.join('')); }
 }
 
-function run(ctx: CommandContext): number {
+export function run(ctx: CommandContext): number {
   // a bad command line: the complaint, then the whole usage text, on stderr
   const bad = (message: string) => { ctx.stderr.write((message.length > 0 ? `sed: ${message}\n` : '') + USAGE); return 1; };
   const scripts: { text: string; where: string }[] = [];

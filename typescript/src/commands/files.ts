@@ -1,16 +1,15 @@
 // File commands: ls cat mkdir touch rm rmdir cp mv find tree stat du df chmod chown file mktemp realpath ...
-import { Args, specOf, specMessage, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, type CommandContext, type CommandHandler } from '../command.js';
+import { Args, specOf, specMessage, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, line, type CommandContext, type CommandHandler } from '../command.js';
 import { VirtualFileSystem, NO_SPACE, type FileStat } from '../vfs.js';
 import { ERRNO } from '../spec.generated.js';
 import { globRegex } from '../glob.js';
 import { strftime } from '../format.js';
-import { parseDate } from './builtins.js';
+import { parseDate } from './system.js';
 import type { Shell } from '../shell.js';
 
-const norm = VirtualFileSystem.normalize;
+export const norm = VirtualFileSystem.normalize;
 const nameOf = VirtualFileSystem.getName;
-const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
-const trimEnd = (s: string, c: string) => { let e = s.length; while (e > 0 && s[e - 1] === c) e--; return s.slice(0, e); };
+export const trimEnd = (s: string, c: string) => { let e = s.length; while (e > 0 && s[e - 1] === c) e--; return s.slice(0, e); };
 
 /** A filesystem error "/abs/dir/x: reason" as [arg/x, reason]: the path shown the way the user typed it. */
 function typed(e: Error, arg: string, abs: string): [string, string] {
@@ -881,53 +880,6 @@ export function registerFiles(shell: Shell) {
     ctx.stdout.write(out);
   });
 
-  reg('basename', ctx => {
-    const a = Args.parse(ctx.args, specOf('basename'));
-    if (a.positional.length === 0) throw new UsageException(specMessage('basename', 'missingOperand', {}));
-    const suffix = a.value('s') ?? (!a.has('a') && a.positional.length === 2 ? a.positional[1] : undefined);
-    const names = a.has('a') || a.value('s') !== undefined ? a.positional : a.positional.slice(0, 1);
-    for (const n of names) {
-      const t = trimEnd(n, '/');
-      let b = t.length === 0 ? (n.length ? '/' : '') : t.slice(t.lastIndexOf('/') + 1);
-      if (suffix !== undefined && b.endsWith(suffix) && b !== suffix) b = b.slice(0, -suffix.length);
-      ctx.stdout.write(b + (a.has('z') ? '\0' : '\n'));
-    }
-  });
-
-  reg('dirname', ctx => {
-    const a = Args.parse(ctx.args, specOf('dirname'));
-    if (a.positional.length === 0) throw new UsageException(specMessage('dirname', 'missingOperand', {}));
-    for (const n of a.positional) {
-      const t = trimEnd(n, '/');
-      const i = t.lastIndexOf('/');
-      ctx.stdout.write((t.length === 0 ? (n.length ? '/' : '.') : i < 0 ? '.' : i === 0 ? '/' : trimEnd(t.slice(0, i), '/') || '/') + (a.has('z') ? '\0' : '\n'));
-    }
-  });
-
-  const realpath: CommandHandler = ctx => {
-    const a = Args.parse(ctx.args, specOf(ctx.name));
-    const readlink = ctx.name === 'readlink', plain = readlink && !a.has('f') && !a.has('e') && !a.has('m');
-    // readlink is silent about failures unless -v; realpath reports them unless -q
-    const report = readlink ? a.has('v') : !a.has('q');
-    if (a.positional.length === 0 && readlink) throw new UsageException(specMessage('readlink', 'missingOperand'));
-    const fs = ctx.fs;
-    const end = a.has('z') ? '\0' : readlink && a.has('n') && a.positional.length === 1 ? '' : '\n';
-    let code = 0;
-    for (const p of a.positional.length ? a.positional : ['.']) {
-      const abs = ctx.resolvePath(p);
-      let result: string | null, why = '';
-      if (plain) {
-        try { result = fs.readLink(abs); } catch (e) { result = null; why = reason(e); }
-      } else if (!readlink && a.has('s')) result = norm(ctx.shell.cwd, p); // -s: no links resolved
-      else { result = fs.realPath(abs, a.has('e')) ?? (a.has('m') ? abs : null); why = fs.whyMissing(abs); }
-      if (result === null) { if (report) ctx.stderr.write(`${ctx.name}: ${specMessage(ctx.name, 'failed', { file: p, errno: why ?? '' })}\n`); code = 1; continue; }
-      ctx.stdout.write(result + end);
-    }
-    return code;
-  };
-  reg('realpath', realpath);
-  reg('readlink', realpath);
-
   reg('stat', ctx => {
     const a = Args.parse(ctx.args, specOf('stat'));
     let code = 0;
@@ -1107,17 +1059,6 @@ export function registerFiles(shell: Shell) {
     return code;
   });
 
-  reg('mktemp', ctx => {
-    const a = Args.parse(ctx.args, specOf('mktemp'));
-    const template = a.positional[0] ?? 'tmp.XXXXXXXXXX';
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    const m = /X{3,}$/.exec(template);
-    if (!m) throw new ShellError(specMessage('mktemp', 'tooFewX', { template }));
-    const name = template.slice(0, m.index) + Array.from({ length: m[0].length }, () => chars[ctx.shell.nextRandom(chars.length)]).join('');
-    const path = template.includes('/') && a.value('p') === undefined && !a.has('t') ? ctx.resolvePath(name) : norm(a.value('p') ?? '/tmp', name);
-    if (!a.has('u')) { if (a.has('d')) { ctx.fs.mkdir(path); ctx.fs.chmod(path, 0o700); } else { ctx.fs.writeText(path, ''); ctx.fs.chmod(path, 0o600); } }
-    line(ctx, path);
-  });
 }
 
 /** `file`'s description of some bytes. */

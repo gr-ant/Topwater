@@ -1,7 +1,8 @@
 import type { Shell } from './shell.js';
 import { ShellError, UsageException, type VirtualFileSystem } from './vfs.js';
 import { encodeText } from './bytes.js';
-import { COMMANDS, DEFAULT_MESSAGES, GETOPT, type CommandSpec } from './spec.generated.js';
+import { COMMANDS, DEFAULT_MESSAGES, ERRNO, GETOPT, type CommandSpec } from './spec.generated.js';
+import type { Io } from './shell/types.js';
 
 export { ShellError, UsageException };
 
@@ -292,3 +293,14 @@ export function tooLarge(what: string, limit: number, instead: string): LimitExc
 
 /** Registers commands: the shape every command module exports (`register(shell)` calls `shell.register(...)`). */
 export type Registrar = (shell: Shell) => void;
+
+export const ioOf = (ctx: CommandContext): Io => ({ stdin: ctx.stdin, out: ctx.stdout, err: ctx.stderr, fds: ctx.fds });
+export const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
+
+/** Why `name` can't be run as a program by env or timeout ([errno, exit status]), or null if it can. */
+export function cannotRun(ctx: CommandContext, name: string): [string, number] | null {
+  if (!name.includes('/')) return ctx.shell.locate(name) !== null ? null : [ERRNO.ENOENT, 127]; // a shell builtin is no program
+  const abs = ctx.resolvePath(name);
+  if (!ctx.fs.exists(abs)) { const why = ctx.fs.whyMissing(abs); return [why, why === ERRNO.EACCES ? 126 : 127]; }
+  return ctx.fs.isDirectory(abs) || !ctx.fs.canExecute(abs) ? [ERRNO.EACCES, 126] : null;
+}

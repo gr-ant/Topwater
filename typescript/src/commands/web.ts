@@ -4,7 +4,7 @@ import { ShellError, reason, specMessage, specOf, type CommandContext } from '..
 import { concatBytes, decodeBytes, encodeText, toBase64 } from '../bytes.js';
 import { strftime } from '../format.js';
 import { WebFailure, WebSession, WebUrl, decompress, header, type WebResponse } from '../web.js';
-import { sleepFor } from './builtins.js';
+import { sleepFor } from './process.js';
 
 const NO_NETWORK = new WebSession({ explainBlocked: false });
 const utf8 = new TextEncoder();
