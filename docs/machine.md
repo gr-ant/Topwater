@@ -238,7 +238,7 @@ What each commonly tried program does:
 
 | Program | Here | Why |
 |---|---|---|
-| `python`, `python3`, `pip`, `pip3`, `node`, `npm`, `perl` | command not found (127) | not part of the machine; a fake interpreter would mislead. Ubuntu itself ships `perl`, so this one differs from a real install |
+| `python`, `python3`, `pip`, `pip3`, `node`, `npm`, `perl` | command not found (127) | not part of the machine; a fake interpreter would mislead. Ubuntu itself ships `perl`, so this one differs from a real install. Your application can add a real `python3` ([Python](python.md)) |
 | `apt`, `apt-get`, `apt-cache` | exist; every subcommand prints `E: Packages cannot be installed on this machine: ...` and exits 100, apt's error status | agents reach for apt when a program is missing; saying plainly that nothing can be installed stops them retrying |
 | `dpkg` | exists; prints `dpkg: error: packages cannot be installed or listed ...` and exits 2 | same, with dpkg's status |
 | `sudo apt ...`, `sudo dpkg ...` | the package manager's own message | more useful than the sudoers refusal every other `sudo` command gets |

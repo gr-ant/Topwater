@@ -222,6 +222,7 @@ built-in tools and the developer's own Claude Code settings left out. See
 | [Web access](docs/web.md) to sites you list, through `curl` and `wget` | `shell.AllowWeb(new WebPolicy { ... })` | `shell.allow_web(WebPolicy(...))` | `shell.allowWeb({ ... })` |
 | [Outside files as a folder](docs/mounts.md) (a host folder, an Obsidian vault, your own source), read-only or with changes you review | `await shell.MountAsync(path, source, mode)` | `shell.mount(path, source, mode)` | `await shell.mount(path, source, mode)` |
 | A real program from your machine | `shell.RegisterHostCommand("duckdb")` | `register_host_command(shell, "duckdb")` | not yet |
+| [`python3`](docs/python.md): real CPython 3.14 in WebAssembly, on the machine's files only (add-on package) | to come | `shell.allow_python()` | to come |
 
 An MCP server becomes one program with a subcommand per tool (`github list-issues --repo acme/api`), so its tool
 definitions are read on demand with `--help` rather than sent to the model up front. An API is called by alias,
@@ -265,7 +266,7 @@ What is not there:
 
 | | |
 |---|---|
-| Python, Node, Perl, compilers | `command not found`, as bash prints it |
+| Node, Perl, compilers; Python unless you [enable it](docs/python.md) | `command not found`, as bash prints it |
 | Network | None by default. `curl` and `wget` exist and fail as on an offline machine, until you [allow a list of sites](docs/web.md). There is no `ssh`, and `git clone`, `fetch` and `push` say there is no network |
 | Packages | `apt` and `dpkg` exist only to say that nothing can be installed |
 | Background jobs and job control | `cmd &` runs to completion |
