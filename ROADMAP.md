@@ -14,6 +14,8 @@ either finished enough to resume on a branch or only an idea. Nothing on this pa
 - A shared client (paging, rate limits, retries), front matter and naming rules both use; fakes of both APIs and
   shared cases in `tests/connectors/`; examples that restructure a Notion page tree and a SharePoint site.
 - Design notes for the C# and TypeScript ports in `docs/connectors/`.
+- It forks from `main` before `0.1.0-preview.5`: rebase it first (`README.md` and `CHANGELOG.md` will conflict) and run
+  all three suites again.
 
 Next steps:
 
@@ -30,7 +32,8 @@ Ubuntu. Without the add-on, `python3` stays `command not found`.
 
 The findings of its last review are fixed. Remaining before it could ship:
 
-- Run all three suites once more on the final branch (C# and TypeScript last ran mid-change), and a last review.
+- CI passed on the branch's last commit. Rebase it on `main` first (it forks before `0.1.0-preview.5`, so `README.md` and
+  `CHANGELOG.md` will conflict), run all three suites again, and do a last review.
 - Create the `topwater-python` projects on PyPI and npm (trusted publishers, or a token for the first publish);
   NuGet creates `Topwater.Python` on the first push. The release jobs are written but have never run.
 - Known gap: two hard-link names of one file opened at once get separate buffers.

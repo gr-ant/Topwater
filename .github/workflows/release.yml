@@ -170,6 +170,8 @@ jobs:
         run: |
           tag=latest; case "$GITHUB_REF_NAME" in *-*) tag=next ;; esac
           npm publish ./topwater-*.tgz --ignore-scripts --provenance --access public --tag "$tag"
+          # while there is no release without a suffix, latest follows the newest preview so the package page is current
+          case "$GITHUB_REF_NAME" in *-*) npm dist-tag add "topwater@${GITHUB_REF_NAME#v}" latest || echo "::warning::npm latest still points at an older preview" ;; esac
 
   # The container image ghcr.io/gr-ant/topwater for linux/amd64 and linux/arm64, made from the binaries job's Linux
   # binaries: docker/Dockerfile only copies them in, so there is no emulation and no repository code runs here.

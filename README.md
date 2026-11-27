@@ -142,7 +142,7 @@ Requires Node 22.3 or later. No runtime dependencies; the package is an ES modul
 npm install topwater@next
 ```
 
-Previews are on npm's `next` tag; plain `npm install topwater` still gets `0.1.0-preview.4`.
+Previews are published under npm's `next` tag.
 
 ```ts
 import { Shell, BashTool } from 'topwater';
@@ -414,11 +414,11 @@ Other virtual shells and filesystems for agents, each worth a look:
 |---|---|---|
 | [just-bash](https://github.com/vercel-labs/just-bash) (Vercel Labs) | A simulated bash with an in-memory filesystem, in TypeScript, with optional `curl`, Python, JavaScript and `sqlite3` | Native in .NET and Python too; `git`; no interpreters inside the machine |
 | [bashkit](https://github.com/everruns/bashkit) | A virtual bash and filesystem in Rust, with Python, JavaScript and WebAssembly bindings and experimental git, Python and SQLite | A separate native implementation per language, .NET among them, instead of one core with bindings |
-| [gbash](https://github.com/ewhauser/gbash) | A sandbox-only bash-like runtime in Go, with a virtual filesystem, allowlisted `curl`, read-only host mounts and a WebAssembly build | For .NET, Python and TypeScript; `git`; mounts that can take changes for review |
+| [gbash](https://github.com/ewhauser/gbash) | A sandbox-only bash-like runtime in Go, with a virtual filesystem, allowlisted `curl`, host directory mounts (a read-only overlay or read-write) and a WebAssembly build | For .NET, Python and TypeScript; `git`; mounts that can take changes for review |
 | [AgentFS](https://github.com/tursodatabase/agentfs) (Turso) | A filesystem for agents kept in one SQLite file, with SDKs, a FUSE/NFS mount and an integration for just-bash | A whole machine (shell, programs, git) rather than storage; its state is a `.topwater` file |
-| [Mirage](https://github.com/strukto-ai/mirage) (strukto.ai) | A virtual terminal that mounts about 60 services (S3, Google Drive, Slack, databases, ...) as one filesystem, with virtual CLIs, profiles and a policy engine; it publishes the [AgentVFS](https://agentvfs.org) interface | No built-in services beyond a host folder; you write a small source class. The shell follows Ubuntu's bash and GNU tools closely |
+| [Mirage](https://github.com/strukto-ai/mirage) (strukto.ai) | A virtual terminal that mounts about 60 services (S3, Google Drive, Slack, databases, ...) as one filesystem, with virtual CLIs, profiles and a policy engine; it publishes the [AgentVFS](https://agentvfs.org) interface | No built-in services beyond a host folder; you write a small source class |
 
-What Topwater adds across the board: three native implementations held to one corpus recorded from real bash,
+What sets Topwater apart: three native implementations held to one corpus recorded from real bash,
 git in its real on-disk format, staged mounts whose changes come back as a change set, and recordings that replay
 in a viewer or as tests.
 

@@ -23,8 +23,7 @@ The package is an ES module:
 npm install topwater@next
 ```
 
-Previews are published under npm's `next` tag; plain `npm install topwater` gets the `latest` tag, which stays at the
-first preview published (`0.1.0-preview.4`) until a release without a preview suffix.
+Previews are published under npm's `next` tag.
 
 ## Quickstart
 
