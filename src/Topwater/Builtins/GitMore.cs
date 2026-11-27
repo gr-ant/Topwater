@@ -1216,7 +1216,9 @@ internal static partial class Git
                 return DiffFiles(TreeFiles(repo, cm.Parents.Count > 0 ? cm.Parents[0] : null), repo.Flatten(cm.Tree), specs).Count > 0;
             }).ToList();
         if (o.Val("n") is { } nv && Regex.IsMatch(nv, @"^[0-9]+\z")) order = order.Take(int.TryParse(nv, out var take) ? take : int.MaxValue).ToList();
-        g.Out(o.Has("\x01") ? $"{order.Count}\n" : string.Concat(order.Select(c => c + "\n")));
+        if (o.Has("\x03")) order.Reverse();
+        g.Out(o.Has("\x01") ? $"{order.Count}\n"
+            : string.Concat(order.Select(c => string.Join(" ", new[] { c }.Concat(o.Has("\x05") ? repo.Commit(c).Parents : [])) + "\n")));
         return 0;
     }
 
@@ -1274,6 +1276,134 @@ internal static partial class Git
             g.Out(o.Has("v") ? $"{name}\t{url} (fetch)\n{name}\t{fields.GetValueOrDefault("pushurl", url)} (push)\n" : name + "\n");
         }
         return 0;
+    }
+
+    static int GitMergeBase(Cmd g, List<string> args)
+    {
+        var o = Parse("merge-base", args);
+        var repo = g.Repo();
+        if (o.Args.Count < (o.Has("\x01") ? 1 : 2) && !(o.Has("\x02") && o.Args.Count > 0))
+            throw new GitException(SubSpec("merge-base").Help.TrimEnd('\n'), 129);
+        if (o.Has("\x02") && o.Args.Count != 2) throw SubFatal("merge-base", "isAncestorArgs");
+        var commits = new List<string>();
+        foreach (var a in o.Args)
+        {
+            var sha = TryResolve(repo, a);
+            commits.Add((sha != null ? Peel(repo, sha, "commit") : null) ?? throw SubFatal("merge-base", "notValid", ("name", a)));
+        }
+        if (o.Has("\x02")) return Ancestors(repo, [commits[1]]).Contains(commits[0]) ? 0 : 1;
+        HashSet<string> common;
+        if (o.Has("\x01"))  // common to all of them
+        {
+            common = Ancestors(repo, [commits[0]]);
+            foreach (var c in commits.Skip(1)) common.IntersectWith(Ancestors(repo, [c]));
+        }
+        else  // the first against a merge of the others
+        {
+            common = Ancestors(repo, [commits[0]]);
+            common.IntersectWith(Ancestors(repo, commits.Skip(1)));
+        }
+        if (common.Count == 0) return 1;
+        var below = Ancestors(repo, common.SelectMany(c => repo.Commit(c).Parents));
+        var order = WalkOrder(repo, common.Where(c => !below.Contains(c)).Order(GitCore.Ordinal));
+        g.Out(string.Concat((o.Has("a") ? order : order.Take(1)).Select(c => c + "\n")));
+        return 0;
+    }
+
+    static int GitFsck(Cmd g, List<string> args)
+    {
+        var o = Parse("fsck", args);
+        var repo = g.Repo();
+        var fs = repo.Fs;
+        var present = new Dictionary<string, string>(StringComparer.Ordinal);  // every stored object -> its path (loose) or pack
+        int code = 0;
+        var names = new List<(string Sha, string Path)>();
+        var @base = repo.GPath("objects");
+        foreach (var d in fs.IsDirectory(@base, false) ? fs.List(@base).Order(StringComparer.Ordinal) : Enumerable.Empty<string>())
+            if (Full("[0-9a-f]{2}", d) && fs.IsDirectory($"{@base}/{d}", false))
+                names.AddRange(fs.List($"{@base}/{d}").Order(StringComparer.Ordinal).Where(n => Full("[0-9a-f]{38}", n)).Select(n => (d + n, $".git/objects/{d}/{n}")));
+        foreach (var pack in repo.Packs())
+            names.AddRange(pack.Offsets.Keys.Select(sha => (sha, pack.Path)));
+        if (names.Count > MaxWalk) throw Fatal("tooLarge", ("what", "objects"));
+        var kinds = new Dictionary<string, string>(StringComparer.Ordinal);
+        var links = new Dictionary<string, List<(string Kind, string Sha)>>(StringComparer.Ordinal);  // object -> [(kind, id)] it points to
+        foreach (var (sha, path) in names)
+        {
+            g.Check();
+            if (!present.TryAdd(sha, path)) continue;
+            try
+            {
+                var (kind, data) = repo.Obj(sha);
+                kinds[sha] = kind;
+                if (kind == "commit")
+                {
+                    var c = repo.Commit(sha);
+                    links[sha] = [("tree", c.Tree), .. c.Parents.Select(p => ("commit", p))];
+                }
+                else if (kind == "tree")
+                    links[sha] = ParseTree(data, sha).Where(e => e.Mode != "160000").Select(e => (e.Mode == "040000" ? "tree" : "blob", e.Sha)).ToList();
+                else if (kind == "tag")
+                {
+                    var m = Regex.Match(Encoding.UTF8.GetString(data), @"^object ([0-9a-f]{40})\ntype (\w+)", RegexOptions.Multiline);
+                    links[sha] = m.Success ? [(m.Groups[2].Value, m.Groups[1].Value)] : [];
+                }
+            }
+            catch (GitException)
+            {
+                g.Err(SubMsg("fsck", "corrupt", ("object", sha), ("path", path)) + "\n");
+                code |= 1;
+            }
+        }
+        var roots = new List<(string Kind, string Sha)>();
+        foreach (var e in repo.Index())
+            if (e.Mode != "160000") roots.Add(("blob", e.Sha));
+        if (repo.Head() is { } head) roots.Add(("commit", head));
+        roots.AddRange(repo.Refs("refs/").Select(r => ("commit", r.Sha)));
+        var logs = repo.GPath("logs");
+        var dirs = fs.IsDirectory(logs, false) ? new List<string> { logs } : [];
+        while (dirs.Count > 0)
+        {
+            var d = dirs[^1];
+            dirs.RemoveAt(dirs.Count - 1);
+            foreach (var n in fs.List(d).Order(StringComparer.Ordinal))
+            {
+                var full = d + "/" + n;
+                if (fs.IsDirectory(full, false)) dirs.Add(full);
+                else if (fs.IsFile(full, false))
+                    foreach (var line in ByteText.Decode(fs.ReadAllBytes(full)).Split('\n'))
+                        roots.AddRange(line.Split(' ').Take(2).Where(x => Full("[0-9a-f]{40}", x) && x != Z40).Select(x => ("commit", x)));
+            }
+        }
+        var reachable = new HashSet<string>(StringComparer.Ordinal);
+        var missing = new Dictionary<string, string>(StringComparer.Ordinal);
+        var stack = roots.AsEnumerable().Reverse().Select(r => (r.Kind, r.Sha, Parent: (string?)null)).ToList();
+        while (stack.Count > 0)
+        {
+            var (kind, sha, parent) = stack[^1];
+            stack.RemoveAt(stack.Count - 1);
+            if (!reachable.Add(sha)) continue;
+            if (reachable.Count % 256 == 0) g.Check();
+            if (!kinds.ContainsKey(sha))
+            {
+                if (!present.ContainsKey(sha))
+                {
+                    if (parent != null)
+                        g.Out(SubMsg("fsck", "brokenLink", ("fromKind", kinds[parent].PadLeft(7)), ("from", parent), ("toKind", kind.PadLeft(7)), ("to", sha)) + "\n");
+                    missing[sha] = kind;
+                }
+                continue;
+            }
+            if (links.TryGetValue(sha, out var ls)) stack.AddRange(ls.AsEnumerable().Reverse().Select(l => (l.Kind, l.Sha, (string?)sha)));
+        }
+        if (missing.Count > 0) code |= 2;
+        var referenced = links.Values.SelectMany(ls => ls.Select(l => l.Sha)).ToHashSet(StringComparer.Ordinal);
+        var report = missing.Select(kv => (kv.Key, SubMsg("fsck", "missing", ("kind", kv.Value), ("object", kv.Key)))).ToList();
+        if (!o.Has("!\x01"))
+            report.AddRange(kinds.Where(kv => !reachable.Contains(kv.Key) && !referenced.Contains(kv.Key))
+                .Select(kv => (kv.Key, SubMsg("fsck", "dangling", ("kind", kv.Value), ("object", kv.Key)))));
+        // shortcut: git prints these in its hash table's order; sorted by id here
+        g.Out(string.Concat(report.OrderBy(r => r.Key, StringComparer.Ordinal).ThenBy(r => r.Item2, StringComparer.Ordinal).Select(r => r.Item2 + "\n")));
+        return code;
     }
 
     // ---------- config ----------

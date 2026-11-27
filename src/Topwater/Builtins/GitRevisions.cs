@@ -547,6 +547,7 @@ internal static partial class Git
 
     static readonly Dictionary<string, Func<Cmd, List<string>, int>> Handlers = new(StringComparer.Ordinal)
     {
+        ["merge-base"] = GitMergeBase, ["fsck"] = GitFsck,
         ["remote"] = GitRemote, ["init"] = GitInit, ["status"] = GitStatus, ["add"] = GitAdd, ["rm"] = GitRm, ["mv"] = GitMv, ["commit"] = GitCommit, ["log"] = GitLog,
         ["show"] = GitShow, ["diff"] = GitDiff, ["branch"] = GitBranch, ["checkout"] = GitCheckout, ["switch"] = GitSwitch, ["restore"] = GitRestore,
         ["reset"] = GitReset, ["tag"] = GitTag, ["merge"] = GitMerge, ["stash"] = GitStash, ["rev-parse"] = GitRevParse, ["ls-files"] = GitLsFiles,

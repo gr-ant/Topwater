@@ -52,6 +52,7 @@ internal sealed class GitPack
         Fatal("badPack", ("path", path), ("why", Msg(why, values)));
 
     public int Count => _names.Length;
+    public string Path => _path;
 
     public GitPack(string path, byte[] idx, byte[] pack, long limit, Action check, GitObjectCache cache)
     {

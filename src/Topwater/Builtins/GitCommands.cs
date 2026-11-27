@@ -608,13 +608,14 @@ internal static partial class Git
 
     static readonly string[] Pretty = ["oneline", "short", "medium", "full", "fuller", "raw"];
 
-    /// <summary>The commit as log prints it, ending in a newline (except a separator-style format).</summary>
-    static string CommitHeader(Cmd g, Repo repo, Commit c, string pretty, string? fmt, Dictionary<string, List<string>>? decor, string dateStyle, bool abbrevCommit)
+    /// <summary>The commit as log prints it, ending in a newline (except a separator-style format). parents: --parents.</summary>
+    static string CommitHeader(Cmd g, Repo repo, Commit c, string pretty, string? fmt, Dictionary<string, List<string>>? decor, string dateStyle, bool abbrevCommit,
+        bool parents = false)
     {
         if (pretty is "format" or "tformat") return ExpandFormat(g, repo, fmt ?? "", c, decor, dateStyle) + (pretty == "tformat" ? "\n" : "");
         var d = decor != null && decor.TryGetValue(c.Sha, out var dl) ? dl : [];
         var dtext = d.Count > 0 ? $" ({string.Join(", ", d)})" : "";
-        var sha = abbrevCommit ? Abbrev(c.Sha) : c.Sha;
+        var sha = string.Join(" ", new[] { c.Sha }.Concat(parents ? c.Parents : []).Select(x => abbrevCommit ? Abbrev(x) : x));
         if (pretty == "oneline") return $"{sha}{dtext} {c.Subject}\n";
         var a = ParseIdent(c.Author);
         var cm = ParseIdent(c.Committer);
@@ -622,7 +623,7 @@ internal static partial class Git
         if (c.Parents.Count > 1) lines.Add("Merge: " + string.Join(" ", c.Parents.Select(Abbrev)));
         if (pretty == "raw")
         {
-            lines = [$"commit {c.Sha}", $"tree {c.Tree}", .. c.Parents.Select(p => $"parent {p}"), $"author {c.Author}", $"committer {c.Committer}"];
+            lines = [$"commit {sha}", $"tree {c.Tree}", .. c.Parents.Select(p => $"parent {p}"), $"author {c.Author}", $"committer {c.Committer}"];
         }
         else if (pretty == "fuller")
             lines.AddRange([$"Author:     {a.Name} <{a.Email}>", $"AuthorDate: {FormatDate(a.Epoch, a.Zone, dateStyle, g.Now)}",
@@ -777,7 +778,15 @@ internal static partial class Git
             }
         var authorRx = o.Val("\x14") is { } ap ? UserRegex(ap) : null;
         var grepRx = o.Val("\x15") is { } gp ? UserRegex(gp) : null;
+        var pickaxe = o.Val("S");
+        Regex? pickaxeRx = null;
+        if (o.Val("G") is { } gv)
+        {
+            if (Builtins.PosixRegexError(gv, true, grep: false) is { } error) throw new GitException(SubMsg("log", "badPickaxeRegex", ("error", error)), 128);
+            pickaxeRx = new Regex(Builtins.PosixToNet(gv, true), RegexOptions.Multiline | RegexOptions.CultureInvariant, Shell.RegexTimeout);
+        }
         var shown = new List<Commit>();
+        var hits = new Dictionary<string, List<string>>(StringComparer.Ordinal);  // commit -> the paths the pickaxe found, which its diff is limited to
         foreach (var sha in order)
         {
             var c = repo.Commit(sha);
@@ -794,17 +803,67 @@ internal static partial class Git
                 var a = c.Parents.Count > 0 ? TreeFiles(repo, c.Parents[0]) : new FileMap(StringComparer.Ordinal);
                 if (DiffFiles(a, repo.Flatten(c.Tree), specs).Count == 0) continue;
             }
+            if (pickaxe != null || pickaxeRx != null)
+            {
+                if (c.Parents.Count > 1) continue;  // a merge has no diff of its own to search
+                var found = PickaxePaths(g, repo, c, specs, pickaxe, pickaxeRx);
+                if (found.Count == 0) continue;
+                hits[sha] = found;
+            }
             if (skip > 0) { skip--; continue; }
             if (limit >= 0 && shown.Count >= limit) break;
             shown.Add(c);
         }
         if (o.Has("\x13")) shown.Reverse();
-        WriteLog(g, repo, shown, o, pretty, fmt, decor, dateStyle, abbrevCommit, specs, defaultPatch: false, graph: o.Has("\x0f"));
+        WriteLog(g, repo, shown, o, pretty, fmt, decor, dateStyle, abbrevCommit, specs, defaultPatch: false, graph: o.Has("\x0f"), hits: hits);
         return 0;
     }
 
+    /// <summary>The files whose change in c alters the count of needle (-S), or adds or removes a line rx matches (-G).</summary>
+    static List<string> PickaxePaths(Cmd g, Repo repo, Commit c, IReadOnlyList<string>? specs, string? needle, Regex? rx)
+    {
+        var a = c.Parents.Count > 0 ? TreeFiles(repo, c.Parents[0]) : new FileMap(StringComparer.Ordinal);
+        var b = repo.Flatten(c.Tree);
+        var output = new List<string>();
+        void Hit(Change ch)
+        {
+            foreach (var p in new[] { ch.Old, ch.New })
+                if (p != null && !output.Contains(p)) output.Add(p);
+        }
+        foreach (var ch in DiffFiles(a, b, specs))
+        {
+            g.Check();
+            var x = ch.Old != null ? repo.Typed(a[ch.Old].Sha, "blob") : [];
+            var y = ch.New != null ? repo.Typed(b[ch.New].Sha, "blob") : [];
+            if (IsBinary(x) || IsBinary(y)) continue;
+            if (needle != null)
+            {
+                var n = ByteText.Encode(needle);
+                if (n.Length > 0 && Count(x, n) != Count(y, n)) Hit(ch);
+                continue;
+            }
+            var (lx, ly) = (SplitLines(x), SplitLines(y));
+            var changed = Myers(lx, ly, g.Check).SelectMany(r => lx.GetRange(r.S1, r.E1 - r.S1).Concat(ly.GetRange(r.S2, r.E2 - r.S2)));
+            if (changed.Any(l => rx!.IsMatch(GitCore.Text(l).TrimEnd('\n')))) Hit(ch);
+        }
+        return output;
+    }
+
+    /// <summary>Non-overlapping occurrences of needle in data, as Python's bytes.count counts them.</summary>
+    static int Count(byte[] data, byte[] needle)
+    {
+        int n = 0;
+        for (int i = data.AsSpan().IndexOf(needle); i >= 0; )
+        {
+            n++;
+            int next = data.AsSpan(i + needle.Length).IndexOf(needle);
+            i = next < 0 ? -1 : i + needle.Length + next;
+        }
+        return n;
+    }
+
     static void WriteLog(Cmd g, Repo repo, List<Commit> commits, Opts o, string pretty, string? fmt, Dictionary<string, List<string>>? decor, string dateStyle,
-        bool abbrevCommit, IReadOnlyList<string>? specs, bool defaultPatch, bool graph = false, bool merges = false)
+        bool abbrevCommit, IReadOnlyList<string>? specs, bool defaultPatch, bool graph = false, bool merges = false, Dictionary<string, List<string>>? hits = null)
     {
         if (graph)
             for (int i = 0; i < commits.Count; i++)
@@ -815,8 +874,9 @@ internal static partial class Git
         {
             g.Check();
             var c = commits[i];
-            var head = CommitHeader(g, repo, c, pretty, fmt, decor, dateStyle, abbrevCommit);
-            var diff = wantsDiff ? CommitDiff(g, repo, c, o, specs, merges) : "";
+            // shortcut: with paths, --parents prints the real parents, not git's rewritten (simplified) ones
+            var head = CommitHeader(g, repo, c, pretty, fmt, decor, dateStyle, abbrevCommit, parents: o.Has("\x05"));
+            var diff = wantsDiff ? CommitDiff(g, repo, c, o, hits is { Count: > 0 } ? hits[c.Sha] : specs, merges) : "";
             bool multiLine = pretty is not ("oneline" or "format" or "tformat");
             var text = "";
             if (i > 0 && multiLine) text += "\n";
@@ -955,7 +1015,56 @@ internal static partial class Git
             (b2, bw) = (WorktreeFiles(repo, idx.Keys.Union(a2.Keys)), true);
         }
         else (a2, b2, bw) = (idx, WorktreeFiles(repo, idx.Keys), true);
+        if (o.Has("\x10") && (o.Has("\x03") || o.Has("\x04"))) throw SubFatal("diff", "checkWith");
+        if (o.Has("\x10") && !o.Has("\x05"))
+        {
+            var changes = DiffFiles(a2, b2, specs);
+            bool bad = WhitespaceCheck(g, repo, a2, b2, changes, bw);
+            return (bad ? 2 : 0) | (changes.Count > 0 && o.Has("\x07") ? 1 : 0);
+        }
         bool changed = WriteDiff(g, repo, a2, b2, o, specs, bWorktree: bw);
         return changed && (o.Has("\x07") || o.Has("\x05")) ? 1 : 0;
+    }
+
+    /// <summary>diff --check: prints added lines with whitespace problems (git's default core.whitespace); true when any.</summary>
+    static bool WhitespaceCheck(Cmd g, Repo repo, FileMap a, FileMap b, List<Change> changes, bool bWorktree)
+    {
+        static bool Blank(string line) => line.Trim(' ', '\t', '\r', '\n', '\v', '\f').Length == 0;
+        static int TrailingBlanks(List<string> lines)
+        {
+            int n = 0;
+            while (n < lines.Count && Blank(lines[^(1 + n)])) n++;
+            return n;
+        }
+        bool bad = false;
+        foreach (var ch in changes)
+        {
+            if (ch.New == null || ch.St == "T") continue;
+            var x = BlobData(repo, Get(a, ch.Old), ch.Old ?? "", false);
+            var y = BlobData(repo, b[ch.New], ch.New, bWorktree);
+            if (IsBinary(x) || IsBinary(y)) continue;
+            var (lx, ly) = (SplitLines(x), SplitLines(y));
+            var name = CQuote(ch.New);
+            foreach (var (_, _, s2, e2) in Myers(lx, ly, g.Check))
+                for (int j = s2; j < e2; j++)
+                {
+                    var text = ly[j].TrimEnd('\n');
+                    var problems = new List<string>();
+                    if (text.Length > 0 && text[^1] is ' ' or '\t' or '\r') problems.Add(SubMsg("diff", "checkTrailing"));
+                    var indent = text[..(text.Length - text.TrimStart(' ', '\t').Length)];
+                    if (indent.Length < text.Length && indent.Contains(" \t")) problems.Add(SubMsg("diff", "checkSpaceTab"));
+                    if (problems.Count == 0) continue;
+                    bad = true;
+                    g.Out(SubMsg("diff", "checkLine", ("file", name), ("line", (j + 1).ToString()), ("problems", string.Join(", ", problems))) + "\n");
+                    g.Out("+" + Text(text) + "\n");
+                }
+            int tail = TrailingBlanks(ly);
+            if (tail > TrailingBlanks(lx))
+            {
+                bad = true;
+                g.Out(SubMsg("diff", "checkBlankEof", ("file", name), ("line", (ly.Count - tail + 1).ToString())) + "\n");
+            }
+        }
+        return bad;
     }
 }

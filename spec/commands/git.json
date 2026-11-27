@@ -303,9 +303,13 @@
         {"long": ["since", "after"], "key": "\u001d", "arg": "<date>", "description": "only commits made at or after <date>"},
         {"long": ["until", "before"], "key": "\u001e", "arg": "<date>", "description": "only commits made at or before <date>"},
         {"short": "s", "long": ["no-patch"], "description": "show no changes"},
+        {"short": "S", "arg": "<string>", "description": "only commits that change how many times <string> occurs in a file (the pickaxe); their diffs show only those files"},
+        {"short": "G", "arg": "<regex>", "description": "only commits with an added or removed line that matches <regex>; their diffs show only those files"},
+        {"long": ["parents"], "key": "\u0005", "description": "print each commit's parents after its id"},
         {"long": ["color"], "arg": "<when>", "description": "accepted and ignored, with or without =<when> (output is never colored)", "custom": true, "ignored": true}
       ],
       "messages": {
+        "badPickaxeRegex": "fatal: invalid regex: {error}",
         "noCommitsYet": "fatal: your current branch '{branch}' does not have any commits yet"
       }
     },
@@ -352,9 +356,15 @@
         {"long": ["exit-code"], "key": "\u0007", "description": "exit 1 when there are differences"},
         {"short": "p", "long": ["patch"], "description": "show a patch (the default)", "ignored": true},
         {"long": ["no-color"], "key": "\u0018", "description": "accepted and ignored (output is never colored)", "ignored": true},
+        {"long": ["check"], "key": "\u0010", "description": "instead of a diff, list added lines with trailing whitespace or a space before a tab in the indent, and added blank lines at the end of a file; exit 2 when there are any"},
         {"long": ["color"], "arg": "<when>", "description": "accepted and ignored, with or without =<when> (output is never colored)", "custom": true, "ignored": true}
       ],
       "messages": {
+        "checkTrailing": "trailing whitespace",
+        "checkSpaceTab": "space before tab in indent",
+        "checkLine": "{file}:{line}: {problems}.",
+        "checkBlankEof": "{file}:{line}: new blank line at EOF.",
+        "checkWith": "fatal: options '--name-only', '--name-status', '--check', and '-s' cannot be used together",
         "tooManyRevisions": "error: too many revisions; give at most two"
       }
     },
@@ -675,7 +685,9 @@
       "options": [
         {"long": ["count"], "key": "\u0001", "description": "print only how many commits there are"},
         {"short": "n", "long": ["max-count"], "arg": "<n>", "description": "list at most <n> commits (also -<n>)"},
-        {"long": ["all"], "key": "\u0002", "description": "start from every branch and tag as well as HEAD"}
+        {"long": ["all"], "key": "\u0002", "description": "start from every branch and tag as well as HEAD"},
+        {"long": ["reverse"], "key": "\u0003", "description": "oldest commit first (after --max-count picks the newest)"},
+        {"long": ["parents"], "key": "\u0005", "description": "print each commit's parents after its id"}
       ],
       "messages": {
         "noRevisions": "fatal: no revisions given"
@@ -804,12 +816,21 @@
       "unsupported": true
     },
     "merge-base": {
-      "summary": "Find a common ancestor (not available)",
-      "usage": ["git merge-base"],
+      "summary": "Find the best common ancestor of commits",
+      "usage": [
+        "git merge-base [-a | --all] <commit> <commit>...",
+        "git merge-base [-a | --all] --octopus <commit>...",
+        "git merge-base --is-ancestor <commit> <commit>"
+      ],
+      "options": [
+        {"short": "a", "long": ["all"], "description": "print every best common ancestor, not just one"},
+        {"long": ["octopus"], "key": "\u0001", "description": "the ancestors common to all the commits at once"},
+        {"long": ["is-ancestor"], "key": "\u0002", "description": "print nothing; exit 0 when the first commit is an ancestor of (or equal to) the second, 1 when not"}
+      ],
       "messages": {
-        "unsupported": "fatal: 'git {name}' is not available in this machine's git; use git log --format='%h %p %s' to follow the parents"
-      },
-      "unsupported": true
+        "notValid": "fatal: Not a valid object name {name}",
+        "isAncestorArgs": "fatal: --is-ancestor takes exactly two commits"
+      }
     },
     "check-ignore": {
       "summary": "Explain why a path is ignored (not available)",
@@ -896,9 +917,20 @@
       "unsupported": true
     },
     "fsck": {
-      "summary": "Verify the object database (not available)",
-      "usage": ["git fsck"],
-      "unsupported": true
+      "summary": "Check the object database: every object readable, everything reachable present",
+      "usage": ["git fsck [--no-dangling] [--full] [--connectivity-only]"],
+      "options": [
+        {"long": ["dangling"], "key": "\u0001", "description": "list unreachable objects nothing else points to (the default; --no-dangling turns it off)"},
+        {"long": ["full"], "key": "\u0002", "description": "accepted and ignored (loose and packed objects are always checked)", "ignored": true},
+        {"long": ["connectivity-only"], "key": "\u0003", "description": "accepted and ignored (objects are always read in full)", "ignored": true}
+      ],
+      "notes": "Exit status: 0 when everything is fine (dangling objects included), otherwise 1 for an unreadable object and 2 for a missing one that something reachable needs, combined.",
+      "messages": {
+        "dangling": "dangling {kind} {object}",
+        "missing": "missing {kind} {object}",
+        "brokenLink": "broken link from {fromKind} {from}\n              to {toKind} {to}",
+        "corrupt": "error: {object}: object corrupt or missing: {path}"
+      }
     },
     "format-patch": {
       "summary": "Write commits as patch files (not available)",

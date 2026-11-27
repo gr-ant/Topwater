@@ -10,6 +10,7 @@ from .. import bytetext
 from .._spec import COMMANDS
 from ..vfs import ShellError, normalize, utc_now
 from . import spec_format, spec_message, spec_sub_message
+from .text import posix_regex_error, posix_to_python
 from .gitpack import MAX_NAMES, MAX_PACKS, Corrupt, ObjectCache, Pack
 from .gitcore import (EMPTY_TREE, timed, HEX, MAX_DEPTH, MAX_WALK, Commit, Config, Entry, GitError, IgnoreRules, c_quote, canonical_key,
                       check_path, config_bool, count_changes, fatal, format_date, glob_regex, is_binary, local_time, merge_lines,
@@ -2067,13 +2068,14 @@ def expand_format(g: Git, repo: Repo, fmt: str, c: Commit, decor, date_style: st
 PRETTY = ("oneline", "short", "medium", "full", "fuller", "raw")
 
 
-def commit_header(g: Git, repo: Repo, c: Commit, pretty: str, fmt: str | None, decor, date_style: str, abbrev_commit: bool) -> str:
-    """The commit as log prints it, ending in a newline (except a separator-style format)."""
+def commit_header(g: Git, repo: Repo, c: Commit, pretty: str, fmt: str | None, decor, date_style: str, abbrev_commit: bool,
+                  parents: bool = False) -> str:
+    """The commit as log prints it, ending in a newline (except a separator-style format). parents: --parents."""
     if pretty in ("format", "tformat"):
         return expand_format(g, repo, fmt or "", c, decor, date_style) + ("\n" if pretty == "tformat" else "")
     d = decor.get(c.sha, []) if decor is not None else []
     dtext = f" ({', '.join(d)})" if d else ""
-    sha = abbrev(c.sha) if abbrev_commit else c.sha
+    sha = " ".join(abbrev(x) if abbrev_commit else x for x in [c.sha] + (c.parents if parents else []))
     if pretty == "oneline":
         return f"{sha}{dtext} {c.subject}\n"
     an, ae, at, az = parse_ident(c.author)
@@ -2082,7 +2084,7 @@ def commit_header(g: Git, repo: Repo, c: Commit, pretty: str, fmt: str | None, d
     if len(c.parents) > 1:
         lines.append("Merge: " + " ".join(abbrev(p) for p in c.parents))
     if pretty == "raw":
-        lines = [f"commit {c.sha}", f"tree {c.tree}"] + [f"parent {p}" for p in c.parents] + [f"author {c.author}", f"committer {c.committer}"]
+        lines = [f"commit {sha}", f"tree {c.tree}"] + [f"parent {p}" for p in c.parents] + [f"author {c.author}", f"committer {c.committer}"]
     elif pretty == "fuller":
         lines += [f"Author:     {an} <{ae}>", f"AuthorDate: {format_date(at, az, date_style, g.now())}",
                   f"Commit:     {cn} <{ce}>", f"CommitDate: {format_date(ct, cz, date_style, g.now())}"]
@@ -2210,7 +2212,15 @@ def git_log(g: Git, args) -> int:
             since, until = (when, until) if name == "since" else (since, when)
     author_rx = user_regex(o.val("\x14"))
     grep_rx = user_regex(o.val("\x15"))
+    pickaxe = o.val("S")
+    pickaxe_rx = None
+    if o.val("G") is not None:
+        error = posix_regex_error(o.val("G"), True, grep=False)
+        if error:
+            raise GitError(sub_msg("log", "badPickaxeRegex", error=error), 128)
+        pickaxe_rx = timed(posix_to_python(o.val("G"), True), re.MULTILINE)
     shown = []
+    hits: dict[str, list[str]] = {}  # commit -> the paths the pickaxe found, which its diff is limited to
     for sha in order:
         c = repo.commit(sha)
         if o.has("\x17") and len(c.parents) > 1 or o.has("\x18") and len(c.parents) < 2:
@@ -2225,6 +2235,13 @@ def git_log(g: Git, args) -> int:
             a = tree_files(repo, c.parents[0]) if c.parents else {}
             if not diff_files(a, repo.flatten(c.tree), specs):
                 continue
+        if pickaxe is not None or pickaxe_rx is not None:
+            if len(c.parents) > 1:
+                continue  # a merge has no diff of its own to search
+            found = pickaxe_paths(g, repo, c, specs, pickaxe, pickaxe_rx)
+            if not found:
+                continue
+            hits[sha] = found
         if skip:
             skip -= 1
             continue
@@ -2233,11 +2250,36 @@ def git_log(g: Git, args) -> int:
         shown.append(c)
     if o.has("\x13"):
         shown.reverse()
-    write_log(g, repo, shown, o, pretty, fmt, decor, date_style, abbrev_commit, specs, default_patch=False, graph=o.has("\x0f"))
+    write_log(g, repo, shown, o, pretty, fmt, decor, date_style, abbrev_commit, specs, default_patch=False, graph=o.has("\x0f"),
+              hits=hits)
     return 0
 
 
-def write_log(g, repo, commits, o, pretty, fmt, decor, date_style, abbrev_commit, specs, default_patch, graph=False, merges=False) -> None:
+def pickaxe_paths(g: Git, repo: Repo, c: Commit, specs, needle: str | None, rx) -> list[str]:
+    """The files whose change in c alters the count of needle (-S), or adds or removes a line rx matches (-G)."""
+    a = tree_files(repo, c.parents[0]) if c.parents else {}
+    b = repo.flatten(c.tree)
+    out = []
+    for st, old, new in diff_files(a, b, specs):
+        g.ctx.check_time()
+        x = repo.typed(a[old][1], "blob") if old else b""
+        y = repo.typed(b[new][1], "blob") if new else b""
+        if is_binary(x) or is_binary(y):
+            continue
+        if needle is not None:
+            n = needle.encode("utf-8", "surrogateescape")
+            if n and x.count(n) != y.count(n):
+                out += [p for p in (old, new) if p and p not in out]
+            continue
+        lx, ly = split_lines(x), split_lines(y)
+        changed = [l for s1, e1, s2, e2 in myers(lx, ly, g.ctx.check_time) for l in lx[s1:e1] + ly[s2:e2]]
+        if any(rx.search(l.decode("utf-8", "surrogateescape").rstrip("\n")) for l in changed):
+            out += [p for p in (old, new) if p and p not in out]
+    return out
+
+
+def write_log(g, repo, commits, o, pretty, fmt, decor, date_style, abbrev_commit, specs, default_patch, graph=False, merges=False,
+              hits=None) -> None:
     if graph:
         for i, c in enumerate(commits):
             if len(c.parents) > 1 or (i + 1 < len(commits) and c.parents != [commits[i + 1].sha]):
@@ -2245,8 +2287,9 @@ def write_log(g, repo, commits, o, pretty, fmt, decor, date_style, abbrev_commit
     wants_diff = diff_wanted(o, default_patch)
     for i, c in enumerate(commits):
         g.ctx.check_time()
-        head = commit_header(g, repo, c, pretty, fmt, decor, date_style, abbrev_commit)
-        diff = commit_diff(g, repo, c, o, specs, merges) if wants_diff else ""
+        # shortcut: with paths, --parents prints the real parents, not git's rewritten (simplified) ones
+        head = commit_header(g, repo, c, pretty, fmt, decor, date_style, abbrev_commit, parents=o.has("\x05"))
+        diff = commit_diff(g, repo, c, o, hits[c.sha] if hits else specs, merges) if wants_diff else ""
         multi_line = pretty not in ("oneline", "format", "tformat")
         text = ""
         if i and multi_line:
@@ -2371,8 +2414,54 @@ def git_diff(g: Git, args) -> int:
         b, bw = worktree_files(repo, set(idx) | set(a)), True
     else:
         a, b, bw = idx, worktree_files(repo, idx), True
+    if o.has("\x10") and (o.has("\x03") or o.has("\x04")):
+        raise sub_fatal("diff", "checkWith")
+    if o.has("\x10") and not o.has("\x05"):
+        changes = diff_files(a, b, specs)
+        bad = whitespace_check(g, repo, a, b, changes, bw)
+        return (2 if bad else 0) | (1 if changes and o.has("\x07") else 0)
     changed = write_diff(g, repo, a, b, o, specs, b_worktree=bw)
     return 1 if changed and (o.has("\x07") or o.has("\x05")) else 0
+
+
+def whitespace_check(g: Git, repo: Repo, a: dict, b: dict, changes, b_worktree: bool) -> bool:
+    """diff --check: prints added lines with whitespace problems (git's default core.whitespace); True when any."""
+    def blank(line: bytes) -> bool:
+        return not line.strip(b" \t\r\n\v\f")
+
+    def trailing_blanks(lines) -> int:
+        n = 0
+        while n < len(lines) and blank(lines[-1 - n]):
+            n += 1
+        return n
+    bad = False
+    for st, old, new in changes:
+        if not new or st == "T":
+            continue
+        x = blob_data(repo, a.get(old) if old else None, old or "", False)
+        y = blob_data(repo, b[new], new, b_worktree)
+        if is_binary(x) or is_binary(y):
+            continue
+        lx, ly = split_lines(x), split_lines(y)
+        name = c_quote(new)
+        for _, _, s2, e2 in myers(lx, ly, g.ctx.check_time):
+            for j in range(s2, e2):
+                text = ly[j].rstrip(b"\n")
+                problems = []
+                if text and text[-1:] in b" \t\r":
+                    problems.append(sub_msg("diff", "checkTrailing"))
+                indent = text[:len(text) - len(text.lstrip(b" \t"))]
+                if len(indent) < len(text) and b" \t" in indent:
+                    problems.append(sub_msg("diff", "checkSpaceTab"))
+                if problems:
+                    bad = True
+                    g.out(sub_msg("diff", "checkLine", file=name, line=str(j + 1), problems=", ".join(problems)) + "\n")
+                    g.out("+" + text.decode("utf-8", "surrogateescape") + "\n")
+        tail = trailing_blanks(ly)
+        if tail > trailing_blanks(lx):
+            bad = True
+            g.out(sub_msg("diff", "checkBlankEof", file=name, line=str(len(ly) - tail + 1)) + "\n")
+    return bad
 
 
 # ---------- moving between commits ----------
@@ -3541,10 +3630,12 @@ def git_rev_list(g: Git, args) -> int:
         order = [c for c in order if diff_files(tree_files(repo, (repo.commit(c).parents or [None])[0]), repo.flatten(repo.commit(c).tree), specs)]
     if o.val("n") is not None and o.val("n").isdigit():
         order = order[:int(o.val("n"))]
+    if o.has("\x03"):
+        order.reverse()
     if o.has("\x01"):
         g.out(f"{len(order)}\n")
     else:
-        g.out("".join(c + "\n" for c in order))
+        g.out("".join(" ".join([c] + (repo.commit(c).parents if o.has("\x05") else [])) + "\n" for c in order))
     return 0
 
 
@@ -3679,7 +3770,124 @@ def git_remote(g: Git, args) -> int:
     return 0
 
 
+def git_merge_base(g: Git, args) -> int:
+    o = parse("merge-base", args)
+    repo = g.repo()
+    if len(o.args) < (1 if o.has("\x01") else 2) and not (o.has("\x02") and o.args):
+        raise GitError(SPEC.subcommands["merge-base"].help.rstrip("\n"), 129)
+    if o.has("\x02") and len(o.args) != 2:
+        raise sub_fatal("merge-base", "isAncestorArgs")
+    commits = []
+    for a in o.args:
+        sha = try_resolve(repo, a)
+        c = peel(repo, sha, "commit") if sha else None
+        if c is None:
+            raise sub_fatal("merge-base", "notValid", name=a)
+        commits.append(c)
+    check = g.ctx.check_time
+    if o.has("\x02"):
+        return 0 if commits[0] in ancestors(repo, [commits[1]], check) else 1
+    if o.has("\x01"):  # common to all of them
+        common = ancestors(repo, [commits[0]], check)
+        for c in commits[1:]:
+            common &= ancestors(repo, [c], check)
+    else:  # the first against a merge of the others
+        common = ancestors(repo, [commits[0]], check) & ancestors(repo, commits[1:], check)
+    if not common:
+        return 1
+    best = common - ancestors(repo, [p for c in common for p in repo.commit(c).parents], check)
+    order = walk_order(repo, sorted(best), check)
+    g.out("".join(c + "\n" for c in (order if o.has("a") else order[:1])))
+    return 0
+
+
+def git_fsck(g: Git, args) -> int:
+    o = parse("fsck", args)
+    repo = g.repo()
+    check = g.ctx.check_time
+    present: dict[str, str] = {}  # every stored object -> its path (loose) or pack
+    code = 0
+    names = []
+    base = repo._gpath("objects")
+    for d in sorted(repo.fs.listdir(base)) if repo.fs.is_dir(base, follow=False) else []:
+        if re.fullmatch(r"[0-9a-f]{2}", d) and repo.fs.is_dir(f"{base}/{d}", follow=False):
+            names += [(d + n, f".git/objects/{d}/{n}") for n in sorted(repo.fs.listdir(f"{base}/{d}")) if re.fullmatch(r"[0-9a-f]{38}", n)]
+    for pack in repo.packs():
+        names += [(sha, pack.path) for sha in pack.offsets]
+    if len(names) > MAX_WALK:
+        raise fatal("tooLarge", what="objects")
+    kinds: dict[str, str] = {}
+    links: dict[str, list[tuple[str, str]]] = {}  # object -> [(kind, id)] it points to
+    for sha, path in names:
+        check()
+        if sha in present:
+            continue
+        present[sha] = path
+        try:
+            kind, data = repo.obj(sha)
+            kinds[sha] = kind
+            if kind == "commit":
+                c = repo.commit(sha)
+                links[sha] = [("tree", c.tree)] + [("commit", p) for p in c.parents]
+            elif kind == "tree":
+                links[sha] = [("commit" if m == "160000" else "tree" if m == "040000" else "blob", x)
+                              for m, _, x in parse_tree(data, sha) if m != "160000"]
+            elif kind == "tag":
+                m = re.search(r"^object ([0-9a-f]{40})\ntype (\w+)", data.decode("utf-8", "replace"), re.M)
+                links[sha] = [(m.group(2), m.group(1))] if m else []
+        except GitError:
+            g.err(sub_msg("fsck", "corrupt", object=sha, path=path) + "\n")
+            code |= 1
+    roots: list[tuple[str, str]] = []
+    for e in repo.index():
+        if e.mode != "160000":
+            roots.append(("blob", e.sha))
+    head = repo.head()
+    if head:
+        roots.append(("commit", head))
+    roots += [("commit", s) for _, s in repo.refs("refs/")]
+    logs = repo._gpath("logs")
+    stack = [logs] if repo.fs.is_dir(logs, follow=False) else []
+    while stack:
+        d = stack.pop()
+        for n in sorted(repo.fs.listdir(d)):
+            full = d + "/" + n
+            if repo.fs.is_dir(full, follow=False):
+                stack.append(full)
+            elif repo.fs.is_file(full, follow=False):
+                for line in bytetext.decode(repo.fs.read_bytes(full)).split("\n"):
+                    roots += [("commit", x) for x in line.split(" ")[:2] if re.fullmatch(r"[0-9a-f]{40}", x) and x != "0" * 40]
+    reachable: set[str] = set()
+    missing: dict[str, str] = {}
+    stack2 = [(k, x, None) for k, x in reversed(roots)]
+    while stack2:
+        kind, sha, parent = stack2.pop()
+        if sha in reachable:
+            continue
+        reachable.add(sha)
+        if len(reachable) % 256 == 0:
+            check()
+        if sha not in kinds:
+            if sha not in present:
+                if parent is not None:
+                    g.out(sub_msg("fsck", "brokenLink", fromKind=kinds[parent].rjust(7), **{"from": parent}, toKind=kind.rjust(7), to=sha) + "\n")
+                missing[sha] = kind
+            continue
+        stack2 += [(k, x, sha) for k, x in reversed(links.get(sha, []))]
+    if missing:
+        code |= 2
+    referenced = {x for ls in links.values() for _, x in ls}
+    report = [(sha, sub_msg("fsck", "missing", kind=k, object=sha)) for sha, k in missing.items()]
+    if not o.has("!\x01"):
+        report += [(sha, sub_msg("fsck", "dangling", kind=kinds[sha], object=sha))
+                   for sha in kinds if sha not in reachable and sha not in referenced]
+    # shortcut: git prints these in its hash table's order; sorted by id here
+    g.out("".join(line + "\n" for _, line in sorted(report)))
+    return code
+
+
 HANDLERS = {
+    "merge-base": git_merge_base, "fsck": git_fsck,
     "remote": git_remote,
     "init": git_init, "status": git_status, "add": git_add, "rm": git_rm, "mv": git_mv, "commit": git_commit, "log": git_log,
     "show": git_show, "diff": git_diff, "branch": git_branch, "checkout": git_checkout, "switch": git_switch, "restore": git_restore,

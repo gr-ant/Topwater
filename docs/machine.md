@@ -78,9 +78,9 @@ local commands (`rebase`, `cherry-pick`, `revert`, `blame`, ...) say they are no
 | | |
 |---|---|
 | Work | `init` `status` (`-s`, `-b`, `--porcelain`, `-u`) `add` (`-A`, `-u`, `-f`, `-n`) `rm` (`--cached`, `-r`) `mv` `commit` (`-m`, `-F`, `-a`, `--amend`, `--no-edit`, `--allow-empty`, `--author`, `--date`, paths) `restore` (`--staged`, `--source`) `reset` (`--soft`, `--mixed`, `--hard`, paths) `stash` (`push`, `save`, `list`, `show`, `pop`, `apply`, `drop`, `clear`, `-u`) `clean` (`-n`, `-f`, `-d`, `-x`, `-X`) |
-| History | `log` (`--oneline`, `-n`/`-<n>`, `--stat`, `-p`, `--format`/`--pretty` with `%H %h %s %b %an %ae %ad %d` and more, `--graph` for linear history, `--all`, `--author`, `--grep`, `--since`, `a..b`, `-- paths`) `show` (commits, tags, `rev:path`) `diff` (work tree, `--cached`, commits, `a..b`, `a...b`, `--stat`, `--name-only`, `--name-status`, `--numstat`, `-U<n>`, `--quiet`) |
+| History | `log` (`--oneline`, `-n`/`-<n>`, `--stat`, `-p`, `--format`/`--pretty` with `%H %h %s %b %an %ae %ad %d` and more, `--graph` for linear history, `--all`, `--author`, `--grep`, `-S`, `-G`, `--parents`, `--since`, `a..b`, `-- paths`) `show` (commits, tags, `rev:path`) `diff` (work tree, `--cached`, commits, `a..b`, `a...b`, `--stat`, `--name-only`, `--name-status`, `--numstat`, `-U<n>`, `--quiet`, `--check`) `merge-base` (`-a`, `--octopus`, `--is-ancestor`) |
 | Branches | `branch` (`-d`, `-D`, `-m`, `-v`, `-vv`, `-r`, `-a`, `--show-current`) `checkout` (`-b`, `-B`, `--detach`, `-- paths`) `switch` (`-c`, `-C`, `--detach`, `-`) `merge` (fast-forward, three-way with conflict markers, `--no-ff`, `--ff-only`, `--abort`, `--continue`) `tag` (`-a`, `-m`, `-d`, `-l`) |
-| Plumbing | `rev-parse` `rev-list` `ls-files` `cat-file` `config` (`--global`, `--local`, `--get`, `--unset`, `--list`), `git -C dir`, `git -c name=value` |
+| Plumbing | `rev-parse` `rev-list` (`--count`, `--reverse`, `--parents`) `fsck` (`--no-dangling`) `ls-files` `cat-file` `config` (`--global`, `--local`, `--get`, `--unset`, `--list`), `git -C dir`, `git -c name=value` |
 
 Revisions: `HEAD`, `@`, branch, tag and remote-tracking names (`origin/main`, `origin`), full or short ids, `~n`, `^n`,
 `^{tree}`, `rev:path`, `@{-1}`, `@{u}`.
@@ -138,7 +138,8 @@ may not have are ignored.
 
 **Differences from real git.** No writing packfiles (and no multi-pack-index, bitmaps or commit-graph use: they are
 ignored), no submodules, hooks, editor, pager or colors; reflogs are written but there
-is no `reflog` command or `@{n}`; `--graph` draws linear history only; when a change could be placed at several equal
+is no `reflog` command or `@{n}`; `--graph` draws linear history only; `log --parents` with paths prints the real
+parents, not simplified ones; `fsck` checks readability and connectivity only and lists its findings sorted by id; when a change could be placed at several equal
 positions, diffs place it at the lowest one, where real git's indent heuristic sometimes picks another.
 
 ## Files and permissions

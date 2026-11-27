@@ -11,10 +11,11 @@ import { COMMANDS, type CommandSpec, type SubcommandSpec } from '../spec.generat
 import {
   EMPTY_TREE, HEX, MAX_DEPTH, MAX_WALK, SHA, Commit, Config, DateError, Entry, GitError, IgnoreRules, cQuote, canonicalKey, checkPath,
   cmpCp, cmpPath, concat, configBool, countChanges, cpLen, cpSlice, fatal, formatDate, globFull, isBinary, isDigits, ljust,
-  lstripChars, mergeLines, msg, objectId, parseDate, parseIdent, parseTree, partition, readIndex, rjust, rstripChars, sortCp,
+  lstripChars, mergeLines, msg, myers, objectId, parseDate, parseIdent, parseTree, partition, readIndex, rjust, rstripChars, sortCp,
   sortPaths, splitLines, stripChars, treeBytes, unified, validKey, writeIndex, type TreeEntry, type Values,
 } from './gitcore.js';
 import { MAX_NAMES, MAX_PACKS, Corrupt, ObjectCache, Pack } from './gitpack.js';
+import { posixRegexError, posixToJs } from '../regex.js';
 
 const SPEC = (): CommandSpec => COMMANDS.get('git')!;
 const subSpec = (sub: string): SubcommandSpec => SPEC().subcommands!.get(sub)!;
@@ -1834,19 +1835,19 @@ function expandFormat(g: Git, repo: Repo, fmt: string, c: Commit, decor: Map<str
 
 const PRETTY = ['oneline', 'short', 'medium', 'full', 'fuller', 'raw'];
 
-/** The commit as log prints it, ending in a newline (except a separator-style format). */
+/** The commit as log prints it, ending in a newline (except a separator-style format). parents: --parents. */
 function commitHeader(g: Git, repo: Repo, c: Commit, pretty: string, fmt: string | null, decor: Map<string, string[]> | null, dateStyle: string,
-  abbrevCommit: boolean): string {
+  abbrevCommit: boolean, parents = false): string {
   if (pretty === 'format' || pretty === 'tformat') return expandFormat(g, repo, fmt ?? '', c, decor, dateStyle) + (pretty === 'tformat' ? '\n' : '');
   const d = decor?.get(c.sha) ?? [];
   const dtext = d.length ? ` (${d.join(', ')})` : '';
-  const sha = abbrevCommit ? abbrev(c.sha) : c.sha;
+  const sha = [c.sha, ...(parents ? c.parents : [])].map(x => abbrevCommit ? abbrev(x) : x).join(' ');
   if (pretty === 'oneline') return `${sha}${dtext} ${c.subject}\n`;
   const [an, ae, at, az] = parseIdent(c.author);
   const [cn, ce, ct, cz] = parseIdent(c.committer);
   let lines = [`commit ${sha}${dtext}`];
   if (c.parents.length > 1) lines.push('Merge: ' + c.parents.map(abbrev).join(' '));
-  if (pretty === 'raw') lines = [`commit ${c.sha}`, `tree ${c.tree}`, ...c.parents.map(p => `parent ${p}`), `author ${c.author}`, `committer ${c.committer}`];
+  if (pretty === 'raw') lines = [`commit ${sha}`, `tree ${c.tree}`, ...c.parents.map(p => `parent ${p}`), `author ${c.author}`, `committer ${c.committer}`];
   else if (pretty === 'fuller') lines.push(`Author:     ${an} <${ae}>`, `AuthorDate: ${formatDate(at, az, dateStyle, g.now())}`,
     `Commit:     ${cn} <${ce}>`, `CommitDate: ${formatDate(ct, cz, dateStyle, g.now())}`);
   else {
@@ -1972,7 +1973,16 @@ function gitLog(g: Git, args: string[]): number {
   }
   const authorRx = userRegex(o.val('\x14'));
   const grepRx = userRegex(o.val('\x15'));
+  const pickaxe = o.val('S');
+  let pickaxeRx: RegExp | null = null;
+  const gv = o.val('G');
+  if (gv !== null) {
+    const error = posixRegexError(gv, true, false);
+    if (error) throw subFatal('log', 'badPickaxeRegex', { error });
+    pickaxeRx = new RegExp(posixToJs(gv, true), 'm');
+  }
   const shown: Commit[] = [];
+  const hits = new Map<string, string[]>(); // commit -> the paths the pickaxe found, which its diff is limited to
   for (const sha of order) {
     const c = repo.commit(sha);
     if ((o.has('\x17') && c.parents.length > 1) || (o.has('\x18') && c.parents.length < 2)) continue;
@@ -1986,17 +1996,47 @@ function gitLog(g: Git, args: string[]): number {
       const a = c.parents.length ? treeFiles(repo, c.parents[0]) : new Map<string, F>();
       if (!diffFiles(a, repo.flatten(c.tree), specs).length) continue;
     }
+    if (pickaxe !== null || pickaxeRx !== null) {
+      if (c.parents.length > 1) continue; // a merge has no diff of its own to search
+      const found = pickaxePaths(g, repo, c, specs, pickaxe, pickaxeRx);
+      if (!found.length) continue;
+      hits.set(sha, found);
+    }
     if (skip) { skip--; continue; }
     if (limit >= 0 && shown.length >= limit) break;
     shown.push(c);
   }
   if (o.has('\x13')) shown.reverse();
-  writeLog(g, repo, shown, o, pretty, fmt, decor, dateStyle, abbrevCommit, specs, false, o.has('\x0f'));
+  writeLog(g, repo, shown, o, pretty, fmt, decor, dateStyle, abbrevCommit, specs, false, o.has('\x0f'), false, hits);
   return 0;
 }
 
+/** The files whose change in c alters the count of needle (-S), or adds or removes a line rx matches (-G). */
+function pickaxePaths(g: Git, repo: Repo, c: Commit, specs: string[] | null, needle: string | null, rx: RegExp | null): string[] {
+  const a = c.parents.length ? treeFiles(repo, c.parents[0]) : new Map<string, F>();
+  const b = repo.flatten(c.tree);
+  const out: string[] = [];
+  const add = (...ps: (string | null)[]) => { for (const p of ps) if (p && !out.includes(p)) out.push(p); };
+  for (const [, old, neu] of diffFiles(a, b, specs)) {
+    g.ctx.checkTime();
+    const x = old ? repo.typed(a.get(old)![1], 'blob') : new Uint8Array(0);
+    const y = neu ? repo.typed(b.get(neu)![1], 'blob') : new Uint8Array(0);
+    if (isBinary(x) || isBinary(y)) continue;
+    if (needle !== null) {
+      const count = (t: string) => t.split(needle).length - 1;
+      if (needle && count(decodeBytes(x)) !== count(decodeBytes(y))) add(old, neu);
+      continue;
+    }
+    const lx = splitLines(x), ly = splitLines(y);
+    const changed = myers(lx, ly, g.check).flatMap(([s1, e1, s2, e2]) => [...lx.slice(s1, e1), ...ly.slice(s2, e2)]);
+    if (changed.some(l => rx!.test(rstripChars(l, '\n')))) add(old, neu);
+  }
+  return out;
+}
+
 function writeLog(g: Git, repo: Repo, commits: Commit[], o: Opts, pretty: string, fmt: string | null, decor: Map<string, string[]> | null,
-  dateStyle: string, abbrevCommit: boolean, specs: string[] | null, defaultPatch: boolean, graph = false, merges = false): void {
+  dateStyle: string, abbrevCommit: boolean, specs: string[] | null, defaultPatch: boolean, graph = false, merges = false,
+  hits: Map<string, string[]> | null = null): void {
   if (graph) {
     commits.forEach((c, i) => { // a straight line would misdraw it
       if (c.parents.length > 1 || (i + 1 < commits.length && !(c.parents.length === 1 && c.parents[0] === commits[i + 1].sha))) throw fatal('graphNotLinear');
@@ -2005,8 +2045,9 @@ function writeLog(g: Git, repo: Repo, commits: Commit[], o: Opts, pretty: string
   const wantsDiff = diffWanted(o, defaultPatch);
   commits.forEach((c, i) => {
     g.ctx.checkTime();
-    const head = commitHeader(g, repo, c, pretty, fmt, decor, dateStyle, abbrevCommit);
-    const diff = wantsDiff ? commitDiff(g, repo, c, o, specs, merges) : '';
+    // shortcut: with paths, --parents prints the real parents, not git's rewritten (simplified) ones
+    const head = commitHeader(g, repo, c, pretty, fmt, decor, dateStyle, abbrevCommit, o.has('\x05'));
+    const diff = wantsDiff ? commitDiff(g, repo, c, o, hits?.size ? hits.get(c.sha)! : specs, merges) : '';
     const multiLine = !['oneline', 'format', 'tformat'].includes(pretty);
     let text = '';
     if (i && multiLine) text += '\n';
@@ -2118,8 +2159,53 @@ function gitDiff(g: Git, args: string[]): number {
     a = treeOf(revs[0]);
     [b, bw] = [worktreeFiles(repo, union(idx.keys(), a.keys())), true];
   } else [a, b, bw] = [idx, worktreeFiles(repo, idx.keys()), true];
+  if (o.has('\x10') && (o.has('\x03') || o.has('\x04'))) throw subFatal('diff', 'checkWith');
+  if (o.has('\x10') && !o.has('\x05')) {
+    const changes = diffFiles(a, b, specs);
+    const bad = whitespaceCheck(g, repo, a, b, changes, bw);
+    return (bad ? 2 : 0) | (changes.length && o.has('\x07') ? 1 : 0);
+  }
   const changed = writeDiff(g, repo, a, b, o, specs, bw);
   return changed && (o.has('\x07') || o.has('\x05')) ? 1 : 0;
+}
+
+/** diff --check: prints added lines with whitespace problems (git's default core.whitespace); true when any. */
+function whitespaceCheck(g: Git, repo: Repo, a: Files, b: Files, changes: Change[], bWorktree: boolean): boolean {
+  const blank = (line: string) => !stripChars(line, ' \t\r\n\v\f');
+  const trailingBlanks = (lines: string[]) => {
+    let n = 0;
+    while (n < lines.length && blank(lines[lines.length - 1 - n])) n++;
+    return n;
+  };
+  let bad = false;
+  for (const [st, old, neu] of changes) {
+    if (!neu || st === 'T') continue;
+    const x = blobData(repo, old ? a.get(old) : null, old ?? '', false);
+    const y = blobData(repo, b.get(neu), neu, bWorktree);
+    if (isBinary(x) || isBinary(y)) continue;
+    const lx = splitLines(x), ly = splitLines(y);
+    const name = cQuote(neu);
+    for (const [, , s2, e2] of myers(lx, ly, g.check)) {
+      for (let j = s2; j < e2; j++) {
+        const text = rstripChars(ly[j], '\n');
+        const problems: string[] = [];
+        if (text && ' \t\r'.includes(text[text.length - 1])) problems.push(subMsg('diff', 'checkTrailing'));
+        const indent = /^[ \t]*/.exec(text)![0];
+        if (indent.length < text.length && indent.includes(' \t')) problems.push(subMsg('diff', 'checkSpaceTab'));
+        if (problems.length) {
+          bad = true;
+          g.out(subMsg('diff', 'checkLine', { file: name, line: String(j + 1), problems: problems.join(', ') }) + '\n');
+          g.out('+' + text + '\n');
+        }
+      }
+    }
+    const tail = trailingBlanks(ly);
+    if (tail > trailingBlanks(lx)) {
+      bad = true;
+      g.out(subMsg('diff', 'checkBlankEof', { file: name, line: String(ly.length - tail + 1) }) + '\n');
+    }
+  }
+  return bad;
 }
 
 // ---------- moving between commits ----------
@@ -3141,8 +3227,9 @@ function gitRevList(g: Git, args: string[]): number {
   if (specs !== null) order = order.filter(c => diffFiles(treeFiles(repo, repo.commit(c).parents[0] ?? null), repo.flatten(repo.commit(c).tree), specs).length);
   const n = o.val('n');
   if (n !== null && isDigits(n)) order = order.slice(0, Number(n));
+  if (o.has('\x03')) order.reverse();
   if (o.has('\x01')) g.out(`${order.length}\n`);
-  else g.out(order.map(c => c + '\n').join(''));
+  else g.out(order.map(c => [c, ...(o.has('\x05') ? repo.commit(c).parents : [])].join(' ') + '\n').join(''));
   return 0;
 }
 
@@ -3251,7 +3338,122 @@ function gitRemote(g: Git, args: string[]): number {
   return 0;
 }
 
+function gitMergeBase(g: Git, args: string[]): number {
+  const o = parse('merge-base', args);
+  const repo = g.repo();
+  if (o.args.length < (o.has('\x01') ? 1 : 2) && !(o.has('\x02') && o.args.length))
+    throw new GitError(rstripChars(subSpec('merge-base').help, '\n'), 129);
+  if (o.has('\x02') && o.args.length !== 2) throw subFatal('merge-base', 'isAncestorArgs');
+  const commits = o.args.map(a => {
+    const sha = tryResolve(repo, a);
+    const c = sha ? peel(repo, sha, 'commit') : null;
+    if (c === null) throw subFatal('merge-base', 'notValid', { name: a });
+    return c;
+  });
+  const check = g.check;
+  if (o.has('\x02')) return ancestors(repo, [commits[1]], check).has(commits[0]) ? 0 : 1;
+  let common: Set<string>;
+  if (o.has('\x01')) { // common to all of them
+    common = ancestors(repo, [commits[0]], check);
+    for (const c of commits.slice(1)) { const s = ancestors(repo, [c], check); common = new Set([...common].filter(x => s.has(x))); }
+  } else { // the first against a merge of the others
+    const others = ancestors(repo, commits.slice(1), check);
+    common = new Set([...ancestors(repo, [commits[0]], check)].filter(x => others.has(x)));
+  }
+  if (!common.size) return 1;
+  const below = ancestors(repo, [...common].flatMap(c => repo.commit(c).parents), check);
+  const order = walkOrder(repo, [...common].filter(c => !below.has(c)).sort(), check);
+  g.out((o.has('a') ? order : order.slice(0, 1)).map(c => c + '\n').join(''));
+  return 0;
+}
+
+function gitFsck(g: Git, args: string[]): number {
+  const o = parse('fsck', args);
+  const repo = g.repo();
+  const check = g.check;
+  const present = new Map<string, string>(); // every stored object -> its path (loose) or pack
+  let code = 0;
+  const names: [string, string][] = [];
+  const base = repo.gpath('objects');
+  for (const d of repo.fs.isDirectory(base, false) ? repo.fs.list(base).sort() : []) {
+    if (/^[0-9a-f]{2}$/.test(d) && repo.fs.isDirectory(`${base}/${d}`, false))
+      for (const n of repo.fs.list(`${base}/${d}`).sort()) if (/^[0-9a-f]{38}$/.test(n)) names.push([d + n, `.git/objects/${d}/${n}`]);
+  }
+  for (const pack of repo.packs()) for (const sha of pack.offsets.keys()) names.push([sha, pack.path]);
+  if (names.length > MAX_WALK) throw fatal('tooLarge', { what: 'objects' });
+  const kinds = new Map<string, string>();
+  const links = new Map<string, [string, string][]>(); // object -> [kind, id][] it points to
+  for (const [sha, path] of names) {
+    check();
+    if (present.has(sha)) continue;
+    present.set(sha, path);
+    try {
+      const [kind, data] = repo.obj(sha);
+      kinds.set(sha, kind);
+      if (kind === 'commit') {
+        const c = repo.commit(sha);
+        links.set(sha, [['tree', c.tree], ...c.parents.map((p): [string, string] => ['commit', p])]);
+      } else if (kind === 'tree') {
+        links.set(sha, parseTree(data, sha).filter(([m]) => m !== '160000').map(([m, , x]): [string, string] => [m === '040000' ? 'tree' : 'blob', x]));
+      } else if (kind === 'tag') {
+        const m = /^object ([0-9a-f]{40})\ntype (\w+)/m.exec(bytesToText(data));
+        links.set(sha, m ? [[m[2], m[1]]] : []);
+      }
+    } catch (e) {
+      if (!(e instanceof GitError)) throw e;
+      g.err(subMsg('fsck', 'corrupt', { object: sha, path }) + '\n');
+      code |= 1;
+    }
+  }
+  const roots: [string, string][] = [];
+  for (const e of repo.index()) if (e.mode !== '160000') roots.push(['blob', e.sha]);
+  const head = repo.head();
+  if (head) roots.push(['commit', head]);
+  for (const [, s] of repo.refs('refs/')) roots.push(['commit', s]);
+  const logs = repo.gpath('logs');
+  const stack = repo.fs.isDirectory(logs, false) ? [logs] : [];
+  while (stack.length) {
+    const d = stack.pop()!;
+    for (const n of sortCp(repo.fs.list(d))) {
+      const full = d + '/' + n;
+      if (repo.fs.isDirectory(full, false)) stack.push(full);
+      else if (repo.fs.isFile(full, false)) {
+        for (const line of decodeBytes(repo.fs.readBytes(full)).split('\n'))
+          for (const x of line.split(' ').slice(0, 2)) if (/^[0-9a-f]{40}$/.test(x) && x !== '0'.repeat(40)) roots.push(['commit', x]);
+      }
+    }
+  }
+  const reachable = new Set<string>();
+  const missing = new Map<string, string>();
+  const stack2: [string, string, string | null][] = roots.map(([k, x]): [string, string, string | null] => [k, x, null]).reverse();
+  while (stack2.length) {
+    const [kind, sha, parent] = stack2.pop()!;
+    if (reachable.has(sha)) continue;
+    reachable.add(sha);
+    if (reachable.size % 256 === 0) check();
+    if (!kinds.has(sha)) {
+      if (!present.has(sha)) {
+        if (parent !== null)
+          g.out(subMsg('fsck', 'brokenLink', { fromKind: rjust(kinds.get(parent)!, 7), from: parent, toKind: rjust(kind, 7), to: sha }) + '\n');
+        missing.set(sha, kind);
+      }
+      continue;
+    }
+    stack2.push(...(links.get(sha) ?? []).map(([k, x]): [string, string, string | null] => [k, x, sha]).reverse());
+  }
+  if (missing.size) code |= 2;
+  const referenced = new Set([...links.values()].flatMap(ls => ls.map(([, x]) => x)));
+  const report: [string, string][] = [...missing].map(([sha, k]) => [sha, subMsg('fsck', 'missing', { kind: k, object: sha })]);
+  if (!o.has('!\x01'))
+    for (const [sha, k] of kinds) if (!reachable.has(sha) && !referenced.has(sha)) report.push([sha, subMsg('fsck', 'dangling', { kind: k, object: sha })]);
+  // shortcut: git prints these in its hash table's order; sorted by id here
+  report.sort((x, y) => x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0);
+  g.out(report.map(([, line]) => line + '\n').join(''));
+  return code;
+}
+
 const HANDLERS: Record<string, (g: Git, args: string[]) => number> = {
+  'merge-base': gitMergeBase, fsck: gitFsck,
   remote: gitRemote,
   init: gitInit, status: gitStatus, add: gitAdd, rm: gitRm, mv: gitMv, commit: gitCommit, log: gitLog, show: gitShow, diff: gitDiff,
   branch: gitBranch, checkout: gitCheckout, switch: gitSwitch, restore: gitRestore, reset: gitReset, tag: gitTag, merge: gitMerge,

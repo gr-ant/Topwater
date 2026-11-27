@@ -21,6 +21,11 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 - **`tar` from a deleted working directory.** After `rm -rf` of the current directory, `tar tf /abs/a.tar` failed
   with `tar: {file}: Cannot open`. tar now needs the working directory only when given `-C` or relative names, as
   real tar does, and the spec tests check that every message lookup supplies all of its placeholders.
+- **More git history and checking commands.** `git log -S<string>` and `-G<regex>` (the pickaxe; a commit's diff
+  shows only the files that matched), `git log --parents`, `git rev-list --reverse` and `--parents`, `git diff
+  --check` (trailing whitespace, a space before a tab in the indent, new blank lines at the end; exit 2), `git
+  merge-base` (`-a`, `--octopus`, `--is-ancestor`) and `git fsck` (unreadable, missing and dangling objects, loose and
+  packed).
 
 ## 0.1.0-preview.4 (2026-11-26)
 
