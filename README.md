@@ -221,6 +221,7 @@ built-in tools and the developer's own Claude Code settings left out. See
 | An HTTP API, credentials hidden from the model | `shell.RegisterApi(...)` | `register_api(shell, ...)` | `shell.registerApi(...)` |
 | [Web access](docs/web.md) to sites you list, through `curl` and `wget` | `shell.AllowWeb(new WebPolicy { ... })` | `shell.allow_web(WebPolicy(...))` | `shell.allowWeb({ ... })` |
 | [Outside files as a folder](docs/mounts.md) (a host folder, an Obsidian vault, your own source), read-only or with changes you review | `await shell.MountAsync(path, source, mode)` | `shell.mount(path, source, mode)` | `await shell.mount(path, source, mode)` |
+| [Your Notion pages as a folder](docs/connectors/notion.md): the agent reorganises them, you review the change set | not yet | `shell.mount(path, NotionSource(token, root), "staged")` | not yet |
 | [SharePoint and OneDrive as a folder](docs/connectors/graph.md): libraries, lists and subsites; you review the change set | not yet | `shell.mount(path, GraphSource(token, site=url), "staged")` | not yet |
 | A real program from your machine | `shell.RegisterHostCommand("duckdb")` | `register_host_command(shell, "duckdb")` | not yet |
 

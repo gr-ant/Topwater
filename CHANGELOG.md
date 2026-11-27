@@ -5,6 +5,14 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 
 ## Unreleased
 
+- **Notion connector (Python).** `topwater.connectors.notion.NotionSource(token, root)` mounts a Notion page (or
+  database) and everything below it: a page is `Title.md`, a page with subpages a folder whose own text is
+  `index.md`, a database a folder of rows with their properties as front matter. Mounted staged, the agent's moves,
+  renames, edits, new pages and deletes (to Notion's trash) become a change set you review and apply. Writing a page
+  never moves or drops its subpages; conflicts are found from `last_edited_time` and, for pages the agent read, their
+  text. Rate limited and retried; no dependencies. The C# and TypeScript ports follow
+  [the design note](docs/connectors/notion-design.md). See [Notion](docs/connectors/notion.md) and
+  `python/examples/notion_restructure.py`.
 - **Microsoft Graph connector (Python).** `topwater.connectors.graph.GraphSource(token, site=...)` mounts a SharePoint
   site (its document libraries, lists and subsites) or a drive (`drive="me"` for OneDrive) through Graph v1.0. Files are
   their real bytes; a list is a folder of `Title.md` items with the columns as front matter (read-only columns shown,

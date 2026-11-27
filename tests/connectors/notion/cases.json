@@ -1,0 +1,600 @@
+{
+ "about": "The Notion connector against a fake Notion (docs/connectors/notion-design.md), run by every port that has the connector (python/tests/test_notion.py). The fake is built from `tree` (a case may have its own): a page is {title, text, children}, a database {database, schema: {property: type}, rows: [{title, props, text}]}; ids are given in creation order, depth first: 00000000-0000-4000-8000-000000000001, ...; the clock starts at 2026-01-01T00:00 and moves only with `tick` (seconds). The root page is mounted at /mnt/n in `mode` with token secret-token. Steps: run (stdout, stderr, exitCode), changes (the pending change set; content as text), apply (paths applied, the one it stopped at, conflict, the error text), notion (the fake's outline), edit / trash (someone changes Notion), tick, refresh, fault (the next `times` requests of `method` whose path matches the regex `path` get `status`, `headers`, `body`).",
+ "tree": {
+  "title": "Test",
+  "text": "TEST",
+  "children": [
+   {
+    "title": "Projects",
+    "text": "Active work.",
+    "children": [
+     {
+      "title": "Website Redesign",
+      "text": "## Tasks\n\n- [ ] Ship pricing page",
+      "children": [
+       {
+        "title": "Kickoff notes",
+        "text": "Attendees: Sam, Priya"
+       }
+      ]
+     },
+     {
+      "title": "Q4 Launch Plan",
+      "text": "Launch 2026-12-10."
+     }
+    ]
+   },
+   {
+    "title": "Wiki",
+    "text": "Team knowledge base.",
+    "children": [
+     {
+      "title": "Onboarding",
+      "text": "Welcome!\n\n1. Get laptop\n2. Join #general"
+     },
+     {
+      "title": "Style Guide",
+      "text": "Use sentence case."
+     }
+    ]
+   },
+   {
+    "title": "Inbox (unsorted)",
+    "text": "Sort later.",
+    "children": [
+     {
+      "title": "random idea",
+      "text": "A search box that works"
+     },
+     {
+      "title": "Notes",
+      "text": "pricing page should mention annual discount"
+     },
+     {
+      "title": "Notes",
+      "text": "call dentist"
+     },
+     {
+      "title": "A/B test",
+      "text": "variant B wins"
+     },
+     {
+      "title": "",
+      "text": "untitled thoughts"
+     }
+    ]
+   },
+   {
+    "database": "Meeting Notes",
+    "schema": {
+     "Date": "date",
+     "Type": "select",
+     "Tags": "multi_select",
+     "Done": "checkbox"
+    },
+    "rows": [
+     {
+      "title": "Q3 Retro",
+      "props": {
+       "Date": "2026-10-01",
+       "Type": "Retro",
+       "Tags": [
+        "website",
+        "launch"
+       ],
+       "Done": true
+      },
+      "text": "Keep: demos."
+     },
+     {
+      "title": "Hiring sync",
+      "props": {
+       "Date": "2026-11-18",
+       "Type": "Planning",
+       "Tags": [
+        "hiring"
+       ],
+       "Done": false
+      },
+      "text": "Two candidates."
+     }
+    ]
+   }
+  ]
+ },
+ "cases": [
+  {
+   "name": "the file view",
+   "mode": "read-only",
+   "steps": [
+    {
+     "run": "mount",
+     "expect": {
+      "stdout": "notion:00000000-0000-4000-8000-000000000001 on /mnt/n type notion (ro)\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "find /mnt/n | sort",
+     "expect": {
+      "stdout": "/mnt/n\n/mnt/n/Inbox (unsorted)\n/mnt/n/Inbox (unsorted)/A∕B test.md\n/mnt/n/Inbox (unsorted)/Notes (2).md\n/mnt/n/Inbox (unsorted)/Notes.md\n/mnt/n/Inbox (unsorted)/Untitled.md\n/mnt/n/Inbox (unsorted)/index.md\n/mnt/n/Inbox (unsorted)/random idea.md\n/mnt/n/Meeting Notes\n/mnt/n/Meeting Notes/Hiring sync.md\n/mnt/n/Meeting Notes/Q3 Retro.md\n/mnt/n/Projects\n/mnt/n/Projects/Q4 Launch Plan.md\n/mnt/n/Projects/Website Redesign\n/mnt/n/Projects/Website Redesign/Kickoff notes.md\n/mnt/n/Projects/Website Redesign/index.md\n/mnt/n/Projects/index.md\n/mnt/n/Wiki\n/mnt/n/Wiki/Onboarding.md\n/mnt/n/Wiki/Style Guide.md\n/mnt/n/Wiki/index.md\n/mnt/n/index.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "ls -l /mnt/n/Projects",
+     "expect": {
+      "stdout": "total 4\n-r--r--r-- 1 root root    0 Jan  1  2026 Q4 Launch Plan.md\ndr-xr-xr-x 2 root root 4096 Jan  1  2026 Website Redesign\n-r--r--r-- 1 root root    0 Jan  1  2026 index.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "cat /mnt/n/index.md /mnt/n/Projects/index.md '/mnt/n/Meeting Notes/Q3 Retro.md' '/mnt/n/Inbox (unsorted)/A∕B test.md'",
+     "expect": {
+      "stdout": "TEST\nActive work.\n---\nDate: \"2026-10-01\"\nDone: true\nTags: [\"website\", \"launch\"]\nType: \"Retro\"\n---\nKeep: demos.\nvariant B wins\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "ls -l /mnt/n/Projects; echo x > /mnt/n/Wiki/Onboarding.md",
+     "expect": {
+      "stdout": "total 8\n-r--r--r-- 1 root root    0 Jan  1  2026 Q4 Launch Plan.md\ndr-xr-xr-x 2 root root 4096 Jan  1  2026 Website Redesign\n-r--r--r-- 1 root root   13 Jan  1  2026 index.md\n",
+      "stderr": "bash: line 1: /mnt/n/Wiki/Onboarding.md: Permission denied\n",
+      "exitCode": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "a staged restructure becomes a change set and applies",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cd /mnt/n && mv 'Inbox (unsorted)/Notes (2).md' Wiki/'Dentist.md' && mkdir Wiki/Policies && mv 'Wiki/Style Guide.md' Wiki/Policies/ && printf '# Policies\\n\\nHow we work.\\n' > Wiki/Policies/index.md && echo 'Kickoff moved to Dec 4.' >> 'Projects/Website Redesign/index.md' && mv 'Projects/Website Redesign' Projects/Website && rm 'Inbox (unsorted)/Untitled.md' && mv 'Inbox (unsorted)/random idea.md' 'Inbox (unsorted)/Search idea.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "mount -c",
+     "expect": {
+      "stdout": "rename /mnt/n/Inbox (unsorted)/random idea.md -> /mnt/n/Inbox (unsorted)/Search idea.md\nrename /mnt/n/Projects/Website Redesign -> /mnt/n/Projects/Website\nrename /mnt/n/Inbox (unsorted)/Notes (2).md -> /mnt/n/Wiki/Dentist.md\nmkdir /mnt/n/Wiki/Policies\nrename /mnt/n/Wiki/Style Guide.md -> /mnt/n/Wiki/Policies/Style Guide.md\nwrite /mnt/n/Projects/Website/index.md\nwrite /mnt/n/Wiki/Policies/index.md\ndelete /mnt/n/Inbox (unsorted)/Untitled.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "rename",
+       "path": "/Inbox (unsorted)/random idea.md",
+       "to": "/Inbox (unsorted)/Search idea.md",
+       "version": "2026-01-01T00:00:00.000Z"
+      },
+      {
+       "kind": "rename",
+       "path": "/Projects/Website Redesign",
+       "to": "/Projects/Website",
+       "version": "2026-01-01T00:00:00.000Z"
+      },
+      {
+       "kind": "rename",
+       "path": "/Inbox (unsorted)/Notes (2).md",
+       "to": "/Wiki/Dentist.md",
+       "version": "2026-01-01T00:00:00.000Z"
+      },
+      {
+       "kind": "mkdir",
+       "path": "/Wiki/Policies"
+      },
+      {
+       "kind": "rename",
+       "path": "/Wiki/Style Guide.md",
+       "to": "/Wiki/Policies/Style Guide.md",
+       "version": "2026-01-01T00:00:00.000Z"
+      },
+      {
+       "kind": "write",
+       "path": "/Projects/Website/index.md",
+       "version": "2026-01-01T00:00:00.000Z",
+       "content": "## Tasks\n\n- [ ] Ship pricing page\nKickoff moved to Dec 4.\n"
+      },
+      {
+       "kind": "write",
+       "path": "/Wiki/Policies/index.md",
+       "content": "# Policies\n\nHow we work.\n"
+      },
+      {
+       "kind": "delete",
+       "path": "/Inbox (unsorted)/Untitled.md",
+       "version": "2026-01-01T00:00:00.000Z"
+      }
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/Inbox (unsorted)/random idea.md",
+       "/Projects/Website Redesign",
+       "/Inbox (unsorted)/Notes (2).md",
+       "/Wiki/Policies",
+       "/Wiki/Style Guide.md",
+       "/Projects/Website/index.md",
+       "/Wiki/Policies/index.md",
+       "/Inbox (unsorted)/Untitled.md"
+      ],
+      "failed": null,
+      "conflict": false,
+      "error": null
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Projects: \"Active work.\"\n    Website: \"## Tasks\\n\\n- [ ] Ship pricing page\\nKickoff moved to Dec 4.\"\n      Kickoff notes: \"Attendees: Sam, Priya\"\n    Q4 Launch Plan: \"Launch 2026-12-10.\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome!\\n\\n1. Get laptop\\n2. Join #general\"\n    Dentist: \"call dentist\"\n    Policies: \"# Policies\\n\\nHow we work.\"\n      Style Guide: \"Use sentence case.\"\n  Inbox (unsorted): \"Sort later.\"\n    Search idea: \"A search box that works\"\n    Notes: \"pricing page should mention annual discount\"\n    A/B test: \"variant B wins\"\n  Meeting Notes [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\", \"launch\"], \"Type\": \"Retro\"}: \"Keep: demos.\"\n    Hiring sync {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n"
+    },
+    {
+     "refresh": true
+    },
+    {
+     "run": "find /mnt/n | sort; mount -c; cat /mnt/n/Projects/Website/index.md",
+     "expect": {
+      "stdout": "/mnt/n\n/mnt/n/Inbox (unsorted)\n/mnt/n/Inbox (unsorted)/A∕B test.md\n/mnt/n/Inbox (unsorted)/Notes.md\n/mnt/n/Inbox (unsorted)/Search idea.md\n/mnt/n/Inbox (unsorted)/index.md\n/mnt/n/Meeting Notes\n/mnt/n/Meeting Notes/Hiring sync.md\n/mnt/n/Meeting Notes/Q3 Retro.md\n/mnt/n/Projects\n/mnt/n/Projects/Q4 Launch Plan.md\n/mnt/n/Projects/Website\n/mnt/n/Projects/Website/Kickoff notes.md\n/mnt/n/Projects/Website/index.md\n/mnt/n/Projects/index.md\n/mnt/n/Wiki\n/mnt/n/Wiki/Dentist.md\n/mnt/n/Wiki/Onboarding.md\n/mnt/n/Wiki/Policies\n/mnt/n/Wiki/Policies/Style Guide.md\n/mnt/n/Wiki/Policies/index.md\n/mnt/n/Wiki/index.md\n/mnt/n/index.md\n## Tasks\n\n- [ ] Ship pricing page\nKickoff moved to Dec 4.\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "an edit in Notion since the listing is a conflict",
+   "mode": "staged",
+   "steps": [
+    {
+     "tick": 60
+    },
+    {
+     "edit": {
+      "title": "Onboarding",
+      "text": "Welcome, edited in Notion."
+     }
+    },
+    {
+     "run": "echo 'Mine.' > /mnt/n/Wiki/Onboarding.md; echo 'Also mine.' > '/mnt/n/Wiki/Style Guide.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Wiki/Onboarding.md",
+      "conflict": true,
+      "error": "/Wiki/Onboarding.md: version 2026-01-01T00:01:00.000Z, expected 2026-01-01T00:00:00.000Z"
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Projects: \"Active work.\"\n    Website Redesign: \"## Tasks\\n\\n- [ ] Ship pricing page\"\n      Kickoff notes: \"Attendees: Sam, Priya\"\n    Q4 Launch Plan: \"Launch 2026-12-10.\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome, edited in Notion.\"\n    Style Guide: \"Use sentence case.\"\n  Inbox (unsorted): \"Sort later.\"\n    random idea: \"A search box that works\"\n    Notes: \"pricing page should mention annual discount\"\n    Notes: \"call dentist\"\n    A/B test: \"variant B wins\"\n    : \"untitled thoughts\"\n  Meeting Notes [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\", \"launch\"], \"Type\": \"Retro\"}: \"Keep: demos.\"\n    Hiring sync {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n"
+    }
+   ]
+  },
+  {
+   "name": "an edit in Notion in the same minute after reading is a conflict",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cat /mnt/n/Wiki/Onboarding.md",
+     "expect": {
+      "stdout": "Welcome!\n\n1. Get laptop\n2. Join #general\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "edit": {
+      "title": "Onboarding",
+      "text": "Welcome, edited in Notion."
+     }
+    },
+    {
+     "run": "sed -i 's/Welcome!/Hello!/' /mnt/n/Wiki/Onboarding.md",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Wiki/Onboarding.md",
+      "conflict": true,
+      "error": "/Wiki/Onboarding.md: changed in Notion since it was read"
+     }
+    }
+   ]
+  },
+  {
+   "name": "what Notion can't do is refused",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "mv '/mnt/n/Meeting Notes' /mnt/n/Wiki/; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Meeting Notes: /Meeting Notes: Notion can't move databases; only rename one where it is; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "echo x > /mnt/n/Wiki/notes.txt; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Wiki/notes.txt: /Wiki/notes.txt: only .md files can be Notion pages; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "printf '\\377\\376' > /mnt/n/Wiki/bin.md; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Wiki/bin.md: /Wiki/bin.md: Notion pages hold UTF-8 text; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "printf '\\n<page url=\"https://app.notion.com/p/00000000000040008000000000000002\">\\nProjects\\n</page>\\n' >> /mnt/n/Wiki/Onboarding.md; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Wiki/Onboarding.md: /Wiki/Onboarding.md: subpages and databases are folders here; a page's text can't add or change <page> or <database> tags; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "mv /mnt/n/Projects/index.md /mnt/n/Wiki/Projects.md; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Projects/index.md: /Projects/index.md: index.md is the page's own text; move or rename its folder instead; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "mkdir '/mnt/n/Meeting Notes/Archive'; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Meeting Notes/Archive: /Meeting Notes/Archive: a database holds rows: write NAME.md files in it; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "mv '/mnt/n/Projects/Website Redesign' '/mnt/n/Meeting Notes/'; mount --discard /mnt/n",
+     "expect": {
+      "stdout": "",
+      "stderr": "mount: /mnt/n/Projects/Website Redesign: /Projects/Website Redesign: a page with subpages can't become a database row; the change stays pending (mount --discard /mnt/n drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "mv '/mnt/n/Meeting Notes' '/mnt/n/Meetings'; ls /mnt/n",
+     "expect": {
+      "stdout": "Inbox (unsorted)\nMeetings\nProjects\nWiki\nindex.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Projects: \"Active work.\"\n    Website Redesign: \"## Tasks\\n\\n- [ ] Ship pricing page\"\n      Kickoff notes: \"Attendees: Sam, Priya\"\n    Q4 Launch Plan: \"Launch 2026-12-10.\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome!\\n\\n1. Get laptop\\n2. Join #general\"\n    Style Guide: \"Use sentence case.\"\n  Inbox (unsorted): \"Sort later.\"\n    random idea: \"A search box that works\"\n    Notes: \"pricing page should mention annual discount\"\n    Notes: \"call dentist\"\n    A/B test: \"variant B wins\"\n    : \"untitled thoughts\"\n  Meetings [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\", \"launch\"], \"Type\": \"Retro\"}: \"Keep: demos.\"\n    Hiring sync {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n"
+    }
+   ]
+  },
+  {
+   "name": "index.md alone is not deleted; its folder is",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "rm /mnt/n/Wiki/index.md; ls /mnt/n/Wiki",
+     "expect": {
+      "stdout": "Onboarding.md\nStyle Guide.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "rm -r /mnt/n/Projects; ls /mnt/n",
+     "expect": {
+      "stdout": "Inbox (unsorted)\nMeeting Notes\nWiki\nindex.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome!\\n\\n1. Get laptop\\n2. Join #general\"\n    Style Guide: \"Use sentence case.\"\n  Inbox (unsorted): \"Sort later.\"\n    random idea: \"A search box that works\"\n    Notes: \"pricing page should mention annual discount\"\n    Notes: \"call dentist\"\n    A/B test: \"variant B wins\"\n    : \"untitled thoughts\"\n  Meeting Notes [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\", \"launch\"], \"Type\": \"Retro\"}: \"Keep: demos.\"\n    Hiring sync {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n"
+    }
+   ]
+  },
+  {
+   "name": "names stay put while the agent works",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "mv '/mnt/n/Inbox (unsorted)/Notes.md' /mnt/n/Wiki/; ls '/mnt/n/Inbox (unsorted)' /mnt/n/Wiki",
+     "expect": {
+      "stdout": "/mnt/n/Inbox (unsorted):\nA∕B test.md\nNotes (2).md\nUntitled.md\nindex.md\nrandom idea.md\n\n/mnt/n/Wiki:\nNotes.md\nOnboarding.md\nStyle Guide.md\nindex.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "refresh": true
+    },
+    {
+     "run": "ls '/mnt/n/Inbox (unsorted)' /mnt/n/Wiki",
+     "expect": {
+      "stdout": "/mnt/n/Inbox (unsorted):\nA∕B test.md\nNotes (2).md\nUntitled.md\nindex.md\nrandom idea.md\n\n/mnt/n/Wiki:\nNotes.md\nOnboarding.md\nStyle Guide.md\nindex.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Projects: \"Active work.\"\n    Website Redesign: \"## Tasks\\n\\n- [ ] Ship pricing page\"\n      Kickoff notes: \"Attendees: Sam, Priya\"\n    Q4 Launch Plan: \"Launch 2026-12-10.\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome!\\n\\n1. Get laptop\\n2. Join #general\"\n    Style Guide: \"Use sentence case.\"\n    Notes: \"pricing page should mention annual discount\"\n  Inbox (unsorted): \"Sort later.\"\n    random idea: \"A search box that works\"\n    Notes: \"call dentist\"\n    A/B test: \"variant B wins\"\n    : \"untitled thoughts\"\n  Meeting Notes [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\", \"launch\"], \"Type\": \"Retro\"}: \"Keep: demos.\"\n    Hiring sync {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n"
+    }
+   ]
+  },
+  {
+   "name": "database rows keep their properties in front matter",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cd '/mnt/n/Meeting Notes' && sed -i -e 's/\"Retro\"/Planning/' -e 's/\\[\"website\", \"launch\"\\]/[website]/' 'Q3 Retro.md' && printf -- '---\\nDate: 2026-12-01\\nDone: false\\nTags:\\n  - launch\\n  - website\\n---\\nGo or no-go.\\n' > 'Launch review.md' && mv 'Hiring sync.md' 'Hiring sync (final).md' && cat 'Q3 Retro.md'",
+     "expect": {
+      "stdout": "---\nDate: \"2026-10-01\"\nDone: true\nTags: [website]\nType: Planning\n---\nKeep: demos.\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/Meeting Notes/Hiring sync.md",
+       "/Meeting Notes/Launch review.md",
+       "/Meeting Notes/Q3 Retro.md"
+      ],
+      "failed": null,
+      "conflict": false,
+      "error": null
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Projects: \"Active work.\"\n    Website Redesign: \"## Tasks\\n\\n- [ ] Ship pricing page\"\n      Kickoff notes: \"Attendees: Sam, Priya\"\n    Q4 Launch Plan: \"Launch 2026-12-10.\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome!\\n\\n1. Get laptop\\n2. Join #general\"\n    Style Guide: \"Use sentence case.\"\n  Inbox (unsorted): \"Sort later.\"\n    random idea: \"A search box that works\"\n    Notes: \"pricing page should mention annual discount\"\n    Notes: \"call dentist\"\n    A/B test: \"variant B wins\"\n    : \"untitled thoughts\"\n  Meeting Notes [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\"], \"Type\": \"Planning\"}: \"Keep: demos.\"\n    Hiring sync (final) {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n    Launch review {\"Date\": \"2026-12-01\", \"Done\": false, \"Tags\": [\"launch\", \"website\"]}: \"Go or no-go.\"\n"
+    },
+    {
+     "run": "printf -- '---\\nMood: happy\\n---\\n' > '/mnt/n/Meeting Notes/Bad.md'; printf -- '---\\nDone: maybe\\n---\\n' > '/mnt/n/Meeting Notes/Worse.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Meeting Notes/Bad.md",
+      "conflict": false,
+      "error": "/Meeting Notes/Bad.md: no property Mood in this database"
+     }
+    }
+   ]
+  },
+  {
+   "name": "mkdir beside a page's file gives that page subpages",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cd /mnt/n/Wiki && mkdir Onboarding && mv Onboarding.md Onboarding/index.md && mv 'Style Guide.md' Onboarding/ && echo '3. Read the style guide' >> Onboarding/index.md && mount -c",
+     "expect": {
+      "stdout": "mkdir /mnt/n/Wiki/Onboarding\nrename /mnt/n/Wiki/Style Guide.md -> /mnt/n/Wiki/Onboarding/Style Guide.md\nrename /mnt/n/Wiki/Onboarding.md -> /mnt/n/Wiki/Onboarding/index.md\nwrite /mnt/n/Wiki/Onboarding/index.md\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/Wiki/Onboarding",
+       "/Wiki/Style Guide.md",
+       "/Wiki/Onboarding.md",
+       "/Wiki/Onboarding/index.md"
+      ],
+      "failed": null,
+      "conflict": false,
+      "error": null
+     }
+    },
+    {
+     "notion": true,
+     "expect": "Test: \"TEST\"\n  Projects: \"Active work.\"\n    Website Redesign: \"## Tasks\\n\\n- [ ] Ship pricing page\"\n      Kickoff notes: \"Attendees: Sam, Priya\"\n    Q4 Launch Plan: \"Launch 2026-12-10.\"\n  Wiki: \"Team knowledge base.\"\n    Onboarding: \"Welcome!\\n\\n1. Get laptop\\n2. Join #general\\n3. Read the style guide\"\n      Style Guide: \"Use sentence case.\"\n  Inbox (unsorted): \"Sort later.\"\n    random idea: \"A search box that works\"\n    Notes: \"pricing page should mention annual discount\"\n    Notes: \"call dentist\"\n    A/B test: \"variant B wins\"\n    : \"untitled thoughts\"\n  Meeting Notes [database]\n    Q3 Retro {\"Date\": \"2026-10-01\", \"Done\": true, \"Tags\": [\"website\", \"launch\"], \"Type\": \"Retro\"}: \"Keep: demos.\"\n    Hiring sync {\"Date\": \"2026-11-18\", \"Done\": false, \"Tags\": [\"hiring\"], \"Type\": \"Planning\"}: \"Two candidates.\"\n"
+    },
+    {
+     "refresh": true
+    },
+    {
+     "run": "find /mnt/n/Wiki | sort; cat /mnt/n/Wiki/Onboarding/index.md",
+     "expect": {
+      "stdout": "/mnt/n/Wiki\n/mnt/n/Wiki/Onboarding\n/mnt/n/Wiki/Onboarding/Style Guide.md\n/mnt/n/Wiki/Onboarding/index.md\n/mnt/n/Wiki/index.md\nWelcome!\n\n1. Get laptop\n2. Join #general\n3. Read the style guide\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "rate limits are waited out, up to a point",
+   "mode": "read-only",
+   "steps": [
+    {
+     "fault": {
+      "method": "GET",
+      "path": "/markdown$",
+      "status": 429,
+      "headers": [
+       [
+        "Retry-After",
+        "0"
+       ]
+      ],
+      "times": 3
+     }
+    },
+    {
+     "run": "cat /mnt/n/Wiki/Onboarding.md",
+     "expect": {
+      "stdout": "Welcome!\n\n1. Get laptop\n2. Join #general\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "fault": {
+      "method": "GET",
+      "path": "/markdown$",
+      "status": 429,
+      "headers": [
+       [
+        "Retry-After",
+        "0"
+       ]
+      ],
+      "times": 5
+     }
+    },
+    {
+     "run": "cat '/mnt/n/Wiki/Style Guide.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "cat: '/mnt/n/Wiki/Style Guide.md': Notion is busy (HTTP 429); tried 5 times (run the command again to retry)\n",
+      "exitCode": 1
+     }
+    }
+   ]
+  }
+ ]
+}

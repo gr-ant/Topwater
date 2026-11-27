@@ -112,7 +112,7 @@ A dash means the port has no such module; §8 records why.
 | `containers.py`, `mcp.py`, `web.py` (the web terminal) | Python | |
 | `regex.ts`, `md5.ts`, `sha1.ts`, `compress.ts`, `inflate.ts` | TS | The platform has no POSIX regex, hashes or zlib built in |
 | `integrations/*` | Python, TS | Per-framework adapters; each list has its own frameworks |
-| `connectors/graph.py`, `connectors/common.py` | Python | The Microsoft Graph mount source and what connectors share; C# and TS follow it (§10) |
+| `connectors/common.py`, `connectors/notion.py`, `connectors/graph.py` | Python | What connectors share, and the Notion and Microsoft Graph mount sources; C# and TS follow them (§10) |
 | `Bc.cs` | C# | Not ported yet |
 
 ## 3. The shell split
@@ -562,8 +562,12 @@ start of `Run`, the host API in the shell's registration section, and the `mount
 recording formats.
 
 **Connectors** are mount sources for outside stores. They live in the core package when they need nothing beyond the
-platform (HTTP from the standard library), in a `connectors` folder: Python `topwater/connectors/graph.py`
-(`topwater.connectors.graph.GraphSource`), C# `Connectors/GraphSource.cs` (namespace `Topwater.Connectors`), TS
-`connectors/graph.ts`. What every connector shares (the HTTP client with backoff, front matter, names from titles) is
-`connectors/common.py` (C# `Connectors/ConnectorCommon.cs`, TS `connectors/common.ts`). Python is the reference; each
-connector has a design note in `docs/connectors/` that the other ports implement.
+platform (HTTP from the standard library), in a `connectors` folder: Python `topwater/connectors/notion.py`
+(`topwater.connectors.notion.NotionSource`) and `topwater/connectors/graph.py` (`topwater.connectors.graph.GraphSource`),
+C# `Connectors/NotionSource.cs` and `Connectors/GraphSource.cs` (namespace `Topwater.Connectors`), TS
+`connectors/notion.ts` and `connectors/graph.ts` (exported as `topwater/connectors/<name>`). What every connector shares
+(the HTTP client with backoff, front matter, names from titles) is `connectors/common.py` (C# `Connectors/ConnectorCommon.cs`,
+TS `connectors/common.ts`). One that needs a vendor SDK is a separate package, like the framework integrations. Python is
+the reference; each connector has a design note in `docs/connectors/` (with its fake server and the shared cases in
+`tests/connectors/<name>/`) that the other ports implement. The C# and TS
+files are listed as pending in `tools/layout.json` until they exist.
