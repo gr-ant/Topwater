@@ -350,13 +350,15 @@ def _mem(caller):
     return g.memory
 
 
-def _read(caller, ptr: int, n: int) -> bytes:
-    mem = _mem(caller)
-    ptr &= 0xFFFFFFFF
-    n &= 0xFFFFFFFF
-    if ptr + n > mem.data_len(caller):
+def _check(caller, ptr: int, n: int) -> None:
+    if (ptr & 0xFFFFFFFF) + (n & 0xFFFFFFFF) > _mem(caller).data_len(caller):
         raise WasiError(EFAULT)
-    return bytes(mem.read(caller, ptr, ptr + n))
+
+
+def _read(caller, ptr: int, n: int) -> bytes:
+    _check(caller, ptr, n)
+    ptr &= 0xFFFFFFFF
+    return bytes(_mem(caller).read(caller, ptr, ptr + (n & 0xFFFFFFFF)))
 
 
 def _write(caller, ptr: int, data: bytes) -> None:
@@ -620,19 +622,26 @@ def fd_pread(c, fd, iovs, n, offset, nread):
 
 def _write_from(c, fd: int, iovs_ptr: int, n: int, offset: int | None) -> int:
     g = _guest()
-    data = b"".join(_read(c, ptr, length) for ptr, length in _iovs(c, iovs_ptr, n))  # every range checked before anything changes
+    iovs = _iovs(c, iovs_ptr, n)
+    for ptr, length in iovs:
+        _check(c, ptr, length)  # every range checked before anything changes
+    total = sum(length for _, length in iovs)
+    # copied only once the destination has room: 1024 vectors over the whole memory would be terabytes
+    data = lambda: b"".join(_read(c, ptr, length) for ptr, length in iovs)  # noqa: E731
     e = g.fd(fd)
     if e in (_STDOUT, _STDERR):
         if offset is not None:
             raise WasiError(ESPIPE)
-        g.write_output(g.stdout if e is _STDOUT else g.stderr, data)
-        return len(data)
+        if len(g.stdout) + len(g.stderr) + total > g.output_cap:
+            raise OutputFull()
+        g.write_output(g.stdout if e is _STDOUT else g.stderr, data())
+        return total
     if not isinstance(e, _File):
         raise WasiError(EISDIR if e is _ROOT or isinstance(e, _Dir) else EBADF)
     if not e.write:
         raise WasiError(EBADF)
     start = len(e.data) if e.append else e.pos if offset is None else offset
-    end = start + len(data)
+    end = start + total
     if end > len(e.data):
         if end > g.room(e):
             raise WasiError(ENOSPC)
@@ -641,11 +650,11 @@ def _write_from(c, fd: int, iovs_ptr: int, n: int, offset: int | None) -> int:
         e.data = bytearray(e.data)
     if start > len(e.data):
         e.data += bytes(start - len(e.data))
-    e.data[start:end] = data
+    e.data[start:end] = data()
     e.dirty, e.mtime = True, time.time_ns()
     if offset is None:
         e.pos = end
-    return len(data)
+    return total
 
 
 @_errno

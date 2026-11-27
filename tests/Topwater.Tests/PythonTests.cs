@@ -315,6 +315,27 @@ public class PythonTests
     }
 
     [Fact]
+    public void AWriteThatRepeatsOneBufferIsRefusedBeforeItIsCopied()
+    {
+        // Python has no os.writev here, so this is what a hand-made module could send: 1000 vectors over the same 64 MB
+        using var engine = new Wasmtime.Engine();
+        using var store = new Wasmtime.Store(engine);
+        var memory = new Wasmtime.Memory(store, 1025);
+        for (int i = 0; i < 1000; i++) { memory.WriteInt32(i * 8, 0); memory.WriteInt32(i * 8 + 4, 64 << 20); }
+        var g = new Wasi.Guest(new Shell().Fs, [], [], [], 1 << 20, 256L << 20, [], DateTime.MaxValue, CancellationToken.None,
+            (_, _, _, _, _) => (0, [])) { Memory = memory };
+        g.Fds.Add(new Wasi.WasiFile("/tmp/f", new MemoryStream(), false, true, false, 0, 0));
+        Wasi.t_guest = g;
+        try
+        {
+            Assert.Throws<Wasi.OutputFull>(() => Wasi.WriteFrom(1, 0, 1000, null));
+            Assert.Equal(Wasi.ENOSPC, Assert.Throws<Wasi.WasiException>(() => Wasi.WriteFrom(g.Fds.Count - 1, 0, 1000, null)).Errno); // past MaxMemory's buffers
+            Assert.Equal(Wasi.ENOSPC, Assert.Throws<Wasi.WasiException>(() => Wasi.WriteFrom(g.Fds.Count - 1, 0, 1000, 0)).Errno);
+        }
+        finally { Wasi.t_guest = null; }
+    }
+
+    [Fact]
     public async Task OutputFloodEndsTheCall()
     {
         var r = await Run("python3 -c 'while True: print(\"x\" * 1000)'", new ShellOptions { MaxStringBytes = 1 << 20 });

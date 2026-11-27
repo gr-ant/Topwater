@@ -331,18 +331,21 @@ internal static class Wasi
 
     // ---------- wasi functions ----------
 
-    [ThreadStatic] static Guest? t_guest; // the guest of the call running on this thread: the linker is shared by every call
+    [ThreadStatic] internal static Guest? t_guest; // the guest of the call running on this thread: the linker is shared by every call
     static Guest? Current => t_guest;
     static Guest G => t_guest!;
 
     static Memory Mem() => G.Memory ?? throw new WasiException(EFAULT);
 
+    static void Check(int ptr, int n)
+    {
+        if ((long)(uint)ptr + (uint)n > Mem().GetLength()) throw new WasiException(EFAULT);
+    }
+
     static byte[] Read(int ptr, int n)
     {
-        var mem = Mem();
-        long p = (uint)ptr, len = (uint)n;
-        if (p + len > mem.GetLength()) throw new WasiException(EFAULT);
-        return len == 0 ? [] : mem.GetSpan(p, (int)len).ToArray();
+        Check(ptr, n);
+        return n == 0 ? [] : Mem().GetSpan((uint)ptr, (int)(uint)n).ToArray();
     }
 
     static void Write(int ptr, ReadOnlySpan<byte> data)
@@ -564,34 +567,38 @@ internal static class Wasi
         return done;
     }
 
-    static int WriteFrom(int fd, int iovsPtr, int n, long? offset)
+    internal static int WriteFrom(int fd, int iovsPtr, int n, long? offset)
     {
         var g = G;
-        var parts = new MemoryStream();
-        foreach (var (ptr, length) in Iovs(iovsPtr, n)) parts.Write(Read(ptr, length)); // every range checked before anything changes
-        var data = parts.ToArray();
+        var iovs = Iovs(iovsPtr, n);
+        foreach (var (ptr, length) in iovs) Check(ptr, length); // every range checked before anything changes
+        long total = iovs.Sum(v => (long)(uint)v.Len);
+        // copied only once the destination has room: 1024 vectors over the whole memory would be terabytes
         var e = g.Fd(fd);
         if (e == StdoutFd || e == StderrFd)
         {
             if (offset is not null) throw new WasiException(ESPIPE);
-            g.WriteOutput(e == StdoutFd ? g.Stdout : g.Stderr, data);
-            return data.Length;
+            if (g.Stdout.Length + g.Stderr.Length + total > g.OutputCap) throw new OutputFull();
+            var data = new MemoryStream((int)total);
+            foreach (var (ptr, length) in iovs) data.Write(Read(ptr, length));
+            g.WriteOutput(e == StdoutFd ? g.Stdout : g.Stderr, data.ToArray());
+            return (int)total;
         }
         if (e is not WasiFile f) throw new WasiException(e == RootFd || e is WasiDir ? EISDIR : EBADF);
         if (!f.Write) throw new WasiException(EBADF);
         long start = f.Append ? f.Data.Length : offset ?? f.Pos;
-        long end = start + data.Length;
+        long end = start + total;
         if (end > f.Data.Length)
         {
             if (end > g.Room(f)) throw new WasiException(ENOSPC);
             g.Reserve(end - f.Data.Length);
         }
         f.Data.Position = start; // past the end: the gap fills with zeros
-        f.Data.Write(data);
+        foreach (var (ptr, length) in iovs) f.Data.Write(Read(ptr, length));
         f.Dirty = true;
         f.Mtime = NowNs(g);
         if (offset is null) f.Pos = end;
-        return data.Length;
+        return (int)total;
     }
 
     static void FdSeek(int fd, long offset, int whence, int @out)

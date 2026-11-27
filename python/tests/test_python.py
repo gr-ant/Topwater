@@ -231,6 +231,34 @@ def test_huge_files_hit_the_disk_cap():
     assert r.exit_code == 1
 
 
+def test_a_write_that_repeats_one_buffer_is_refused_before_it_is_copied():
+    # Python has no os.writev here, so this is what a hand-made module could send: 1000 vectors over the same 64 MB
+    table = b"".join(struct.pack("<II", 0, 64 << 20) for _ in range(1000))
+
+    class Memory:  # wasmtime's Memory, reduced to what wasi.py calls; any copy of the data is a failure
+        def data_len(self, caller):
+            return 64 << 20
+
+        def read(self, caller, start, stop):
+            assert (start, stop) == (0, len(table)), "copied the data before checking the limit"
+            return table
+
+        def write(self, caller, data, ptr):
+            pass
+
+    g = wasi.Guest(Shell().fs, [], [], b"", 1 << 20, 256 << 20, b"", float("inf"))
+    g.memory = Memory()
+    g.fds.append(wasi._File("/tmp/f", bytearray(), False, True, False, 0, 0))
+    wasi._local.guest = g
+    try:
+        with pytest.raises(wasi.OutputFull):
+            wasi.fd_write(None, 1, 0, 1000, 8000)
+        assert wasi.fd_write(None, len(g.fds) - 1, 0, 1000, 8000) == wasi.ENOSPC  # past max_memory's buffers
+        assert wasi.fd_pwrite(None, len(g.fds) - 1, 0, 1000, 0, 8000) == wasi.ENOSPC
+    finally:
+        del wasi._local.guest
+
+
 def test_output_flood_ends_the_call():
     r = run("python3 -c 'while True: print(\"x\" * 1000)'", max_string_bytes=1 << 20)
     assert r.exit_code == 1 and "output too large" in r.stderr
