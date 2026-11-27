@@ -112,6 +112,7 @@ A dash means the port has no such module; §8 records why.
 | `containers.py`, `mcp.py`, `web.py` (the web terminal) | Python | |
 | `regex.ts`, `md5.ts`, `sha1.ts`, `compress.ts`, `inflate.ts` | TS | The platform has no POSIX regex, hashes or zlib built in |
 | `integrations/*` | Python, TS | Per-framework adapters; each list has its own frameworks |
+| `connectors/notion.py` | Python | The Notion mount source; C# and TS follow it (§10) |
 | `Bc.cs` | C# | Not ported yet |
 
 ## 3. The shell split
@@ -559,3 +560,11 @@ The rest is hooks where each port already does the same job: a `loader` on the f
 copy), fetching around the handler call in `Invoke` and for `<` / `>>` redirections, listing restored mounts at the
 start of `Run`, the host API in the shell's registration section, and the `mounts` entries in the snapshot and
 recording formats.
+
+**Connectors** are mount sources for outside stores. They live in the core package when they need nothing beyond the
+platform (HTTP from the standard library), in a `connectors` folder: Python `topwater/connectors/notion.py`
+(`topwater.connectors.notion.NotionSource`), C# `Connectors/NotionSource.cs` (namespace `Topwater.Connectors`), TS
+`connectors/notion.ts` (exported as `topwater/connectors/notion`). One that needs a vendor SDK is a separate package, like
+the framework integrations. Python is the reference; the design every port follows, its fake server and the shared
+cases (`tests/connectors/notion/cases.json`) are in [connectors/notion-design.md](connectors/notion-design.md). The C#
+and TS files are listed as pending in `tools/layout.json` until they exist.

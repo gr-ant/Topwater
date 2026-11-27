@@ -62,6 +62,9 @@
     { "name": "integrations.llamaindex", "cs": null, "py": "integrations/llamaindex.py", "ts": null, "note": "a Python framework" },
     { "name": "integrations.pydantic-ai", "cs": null, "py": "integrations/pydantic_ai.py", "ts": null, "note": "a Python framework" },
     { "name": "integrations.smolagents", "cs": null, "py": "integrations/smolagents.py", "ts": null, "note": "a Python framework" },
+    { "name": "connectors", "cs": null, "py": "connectors/__init__.py", "ts": null, "note": "the Python package's index; C# and TS have no index file for connectors" },
+    { "name": "connectors.notion", "cs": null, "py": "connectors/notion.py", "ts": null,
+      "note": "pending in C# (Connectors/NotionSource.cs) and TS (connectors/notion.ts): Python is the reference, docs/connectors/notion-design.md" },
 
     { "name": "commands", "cs": "Builtins/Builtins.cs", "py": "commands/__init__.py", "ts": "command.ts",
       "note": "the command API helpers; TS keeps RegisterAll apart, in commands/index.ts" },
