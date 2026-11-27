@@ -1,6 +1,104 @@
-// Shell patterns: case, [[ == ]], ${x%pat}, and pathname expansion against the virtual filesystem.
-import { VirtualFileSystem, ordinal } from './vfs.js';
+// Brace expansion and shell patterns: case, [[ == ]], ${x%pat}, and pathname expansion against the virtual filesystem. See docs/architecture.md.
+import { VirtualFileSystem, ShellError, ordinal } from './vfs.js';
 import { POSIX_CLASSES } from './regex.js';
+import { DIAGNOSTICS } from './spec.generated.js';
+import type { Word, WordPart } from './parser.js';
+
+// ---------- brace expansion ----------
+
+const MAX_BRACE_ITEMS = 10_000;
+const PLACEHOLDER = 0xe000;
+
+/** a{b,c}d, {1..10}, {01..05}, {a..e}, {0..10..2}; a brace may span an expansion: {$x,y}. */
+export function braceExpand(w: Word): Word[] {
+  if (!w.parts.some(p => p.k === 'lit' && !p.q && p.text.includes('{'))) return [w];
+  // everything but unquoted text becomes one placeholder character, so braces work on plain text
+  let text = '';
+  const opaque: WordPart[] = [];
+  for (const p of w.parts) {
+    if (p.k === 'lit' && !p.q) text += p.text;
+    else { text += String.fromCharCode(PLACEHOLDER + opaque.length); opaque.push(p); }
+  }
+  if (opaque.length > 0x1000) return [w];
+  const results = expandBraceText(text);
+  if (results.length === 1 && results[0] === text) return [w];
+  return results.map(t => {
+    const parts: WordPart[] = [];
+    let litText = '';
+    for (const c of t) {
+      const code = c.charCodeAt(0);
+      if (code < PLACEHOLDER || code >= PLACEHOLDER + opaque.length) { litText += c; continue; }
+      if (litText) { parts.push({ k: 'lit', text: litText, q: false }); litText = ''; }
+      parts.push(opaque[code - PLACEHOLDER]);
+    }
+    if (litText || parts.length === 0) parts.push({ k: 'lit', text: litText, q: false });
+    return { parts };
+  });
+}
+
+function expandBraceText(text: string): string[] {
+  for (let open = text.indexOf('{'); open >= 0; open = text.indexOf('{', open + 1)) {
+    if (open > 0 && text[open - 1] === '$') continue;
+    const close = findClose(text, open);
+    if (close < 0) continue;
+    const alts = alternatives(text.slice(open + 1, close));
+    if (!alts) continue;
+    const results: string[] = [];
+    for (const alt of alts) {
+      results.push(...expandBraceText(text.slice(0, open) + alt + text.slice(close + 1)));
+      if (results.length > MAX_BRACE_ITEMS) throw new ShellError(DIAGNOSTICS.braceTooMany);
+    }
+    return results;
+  }
+  return [text];
+}
+
+function findClose(s: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === '{') depth++;
+    else if (s[i] === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function alternatives(inner: string): string[] | null {
+  let m = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/.exec(inner);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]);
+    let step = m[3] ? Math.abs(Number(m[3])) : 1;
+    if (step === 0) step = 1;
+    const padded = (s: string) => s.replace(/^-/, '').startsWith('0') && s.length > 1;
+    const pad = padded(m[1]) || padded(m[2]);
+    const width = Math.max(m[1].length, m[2].length);
+    if (Math.abs(b - a) / step > MAX_BRACE_ITEMS) throw new ShellError(DIAGNOSTICS.braceTooMany);
+    const list: string[] = [];
+    for (let v = a; a <= b ? v <= b : v >= b; v += a <= b ? step : -step) {
+      const s = String(Math.abs(v));
+      list.push(pad ? (v < 0 ? '-' + s.padStart(width - 1, '0') : s.padStart(width, '0')) : String(v));
+    }
+    return list;
+  }
+  m = /^([a-zA-Z])\.\.([a-zA-Z])(?:\.\.(-?\d+))?$/.exec(inner);
+  if (m) {
+    const a = m[1].charCodeAt(0), b = m[2].charCodeAt(0);
+    const step = m[3] ? Math.max(1, Math.abs(Number(m[3]))) : 1;
+    const list: string[] = [];
+    for (let c = a; a <= b ? c <= b : c >= b; c += a <= b ? step : -step) list.push(String.fromCharCode(c));
+    return list;
+  }
+  const parts: string[] = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === '{') depth++;
+    else if (inner[i] === '}') depth--;
+    else if (inner[i] === ',' && depth === 0) { parts.push(inner.slice(start, i)); start = i + 1; }
+  }
+  parts.push(inner.slice(start));
+  return parts.length < 2 ? null : parts;
+}
+
+// ---------- globbing ----------
 
 export const hasWildcard = (s: string) => /[*?[]|[@+!]\(/.test(s);
 

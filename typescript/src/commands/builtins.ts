@@ -5,7 +5,9 @@ import { isName } from '../parser.js';
 import { evalArith } from '../arith.js';
 import { printfFormat, unescape, shellQuote, quoteValue, strftime } from '../format.js';
 import { VirtualFileSystem, ordinal } from '../vfs.js';
-import { splitFields, ExitSignal, ReturnSignal, type Shell, type Io } from '../shell.js';
+import type { Shell } from '../shell.js';
+import { ExitSignal, ReturnSignal, type Io } from '../shell/types.js';
+import { splitFields } from '../shell/expansion.js';
 
 const ioOf = (ctx: CommandContext): Io => ({ stdin: ctx.stdin, out: ctx.stdout, err: ctx.stderr, fds: ctx.fds });
 const line = (ctx: CommandContext, s: string) => ctx.stdout.write(s + '\n');
