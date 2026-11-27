@@ -142,7 +142,7 @@ public class PythonTests
         finally { Directory.Delete(dir, true); }
     }
 
-    /// <summary>The add-on's gzipped module is the vendored xz's module (tools/python-wasm/gzip_module.py writes it; --check in CI
+    /// <summary>The add-on's gzipped module is the vendored xz's module (tools/python_wasm_gz.py writes it; --check in CI
     /// compares the bytes): the hash it is checked against at load is the design note's, and the xz is still MANIFEST's.</summary>
     [Fact]
     public void TheCarriedInterpreterIsTheVendoredOne()
@@ -154,7 +154,7 @@ public class PythonTests
         static string Sha(byte[] b) => Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
         Assert.Contains($"{Sha(File.ReadAllBytes(Path.Combine(assets, "python.wasm.xz")))}  python.wasm.xz", manifest);
         Assert.Contains($"{Wasi.StdlibSha256}  python314.zip", manifest);
-        using var gz = new System.IO.Compression.GZipStream(File.OpenRead(Path.Combine(root.FullName, "src", "Topwater.Python", "python.wasm.gz")), System.IO.Compression.CompressionMode.Decompress);
+        using var gz = new System.IO.Compression.GZipStream(File.OpenRead(Path.Combine(assets, "python.wasm.gz")), System.IO.Compression.CompressionMode.Decompress);
         using var wasm = new MemoryStream();
         gz.CopyTo(wasm);
         Assert.Equal(Wasi.ModuleSha256, Sha(wasm.ToArray()));

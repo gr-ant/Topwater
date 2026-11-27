@@ -63,9 +63,10 @@ thread, where a busy loop could not be stopped. A Content-Security-Policy must a
 give `artifacts` the URL of a folder you serve the two files from (same origin, or with CORS and
 `Cross-Origin-Resource-Policy`).
 
-.NET and JavaScript have no xz decoder, so their add-ons carry the same module recompressed with gzip
-(`python.wasm.gz`, written reproducibly from `python.wasm.xz` by `tools/python_wasm_gz.py`) and check the SHA-256 of
-the decompressed module.
+.NET and JavaScript have no xz decoder, so their add-ons carry the same module recompressed with gzip: one file,
+`assets/python-wasm/python.wasm.gz`, written reproducibly from `python.wasm.xz` by `tools/python_wasm_gz.py` (CI runs
+it with `--check`). The .NET add-on embeds it and the npm one copies it in when packed; both check the SHA-256 of the
+decompressed module when they load it.
 
 `allow_python` compiles the interpreter the first time a process uses it (2 to 3 seconds) and keeps it for every
 shell after that; each call then costs a few milliseconds. It raises `PythonUnavailable` (.NET:

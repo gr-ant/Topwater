@@ -18,8 +18,8 @@ jobs:
       - run: python3 tools/spec-gen/test_gen.py
       # the three ports keep the same files, sections and command order (docs/architecture.md)
       - run: python3 tools/check_layout.py --self-test && python3 tools/check_layout.py
-      # the .NET add-on's gzipped interpreter is exactly what the script writes from the vendored xz (docs/python.md)
-      - run: python3 tools/python-wasm/gzip_module.py --check
+      # the .NET and npm add-ons' gzipped interpreter is exactly what the script writes from the vendored xz (docs/python.md)
+      - run: python3 tools/python_wasm_gz.py --check
 
   dotnet:
     runs-on: ubuntu-latest
