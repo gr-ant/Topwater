@@ -154,7 +154,7 @@ internal static class GitCore
         return (m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Success && long.TryParse(m.Groups[3].Value, out var e) ? e : 0, m.Groups[4].Success ? m.Groups[4].Value : "+0000");
     }
 
-    // ---------- trees ----------
+    // ---------- objects ----------
 
     /// <summary>Tree object -> [(mode, name, sha)]; names are checked so nothing can point outside the work tree.</summary>
     public static List<(string Mode, string Name, string Sha)> ParseTree(byte[] data, string where)

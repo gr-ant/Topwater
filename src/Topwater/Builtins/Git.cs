@@ -18,6 +18,41 @@ internal static partial class Git
 
     static bool Full(string pattern, string text) => Regex.IsMatch(text, @"\A(?:" + pattern + @")\z");
 
+    sealed class Commit(string sha, string tree, List<string> parents, string author, string committer, string message)
+    {
+        public readonly string Sha = sha, Tree = tree, Author = author, Committer = committer, Message = message;
+        public readonly List<string> Parents = parents;
+
+        public string Subject
+        {
+            get
+            {
+                var m = Message.TrimStart('\n');
+                int k = m.IndexOf("\n\n", StringComparison.Ordinal);
+                return string.Join(" ", (k >= 0 ? m[..k] : m).Split('\n')).Trim();
+            }
+        }
+
+        public string Body
+        {
+            get
+            {
+                var m = Message.TrimStart('\n');
+                int k = m.IndexOf("\n\n", StringComparison.Ordinal);
+                return k >= 0 ? m[(k + 2)..].TrimStart('\n') : "";
+            }
+        }
+    }
+
+    sealed class Change(string st, string? old, string? @new)
+    {
+        public string St = st;
+        public string? Old = old, New = @new;
+        public string Path => (New ?? Old)!;
+    }
+
+    sealed record Stat(string St, string? Old, string? New, (int Ins, int Dels)? N, long SA, long SB);
+
     // ---------- option parsing ----------
 
     sealed class Opts
@@ -117,43 +152,6 @@ internal static partial class Git
         list.Add(value);
         o.Flags[key] = o.Flags.GetValueOrDefault(key) + 1;
     }
-
-    // ---------- objects ----------
-
-    sealed class Commit(string sha, string tree, List<string> parents, string author, string committer, string message)
-    {
-        public readonly string Sha = sha, Tree = tree, Author = author, Committer = committer, Message = message;
-        public readonly List<string> Parents = parents;
-
-        public string Subject
-        {
-            get
-            {
-                var m = Message.TrimStart('\n');
-                int k = m.IndexOf("\n\n", StringComparison.Ordinal);
-                return string.Join(" ", (k >= 0 ? m[..k] : m).Split('\n')).Trim();
-            }
-        }
-
-        public string Body
-        {
-            get
-            {
-                var m = Message.TrimStart('\n');
-                int k = m.IndexOf("\n\n", StringComparison.Ordinal);
-                return k >= 0 ? m[(k + 2)..].TrimStart('\n') : "";
-            }
-        }
-    }
-
-    sealed class Change(string st, string? old, string? @new)
-    {
-        public string St = st;
-        public string? Old = old, New = @new;
-        public string Path => (New ?? Old)!;
-    }
-
-    sealed record Stat(string St, string? Old, string? New, (int Ins, int Dels)? N, long SA, long SB);
 
     // ---------- the repository ----------
 

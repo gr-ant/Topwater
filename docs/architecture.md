@@ -14,7 +14,7 @@ ticked when all three ports have it; the C# column says where C# is).
 | 1 | Shell split, C# (the pilot: §3.2 is corrected from what it finds before phases 2 and 3 start) | C# |
 | 2 | Shell split, Python | |
 | 3 | Shell split, TypeScript | |
-| 4 | git split, Python and TypeScript (to match C#) | |
+| 4 | git split, Python and TypeScript (to match C#); C# section names aligned | C# |
 | 5 | Command grab-bags split by domain, all three ports | |
 | 6 | Engine extractions: `Sed`, `Find`, `Diff`, `Format`; TS `convert.ts` out of `commands/documents.ts` | |
 | 7 | Optional: parser AST, jq | |
@@ -386,6 +386,12 @@ split is five cuts along existing markers:
 | `GitMore.cs` → `gitmore.py`, `gitmore.ts` | moving between commits, branch/tag, merge, stash, plumbing and inspection, config (py 2479–3900 / ts 2218–3461) |
 | `GitPatch.cs` → `gitpatch.py`, `gitpatch.ts` | patches: apply, am, format-patch; am; format-patch; bisect (py 3901– / ts 3462–) |
 
+- C# is aligned first (phase 4, C#): `Git.cs`'s extra `objects` marker is gone (its `Commit`, `Change` and `Stat`
+  types now sit above `option parsing`, as file-local types do, §4.1), and `GitCore.cs`'s `trees` marker is named
+  `objects` like Python's and TS's. Python keeps `Commit` in `gitcore`'s `objects` section; C# can't move it there
+  without renaming `Git.Commit`, so that difference stays. TS `gitcore.ts` folds its first section (code points and
+  byte order) into `helpers` or the top of the file and drops the parenthesis from `line diff`: marker names are
+  compared exactly.
 - In both ports `register` moves to `gitrevisions`, as C#'s `Register`/`Run` live in `GitRevisions.cs`. Update the
   calls in `commands/__init__.py` and `commands/index.ts`.
 - `HANDLERS` (the subcommand table, at the end of both files today) stays where the cut leaves it: the end of
