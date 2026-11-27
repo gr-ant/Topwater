@@ -240,7 +240,8 @@ async function tar(ctx: CommandContext): Promise<number> {
   const fs = ctx.fs;
   const fatal = (msg: string) => `${msg}\ntar: ${specMessage('tar', 'unrecoverable', {})}`;
   const dir = ctx.resolvePath(a.value('C') ?? '.');
-  if (!fs.isDirectory(dir)) throw new ShellError(fatal(specMessage('tar', 'cannotOpen', { file: a.value('C') ?? '', errno: fs.exists(dir) ? 'Not a directory' : fs.whyMissing(dir) })), 2);
+  // without -C the working directory is only needed for relative names, so a deleted one still lists /abs.tar
+  if (a.value('C') !== undefined && !fs.isDirectory(dir)) throw new ShellError(fatal(specMessage('tar', 'cannotOpen', { file: a.value('C')!, errno: fs.exists(dir) ? 'Not a directory' : fs.whyMissing(dir) })), 2);
   let code = 0;
   const fail = (msg: string) => { ctx.stderr.write(`tar: ${msg}\n`); code = 2; };
   const done = () => { if (code !== 0) ctx.stderr.write(`tar: ${specMessage('tar', 'previousErrors', {})}\n`); return code; };
@@ -371,6 +372,7 @@ async function tar(ctx: CommandContext): Promise<number> {
           // like GNU tar's placeholders for links: nothing lands under (or links to something under) a symbolic link this
           // archive made, so a crafted member can't use one to write outside the target directory
           if (throughMadeLink(target)) throw new ShellError(`${target}: Not a directory`);
+          if (!fs.isDirectory(dir)) throw new ShellError(`${target}: No such file or directory`); // the working directory was deleted
           if (e.type !== '5' && fs.exists(target, false) && !fs.isDirectory(target, false)) fs.delete(target); // a member replaces what is there, never writes through a link
           if (e.type === '5') fs.mkdir(target, true); // shortcut: the archived directory mode isn't restored, so read-only dirs can't block their own contents
           else if (isFile) {

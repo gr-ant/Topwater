@@ -18,6 +18,9 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   exit 0, losing the machine; they now check at start that the file can be written (exit code 2 with the path), and a
   save that fails later makes them exit with 1. `export` and `snapshot save`, which only read `--state`, are
   unchanged.
+- **`tar` from a deleted working directory.** After `rm -rf` of the current directory, `tar tf /abs/a.tar` failed
+  with `tar: {file}: Cannot open`. tar now needs the working directory only when given `-C` or relative names, as
+  real tar does, and the spec tests check that every message lookup supplies all of its placeholders.
 
 ## 0.1.0-preview.4 (2026-11-26)
 

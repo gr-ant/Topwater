@@ -301,8 +301,9 @@ def _tar(ctx):
     def fatal(msg: str) -> str:
         return msg + "\ntar: " + spec_message("tar", "unrecoverable")
 
-    if not fs.is_dir(directory):
-        raise ShellError(fatal(spec_message("tar", "cannotOpen", file=a.value('C'), errno='Not a directory' if fs.exists(directory) else _why_missing(fs, directory))), 2)
+    # without -C the working directory is only needed for relative names, so a deleted one still lists /abs.tar
+    if a.value("C") is not None and not fs.is_dir(directory):
+        raise ShellError(fatal(spec_message("tar", "cannotOpen", file=a.value("C"), errno='Not a directory' if fs.exists(directory) else _why_missing(fs, directory))), 2)
     code = 0
 
     def fail(msg: str) -> None:
@@ -469,6 +470,8 @@ def _tar(ctx):
             # archive made, so a crafted member can't use one to write outside the target directory
             if through_made_link(target):
                 raise ShellError(f"{target}: Not a directory")
+            if not fs.is_dir(directory):  # the working directory was deleted: nothing can be made in it
+                raise ShellError(f"{target}: No such file or directory")
             if e.type != "5" and fs.exists(target, follow=False) and not fs.is_dir(target, follow=False):
                 fs.delete(target)  # a member replaces what is there, never writes through a link
             if e.type == "5":

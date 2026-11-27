@@ -157,7 +157,8 @@ internal static partial class Builtins
         var fs = ctx.Fs;
         string Fatal(string msg) => msg + "\ntar: " + CommandSpec.Message("tar", "unrecoverable");
         var dir = ctx.ResolvePath(a.Value('C') ?? ".");
-        if (!fs.IsDirectory(dir)) throw new ShellException(Fatal(CommandSpec.Message("tar", "cannotOpen", ("file", a.Value('C') ?? ""), ("errno", fs.Exists(dir) ? "Not a directory" : fs.WhyMissing(dir)))), 2);
+        // without -C the working directory is only needed for relative names, so a deleted one still lists /abs.tar
+        if (a.Value('C') is { } cdir && !fs.IsDirectory(dir)) throw new ShellException(Fatal(CommandSpec.Message("tar", "cannotOpen", ("file", cdir), ("errno", fs.Exists(dir) ? "Not a directory" : fs.WhyMissing(dir)))), 2);
         int code = 0;
         void Fail(string msg) { ctx.Stderr.WriteLine("tar: " + msg); code = 2; }
         int Done()
@@ -316,6 +317,7 @@ internal static partial class Builtins
                 // like GNU tar's placeholders for links: nothing lands under (or links to something under) a symbolic link this
                 // archive made, so a crafted member can't use one to write outside the target directory
                 if (ThroughMadeLink(target)) throw new ShellException($"{target}: Not a directory");
+                if (!fs.IsDirectory(dir)) throw new ShellException($"{target}: No such file or directory"); // the working directory was deleted
                 if (e.EntryType != TarEntryType.Directory && fs.Exists(target, follow: false) && !fs.IsDirectory(target, follow: false))
                     fs.Delete(target); // a member replaces what is there, never writes through a link
                 switch (e.EntryType)

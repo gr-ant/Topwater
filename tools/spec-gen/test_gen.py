@@ -110,6 +110,35 @@ class PortsUseTheSpec(unittest.TestCase):
                     with self.subTest(port=port, file=f.name, key=key):
                         self.assertIn(key, known)
 
+    def test_every_placeholder_is_supplied(self):
+        # a value the caller leaves out prints as a literal {file}; checks literal calls only (a None or '' value passed in still
+        # slips through, as tar's -C did from a deleted directory)
+        calls = {"cs": (r'CommandSpec\.(?:Sub)?Message\(', r'\("(\w+)",'),
+                 "py": (r'spec_(?:sub_)?message\(', r'\b(\w+)='),
+                 "ts": (r'spec(?:Sub)?Message\(', r'(?:[{,]\s*)(\w+)\s*(?=[:,}])')}
+        for port, (start, named) in calls.items():
+            for f in PORTS[port][0]:
+                text = f.read_text(encoding="utf-8")
+                for m in re.finditer(start, text):
+                    depth, i = 1, m.end()
+                    while depth and i < len(text):
+                        depth += {"(": 1, ")": -1}.get(text[i], 0)
+                        i += 1
+                    call = text[m.end():i - 1]
+                    head = re.match(r"""\s*(["'])([\w-]+)\1\s*,\s*(?:(["'])([\w-]+)\3\s*,\s*)?(["'])(\w+)\5""", call)
+                    if not head or ("Sub" not in m.group(0) and "sub_" not in m.group(0)) != (head.group(4) is None):
+                        continue  # a command or key chosen at run time
+                    c = BY_NAME[head.group(2)]
+                    key, sub = head.group(6), c.get("subcommands", {}).get(head.group(4) or "", {})
+                    template = sub.get("messages", {}).get(key) or c.get("messages", {}).get(key) or DEFAULTS.get(key, "")
+                    wanted = set(re.findall(r"\{(\w+)(?::[\w-]+)?\}", template))
+                    rest = call[head.end():]
+                    if "..." in rest or "**" in rest or (port == "ts" and rest.strip(", \n") and not rest.lstrip(", \n").startswith("{")):
+                        continue  # values passed through a variable or spread: not visible here
+                    given = set(re.findall(named, rest))
+                    with self.subTest(port=port, file=f.name, command=c["name"], key=key):
+                        self.assertEqual(sorted(wanted - given), [], call.strip()[:120])
+
     def test_every_message_key_is_used(self):
         # used: looked up under its command, or (for keys the code picks at run time, such as cp/mv's clash keys and
         # the unreadable-file helper's openFailed/readDirectory) written as a string somewhere in a port
