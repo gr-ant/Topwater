@@ -15,7 +15,7 @@ ticked when all three ports have it; the C# column says where C# is).
 | 2 | Shell split, Python | |
 | 3 | Shell split, TypeScript | |
 | 4 | git split, Python and TypeScript (to match C#); C# section names aligned | C# |
-| 5 | Command grab-bags split by domain, all three ports | |
+| 5 | Command grab-bags split by domain, all three ports | C# |
 | 6 | Engine extractions: `Sed`, `Find`, `Diff`, `Format`; TS `convert.ts` out of `commands/documents.ts` | |
 | 7 | Optional: parser AST, jq | |
 
@@ -353,22 +353,32 @@ Where each block comes from:
 
 | To | C# from | Python from | TS from |
 |---|---|---|---|
-| Scripting | `Builtins.cs` `RegisterShellCommands` (true … help, which, type, history), class `Test`; `MoreCommands.cs`: `ParseCount`, `LoopJump`, `Describe`, exit … set, getopts, exec, hash, builtin, eval, let, command | `__init__.py`: `_echo`, `_printf`, `_which`, `_type`, `_help`, history, `test_unary`, `newer`, `_test_binary`, `_is_int`, `evaluate_test`, `_bracket`, `_run_script`; `more.py`: `_count`, `_exit`, `_return`, `_break`, `_shift`, `_set`, `_trap_name`, `_trap`, `_shopt`, `describe`, `_getopts`, `_exec`, `_hash`, `_builtin`, `_eval`, `_let`, `_command` | `builtins.ts`: `testUnary`, `testNewer`, `BINARY_OPS`, `testBinary`, `testEvaluate`, `SHELL_KEYWORDS`, `parseCount`, `loopJump`, `describe` and those commands |
-| Variables | `Builtins.cs`: export, unset, env, alias, unalias; `MoreCommands.cs`: `EndsWithEscape`, `ReadFields`, `PrintFunctions`, `AttributeFlags`, `DeclareLine`, declare family, read, mapfile, printenv | `__init__.py`: `_flag_args`, `_export`, `_env`, `_unset`, `_alias`, `_unalias`; `more.py`: `_print_functions`, `attribute_flags`, `_declare_quote`, `declare_line`, `_declare`, `_ends_with_escape`, `read_fields`, `_input_fd`, `_read`, `_mapfile`, `_printenv` | `builtins.ts`: `readFields`, `attributeFlags`, `declareLine`, `allVariableNames`, `inputFor` and those commands |
-| Process | `Builtins.cs`: ps; `MoreCommands.cs`: `ParseDuration`, `OctalMask`, `SymbolicMask`, wait … kill, ulimit, times, umask, sleep, timeout, time | `__init__.py`: ps; `more.py`: `_duration`, `_wait`, `_kill`, `_ulimit`, `_umask_symbolic`, `_umask_parse`, `_umask`, `_sleep`, `_timeout`, `_time` | `builtins.ts`: `symbolicMode`, `parseDuration`, `sleepFor` and those commands |
-| System | `Builtins.cs` `RegisterSystemCommands` (minus ps), `ParseDate`, `ParseDateOrThrow`; `MoreCommands.cs`: sudo, su, unavailable/dpkg, id, uptime, free, nproc, clear | `__init__.py`: `_uname`, `parse_date`, `_parse_date`, `_date`, `_register_system_commands`; `more.py`: `_sudo`, `_package_manager`, `_su`, `_id`, `_uptime`, `_free` | `builtins.ts`: `ISO_*`, `MONTH_ABBR`, `DAY_ABBR`, `ZONE_HOURS`, `DATE_UNITS`, `parseDate` and those commands |
-| Paths | `Builtins.cs`: cd, pwd; `MoreCommands.cs`: pushd, popd, dirs, basename, dirname, realpath, readlink, mktemp | `__init__.py`: `_cd`, `_pwd`; `more.py`: `_dirs_line`, `_change_dir`, `_pushd`, `_popd`, `_dirs`, `_basename`, `_dirname`, `_realpath`, `_mktemp` | `builtins.ts`: cd, pwd, pushd, popd, dirs; `files.ts`: basename, dirname, realpath, readlink, mktemp |
-| Files | `MoreCommands.cs`: stat, du, df, chmod, chown, chgrp, less, more, file, `LooksJson`, class `Chmod` | `more.py`: `_stat`, `_du`, `_df`, `chmod_parse`, `_chmod`, `_chown`, `_pager`, `_looks_json`, `_file` | already there |
-| Text | `MoreCommands.cs`: nl, rev, tac, paste, comm, join (`TwoInputs`, `CommCmd`, `JoinCmd`), column, seq, diff | `more.py`: `_nl`, `_rev`, `_tac`, `_paste`, `_two_inputs`, `_comm_cmd`, `_join_cmd`, `_column`, `_seq`, and the registration of `_diff` | already there |
-| Binary | `MoreCommands.cs`: base64, `Hex`, checksum loop | `more.py`: `_base64`, `_hasher` | already there |
-| Diff | class `Diff` from `MoreCommands.cs` | `_diff`, `_join`, `_diff_dirs`, `_diff_header`, `_diff_files` from `more.py` | the diff section of `text.ts` |
+| Scripting | `Builtins.cs`: `IsShellBuiltin`; from `RegisterShellCommands` true, :, false, echo, printf, history, which, type, test, [, the `runScript` handler, bash, sh, source, ., help; class `Test` (after the class). `MoreCommands.cs`: `ParseCount`, `LoopJump`, `ShellKeywords`, `Describe`; exit, return, break, continue, shift, trap, shopt, set, getopts, exec, hash, builtin, eval, let, command | `__init__.py`: `_echo`, `_printf`, `_which`, `_type`, `_help`, history, `test_unary`, `newer`, `_test_binary`, `_is_int`, `evaluate_test`, `_bracket`, `_run_script`; `more.py`: `_count`, `_exit`, `_return`, `_break`, `_shift`, `_set`, `_trap_name`, `_trap`, `_shopt`, `describe`, `_getopts`, `_exec`, `_hash`, `_builtin`, `_eval`, `_let`, `_command` | `builtins.ts`: `testUnary`, `testNewer`, `BINARY_OPS`, `testBinary`, `testEvaluate`, `SHELL_KEYWORDS`, `parseCount`, `loopJump`, `describe` and those commands |
+| Variables | `Builtins.cs`: export, unset, env, alias, unalias. `MoreCommands.cs`: `EndsWithEscape`, `ReadFields`, `PrintFunctions`, `AttributeFlags`, `DeclareLine`; the `declare` handler, local, declare, typeset, readonly, read, the `mapfile` handler, mapfile, readarray, printenv | `__init__.py`: `_flag_args`, `_export`, `_env`, `_unset`, `_alias`, `_unalias`; `more.py`: `_print_functions`, `attribute_flags`, `_declare_quote`, `declare_line`, `_declare`, `_ends_with_escape`, `read_fields`, `_input_fd`, `_read`, `_mapfile`, `_printenv` | `builtins.ts`: `readFields`, `attributeFlags`, `declareLine`, `allVariableNames`, `inputFor` and those commands |
+| Process | `Builtins.cs`: ps. `MoreCommands.cs`: `ParseDuration`, `OctalMask`, `SymbolicMask`; wait, jobs, disown, kill, ulimit, times, umask, sleep, timeout, time | `__init__.py`: ps; `more.py`: `_duration`, `_wait`, `_kill`, `_ulimit`, `_umask_symbolic`, `_umask_parse`, `_umask`, `_sleep`, `_timeout`, `_time` | `builtins.ts`: `symbolicMode`, `parseDuration`, `sleepFor` and those commands |
+| System | `Builtins.cs`: `IsoUnits`, `IsoFormats`, `DateUnits`, `MonthAbbr`, `DayAbbr`, `ZoneHours`, `ParseDate`, `ParseDateOrThrow`; from `RegisterSystemCommands` whoami, hostname, uname, date (the registrar keeps its name). `MoreCommands.cs`: clear, sudo, the apt/apt-get/apt-cache loop, dpkg, su, id, uptime, free, nproc | `__init__.py`: `_uname`, `parse_date`, `_parse_date`, `_date`, `_register_system_commands`; `more.py`: `_sudo`, `_package_manager`, `_su`, `_id`, `_uptime`, `_free` | `builtins.ts`: `ISO_*`, `MONTH_ABBR`, `DAY_ABBR`, `ZONE_HOURS`, `DATE_UNITS`, `parseDate` and those commands |
+| Paths | `Builtins.cs`: cd, pwd. `MoreCommands.cs`: the local functions `Dirs` and `ChangeDir`, pushd, popd, dirs, basename, dirname, the `realpath` handler, realpath, readlink, mktemp | `__init__.py`: `_cd`, `_pwd`; `more.py`: `_dirs_line`, `_change_dir`, `_pushd`, `_popd`, `_dirs`, `_basename`, `_dirname`, `_realpath`, `_mktemp` | `builtins.ts`: cd, pwd, pushd, popd, dirs; `files.ts`: basename, dirname, realpath, readlink, mktemp |
+| Files | `MoreCommands.cs`: `LooksJson` (before the registrar); stat, du, df, chmod, the `chown` handler, chown, chgrp, the `pager` handler, less, more, file (at the end of `RegisterFileCommands`); class `Chmod` (at the end of the file) | `more.py`: `_stat`, `_du`, `_df`, `chmod_parse`, `_chmod`, `_chown`, `_pager`, `_looks_json`, `_file` | already there |
+| Text | `MoreCommands.cs`: `TwoInputs`, `CommCmd`, `JoinCmd` (before the registrar); nl, rev, tac, paste, comm, join, column, seq, diff (at the end of `RegisterTextCommands`) | `more.py`: `_nl`, `_rev`, `_tac`, `_paste`, `_two_inputs`, `_comm_cmd`, `_join_cmd`, `_column`, `_seq`, and the registration of `_diff` | already there |
+| Binary | `MoreCommands.cs`: `Hex` (before the registrar); base64 and the checksum loop (at the end of `RegisterBinaryCommands`) | `more.py`: `_base64`, `_hasher` | already there |
+| Diff | class `Diff` from `MoreCommands.cs`, in phase 5 (the file goes away then) | `_diff`, `_join`, `_diff_dirs`, `_diff_header`, `_diff_files` from `more.py` | the diff section of `text.ts` |
 | Sed | class `Sed` from `TextCommands.cs` | the sed section of `text.py` (`_SedCmd` … `_sed`) | already `sed.ts` |
 | Find | already `Find.cs` | `_Find` … `_find` from `files.py` | the find section of `files.ts` |
-| Format (root) | class `Printf` and `Strftime` from `Builtins.cs` | `unescape`, `_byte_char`, `_c_integer`, `_c_float`, `shell_quote`, `printf_format`, `strftime` from `commands/__init__.py` (re-exported there) | already `format.ts` |
+| Format (root) | class `Printf`, and a `partial class Builtins` block with `Unescape`, `ByteChar`, `DayNames`, `MonthNames`, `Strftime` (all from `Builtins.cs`) | `unescape`, `_byte_char`, `_c_integer`, `_c_float`, `shell_quote`, `printf_format`, `strftime` from `commands/__init__.py` (re-exported there) | already `format.ts` |
 | Web | already `WebCommands.cs` | rename `net.py` → `web.py` | already `web.ts` |
 
-The registrars are called in the order of the domain table above, the same in all three ports (today each port has
-its own order). No command is registered twice in any port, so the order changes no winner; §9 has the check.
+The registrars are called in one order in all three ports (today each port has its own): scripting, variables,
+process, system, paths, files, text, awk, jq, bc, binary, archive, documents, web, git; the order of the rows with
+`commands` in `layout.json`. No command is registered twice in any port, so the order changes no winner; only the
+order in which a host enumerating `Shell.Commands` sees them. §9 has the check. C# names the registrars
+`RegisterScriptingCommands`, `RegisterVariableCommands`, `RegisterProcessCommands`, `RegisterSystemCommands`,
+`RegisterPathCommands`; `RegisterShellCommands` and `RegisterUtilityCommands` go.
+
+Registrars in C# and TS are cut at statement level: each `Register` call with its leading comments moves whole. A
+local the registrar declares for several commands (`CommandHandler declare`, `runScript`, `realpath`, `chown`, `pager`,
+`mapfile`, the `Dirs`/`ChangeDir` local functions) moves with them; in every port each such local serves commands of
+one domain only. A helper that several domains use stays in the shared helper file: `ExecFailure` / `exec_failure`
+(env, xargs, timeout) and the quoting, input and message helpers.
 
 Small helpers used by several domains move to the shared helper file: TS `ioOf` and `line` go to `command.ts`.
 Engine extractions (Sed, Find, Diff) leave the registration line where it is now.
@@ -486,8 +496,10 @@ together, but a phase isn't ticked until all three have it.
   `node -e "await import('./dist/shell/execution.js')"` and so on after `npm run build`.
 - Python: `pipx run pyflakes python/src/topwater` reports no new undefined names, and no part repeats a name:
   `python -c "from topwater.shell import Shell; import collections as c; d=c.Counter(n for k in Shell.__mro__[1:-1] for n in vars(k) if n[:2]!='__'); assert max(d.values())==1, [n for n in d if d[n]>1]"`.
-- Commands (phase 5): on a new shell with a fixed start time, the output of `help; ls -la /usr/bin /bin` and the
-  bytes of a saved snapshot are the same before and after.
+- Commands (phase 5): on a new shell with a fixed start time and random seed, the output of
+  `help; ls -la /usr/bin /bin; type -a ls echo cd; hash; date; stat /usr/bin/ls`, each command's description and help,
+  and the entries of a saved snapshot (names and contents in order) are the same before and after. Not the snapshot's
+  bytes: the zip stamps each entry with the host's clock, so two saves of one shell differ.
 - Review with `git diff -M --color-moved=dimmed-zebra`.
 
 | Risk | Port | Mitigation |

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Topwater;
@@ -48,6 +49,8 @@ internal static partial class Builtins
     static string Visible(byte b) => b >= 128 ? "M-" + Visible((byte)(b - 128)) : b < 32 ? "^" + (char)(b + 64) : b == 127 ? "^?" : ((char)b).ToString();
 
     static readonly Dictionary<byte, string> OdEscapes = new() { [0] = "\\0", [7] = "\\a", [8] = "\\b", [9] = "\\t", [10] = "\\n", [11] = "\\v", [12] = "\\f", [13] = "\\r" };
+
+    static string Hex(byte[] bytes) => Convert.ToHexString(bytes).ToLowerInvariant();
 
     static void RegisterBinaryCommands(Shell shell)
     {
@@ -190,5 +193,35 @@ internal static partial class Builtins
             }
             return code;
         });
+
+        shell.Register("base64", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("base64"));
+            int code = 0;
+            var data = InputBytes(ctx, a.Positional, () => code = 1).SelectMany(i => i.Text).ToArray();
+            if (a.Has('d'))
+            {
+                try { ctx.Stdout.Write(ByteText.Decode(Convert.FromBase64String(string.Concat(Encoding.UTF8.GetString(data).Where(c => !char.IsWhiteSpace(c)))))); }
+                catch (FormatException) { throw new ShellException(CommandSpec.Message("base64", "invalidInput")); }
+                return code;
+            }
+            var enc = Convert.ToBase64String(data);
+            int wrap = int.Parse(a.Value('w') ?? "76");
+            if (wrap > 0) enc = string.Join('\n', enc.Chunk(wrap).Select(c => new string(c)));
+            ctx.Stdout.WriteLine(enc);
+            return code;
+        });
+
+        foreach (var (name, hash) in new (string, Func<byte[], byte[]>)[] { ("md5sum", MD5.HashData), ("sha1sum", SHA1.HashData), ("sha256sum", SHA256.HashData), ("sha512sum", SHA512.HashData) })
+        {
+            shell.Register(name, ctx =>
+            {
+                int code = 0;
+                var files = ctx.Args.Where(x => !x.StartsWith('-') || x == "-").ToList();
+                foreach (var (n, data) in InputBytes(ctx, files, () => code = 1))
+                    ctx.Stdout.WriteLine($"{Hex(hash(data))}  {(files.Count == 0 ? "-" : n)}");
+                return code;
+            });
+        }
     }
 }

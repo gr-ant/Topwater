@@ -292,6 +292,217 @@ internal static partial class Builtins
         return (result, openFrom);
     }
 
+    /// <summary>comm and join: the lines of exactly two files (- is stdin), or null after reporting an unreadable one.</summary>
+    static List<List<string>>? TwoInputs(CommandContext ctx, List<string> files, char sep = '\n')
+    {
+        if (files.Count < 2)
+            throw new UsageException(files.Count > 0 ? CommandSpec.Message(ctx.Name, "missingOperandAfter", ("operand", files[0])) : CommandSpec.Message(ctx.Name, "missingOperand"));
+        if (files.Count > 2) throw new UsageException(CommandSpec.Message(ctx.Name, "extraOperand", ("operand", files[2])));
+        var output = new List<List<string>>();
+        foreach (var f in files)
+        {
+            var got = Inputs(ctx, [f], () => { }).ToList();
+            if (got.Count == 0) return null;
+            var lines = got[0].Text.Split(sep).ToList();
+            if (lines.Count > 0 && lines[^1] == "") lines.RemoveAt(lines.Count - 1);
+            output.Add(lines);
+        }
+        return output;
+    }
+
+    static int CommCmd(CommandContext ctx)
+    {
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("comm"));
+        char sep = a.Has('z') ? '\0' : '\n';
+        if (TwoInputs(ctx, a.Positional, sep) is not [var left, var right]) return 1;
+        var delim = a.Value('\u0003') ?? "\t";
+        bool[] show = [!a.Has('1'), !a.Has('2'), !a.Has('3')];
+        string[] indent = ["", show[0] ? delim : "", string.Concat(Enumerable.Repeat(delim, (show[0] ? 1 : 0) + (show[1] ? 1 : 0)))];
+        bool check = !a.Has('\u0002'), strict = a.Has('\u0001');
+        var output = new List<string>();
+        int[] counts = [0, 0, 0];
+        string?[] last = [null, null];
+        bool[] unsorted = [false, false];
+        void Flush()
+        {
+            ctx.Stdout.Write(string.Concat(output.Select(x => x + sep)));
+            output.Clear();
+        }
+        // notes line as file k's latest; true the first time file k is found out of order
+        bool Disorder(int k, string line)
+        {
+            bool bad = check && last[k] != null && GitCore.Ordinal.Compare(line, last[k]) < 0 && !unsorted[k];
+            unsorted[k] |= bad;
+            last[k] = line;
+            return bad;
+        }
+        static bool Less(string x, string y) => GitCore.Ordinal.Compare(x, y) < 0;
+        int i = 0, j = 0;
+        while (i < left.Count || j < right.Count)
+        {
+            ctx.CancellationToken.ThrowIfCancellationRequested();
+            int col;
+            string line;
+            var bad = new List<int>();
+            if (j >= right.Count || (i < left.Count && Less(left[i], right[j])))
+            {
+                (col, line) = (0, left[i]);
+                if (Disorder(0, left[i])) bad.Add(0);
+                i++;
+            }
+            else if (i >= left.Count || Less(right[j], left[i]))
+            {
+                (col, line) = (1, right[j]);
+                if (Disorder(1, right[j])) bad.Add(1);
+                j++;
+            }
+            else
+            {
+                (col, line) = (2, left[i]);
+                if (Disorder(0, left[i])) bad.Add(0);
+                if (Disorder(1, right[j])) bad.Add(1);
+                i++;
+                j++;
+            }
+            if (bad.Count > 0 && strict)  // --check-order stops before the line out of order
+            {
+                Flush();
+                ctx.Stderr.WriteLine("comm: " + CommandSpec.Message("comm", "notSorted", ("n", (bad[0] + 1).ToString())));
+                return 1;
+            }
+            counts[col]++;
+            if (show[col]) output.Add(indent[col] + line);
+            foreach (var k in bad)  // otherwise the line goes out first, then the warning
+            {
+                Flush();
+                ctx.Stderr.WriteLine("comm: " + CommandSpec.Message("comm", "notSorted", ("n", (k + 1).ToString())));
+            }
+        }
+        if (a.Has('\u0004')) output.Add(string.Join(delim, counts) + delim + CommandSpec.Message("comm", "total"));
+        Flush();
+        if (unsorted.Any(u => u))
+        {
+            ctx.Stderr.WriteLine("comm: " + CommandSpec.Message("comm", "inputNotSorted"));
+            return 1;
+        }
+        return 0;
+    }
+
+    static int JoinCmd(CommandContext ctx)
+    {
+        var a = Args.Parse(ctx.Args, CommandSpec.Of("join"));
+        var tab = a.Value('t') is { Length: > 0 } t0 ? t0 : null; // -t "" splits on blanks, as GNU join does
+        if (tab is { Length: > 1 }) throw new ShellException(CommandSpec.Message("join", "multiCharTab", ("value", tab)));
+        static int FieldNo(string v) =>
+            v.Length > 0 && v.All(char.IsAsciiDigit) && int.TryParse(v, out var n) && n >= 1 ? n - 1
+            : v.Length > 0 && v.All(char.IsAsciiDigit) && v.TrimStart('0').Length > 0 ? int.MaxValue  // past int: no line has that field
+            : throw new ShellException(CommandSpec.Message("join", "badField", ("value", v)));
+        int k1 = 0, k2 = 0;
+        if (a.Value('j') is { } jv) k1 = k2 = FieldNo(jv);
+        if (a.Value('1') is { } v1) k1 = FieldNo(v1);
+        if (a.Value('2') is { } v2) k2 = FieldNo(v2);
+        var unpaired = new HashSet<int>();
+        foreach (var v in a.All('a').Concat(a.All('v')))
+        {
+            if (v is not ("1" or "2")) throw new ShellException(CommandSpec.Message("join", "badFileNumberArg", ("value", v)));
+            unpaired.Add(v[0] - '0');
+        }
+        bool only = a.All('v').Count > 0;
+        List<(int Side, int N)>? fmt = null;
+        if (a.Value('o') is { } ov && ov != "auto")
+        {
+            fmt = [];
+            foreach (var spec in Regex.Split(ov.Trim(), "[ ,]+"))
+            {
+                var m = Regex.Match(spec, @"\A([0-9]+)\.([0-9]+)\z");
+                if (spec == "0") fmt.Add((0, 0));
+                else if (!m.Success || m.Groups[1].Value is not ("1" or "2")) throw new ShellException(CommandSpec.Message("join", "badFileNumber", ("spec", spec)));
+                else fmt.Add((m.Groups[1].Value[0] - '0', FieldNo(m.Groups[2].Value)));
+            }
+        }
+        if (TwoInputs(ctx, a.Positional) is not [var lefts, var rights]) return 1;
+        List<string> Fields(string line)
+        {
+            if (tab != null) return line.Split(tab[0]).ToList();
+            line = line.Trim(' ', '\t');  // GNU join's blanks: spaces and tabs only
+            return line.Length > 0 ? Regex.Split(line, "[ \t]+").ToList() : [];
+        }
+        var left = lefts.Select(Fields).ToList();
+        var right = rights.Select(Fields).ToList();
+        int[] keys = [k1, k2];
+        bool fold = a.Has('i');
+        string Key(List<string> f, int side)
+        {
+            var k = keys[side] < f.Count ? f[keys[side]] : "";
+            return fold ? k.ToLowerInvariant() : k;
+        }
+        if (a.Value('o') == "auto")
+            fmt = [(0, 0), .. Enumerable.Range(0, left.Count > 0 ? left[0].Count : 0).Where(n => n != k1).Select(n => (1, n)),
+                .. Enumerable.Range(0, right.Count > 0 ? right[0].Count : 0).Where(n => n != k2).Select(n => (2, n))];
+        var outSep = tab ?? " ";
+        var empty = a.Value('e') ?? "";
+        var lines = new List<string>();
+        void Emit(List<string>? f1, List<string>? f2)
+        {
+            var row = new List<string>();
+            var (src, k) = f1 != null ? (f1, k1) : (f2!, k2);
+            if (fmt != null)
+                foreach (var (side, n) in fmt)
+                {
+                    var f = side == 1 ? f1 : f2;
+                    if (side == 0) row.Add(k < src.Count ? src[k] : empty);
+                    else row.Add(f != null && n < f.Count ? f[n] : empty);
+                }
+            else
+            {
+                row.Add(k < src.Count ? src[k] : "");
+                row.AddRange((f1 ?? []).Where((_, n) => n != k1));
+                row.AddRange((f2 ?? []).Where((_, n) => n != k2));
+            }
+            lines.Add(string.Join(outSep, row));
+            if (lines.Count >= 1024)  // written as it goes: one repeated key can pair up into far more rows than fit in memory
+            {
+                ctx.CancellationToken.ThrowIfCancellationRequested();
+                ctx.Stdout.Write(string.Concat(lines.Select(x => x + "\n")));
+                lines.Clear();
+            }
+        }
+        int i = 0, j = 0;
+        if (a.Has('\u0001') && (left.Count > 0 || right.Count > 0))
+        {
+            Emit(left.Count > 0 ? left[0] : null, right.Count > 0 ? right[0] : null);
+            i = j = 1;
+        }
+        while (i < left.Count || j < right.Count)
+        {
+            ctx.CancellationToken.ThrowIfCancellationRequested();
+            var aKey = i < left.Count ? Key(left[i], 0) : null;
+            var bKey = j < right.Count ? Key(right[j], 1) : null;
+            if (bKey == null || (aKey != null && GitCore.Ordinal.Compare(aKey, bKey) < 0))
+            {
+                if (unpaired.Contains(1)) Emit(left[i], null);
+                i++;
+            }
+            else if (aKey == null || GitCore.Ordinal.Compare(bKey, aKey) < 0)
+            {
+                if (unpaired.Contains(2)) Emit(null, right[j]);
+                j++;
+            }
+            else
+            {
+                int i2 = i, j2 = j;
+                while (i2 < left.Count && Key(left[i2], 0) == aKey) i2++;
+                while (j2 < right.Count && Key(right[j2], 1) == aKey) j2++;
+                if (!only)
+                    for (int x = i; x < i2; x++)
+                        for (int y = j; y < j2; y++) Emit(left[x], right[y]);
+                (i, j) = (i2, j2);
+            }
+        }
+        ctx.Stdout.Write(string.Concat(lines.Select(x => x + "\n")));
+        return 0;
+    }
+
     static void RegisterTextCommands(Shell shell)
     {
         shell.Register("grep", ctx =>
@@ -662,6 +873,125 @@ internal static partial class Builtins
         });
 
         shell.Register("sed", ctx => Sed.Run(ctx));
+
+        shell.Register("nl", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("nl"));
+            bool all = a.Value('b') == "a";
+            int width = int.Parse(a.Value('w') ?? "6"), n = 0, code = 0;
+            var sep = a.Value('s') ?? "\t";
+            foreach (var (_, text) in Inputs(ctx, a.Positional, () => code = 1))
+                foreach (var line in SplitLines(text))
+                    ctx.Stdout.WriteLine(line.Length == 0 && !all ? "" : $"{(++n).ToString().PadLeft(width)}{sep}{line}");
+            return code;
+        });
+
+        shell.Register("rev", ctx =>
+        {
+            int code = 0;
+            foreach (var (_, text) in Inputs(ctx, ctx.Args, () => code = 1))
+                foreach (var line in SplitLines(text)) ctx.Stdout.WriteLine(new string(line.Reverse().ToArray()));
+            return code;
+        });
+
+        shell.Register("tac", ctx =>
+        {
+            int code = 0;
+            foreach (var (_, text) in Inputs(ctx, ctx.Args, () => code = 1)) WriteLines(ctx.Stdout, Enumerable.Reverse(SplitLines(text)));
+            return code;
+        });
+
+        shell.Register("paste", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("paste"));
+            var delims = Unescape(a.Value('d') ?? "\t");
+            if (delims.Length == 0) delims = "\0";
+            char D(int i) => delims[i % delims.Length];
+            string Join(IList<string> cells) { var sb = new StringBuilder(); for (int i = 0; i < cells.Count; i++) { if (i > 0 && D(i - 1) != '\0') sb.Append(D(i - 1)); sb.Append(cells[i]); } return sb.ToString(); }
+            int code = 0;
+            List<List<string>> columns;
+            int dashes = a.Positional.Count(f => f == "-");
+            if (dashes > 1 && !a.Has('s'))
+            {
+                // several "-" operands take turns reading lines from stdin (seq 6 | paste - - -)
+                var stdinLines = SplitLines(ctx.StdinText);
+                columns = [];
+                int k = 0;
+                foreach (var f in a.Positional)
+                {
+                    if (f == "-") { int start = k++; columns.Add(stdinLines.Where((_, idx) => idx % dashes == start).ToList()); }
+                    else columns.AddRange(Inputs(ctx, [f], () => code = 1).Select(i => SplitLines(i.Text)));
+                }
+            }
+            else columns = Inputs(ctx, a.Positional, () => code = 1).Select(i => SplitLines(i.Text)).ToList();
+            if (a.Has('s')) foreach (var col in columns) ctx.Stdout.WriteLine(Join(col));
+            else
+            {
+                int rows = columns.Count == 0 ? 0 : columns.Max(c => c.Count);
+                for (int r = 0; r < rows; r++) ctx.Stdout.WriteLine(Join(columns.Select(c => r < c.Count ? c[r] : "").ToList()));
+            }
+            return code;
+        });
+
+        shell.Register("comm", CommCmd);
+        shell.Register("join", JoinCmd);
+
+        shell.Register("column", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("column"));
+            int code = 0;
+            var lines = Inputs(ctx, a.Positional, () => code = 1).SelectMany(i => SplitLines(i.Text)).ToList();
+            if (!a.Has('t')) { WriteLines(ctx.Stdout, lines); return code; }
+            var sep = a.Value('s');
+            var rows = lines.Where(l => l.Trim().Length > 0)
+                .Select(l => sep != null ? l.Split(Unescape(sep).ToCharArray(), StringSplitOptions.RemoveEmptyEntries) : l.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToList();
+            var outSep = a.Value('o') ?? "  ";
+            int cols = rows.Count == 0 ? 0 : rows.Max(r => r.Length);
+            var widths = Enumerable.Range(0, cols).Select(c => rows.Max(r => c < r.Length ? r[c].Length : 0)).ToArray();
+            foreach (var r in rows)
+                ctx.Stdout.WriteLine(string.Join(outSep, r.Select((cell, i) => i == r.Length - 1 ? cell : cell.PadRight(widths[i]))));
+            return code;
+        });
+
+        shell.Register("seq", ctx =>
+        {
+            var args = ctx.Args;
+            var nums = new List<string>();
+            string sep = "\n";
+            bool equalWidth = false;
+            string? fmt = null;
+            for (int i = 0; i < args.Count; i++)
+            {
+                var x = args[i];
+                if (double.TryParse(x, NumberStyles.Float, CultureInfo.InvariantCulture, out _)) nums.Add(x);
+                else if (x is "-w" or "--equal-width") equalWidth = true;
+                else if (x == "-s") sep = i + 1 < args.Count ? args[++i] : throw new ShellException(CommandSpec.Message("seq", "optionRequiresArgument", ("option", "s")));
+                else if (x.StartsWith("-s")) sep = x[2..];
+                else if (x.StartsWith("--separator=")) sep = x[12..];
+                else if (x is "-f" or "--format") fmt = i + 1 < args.Count ? args[++i] : throw new ShellException(CommandSpec.Message("seq", "optionRequiresArgument", ("option", "f")));
+                else if (x.StartsWith("-f")) fmt = x[2..];
+                else if (x.StartsWith("--format=")) fmt = x[9..];
+                else throw new ShellException(CommandSpec.Message("seq", "invalidOption", ("option", x.TrimStart('-'))));
+            }
+            if (nums.Count is 0 or > 3) throw new UsageException(nums.Count == 0 ? CommandSpec.Message("seq", "missingOperand") : CommandSpec.Message("seq", "extraOperand", ("operand", nums[3])));
+            var v = nums.Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToList();
+            double first = v.Count > 1 ? v[0] : 1, step = v.Count == 3 ? v[1] : 1, last = v[^1];
+            if (step == 0) throw new ShellException(CommandSpec.Message("seq", "zeroIncrement"));
+            int decimals = nums.Max(x => x.Contains('.') ? x.Length - x.IndexOf('.') - 1 : 0);
+            var items = new List<string>();
+            for (long k = 0; ; k++)
+            {
+                double x = first + k * step; // not a running sum, so 0.1 steps don't drift
+                if (!(step > 0 ? x <= last + 1e-9 : x >= last - 1e-9)) break;
+                items.Add(fmt != null ? Printf.Format(fmt, [x.ToString("R", CultureInfo.InvariantCulture)]) : x.ToString("F" + decimals, CultureInfo.InvariantCulture));
+                if (items.Count > 1_000_000) throw new ShellException(CommandSpec.Message("seq", "tooManyNumbers"));
+            }
+            if (equalWidth && items.Count > 0) { int w = items.Max(s => s.Length); items = items.Select(s => s.PadLeft(w, '0')).ToList(); }
+            if (items.Count > 0) ctx.Stdout.Write(string.Join(Unescape(sep), items) + "\n");
+            return 0;
+        });
+
+        shell.Register("diff", ctx => Diff.Run(ctx));
     }
 
     static readonly Dictionary<string, string> TrClasses = new()

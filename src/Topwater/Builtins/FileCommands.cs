@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 
 namespace Topwater;
 
@@ -105,6 +106,13 @@ internal static partial class Builtins
 
     static string ShowNonprinting(string line) => string.Concat(line.Select(c =>
         c == '\t' || (c >= 32 && c < 127) || c > 159 ? c.ToString() : c == 127 ? "^?" : c < 32 ? "^" + (char)(c + 64) : "M-^" + (char)(c - 64)));
+
+    static bool LooksJson(string t)
+    {
+        var s = t.TrimStart();
+        if (s.Length == 0 || s[0] is not ('{' or '[')) return false;
+        try { JsonDocument.Parse(t); return true; } catch (JsonException) { return false; }
+    }
 
     static void RegisterFileCommands(Shell shell)
     {
@@ -559,5 +567,259 @@ internal static partial class Builtins
             ctx.Stdout.Write(sb.ToString());
             return 0;
         });
+
+        shell.Register("stat", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("stat"));
+            int code = 0;
+            foreach (var p in a.Positional)
+            {
+                var abs = ctx.ResolvePath(p);
+                bool follow = a.Has('L');
+                if (!ctx.Fs.Exists(abs, follow)) { ctx.Stderr.WriteLine("stat: " + CommandSpec.Message("stat", "cannotStat", ("file", p), ("errno", ctx.Fs.WhyMissing(abs, follow)))); code = 1; continue; }
+                var st = ctx.Fs.Stat(abs, follow);
+                var type = st.IsSymlink ? "symbolic link" : st.IsDirectory ? "directory" : st.Size == 0 ? "regular empty file" : "regular file";
+                var named = st.LinkTarget is { } target ? $"{QuoteAlways(p)} -> {QuoteAlways(target)}" : QuoteAlways(p);
+                var mode = Convert.ToString(st.Mode, 8).PadLeft(3, '0');
+                var rwx = VirtualFileSystem.FormatMode(st);
+                var owner = st.Owner;
+                var uid = owner == "root" ? "0" : "1000";
+                var mtime = st.Modified.ToString("yyyy-MM-dd HH:mm:ss.fffffff00 +0000", CultureInfo.InvariantCulture);
+                if (a.Value('c') is { } fmt)
+                {
+                    var sb = new StringBuilder();
+                    for (int i = 0; i < fmt.Length; i++)
+                    {
+                        if (fmt[i] != '%' || i + 1 >= fmt.Length) { sb.Append(fmt[i]); continue; }
+                        sb.Append(fmt[++i] switch
+                        {
+                            'n' => p, 'N' => named, 's' => st.Size.ToString(), 'F' => type, 'a' => mode, 'A' => rwx, 'U' => owner, 'G' => owner,
+                            'u' => uid, 'g' => uid, 'y' => mtime, 'Y' => new DateTimeOffset(st.Modified).ToUnixTimeSeconds().ToString(),
+                            'b' => st.Blocks.ToString(), 'B' => "512", 'h' => st.Links.ToString(), 'i' => (Math.Abs(abs.GetHashCode()) % 1000000).ToString(), '%' => "%",
+                            var c => "%" + c,
+                        });
+                    }
+                    ctx.Stdout.WriteLine(sb.ToString());
+                    continue;
+                }
+                ctx.Stdout.Write(
+                    $"  File: {p}{(st.IsSymlink ? " -> " + st.LinkTarget : "")}\n  Size: {st.Size,-10}\tBlocks: {st.Blocks,-10} IO Block: 4096   {type}\n" +
+                    $"Access: ({mode.PadLeft(4, '0')}/{rwx})  Uid: ({uid,5}/{owner,8})   Gid: ({uid,5}/{owner,8})\n" +
+                    $"Modify: {mtime}\nChange: {mtime}\n");
+            }
+            return code;
+        });
+
+        shell.Register("du", ctx =>
+        {
+            var a = Args.Parse(ctx.Args, CommandSpec.Of("du"));
+            int maxDepth = a.Has('s') ? 0 : a.Value('d') is { } d ? int.Parse(d) : int.MaxValue;
+            string Fmt(long kb) => !a.Has('h') ? kb.ToString()
+                : kb < 10 ? $"{kb:0.0}K" : kb < 1024 ? $"{kb}K" : kb < 1024 * 1024 ? $"{kb / 1024.0:0.#}M" : $"{kb / 1048576.0:0.#}G";
+            long total = 0;
+            int code = 0;
+            long Walk(string abs, string display, int depth)
+            {
+                if (!ctx.Fs.IsDirectory(abs, follow: false))
+                {
+                    long kb = ctx.Fs.Stat(abs, follow: false).Blocks / 2;
+                    if (a.Has('a') && depth <= maxDepth || depth == 0) ctx.Stdout.WriteLine($"{Fmt(kb)}\t{display}");
+                    return kb;
+                }
+                long sum = 4;
+                foreach (var n in ctx.Fs.List(abs)) sum += Walk(VirtualFileSystem.Normalize(abs, n), display.TrimEnd('/') + "/" + n, depth + 1);
+                if (depth <= maxDepth) ctx.Stdout.WriteLine($"{Fmt(sum)}\t{display}");
+                return sum;
+            }
+            foreach (var p in a.Positional.DefaultIfEmpty("."))
+            {
+                var abs = ctx.ResolvePath(p);
+                if (!ctx.Fs.Exists(abs, follow: false)) { ctx.Stderr.WriteLine("du: " + CommandSpec.Message("du", "cannotAccess", ("file", p), ("errno", "No such file or directory"))); code = 1; continue; }
+                total += Walk(abs, p, 0);
+            }
+            if (a.Has('c')) ctx.Stdout.WriteLine($"{Fmt(total)}\ttotal");
+            return code;
+        });
+
+        shell.Register("df", ctx =>
+        {
+            bool h = ctx.Args.Any(x => x.StartsWith('-') && x.Contains('h'));
+            // the disk is the filesystem's capacity and what its files really hold
+            long size = ctx.Fs.Capacity, used = ctx.Fs.UsedBytes, avail = Math.Max(0, size - used);
+            int pct = size == 0 ? 0 : (int)Math.Ceiling(used * 100.0 / size);
+            static string H(long b)
+            {
+                if (b < 1024) return b.ToString();
+                double v = b; int u = 0;
+                do { v /= 1024; u++; } while (Math.Ceiling(v) >= 1024 && u < 4);
+                return (v < 10 ? (Math.Ceiling(v * 10) / 10).ToString("0.0") : Math.Ceiling(v).ToString("0")) + "KMGT"[u - 1]; // df -h rounds up
+            }
+            ctx.Stdout.Write(h
+                ? $"Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1      {H(size),5} {H(used),5} {H(avail),5} {pct,3}% /\ntmpfs           3.9G     0  3.9G   0% /dev/shm\n"
+                : $"Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1      {size / 1024,10} {(used + 1023) / 1024,7} {avail / 1024,9} {pct,3}% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n");
+            return 0;
+        });
+
+        shell.Register("chmod", Chmod.Run);
+
+        CommandHandler chown = ctx =>
+        {
+            var files = ctx.Args.Where(x => !x.StartsWith('-')).Skip(1).ToList(); // first operand is the owner
+            if (files.Count == 0) throw new UsageException(CommandSpec.Message(ctx.Name, "missingOperand"));
+            var owner = ctx.Args.First(x => !x.StartsWith('-')).Split(':')[0];
+            int code = 0;
+            foreach (var f in files)
+            {
+                var path = ctx.ResolvePath(f);
+                if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine($"{ctx.Name}: " + CommandSpec.Message(ctx.Name, "cannotAccess", ("file", f), ("reason", ctx.Fs.WhyMissing(path)))); code = 1; continue; }
+                try { ctx.Fs.SetOwner(path, owner.Length > 0 ? owner : ctx.Fs.Stat(path).Owner, ctx.Args.Contains("-R")); }
+                catch (ShellException) { ctx.Stderr.WriteLine($"{ctx.Name}: changing ownership of '{f}': Operation not permitted"); code = 1; }
+            }
+            return Task.FromResult(code);
+        };
+        shell.Register("chown", chown);
+        shell.Register("chgrp", chown);
+
+        CommandHandler pager = ctx =>
+        {
+            int code = 0;
+            foreach (var (_, text) in Inputs(ctx, ctx.Args.Where(x => !x.StartsWith('-') && !x.StartsWith('+')).ToList(), () => code = 1)) ctx.Stdout.Write(text);
+            return Task.FromResult(code);
+        };
+        shell.Register("less", pager);
+        shell.Register("more", pager);
+
+        shell.Register("file", ctx =>
+        {
+            int code = 0;
+            foreach (var p in ctx.Args.Where(x => !x.StartsWith('-')))
+            {
+                var abs = ctx.ResolvePath(p);
+                string desc;
+                if (!ctx.Fs.Exists(abs)) { desc = CommandSpec.Message("file", "cannotOpen", ("file", p)); code = 1; }
+                else if (ctx.Fs.IsDirectory(abs)) desc = "directory";
+                else
+                {
+                    var data = ctx.Fs.ReadAllBytes(abs);
+                    var t = Encoding.UTF8.GetString(data);
+                    desc = t.Length == 0 ? "empty"
+                        : MarkdownConverter.FileType(data) is { } magic ? magic
+                        : t.StartsWith("\u007fELF") ? "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, stripped"
+                        : t.StartsWith("#!") ? (t.Contains("python") ? "Python script" : "Bourne-Again shell script") + ", ASCII text executable"
+                        : LooksJson(t) ? "JSON text data"
+                        : t.Contains('\0') || !Encoding.UTF8.GetBytes(t).AsSpan().SequenceEqual(data) ? "data" // NUL bytes or invalid UTF-8
+                        : t.Any(c => c > 127) ? "Unicode text, UTF-8 text" : "ASCII text";
+                }
+                ctx.Stdout.WriteLine($"{p}: {desc}");
+            }
+            return code;
+        });
+    }
+}
+
+/// <summary>chmod with octal (755) and symbolic (u+x, go-w, a=r, +x) modes, -R, -v and -c.</summary>
+internal static class Chmod
+{
+    public static Task<int> Run(CommandContext ctx)
+    {
+        bool recursive = false, verbose = false, changes = false, quiet = false;
+        string? spec = null, reference = null;
+        var files = new List<string>();
+        var args = new Queue<string>(ctx.Args);
+        while (args.TryDequeue(out var arg))
+        {
+            if (arg == "--reference" || arg.StartsWith("--reference=", StringComparison.Ordinal))
+            {
+                if (arg == "--reference" && args.Count == 0) throw new UsageException(CommandSpec.Message("chmod", "referenceNeedsArgument"));
+                reference = arg.Contains('=') ? arg[12..] : args.Dequeue();
+            }
+            else if (arg is "-R" or "--recursive") recursive = true;
+            else if (arg is "-v" or "--verbose") verbose = true;
+            else if (arg is "-c" or "--changes") changes = true;
+            else if (arg is "-f" or "--silent" or "--quiet") quiet = true;
+            else if (arg.StartsWith("--") && arg.Length > 2) throw new UsageException(CommandSpec.Message("chmod", "unrecognizedOption", ("option", arg)));
+            else if (arg.Length > 1 && arg[0] == '-' && arg.FirstOrDefault(c => !"-rwxXstugoa+=,01234567".Contains(c)) is var bad and not '\0')
+                throw new UsageException(CommandSpec.Message("chmod", "invalidOption", ("option", bad.ToString())));
+            else if (spec == null && reference == null) spec = arg; // may look like an option, e.g. -x or -w
+            else files.Add(arg);
+        }
+        if (reference != null)
+        {
+            // --reference: the mode bits of that file instead of a mode
+            var rpath = ctx.ResolvePath(reference);
+            if (!ctx.Fs.Exists(rpath))
+            {
+                ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotStatReference", ("file", reference), ("reason", ctx.Fs.WhyMissing(rpath))));
+                return Task.FromResult(1);
+            }
+            spec = Convert.ToString(ctx.Fs.Stat(rpath).Mode & 0xFFF, 8);
+            if (files.Count == 0) throw new UsageException(CommandSpec.Message("chmod", "missingOperand"));
+        }
+        if (spec == null || files.Count == 0) throw new UsageException(spec == null ? CommandSpec.Message("chmod", "missingOperand") : CommandSpec.Message("chmod", "missingOperandAfter", ("operand", spec)));
+        int code = 0;
+        void Apply(string display, string path)
+        {
+            var st = ctx.Fs.Stat(path);
+            var mode = Parse(spec, st.Mode, st.IsDirectory, ctx.Fs.Umask);
+            try { ctx.Fs.Chmod(path, mode); }
+            catch (ShellException) { if (!quiet) ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotChangePermissions", ("file", display))); code = 1; return; }
+            string Fmt(int m) => $"{Convert.ToString(m, 8).PadLeft(4, '0')} ({VirtualFileSystem.FormatMode(st.IsDirectory, m)[1..]})";
+            if (mode != st.Mode && (verbose || changes)) ctx.Stdout.WriteLine($"mode of '{display}' changed from {Fmt(st.Mode)} to {Fmt(mode)}");
+            else if (mode == st.Mode && verbose) ctx.Stdout.WriteLine($"mode of '{display}' retained as {Fmt(mode)}");
+            if (recursive && st.IsDirectory && ctx.Fs.CanRead(path))
+                foreach (var n in ctx.Fs.List(path))
+                {
+                    var shown = display.TrimEnd('/') + "/" + n;
+                    // like chmod -R, links met on the way are left alone
+                    if (!ctx.Fs.IsSymlink(VirtualFileSystem.Normalize(path, n))) Apply(shown, VirtualFileSystem.Normalize(path, n));
+                    else if (verbose) ctx.Stdout.WriteLine($"neither symbolic link '{shown}' nor referent has been changed");
+                }
+        }
+        foreach (var f in files)
+        {
+            var path = ctx.ResolvePath(f);
+            if (!ctx.Fs.Exists(path)) { ctx.Stderr.WriteLine("chmod: " + CommandSpec.Message("chmod", "cannotAccess", ("file", f), ("reason", ctx.Fs.WhyMissing(path)))); code = 1; continue; }
+            Apply(f, path);
+        }
+        return Task.FromResult(code);
+    }
+
+    /// <param name="umask">With no u, g, o or a, the bits the umask covers are left alone.</param>
+    public static int Parse(string spec, int mode, bool isDir, int umask = 0)
+    {
+        if (System.Text.RegularExpressions.Regex.IsMatch(spec, "^[0-7]{1,4}$")) return Convert.ToInt32(spec, 8);
+        foreach (var clause in spec.Split(','))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(clause, "^([ugoa]*)([-+=])([rwxXt]*)$");
+            if (!m.Success) throw new ShellException(CommandSpec.Message("chmod", "invalidMode", ("mode", spec)));
+            var who = m.Groups[1].Value is "" or "a" ? "ugo" : m.Groups[1].Value.Replace("a", "ugo");
+            int bits = 0;
+            bool sticky = false;
+            foreach (var c in m.Groups[3].Value)
+                switch (c)
+                {
+                    case 'r': bits |= 4; break;
+                    case 'w': bits |= 2; break;
+                    case 'x': bits |= 1; break;
+                    case 'X': if (isDir || (mode & 0b001_001_001) != 0) bits |= 1; break;
+                    case 't': sticky = true; break;
+                }
+            int mask = 0, clear = 0;
+            foreach (var w in who)
+            {
+                int shift = w == 'u' ? 6 : w == 'g' ? 3 : 0;
+                mask |= bits << shift;
+                clear |= 7 << shift;
+            }
+            if (m.Groups[1].Value == "") mask &= ~umask;
+            int stickyBit = sticky ? 0x200 : 0;
+            mode = m.Groups[2].Value switch
+            {
+                "+" => mode | mask | stickyBit,
+                "-" => mode & ~(mask | stickyBit),
+                _ => (mode & ~(m.Groups[1].Value == "" ? clear & ~umask : clear)) | mask | stickyBit,
+            };
+        }
+        return mode;
     }
 }
