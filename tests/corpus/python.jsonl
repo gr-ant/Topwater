@@ -48,3 +48,7 @@
 {"id":"python-048","script":"python3 -c 'import sqlite3; c = sqlite3.connect(\":memory:\"); print(c.execute(\"select 6*7\").fetchone()[0])'","stdout":"42\n","exitCode":0,"quiet":true}
 {"id":"python-049","script":"python3 -c 'print(\"a\")'; python3 -c 'print(\"b\")' | tr a-z A-Z","stdout":"a\nB\n","exitCode":0,"quiet":true}
 {"id":"python-050","script":"printf 'not python\\nprint(\"skipped first line\")\\n' > x.py; python3 -x x.py","stdout":"skipped first line\n","exitCode":0,"quiet":true}
+{"id":"python-051","script":"python3 -c \"f = open('a', 'w'); f.write('hi'); f.flush(); print(repr(open('a').read()), len(open('a').read()))\"","stdout":"'hi' 2\n","exitCode":0,"quiet":true}
+{"id":"python-052","script":"python3 -c 'import sys\nfor i in (1, 2):\n    print(\"e%d\" % i, file=sys.stderr, flush=True)\n    print(\"o%d\" % i, flush=True)' 2>&1; x=$(python3 -c 'import sys; print(\"o\", flush=True); print(\"e\", file=sys.stderr)' 2>&1); echo \"$x\"","stdout":"e1\no1\ne2\no2\no\ne\n","exitCode":0,"quiet":true}
+{"id":"python-053","script":"for i in 1 2; do timeout 1 python3 -c 'while True: pass'; echo $?; done","stdout":"124\n124\n","exitCode":0,"quiet":true}
+{"id":"python-054","script":"python3 -c \"import os; open('f', 'w').close(); os.rename('f', 'f'); print(os.listdir('.'))\"","stdout":"['f']\n","exitCode":0,"quiet":true}

@@ -54,6 +54,7 @@ python3 tests/corpus/record.py loops --local 'for i in 1 2; do echo $i; done'   
 python3 tests/corpus/record.py quoting --dry-run 'echo hi'          # print the case, don't append
 python3 tests/corpus/record.py ls-long --agent 'touch -d 2020-01-01 f; ls -l'   # as the ordinary user agent, like Topwater
 python3 tests/corpus/record.py git --git 'git init -q r && git -C r status'     # an image with git, fixed identity and dates
+python3 tests/corpus/record.py python --python --agent "python3 -c 'print(1 + 1)'"   # an image with Ubuntu's python3 (the python area)
 ```
 
 The tool runs the script as `bash -c` in an empty `/tmp/w` (`TZ=UTC`, `LC_ALL=C.UTF-8`, no network, a time limit), and

@@ -100,8 +100,14 @@ alias (Ubuntu has none without the `python-is-python3` package), no `pip` and no
 - The environment holds the exported variables and `PWD`; `os.getcwd()` is the shell's directory.
 
 Not there: `pip` and third-party packages, processes (`subprocess` raises `OSError`, `os.system` does not exist), threads (`RuntimeError`),
-sockets (`OSError`), `ctypes`, `multiprocessing`, `tkinter`, `curses`, `bz2` and `lzma`. Nothing is kept between calls:
-each call starts from the same freshly started interpreter.
+sockets (`OSError`). Nothing is kept between calls: each call starts from the same freshly started interpreter. These
+standard modules fail to import (`ModuleNotFoundError`), besides the Windows-only ones that fail on Ubuntu too:
+`antigravity`, `bdb`, `bz2`, `cProfile`, `cmd`, `compileall`, `ctypes`, `curses`, `dbm`, `doctest`, `ensurepip`,
+`fcntl`, `ftplib`, `grp`, `idlelib`, `imaplib`, `lzma`, `mailbox`, `mmap`, `modulefinder`, `multiprocessing`, `netrc`,
+`pickletools`, `plistlib`, `poplib`, `profile`, `pstats`, `pty`, `pwd`, `pyclbr`, `pydoc`, `pydoc_data`, `readline`,
+`resource`, `rlcompleter`, `shelve`, `smtplib`, `socketserver`, `ssl`, `syslog`, `tabnanny`, `termios`, `this`,
+`tkinter`, `trace`, `tty`, `turtle`, `turtledemo`, `unittest`, `venv`, `wave`, `webbrowser`, `wsgiref`, `xmlrpc` and
+`zipapp` (55, found by importing every name in `sys.stdlib_module_names`).
 
 ## Differences from python3 on Ubuntu
 
@@ -114,7 +120,11 @@ behaviour the two share. Beyond the version:
 | `--help`, `-h` | CPython's help | a short help of our own (`spec/commands/python3.json`) |
 | Error numbers | Linux's (`[Errno 2] No such file or directory`) | WASI's (`[Errno 44] No such file or directory`); the names (`FileNotFoundError`) and texts match |
 | `isatty()` | depends on the terminal | always false: stdio is a pipe, as in a tool call |
-| Output | streamed | collected and written when the program ends (pipelines in the machine run one stage after another anyway) |
+| Output | streamed | collected and written when the program ends, in the order it was written, so `2>&1` interleaves stdout and stderr as Ubuntu does (pipelines in the machine run one stage after another anyway) |
+| File modes | `os.chmod`, `os.stat().st_mode` permission bits | `st_mode` holds only the file type; `os.chmod` does nothing, so a script it made executable still fails with exit 126; the `mode` of `os.open` is ignored (new files get the shell's `umask`, which is honoured; there is no `os.umask`); `os.access` answers only whether the file exists |
+| Interpreter | reads `PYTHONPATH`, `PYTHONWARNINGS` and the other `PYTHON*` variables | isolated (`sys.flags.isolated`): those variables are passed on but ignored |
+| Time zone | `TZ` and `/etc/localtime` | always UTC; `TZ` is ignored |
+| Descriptors and devices | `/dev/stdin`, `/dev/urandom`, `/dev/fd/N`, `<(...)` | only descriptors 0 to 2 are inherited; those paths can't be opened (read `sys.stdin`; use `os.urandom`), and `os.listdir` of a descriptor raises `TypeError` |
 | Reading a mounted file the command did not name | — | fetched from the source while the program waits ([mounts](#mounts-web-access-snapshots-and-recordings)) |
 | `os.getuid()` and other process calls | the real ids | absent, as in any WASI build of Python |
 | `random`, `time` | — | real randomness and the real clock, like `date` and `$RANDOM` in Topwater's Python port, which has no virtual clock. In .NET the wall clock is the shell's, so a shell with `StartTime` shows its virtual time; randomness stays real |
@@ -134,7 +144,7 @@ behaviour the two share. Beyond the version:
 
 ## Security model
 
-Isolation comes from the WebAssembly boundary, not from Python. The program can only call the 44 WASI preview1
+Isolation comes from the WebAssembly boundary, not from Python. The program can only call the 42 WASI preview1
 functions and two HTTP functions that Topwater implements itself; it has no way to name a host file, socket, process
 or thread.
 
@@ -146,7 +156,13 @@ or thread.
 - **The network** is Topwater's [web access](web.md): every request (and every redirect, which the program follows
   itself) is checked against your policy, counts toward its limits, gets its credentials and is recorded. Without a
   policy every host fails to resolve, as for `curl`. The program never opens a socket or sees TLS.
-- **The interpreter** is checked against pinned SHA-256 hashes every time it is loaded.
+- **The interpreter** files are checked against pinned SHA-256 hashes every time a process loads them. A compiled
+  module from `cache_dir` is not compiled again, so it is not checked that way: Topwater writes it through an
+  unpredictable temporary name into a folder only your user may enter (0700, the file 0600), prefixes it with an HMAC
+  keyed to the pinned module hash and the wasmtime version, and loads it only when that HMAC matches and, on Linux and
+  macOS, the folder and file belong to your user and nobody else may write them. Anything else is compiled afresh and
+  replaced. This keeps out stale and foreign files, not a program running as your own user, which could change your
+  code anyway.
 - **Hostile programs** (a busy loop, a huge allocation, deep recursion, a file that fills the disk, symbolic link
   loops, `..` paths, closing or exhausting descriptors) fail inside Python or end the program; the tests in
   `python/tests/test_python.py`, `tests/Topwater.Tests/PythonTests.cs` and `typescript/test/python.test.ts` cover
@@ -157,6 +173,11 @@ or thread.
 A mounted file the command names (`python3 /mnt/notes/report.py`) is fetched before the program starts, like for any
 command. One the program finds by itself (`open("/mnt/notes/plan.md")`, `os.listdir` of a folder not listed yet) is
 fetched while the program waits, within the call's time; other commands say "run the command again" instead.
+
+A change the program makes in a `live` mount is applied when the program has ended, as for any command: if the source
+refuses it, the program has already seen its write succeed (and exited 0), and the refusal is printed after its output
+(`mount: ...: the source failed; the change stays pending`). `python3`'s exit status stays the program's, as `echo x >
+/mnt/live/f` keeps 0. Check `mount` or the pending changes when a write must have reached the source.
 
 `python3` keeps nothing between calls, so snapshots and forks need nothing new: a fork keeps the command. A recording
 holds the program's HTTP exchanges with the others, and replays them; to replay calls that ran `python3`, enable it in
