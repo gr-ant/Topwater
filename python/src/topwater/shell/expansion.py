@@ -299,7 +299,7 @@ class ExpansionPart:
             return "".join(chars)
         if len(rest) == 2 and rest[0] == "@":
             from ..commands import unescape
-            from ..commands.more import attribute_flags
+            from ..commands.variables import attribute_flags
             if rest[1] == "a":
                 return attribute_flags(self, self.resolve_name(name))
             if not self._is_set(name):

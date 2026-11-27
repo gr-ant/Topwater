@@ -1,14 +1,17 @@
 """Filesystem commands: ls cd-free file ops, find, tree."""
 from __future__ import annotations
 
+import json
 import math
 import re
 from datetime import datetime, timedelta, timezone
 
-from ..shell import glob_to_regex
 from .._spec import COMMANDS, ERRNO
+from ..convert import file_type
+from ..shell import glob_to_regex
 from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, get_parent, normalize, utc_now
-from . import Args, inputs, parse_date, quote_always, quote_l, spec_message, split_lines, strftime
+from . import Args, inputs, quote_always, spec_message, split_lines, strftime
+from .system import parse_date
 
 
 def typed(message: str, arg: str, abs_path: str) -> tuple[str, str]:
@@ -992,6 +995,291 @@ def _tree(ctx):
     ctx.stdout.write("".join(out))
 
 
+class _Errors:
+    def __init__(self):
+        self.hit = False
+
+    def __call__(self):
+        self.hit = True
+
+
+def chmod_parse(spec: str, mode: int, is_dir: bool, umask: int = 0) -> int:
+    """Octal (755) or symbolic (u+x, go-w, a=r, +x, +t) mode; a clause with no who-letter (+w, =rw) leaves alone the bits
+    the umask takes away."""
+    if re.fullmatch(r"[0-7]{1,4}", spec):
+        return int(spec, 8)
+    for clause in spec.split(","):
+        m = re.fullmatch(r"([ugoa]*)([-+=])([rwxXt]*)", clause)
+        if not m:
+            raise ShellError(spec_message("chmod", "invalidMode", mode=spec))
+        who = "ugo" if m.group(1) in ("", "a") else m.group(1).replace("a", "ugo")
+        bits, sticky = 0, False
+        for c in m.group(3):
+            if c == "r":
+                bits |= 4
+            elif c == "w":
+                bits |= 2
+            elif c == "x" or (c == "X" and (is_dir or mode & 0o111)):
+                bits |= 1
+            elif c == "t":
+                sticky = True
+        mask = clear = 0
+        for w in who:
+            shift = {"u": 6, "g": 3, "o": 0}[w]
+            mask |= bits << shift
+            clear |= 7 << shift
+        if not m.group(1):
+            mask &= ~umask
+        sticky_bit = 0o1000 if sticky else 0
+        op = m.group(2)
+        mode = mode | mask | sticky_bit if op == "+" else mode & ~(mask | sticky_bit) if op == "-" else (mode & ~clear) | mask | sticky_bit
+    return mode
+
+
+def _looks_json(t: str) -> bool:
+    s = t.lstrip()
+    if not s or s[0] not in "{[":
+        return False
+    try:
+        json.loads(t)
+        return True
+    except ValueError:
+        return False
+
+
+def _stat(ctx):
+    a = Args.parse(ctx.args, COMMANDS["stat"])
+    user = ctx.shell.user
+    code = 0
+    for p in a.positional:
+        path = ctx.resolve(p)
+        follow = a.has("L")
+        if not ctx.fs.exists(path, follow):
+            ctx.error("stat: " + spec_message("stat", "cannotStat", file=p, errno=ctx.fs.why_missing(path, follow)))
+            code = 1
+            continue
+        st = ctx.fs.stat(path, follow)
+        kind = "symbolic link" if st.is_symlink else "directory" if st.is_dir else "regular empty file" if st.size == 0 else "regular file"
+        named = f"{quote_always(p)} -> {quote_always(st.link_target)}" if st.is_symlink else quote_always(p)
+        mode = f"{st.mode:03o}"
+        rwx = format_mode(st.is_dir, st.mode, st.is_symlink)
+        user = st.owner
+        uid = "0" if user == "root" else "1000"
+        mtime = st.modified.strftime("%Y-%m-%d %H:%M:%S.%f000 +0000")
+        if a.value("c") is not None:
+            values = {
+                "n": p, "N": named, "s": str(st.size), "F": kind, "a": mode, "A": rwx, "U": user, "G": user, "u": uid, "g": uid,
+                "y": mtime, "Y": str(int(st.modified.replace(tzinfo=timezone.utc).timestamp())), "b": str(st.blocks), "B": "512", "h": str(st.links), "%": "%",
+            }
+            ctx.print(re.sub(r"%(.)", lambda m: values.get(m.group(1), m.group(0)), a.value("c")))
+            continue
+        ctx.stdout.write(f"  File: {p}{' -> ' + st.link_target if st.is_symlink else ''}\n  Size: {st.size:<10}\tBlocks: {st.blocks:<10} IO Block: 4096   {kind}\n"
+                         f"Access: ({mode:0>4}/{rwx})  Uid: ({uid:>5}/{user:>8})   Gid: ({uid:>5}/{user:>8})\n"
+                         f"Modify: {mtime}\nChange: {mtime}\n")
+    return code
+
+
+def _du(ctx):
+    a = Args.parse(ctx.args, COMMANDS["du"])
+    max_depth = 0 if a.has("s") else int(a.value("d")) if a.value("d") else 10**9
+
+    def fmt(kb: int) -> str:
+        if not a.has("h"):
+            return str(kb)
+        if kb < 10:
+            return f"{kb:.1f}K"
+        if kb < 1024:
+            return f"{kb}K"
+        if kb < 1024 * 1024:
+            return f"{kb / 1024:.1f}".rstrip("0").rstrip(".") + "M"
+        return f"{kb / 1048576:.1f}".rstrip("0").rstrip(".") + "G"
+
+    def walk(path, display, depth):
+        if not ctx.fs.is_dir(path, follow=False):
+            kb = ctx.fs.stat(path, follow=False).blocks // 2
+            if (a.has("a") and depth <= max_depth) or depth == 0:
+                ctx.print(f"{fmt(kb)}\t{display}")
+            return kb
+        total = 4 + sum(walk(normalize(path, n), display.rstrip("/") + "/" + n, depth + 1) for n in ctx.fs.listdir(path))
+        if depth <= max_depth:
+            ctx.print(f"{fmt(total)}\t{display}")
+        return total
+
+    code, grand = 0, 0
+    for p in a.positional or ["."]:
+        path = ctx.resolve(p)
+        if not ctx.fs.exists(path, follow=False):
+            ctx.error("du: " + spec_message("du", "cannotAccess", file=p, errno="No such file or directory"))
+            code = 1
+            continue
+        grand += walk(path, p, 0)
+    if a.has("c"):
+        ctx.print(f"{fmt(grand)}\ttotal")
+    return code
+
+
+def _df(ctx):
+    human = any(x.startswith("-") and "h" in x for x in ctx.args)
+    # the disk is the filesystem's capacity and what its files really hold
+    size, used = ctx.fs.capacity, ctx.fs.used_bytes
+    avail = max(0, size - used)
+    pct = 0 if size == 0 else math.ceil(used * 100 / size)
+
+    def h(b: int) -> str:
+        if b < 1024:
+            return str(b)
+        v, unit = float(b), 0
+        while True:
+            v /= 1024
+            unit += 1
+            if not (math.ceil(v) >= 1024 and unit < 4):
+                break
+        return (f"{math.ceil(v * 10) / 10:.1f}" if v < 10 else f"{math.ceil(v):.0f}") + "KMGT"[unit - 1]  # df -h rounds up
+
+    ctx.stdout.write(
+        f"Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1      {h(size):>5} {h(used):>5} {h(avail):>5} {pct:>3}% /\n"
+        "tmpfs           3.9G     0  3.9G   0% /dev/shm\n"
+        if human else
+        f"Filesystem     1K-blocks    Used Available Use% Mounted on\n/dev/sda1      {size // 1024:>10} {(used + 1023) // 1024:>7} "
+        f"{avail // 1024:>9} {pct:>3}% /\ntmpfs            4007440       0   4007440   0% /dev/shm\n")
+
+
+def _chmod(ctx):
+    recursive = verbose = changes = quiet = False
+    spec, files, reference = None, [], None
+    args = list(ctx.args)
+    while args:
+        arg = args.pop(0)
+        if arg == "--reference" or arg.startswith("--reference="):
+            if arg == "--reference" and not args:
+                raise UsageException(spec_message("chmod", "referenceNeedsArgument"))
+            reference = arg[12:] if "=" in arg else args.pop(0)
+        elif arg in ("-R", "--recursive"):
+            recursive = True
+        elif arg in ("-v", "--verbose"):
+            verbose = True
+        elif arg in ("-c", "--changes"):
+            changes = True
+        elif arg in ("-f", "--silent", "--quiet"):
+            quiet = True
+        elif arg.startswith("--") and len(arg) > 2:
+            raise UsageException(spec_message("chmod", "unrecognizedOption", option=arg))
+        elif len(arg) > 1 and arg[0] == "-" and (bad := next((c for c in arg if c not in "-rwxXstugoa+=,01234567"), None)):
+            raise UsageException(spec_message("chmod", "invalidOption", option=bad))
+        elif spec is None and reference is None:
+            spec = arg  # may look like an option, e.g. -x or -w
+        else:
+            files.append(arg)
+    if reference is not None:
+        # --reference: the mode bits of that file instead of a mode
+        rpath = ctx.resolve(reference)
+        if not ctx.fs.exists(rpath):
+            ctx.error("chmod: " + spec_message("chmod", "cannotStatReference", file=reference, reason=ctx.fs.why_missing(rpath)))
+            return 1
+        spec = f"{ctx.fs.stat(rpath).mode & 0o7777:o}"
+        if spec is not None and len(files) == 0:
+            raise UsageException(spec_message("chmod", "missingOperand"))
+    if spec is None or not files:
+        raise UsageException(spec_message("chmod", "missingOperand") if spec is None else spec_message("chmod", "missingOperandAfter", operand=spec))
+    code = 0
+
+    def fmt(st, m):
+        return f"{m:04o} ({format_mode(st.is_dir, m)[1:]})"
+
+    def apply(display, path):
+        nonlocal code
+        st = ctx.fs.stat(path)
+        mode = chmod_parse(spec, st.mode, st.is_dir, ctx.shell.umask)
+        try:
+            ctx.fs.chmod(path, mode)
+        except ShellError:
+            if not quiet:
+                ctx.error("chmod: " + spec_message("chmod", "cannotChangePermissions", file=display))
+            code = 1
+            return
+        if mode != st.mode and (verbose or changes):
+            ctx.print(f"mode of '{display}' changed from {fmt(st, st.mode)} to {fmt(st, mode)}")
+        elif mode == st.mode and verbose:
+            ctx.print(f"mode of '{display}' retained as {fmt(st, mode)}")
+        if recursive and st.is_dir and ctx.fs.can_read(path):
+            for n in ctx.fs.listdir(path):
+                shown = display.rstrip("/") + "/" + n
+                if not ctx.fs.is_symlink(normalize(path, n)):  # like chmod -R, links met on the way are left alone
+                    apply(shown, normalize(path, n))
+                elif verbose:
+                    ctx.print(f"neither symbolic link '{shown}' nor referent has been changed")
+
+    for f in files:
+        path = ctx.resolve(f)
+        if not ctx.fs.exists(path):
+            ctx.error("chmod: " + spec_message("chmod", "cannotAccess", file=f, reason=ctx.fs.why_missing(path)))
+            code = 1
+            continue
+        apply(f, path)
+    return code
+
+
+def _chown(ctx):
+    operands = [x for x in ctx.args if not x.startswith("-")]
+    files = operands[1:]  # first operand is the owner
+    if not files:
+        raise UsageException(spec_message(ctx.name, "missingOperand"))
+    owner = operands[0].split(":")[0]
+    code = 0
+    for f in files:
+        path = ctx.resolve(f)
+        if not ctx.fs.exists(path):
+            ctx.error(f"{ctx.name}: " + spec_message(ctx.name, "cannotAccess", file=f, reason=ctx.fs.why_missing(path)))
+            code = 1
+            continue
+        try:
+            ctx.fs.set_owner(path, owner or ctx.fs.stat(path).owner, "-R" in ctx.args)
+        except ShellError:
+            ctx.error(f"{ctx.name}: changing ownership of '{f}': Operation not permitted")
+            code = 1
+    return code
+
+
+def _pager(ctx):
+    errors = _Errors()
+    for _, text in inputs(ctx, [x for x in ctx.args if not x.startswith(("-", "+"))], errors):
+        ctx.stdout.write(text)
+    return 1 if errors.hit else 0
+
+
+def _file(ctx):
+    code = 0
+    for p in ctx.args:
+        if p.startswith("-"):
+            continue
+        path = ctx.resolve(p)
+        if not ctx.fs.exists(path):
+            desc, code = spec_message("file", "cannotOpen", file=p), 1
+        elif ctx.fs.is_dir(path):
+            desc = "directory"
+        else:
+            data = ctx.fs.read_bytes(path)
+            t = data.decode("utf-8", "replace")
+            if not t:
+                desc = "empty"
+            elif file_type(data):
+                desc = file_type(data)
+            elif t.startswith("\x7fELF"):
+                desc = "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, stripped"
+            elif t.startswith("#!"):
+                desc = ("Python script" if "python" in t.split("\n", 1)[0] else "Bourne-Again shell script") + ", ASCII text executable"
+            elif _looks_json(t):
+                desc = "JSON text data"
+            elif "\0" in t or t.encode() != data:  # NUL bytes or invalid UTF-8
+                desc = "data"
+            elif any(ord(c) > 127 for c in t):
+                desc = "Unicode text, UTF-8 text"
+            else:
+                desc = "ASCII text"
+        ctx.print(f"{p}: {desc}")
+    return code
+
+
 def register(shell) -> None:
     r = shell.register_command
     r("ls", _ls)
@@ -1005,3 +1293,12 @@ def register(shell) -> None:
     r("ln", _ln)
     r("find", _find)
     r("tree", _tree)
+    r("stat", _stat)
+    r("du", _du)
+    r("df", _df)
+    r("chmod", _chmod)
+    r("chown", _chown)
+    r("chgrp", _chown)
+    r("less", _pager)
+    r("more", _pager)
+    r("file", _file)

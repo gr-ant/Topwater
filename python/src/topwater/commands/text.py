@@ -5,10 +5,11 @@ import io
 import re
 
 from .. import bytetext
-from ..shell import CommandContext, TimedPattern, glob_to_regex
 from .._spec import COMMANDS, GETOPT
+from ..shell import CommandContext, TimedPattern, glob_to_regex
 from ..vfs import ShellError, UsageException, normalize
-from . import Args, inputs, quote_l, spec_format, spec_message, split_lines, unescape
+from . import Args, inputs, printf_format, spec_format, spec_message, split_lines, unescape, write_lines
+from .diff import _diff
 
 
 _CLASSES = {
@@ -569,6 +570,8 @@ def _wc(ctx):
 
 
 _SORT_ORDERING = set("bdfghnrMV")
+
+
 _HUMAN_SUFFIX = "KMGTPEZY"
 
 
@@ -1661,6 +1664,328 @@ def _sed(ctx):
     return 4 if any(f != "-" and ctx.fs.is_dir(ctx.resolve(f)) for f in files) else 2 if errors.hit else 0  # 4: a read error (a directory)
 
 
+def _two_inputs(ctx, files: list[str], sep: str = "\n"):
+    """comm and join: the lines of exactly two files (- is stdin), or None after reporting an unreadable one."""
+    if len(files) < 2:
+        raise UsageException(spec_message(ctx.name, "missingOperandAfter", operand=files[0]) if files else spec_message(ctx.name, "missingOperand"))
+    if len(files) > 2:
+        raise UsageException(spec_message(ctx.name, "extraOperand", operand=files[2]))
+    errors = _Errors()
+    out = []
+    for f in files:
+        got = list(inputs(ctx, [f], errors))
+        if not got:
+            return None
+        lines = got[0][1].split(sep)
+        if lines and lines[-1] == "":
+            lines.pop()
+        out.append(lines)
+    return out
+
+
+def _nl(ctx):
+    a = Args.parse(ctx.args, COMMANDS["nl"])
+    every = a.value("b") == "a"
+    width = int(a.value("w") or 6)
+    sep = a.value("s") or "\t"
+    errors, n = _Errors(), 0
+    for _, text in inputs(ctx, a.positional, errors):
+        for line in split_lines(text):
+            if not line and not every:
+                ctx.print("")
+                continue
+            n += 1
+            ctx.print(f"{str(n).rjust(width)}{sep}{line}")
+    return 1 if errors.hit else 0
+
+
+def _rev(ctx):
+    errors = _Errors()
+    for _, text in inputs(ctx, ctx.args, errors):
+        for line in split_lines(text):
+            ctx.print(line[::-1])
+    return 1 if errors.hit else 0
+
+
+def _tac(ctx):
+    errors = _Errors()
+    for _, text in inputs(ctx, ctx.args, errors):
+        write_lines(ctx.stdout, reversed(split_lines(text)))
+    return 1 if errors.hit else 0
+
+
+def _paste(ctx):
+    a = Args.parse(ctx.args, COMMANDS["paste"])
+    delims = unescape(a.value("d") if a.value("d") is not None else "\t") or "\0"
+
+    def join(cells):
+        out = []
+        for i, cell in enumerate(cells):
+            if i and delims[(i - 1) % len(delims)] != "\0":
+                out.append(delims[(i - 1) % len(delims)])
+            out.append(cell)
+        return "".join(out)
+
+    errors = _Errors()
+    if a.positional.count("-") > 1 and not a.has("s"):
+        # several "-" operands take turns reading lines from stdin (seq 6 | paste - - -)
+        stdin_lines = split_lines(ctx.stdin)
+        n = a.positional.count("-")
+        columns, k = [], 0
+        for f in a.positional:
+            if f == "-":
+                columns.append(stdin_lines[k::n])
+                k += 1
+            else:
+                columns.extend(split_lines(t) for _, t in inputs(ctx, [f], errors))
+    else:
+        columns = [split_lines(t) for _, t in inputs(ctx, a.positional, errors)]
+    if a.has("s"):
+        for col in columns:
+            ctx.print(join(col))
+    else:
+        for r in range(max((len(c) for c in columns), default=0)):
+            ctx.print(join([c[r] if r < len(c) else "" for c in columns]))
+    return 1 if errors.hit else 0
+
+
+def _comm_cmd(ctx):
+    a = Args.parse(ctx.args, COMMANDS["comm"])
+    sep = "\0" if a.has("z") else "\n"
+    both = _two_inputs(ctx, a.positional, sep)
+    if both is None:
+        return 1
+    left, right = both
+    delim = a.value("\x03") if a.value("\x03") is not None else "\t"
+    show = [not a.has("1"), not a.has("2"), not a.has("3")]
+    indent = ["", delim * show[0], delim * (show[0] + show[1])]
+    check, strict = not a.has("\x02"), a.has("\x01")
+    out, counts, last, unsorted = [], [0, 0, 0], [None, None], [False, False]
+
+    def flush():
+        ctx.stdout.write("".join(x + sep for x in out))
+        out.clear()
+
+    def disorder(k: int, line: str) -> bool:
+        """Notes line as file k's latest; True the first time file k is found out of order."""
+        bad = check and last[k] is not None and line < last[k] and not unsorted[k]
+        unsorted[k] |= bad
+        last[k] = line
+        return bad
+    i = j = 0
+    while i < len(left) or j < len(right):
+        ctx.check_time()
+        if j >= len(right) or (i < len(left) and left[i] < right[j]):
+            col, line, bad = 0, left[i], [k for k in (0,) if disorder(0, left[i])]
+            i += 1
+        elif i >= len(left) or right[j] < left[i]:
+            col, line, bad = 1, right[j], [k for k in (1,) if disorder(1, right[j])]
+            j += 1
+        else:
+            col, line = 2, left[i]
+            bad = [k for k, x in ((0, left[i]), (1, right[j])) if disorder(k, x)]
+            i, j = i + 1, j + 1
+        if bad and strict:  # --check-order stops before the line out of order
+            flush()
+            ctx.error("comm: " + spec_message("comm", "notSorted", n=str(bad[0] + 1)))
+            return 1
+        counts[col] += 1
+        if show[col]:
+            out.append(indent[col] + line)
+        for k in bad:  # otherwise the line goes out first, then the warning
+            flush()
+            ctx.error("comm: " + spec_message("comm", "notSorted", n=str(k + 1)))
+    if a.has("\x04"):
+        out.append(delim.join(str(c) for c in counts) + delim + spec_message("comm", "total"))
+    flush()
+    if any(unsorted):
+        ctx.error("comm: " + spec_message("comm", "inputNotSorted"))
+        return 1
+    return 0
+
+
+def _join_cmd(ctx):
+    a = Args.parse(ctx.args, COMMANDS["join"])
+    tab = a.value("t") or None  # -t "" splits on blanks, as GNU join does
+    if tab is not None and len(tab) > 1:
+        raise ShellError(spec_message("join", "multiCharTab", value=tab))
+
+    def field_no(v: str) -> int:
+        if not v.isascii() or not v.isdigit() or int(v) < 1:
+            raise ShellError(spec_message("join", "badField", value=v))
+        return int(v) - 1
+    k1 = k2 = 0
+    if a.value("j") is not None:
+        k1 = k2 = field_no(a.value("j"))
+    if a.value("1") is not None:
+        k1 = field_no(a.value("1"))
+    if a.value("2") is not None:
+        k2 = field_no(a.value("2"))
+    unpaired = set()
+    for v in a.all("a") + a.all("v"):
+        if v not in ("1", "2"):
+            raise ShellError(spec_message("join", "badFileNumberArg", value=v))
+        unpaired.add(int(v))
+    only = {int(v) for v in a.all("v")}
+    fmt = None
+    if a.value("o") is not None and a.value("o") != "auto":
+        fmt = []
+        for spec in re.split(r"[ ,]+", a.value("o").strip()):
+            m = re.fullmatch(r"([0-9]+)\.([0-9]+)", spec)
+            if spec == "0":
+                fmt.append((0, 0))
+            elif not m or m.group(1) not in ("1", "2"):
+                raise ShellError(spec_message("join", "badFileNumber", spec=spec))
+            else:
+                fmt.append((int(m.group(1)), field_no(m.group(2))))
+    both = _two_inputs(ctx, a.positional)
+    if both is None:
+        return 1
+
+    def fields(line: str) -> list[str]:
+        if tab is not None:
+            return line.split(tab)
+        line = line.strip(" \t")  # GNU join's blanks: spaces and tabs only
+        return re.split(r"[ \t]+", line) if line else []
+    left, right = [[fields(x) for x in side] for side in both]
+    keys = (k1, k2)
+    fold = a.has("i")
+
+    def key(f: list[str], side: int) -> str:
+        k = f[keys[side]] if keys[side] < len(f) else ""
+        return k.lower() if fold else k
+    if a.value("o") == "auto":
+        fmt = [(0, 0)] + [(1, i) for i in range(len(left[0]) if left else 0) if i != k1] + \
+              [(2, i) for i in range(len(right[0]) if right else 0) if i != k2]
+    out_sep = tab if tab is not None else " "
+    empty = a.value("e") if a.value("e") is not None else ""
+    lines = []
+
+    def emit(f1, f2) -> None:
+        if fmt is not None:
+            row = []
+            for side, n in fmt:
+                f = f1 if side == 1 else f2
+                if side == 0:
+                    src, k = (f1, k1) if f1 is not None else (f2, k2)
+                    row.append(src[k] if k < len(src) else empty)
+                else:
+                    row.append(f[n] if f is not None and n < len(f) else empty)
+        else:
+            src, k = (f1, k1) if f1 is not None else (f2, k2)
+            row = [src[k] if k < len(src) else ""]
+            row += [x for i, x in enumerate(f1 or []) if i != k1] + [x for i, x in enumerate(f2 or []) if i != k2]
+        lines.append(out_sep.join(row))
+        if len(lines) >= 1024:  # written as it goes: one repeated key can pair up into far more rows than fit in memory
+            ctx.check_time()
+            ctx.stdout.write("".join(x + "\n" for x in lines))
+            lines.clear()
+    i = j = 0
+    if a.has("\x01") and (left or right):
+        emit(left[0] if left else None, right[0] if right else None)
+        i = j = 1
+    while i < len(left) or j < len(right):
+        ctx.check_time()
+        a_key = key(left[i], 0) if i < len(left) else None
+        b_key = key(right[j], 1) if j < len(right) else None
+        if b_key is None or (a_key is not None and a_key < b_key):
+            if 1 in unpaired:
+                emit(left[i], None)
+            i += 1
+        elif a_key is None or b_key < a_key:
+            if 2 in unpaired:
+                emit(None, right[j])
+            j += 1
+        else:
+            i2, j2 = i, j
+            while i2 < len(left) and key(left[i2], 0) == a_key:
+                i2 += 1
+            while j2 < len(right) and key(right[j2], 1) == a_key:
+                j2 += 1
+            if not only:
+                for x in left[i:i2]:
+                    for y in right[j:j2]:
+                        emit(x, y)
+            i, j = i2, j2
+    ctx.stdout.write("".join(x + "\n" for x in lines))
+    return 0
+
+
+def _column(ctx):
+    a = Args.parse(ctx.args, COMMANDS["column"])
+    errors = _Errors()
+    lines = [l for _, t in inputs(ctx, a.positional, errors) for l in split_lines(t)]
+    if not a.has("t"):
+        write_lines(ctx.stdout, lines)
+        return 1 if errors.hit else 0
+    sep = a.value("s")
+    rows = []
+    for l in lines:
+        if not l.strip():
+            continue
+        rows.append([c for c in re.split("[" + re.escape(unescape(sep)) + "]", l) if c] if sep else l.split())
+    out_sep = a.value("o") or "  "
+    widths = [max((len(r[c]) for r in rows if c < len(r)), default=0) for c in range(max((len(r) for r in rows), default=0))]
+    for r in rows:
+        ctx.print(out_sep.join(cell if i == len(r) - 1 else cell.ljust(widths[i]) for i, cell in enumerate(r)))
+    return 1 if errors.hit else 0
+
+
+def _seq(ctx):
+    nums, sep, equal_width, fmt = [], "\n", False, None
+    args = ctx.args
+    i = 0
+    while i < len(args):
+        x = args[i]
+        if re.fullmatch(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?", x):
+            nums.append(x)
+        elif x in ("-w", "--equal-width"):
+            equal_width = True
+        elif x == "-s":
+            if i + 1 >= len(args):
+                raise ShellError(spec_message("seq", "optionRequiresArgument", option="s"))
+            i += 1
+            sep = args[i]
+        elif x.startswith("-s"):
+            sep = x[2:]
+        elif x.startswith("--separator="):
+            sep = x[12:]
+        elif x in ("-f", "--format") or x.startswith(("-f", "--format=")):
+            if x in ("-f", "--format"):
+                if i + 1 >= len(args):
+                    raise ShellError(spec_message("seq", "optionRequiresArgument", option="f"))
+                i += 1
+                fmt = args[i]
+            else:
+                fmt = x[2:] if x.startswith("-f") else x[9:]
+        else:
+            raise ShellError(spec_message("seq", "invalidOption", option=x.lstrip("-")))
+        i += 1
+    if not nums or len(nums) > 3:
+        raise UsageException(spec_message("seq", "missingOperand") if not nums else spec_message("seq", "extraOperand", operand=nums[3]))
+    v = [float(x) for x in nums]
+    first = v[0] if len(v) > 1 else 1
+    step = v[1] if len(v) == 3 else 1
+    last = v[-1]
+    if step == 0:
+        raise ShellError(spec_message("seq", "zeroIncrement"))
+    decimals = max((len(x) - x.index(".") - 1 if "." in x else 0) for x in nums)
+    items, k = [], 0
+    while True:
+        x = first + k * step  # not a running sum, so 0.1 steps don't drift
+        if not ((x <= last + 1e-9) if step > 0 else (x >= last - 1e-9)):
+            break
+        items.append(printf_format(fmt, [repr(x)]) if fmt else f"{x:.{decimals}f}")
+        if len(items) > 1_000_000:
+            raise ShellError(spec_message("seq", "tooManyNumbers"))
+        k += 1
+    if equal_width and items:
+        w = max(len(s) for s in items)
+        items = [s.zfill(w) for s in items]
+    if items:
+        ctx.stdout.write(unescape(sep).join(items) + "\n")
+
+
 def register(shell) -> None:
     r = shell.register_command
     r("grep", _grep)
@@ -1677,3 +2002,12 @@ def register(shell) -> None:
     r("tee", _tee)
     r("xargs", _xargs)
     r("sed", _sed)
+    r("nl", _nl)
+    r("rev", _rev)
+    r("tac", _tac)
+    r("paste", _paste)
+    r("comm", _comm_cmd)
+    r("join", _join_cmd)
+    r("column", _column)
+    r("seq", _seq)
+    r("diff", _diff)

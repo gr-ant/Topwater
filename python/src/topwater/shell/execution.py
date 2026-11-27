@@ -525,7 +525,7 @@ class _CondEvaluator:
         if u in self.UNARY and self.p + 1 < len(items) and not (self.p + 2 < len(items) and is_cond_binary(items[self.p + 1])):
             arg = await sh._expand_single(items[self.p + 1], self.io)
             self.p += 2
-            from ..commands import test_unary
+            from ..commands.scripting import test_unary
 
             return test_unary(sh, {"-a": "-e", "-h": "-L"}.get(u, u), arg)
         left = items[self.p]
@@ -565,7 +565,7 @@ class _CondEvaluator:
             if op == ">":
                 return lv > rv
             if op in ("-nt", "-ot"):
-                from ..commands import newer
+                from ..commands.scripting import newer
                 return newer(sh, lv, rv) if op == "-nt" else newer(sh, rv, lv)
             if op == "-ef":
                 return sh.fs.same_file(sh.resolve(lv), sh.resolve(rv))

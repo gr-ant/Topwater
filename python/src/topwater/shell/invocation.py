@@ -132,7 +132,7 @@ class InvocationPart:
             else:
                 return await self._run_script_file(name, path, argv, io_)
         else:
-            from ..commands import is_shell_builtin
+            from ..commands.scripting import is_shell_builtin
 
             if not is_shell_builtin(self, name) and not self.is_unfiled(name):
                 found = self.hash_lookup(name)
@@ -161,7 +161,8 @@ class InvocationPart:
 
             if standard_option(ctx, cmd, argv[1]):
                 return 0
-        from ..commands import is_shell_builtin, usage_error
+        from ..commands import usage_error
+        from ..commands.scripting import is_shell_builtin
 
         try:
             result = cmd.handler(ctx)
@@ -337,7 +338,7 @@ class InvocationPart:
         return found or (["/usr/bin/" + name] if self._is_app_only(name) else [])
 
     def _is_app_only(self, name: str) -> bool:
-        from ..commands import is_shell_builtin
+        from ..commands.scripting import is_shell_builtin
         spec = COMMANDS.get(name)
         shell_only = spec is not None and not spec.program_file and self._builtin_names is not None and name in self._builtin_names
         return self.is_unfiled(name) and not is_shell_builtin(self, name) and not shell_only

@@ -1,9 +1,12 @@
 """Binary inspection: xxd, hexdump, od, strings. All of them read true bytes (text files: their UTF-8)."""
 from __future__ import annotations
 
-from .._spec import COMMANDS
+import base64
+import hashlib
 import re
 
+from .. import bytetext
+from .._spec import COMMANDS
 from ..vfs import ShellError, UsageException
 from . import Args, inputs, spec_message
 from .text import _Errors
@@ -206,6 +209,34 @@ def _strings(ctx):
     return 1 if errors.hit else 0
 
 
+def _base64(ctx):
+    a = Args.parse(ctx.args, COMMANDS["base64"])
+    errors = _Errors()
+    data = b"".join(t for _, t in inputs(ctx, a.positional, errors, raw=True))
+    if a.has("d"):
+        try:
+            ctx.stdout.write(bytetext.decode(base64.b64decode(b"".join(data.split()), validate=True)))
+        except ValueError:
+            raise ShellError("invalid input") from None
+        return 1 if errors.hit else 0
+    enc = base64.b64encode(data).decode()
+    wrap = int(a.value("w") or 76)
+    if wrap > 0:
+        enc = "\n".join(enc[i:i + wrap] for i in range(0, len(enc), wrap))
+    ctx.print(enc)
+    return 1 if errors.hit else 0
+
+
+def _hasher(algo):
+    def run(ctx):
+        files = [x for x in ctx.args if not x.startswith("-") or x == "-"]
+        errors = _Errors()
+        for name, data in inputs(ctx, files, errors, raw=True):
+            ctx.print(f"{hashlib.new(algo, data).hexdigest()}  {name if files else '-'}")
+        return 1 if errors.hit else 0
+    return run
+
+
 def register(shell) -> None:
     r = shell.register_command
     r("cmp", _cmp)
@@ -213,3 +244,6 @@ def register(shell) -> None:
     r("hexdump", _hexdump)
     r("od", _od)
     r("strings", _strings)
+    r("base64", _base64)
+    for name, algo in (("md5sum", "md5"), ("sha1sum", "sha1"), ("sha256sum", "sha256"), ("sha512sum", "sha512")):
+        r(name, _hasher(algo))
