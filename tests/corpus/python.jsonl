@@ -1,0 +1,50 @@
+{"id":"python-001","script":"python3 -c 'print(1+2)'","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"python-002","script":"python3 -c 'import sys; print(sys.argv)' a 'b c'","stdout":"['-c', 'a', 'b c']\n","exitCode":0,"quiet":true}
+{"id":"python-003","script":"printf 'x\\ny\\n' | python3 -c 'import sys; print(len(sys.stdin.read().splitlines()))'","stdout":"2\n","exitCode":0,"quiet":true}
+{"id":"python-004","script":"printf 'print(6*7)\\n' > s.py; python3 s.py","stdout":"42\n","exitCode":0,"quiet":true}
+{"id":"python-005","script":"printf 'import sys\\nprint(sys.argv)\\n' > s.py; python3 s.py one two","stdout":"['s.py', 'one', 'two']\n","exitCode":0,"quiet":true}
+{"id":"python-006","script":"echo 'print(\"from stdin\")' | python3","stdout":"from stdin\n","exitCode":0,"quiet":true}
+{"id":"python-007","script":"echo 'import sys; print(sys.argv)' | python3 - x y","stdout":"['-', 'x', 'y']\n","exitCode":0,"quiet":true}
+{"id":"python-008","script":"python3 -c 'raise SystemExit(3)'; echo $?","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"python-009","script":"python3 -c 'import sys; sys.exit(\"bye\")'; echo $?","stdout":"1\n","exitCode":0,"quiet":false}
+{"id":"python-010","script":"python3 -c '1/0'; echo $?","stdout":"1\n","exitCode":0,"quiet":false}
+{"id":"python-011","script":"echo '{\"a\": 1, \"b\": [1, 2]}' | python3 -m json.tool","stdout":"{\n    \"a\": 1,\n    \"b\": [\n        1,\n        2\n    ]\n}\n","exitCode":0,"quiet":true}
+{"id":"python-012","script":"python3 -c 'import os; print(os.getcwd())'","stdout":"/tmp/w\n","exitCode":0,"quiet":true}
+{"id":"python-013","script":"echo data > in.txt; python3 -c 'print(open(\"in.txt\").read().upper(), end=\"\")'","stdout":"DATA\n","exitCode":0,"quiet":true}
+{"id":"python-014","script":"python3 -c 'open(\"f.txt\", \"w\").write(\"hi\\n\")'; cat f.txt","stdout":"hi\n","exitCode":0,"quiet":true}
+{"id":"python-015","script":"x=$(python3 -c 'print(\"captured\")'); echo \"[$x]\"","stdout":"[captured]\n","exitCode":0,"quiet":true}
+{"id":"python-016","script":"python3 -c 'import sys; sys.stderr.write(\"err\\n\"); print(\"out\")' 2>/dev/null","stdout":"out\n","exitCode":0,"quiet":true}
+{"id":"python-017","script":"printf '#!/usr/bin/env python3\\nprint(\"shebang\")\\n' > s.py; chmod +x s.py; ./s.py","stdout":"shebang\n","exitCode":0,"quiet":true}
+{"id":"python-018","script":"python3 nope.py; echo $?","stdout":"2\n","exitCode":0,"quiet":false}
+{"id":"python-019","script":"python3 -c 'import json; print(json.dumps({\"b\": 1, \"a\": [1, 2]}, sort_keys=True))'","stdout":"{\"a\": [1, 2], \"b\": 1}\n","exitCode":0,"quiet":true}
+{"id":"python-020","script":"python3 -c 'print(sum(range(101)))' | wc -c","stdout":"5\n","exitCode":0,"quiet":true}
+{"id":"python-021","script":"FOO=bar python3 -c 'import os; print(os.environ.get(\"FOO\"))'","stdout":"bar\n","exitCode":0,"quiet":true}
+{"id":"python-022","script":"export X=1; Y=2; python3 -c 'import os; print(os.environ.get(\"X\"), os.environ.get(\"Y\"))'","stdout":"1 None\n","exitCode":0,"quiet":true}
+{"id":"python-023","script":"python3 -c 'import sys; print(sys.stdin.isatty(), sys.stdout.isatty())' </dev/null | cat","stdout":"False False\n","exitCode":0,"quiet":true}
+{"id":"python-024","script":"mkdir d && touch d/b d/a && python3 -c 'import os; print(sorted(os.listdir(\"d\")))'","stdout":"['a', 'b']\n","exitCode":0,"quiet":true}
+{"id":"python-025","script":"python3 -c 'import pathlib; p = pathlib.Path(\"t.txt\"); p.write_text(\"xyz\"); print(p.exists(), p.stat().st_size)'","stdout":"True 3\n","exitCode":0,"quiet":true}
+{"id":"python-026","script":"python3 -c 'import csv, sys; csv.writer(sys.stdout).writerow([\"a\", \"b c\"])' | od -c | head -2","stdout":"0000000   a   ,   b       c  \\r  \\n\n0000007\n","exitCode":0,"quiet":true}
+{"id":"python-027","script":"python3 -c 'print(input())' <<< hello","stdout":"hello\n","exitCode":0,"quiet":true}
+{"id":"python-028","script":"python3 -c 'import os; os.makedirs(\"a/b\"); os.rename(\"a/b\", \"a/c\"); print(os.listdir(\"a\"))'","stdout":"['c']\n","exitCode":0,"quiet":true}
+{"id":"python-029","script":"python3 -c 'import os; os.symlink(\"target\", \"l\"); print(os.readlink(\"l\"))'; ls -l l | cut -c1","stdout":"target\nl\n","exitCode":0,"quiet":true}
+{"id":"python-030","script":"python3 -c 'import shutil; open(\"s\", \"w\").write(\"q\"); shutil.copy(\"s\", \"t\"); print(open(\"t\").read())'","stdout":"q\n","exitCode":0,"quiet":true}
+{"id":"python-031","script":"python3 -c 'import os; os.remove(\"missing\")' 2>/dev/null; echo $?","stdout":"1\n","exitCode":0,"quiet":true}
+{"id":"python-032","script":"python3 -c 'import glob; open(\"a.txt\", \"w\"); open(\"b.txt\", \"w\"); print(sorted(glob.glob(\"*.txt\")))'","stdout":"['a.txt', 'b.txt']\n","exitCode":0,"quiet":true}
+{"id":"python-033","script":"python3 --badopt; echo $?","stdout":"2\n","exitCode":0,"quiet":false}
+{"id":"python-034","script":"python3 -c; echo $?","stdout":"2\n","exitCode":0,"quiet":false}
+{"id":"python-035","script":"python3 -c 'import sys; print(sys.version_info[0])'","stdout":"3\n","exitCode":0,"quiet":true}
+{"id":"python-036","script":"printf 'a\\nb\\n' | python3 -c 'import sys\nfor l in sys.stdin: print(l.strip() * 2)'","stdout":"aa\nbb\n","exitCode":0,"quiet":true}
+{"id":"python-037","script":"printf 'print(\"mod\", __name__)\\n' > m.py; python3 -m m","stdout":"mod __main__\n","exitCode":0,"quiet":true}
+{"id":"python-038","script":"python3 -c 'import os; f = open(\"w.txt\", \"w\"); f.write(\"unclosed\"); os._exit(0)'; cat w.txt; echo \"[$?]\"","stdout":"[0]\n","exitCode":0,"quiet":true}
+{"id":"python-039","script":"python3 -c 'f = open(\"u.txt\", \"w\"); f.write(\"left open\")'; cat u.txt","stdout":"left open","exitCode":0,"quiet":true}
+{"id":"python-040","script":"python3 -c 'import os; print(os.path.exists(\"/etc/hostname\"), os.path.isdir(\"/tmp\"))'","stdout":"True True\n","exitCode":0,"quiet":true}
+{"id":"python-041","script":"python3 -c 'open(\"/nope/x\", \"w\")' 2>&1 | tail -1 | cut -d: -f1","stdout":"FileNotFoundError\n","exitCode":0,"quiet":true}
+{"id":"python-042","script":"python3 -c 'import os; os.rmdir(\"/tmp/w\")' 2>&1 | tail -1 | cut -d: -f1","stdout":"","exitCode":0,"quiet":true}
+{"id":"python-043","script":"printf 'line1\\nline2\\n' > f; python3 -c 'import sys; print(open(sys.argv[1]).readlines())' f","stdout":"['line1\\n', 'line2\\n']\n","exitCode":0,"quiet":true}
+{"id":"python-044","script":"python3 -c 'import zlib, base64; print(base64.b64encode(zlib.decompress(zlib.compress(b\"abc\"))).decode())'","stdout":"YWJj\n","exitCode":0,"quiet":true}
+{"id":"python-045","script":"python3 -c 'import hashlib; print(hashlib.sha256(b\"abc\").hexdigest())'","stdout":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n","exitCode":0,"quiet":true}
+{"id":"python-046","script":"python3 -c 'import re; print(re.sub(r\"(\\d+)\", r\"<\\1>\", \"a1b22\"))'","stdout":"a<1>b<22>\n","exitCode":0,"quiet":true}
+{"id":"python-047","script":"python3 -c 'import datetime; print(datetime.date(2024, 2, 29) + datetime.timedelta(days=1))'","stdout":"2024-03-01\n","exitCode":0,"quiet":true}
+{"id":"python-048","script":"python3 -c 'import sqlite3; c = sqlite3.connect(\":memory:\"); print(c.execute(\"select 6*7\").fetchone()[0])'","stdout":"42\n","exitCode":0,"quiet":true}
+{"id":"python-049","script":"python3 -c 'print(\"a\")'; python3 -c 'print(\"b\")' | tr a-z A-Z","stdout":"a\nB\n","exitCode":0,"quiet":true}
+{"id":"python-050","script":"printf 'not python\\nprint(\"skipped first line\")\\n' > x.py; python3 -x x.py","stdout":"skipped first line\n","exitCode":0,"quiet":true}

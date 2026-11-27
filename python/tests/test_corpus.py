@@ -26,9 +26,17 @@ def _params():
         yield pytest.param(c, id=id, marks=pytest.mark.skip(reason=reason) if reason else ())
 
 
+def _shell(case) -> Shell:
+    if case["area"] != "python":
+        return Shell()
+    pytest.importorskip("wasmtime")  # python3 is opt-in: its area runs with it enabled
+    from topwater.commands.python import PythonOptions
+    return Shell().allow_python(PythonOptions(artifacts=str(CORPUS.parents[1] / "assets" / "python-wasm")))
+
+
 @pytest.mark.parametrize("case", list(_params()))
 def test_case(case):
-    sh = Shell()
+    sh = _shell(case)
     sh.run("mkdir -p /tmp/w && cd /tmp/w && hash -r")
     if case.get("setup"):
         sh.run(case["setup"])

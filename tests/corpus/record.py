@@ -7,7 +7,8 @@ By default the script runs in a fresh ubuntu:24.04 docker container (bash 5.2.21
 empty /tmp/w with TZ=UTC, LC_ALL=C.UTF-8 and no network. --local uses this machine's bash in an empty temp directory.
 --agent runs it as the ordinary user `agent` (uid 1000, owning /tmp/w) like Topwater's shell, instead of root: for
 `ls -l` owners and "Permission denied" cases. --git uses an image with git 2.43 (built once as topwater-git-ref) and stores
-GIT_SETUP as the case's setup: fixed author, committer and dates, so commit ids are the same everywhere.
+GIT_SETUP as the case's setup: fixed author, committer and dates, so commit ids are the same everywhere. --python uses an
+image with Ubuntu's python3 (3.12, built once as topwater-python-ref), offline like the default.
 """
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 
@@ -16,15 +17,17 @@ IMAGE = "ubuntu:24.04"
 GIT_IMAGE = "topwater-git-ref"
 GIT_DOCKERFILE = ("FROM ubuntu:24.04\nRUN apt-get -qq update >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get -qq install -y git >/dev/null"
                   " && rm -rf /var/lib/apt/lists/*\n")
+PYTHON_IMAGE = "topwater-python-ref"
+PYTHON_DOCKERFILE = GIT_DOCKERFILE.replace("install -y git", "install -y python3")
 GIT_SETUP = ("export GIT_AUTHOR_NAME='A U Thor' GIT_AUTHOR_EMAIL=author@example.com GIT_COMMITTER_NAME='A U Thor' "
              "GIT_COMMITTER_EMAIL=author@example.com GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' GIT_COMMITTER_DATE='2026-01-02T03:04:05Z'")
 TIMEOUT = 60  # AGENTS.md: probes run under a time limit, without container logs
 
 
-def git_image():
-    if subprocess.run(["docker", "image", "inspect", GIT_IMAGE], capture_output=True).returncode != 0:
-        subprocess.run(["docker", "build", "-q", "-t", GIT_IMAGE, "-"], input=GIT_DOCKERFILE.encode(), check=True, timeout=600)
-    return GIT_IMAGE
+def ref_image(name, dockerfile):
+    if subprocess.run(["docker", "image", "inspect", name], capture_output=True).returncode != 0:
+        subprocess.run(["docker", "build", "-q", "-t", name, "-"], input=dockerfile.encode(), check=True, timeout=600)
+    return name
 
 
 def run(script, local, apt, agent=False, image=IMAGE):
@@ -60,6 +63,7 @@ def main():
     p.add_argument("--local", action="store_true", help="use this machine's bash instead of docker")
     p.add_argument("--agent", action="store_true", help="run as the ordinary user agent (uid 1000), not root")
     p.add_argument("--git", action="store_true", help="use the git image and the fixed git identity and dates (GIT_SETUP)")
+    p.add_argument("--python", action="store_true", help="use the image with python3 (the python area)")
     p.add_argument("--apt", default="", help="comma-separated packages to install in the container first (e.g. bc,zip)")
     p.add_argument("--tags", default="")
     p.add_argument("--notes", default="")
@@ -82,7 +86,7 @@ def main():
     if a.git and a.local:
         sys.exit("record.py: --git needs docker")
     r = run(setup + "\n" + a.script if setup else a.script, a.local, [x for x in a.apt.split(",") if x], a.agent,
-            git_image() if a.git else IMAGE)
+            ref_image(GIT_IMAGE, GIT_DOCKERFILE) if a.git else ref_image(PYTHON_IMAGE, PYTHON_DOCKERFILE) if a.python else IMAGE)
     try:
         stdout = r.stdout.decode("utf-8")
     except UnicodeDecodeError:
