@@ -3,6 +3,7 @@ this port checks: hostile sources, limits, snapshots, recordings and the local f
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -672,3 +673,40 @@ def test_the_documented_source_runs(capsys):
     exec(compile(code, "docs/mounts.md", "exec"), scope)
     out = capsys.readouterr().out
     assert "failed=None" in out and scope["wiki"]._pages["plan.md"] == b"# Plan\nFinal\n" and scope["wiki"]._pages["notes.md"] == b"# Notes\n"
+
+
+@pytest.mark.skipif(not LocalFolderSource._AT, reason="needs descriptor-relative opens (Linux, macOS)")
+def test_a_link_swapped_in_while_it_works_is_never_followed(tmp_path):
+    import threading
+    import time as _time
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    (root / "d").mkdir(parents=True)
+    (outside / "d").mkdir(parents=True)
+    (root / "d" / "f.txt").write_text("inside\n")
+    (outside / "d" / "f.txt").write_text("OUTSIDE\n")
+    src = LocalFolderSource(root, writable=True, id="r")
+    stop = False
+
+    def swap():
+        while not stop:
+            try:
+                os.rename(root / "d", root / ".real")
+                os.symlink(outside / "d", root / "d")
+                os.remove(root / "d")
+                os.rename(root / ".real", root / "d")
+            except OSError:
+                pass
+    t = threading.Thread(target=swap)
+    t.start()
+    leaks, end, n = 0, _time.time() + 1, 0
+    try:
+        while _time.time() < end:
+            n += 1
+            with contextlib.suppress(Exception):
+                leaks += b"OUTSIDE" in src.read("/d/f.txt", 100)
+            with contextlib.suppress(Exception):
+                src.write(f"/d/w{n}.txt", b"x", None)
+    finally:
+        stop = True
+        t.join()
+    assert leaks == 0 and os.listdir(outside / "d") == ["f.txt"]
