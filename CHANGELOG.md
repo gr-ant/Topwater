@@ -3,9 +3,14 @@
 Topwater is in preview: APIs and file formats may change between previews. The packages are on NuGet, PyPI and npm
 (from 0.1.0-preview.4 for PyPI and npm).
 
-## Unreleased
+## 0.1.0-preview.5 (2026-11-27)
 
-- **Mounted sources.** A host can show an outside store of files as a directory in the machine:
+Everything since `0.1.0-preview.4`. With this preview Topwater is parked: it stays available and is maintained
+lightly. [ROADMAP.md](ROADMAP.md) lists the work that is parked on branches and the ideas not started.
+
+### Mounted sources
+
+- **Outside files as a folder.** A host can show an outside store of files as a directory in the machine:
   `shell.MountAsync("/mnt/notes", source, MountMode.Staged)` (Python `shell.mount`, TypeScript `shell.mount`). A source
   is a small class with `list`, `stat`, `read` and, if it can, `write`, `delete`, `rename` and `mkdir`; its credentials
   never reach the agent. `LocalFolderSource` (a host directory, read-only unless `writable`; Obsidian vaults work) and
@@ -18,8 +23,11 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   time, the rest when a command names it. Snapshots keep each mount's definition and pending changes, not the source's
   files (format version 3 when there is a mount); a snapshot never sets a mode or applies anything, and the changes in
   one loaded from a file wait for `AcceptSnapshotChangesAsync`. Recordings keep the sources' answers, so a replay never
-  calls them. See [Mounted sources](docs/mounts.md).
-- **Container image.** From 0.1.0-preview.5 each release pushes `ghcr.io/gr-ant/topwater` for linux/amd64 and
+  calls them. The tool description names each mounted folder and its mode. See [Mounted sources](docs/mounts.md).
+
+### Command line and container image
+
+- **Container image.** Each release now pushes `ghcr.io/gr-ant/topwater` for linux/amd64 and
   linux/arm64 (tags: the version, `preview`, and `latest` for releases without a preview suffix):
   `docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp`. It is the standalone Linux binary on Ubuntu's chiseled .NET
   base, runs as a non-root user in `/data`, and carries an SBOM and a signed build provenance attestation. CI builds
@@ -32,9 +40,9 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   exit 0, losing the machine; they now check at start that the file can be written (exit code 2 with the path), and a
   save that fails later makes them exit with 1. `export` and `snapshot save`, which only read `--state`, are
   unchanged.
-- **`tar` from a deleted working directory.** After `rm -rf` of the current directory, `tar tf /abs/a.tar` failed
-  with `tar: {file}: Cannot open`. tar now needs the working directory only when given `-C` or relative names, as
-  real tar does, and the spec tests check that every message lookup supplies all of its placeholders.
+
+### git
+
 - **More git history and checking commands.** `git log -S<string>` and `-G<regex>` (the pickaxe; a commit's diff
   shows only the files that matched), `git log --parents`, `git rev-list --reverse` and `--parents`, `git diff
   --check` (trailing whitespace, a space before a tab in the indent, new blank lines at the end; exit 2), `git
@@ -45,10 +53,13 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   exactly, at an offset if need be, and nothing is applied when one fails. `am` applies `format-patch` mailboxes as
   commits with their authors (`--continue`, `--skip`, `--abort`, `--show-current-patch`). `bisect` has `start`,
   `good`/`bad` (and `old`/`new`), `skip`, `reset`, `log` and `run`, where exit 125 skips a commit. `apply` and `am`
-  keep symbolic links links and refuse to write beyond one, `am` decodes RFC 2047 encoded `From` and `Subject`
+  keep symbolic links as links and refuse to write beyond one, `am` decodes RFC 2047 encoded `From` and `Subject`
   headers, and `git status` mentions an `am` or `bisect` in progress.
 - **`git checkout .` works.** It used to fail with "invalid path 'refs/heads/.'" in the Python port.
 - **`git diff --check` reports leftover conflict markers.**
+
+### Other commands
+
 - **`comm` and `join`, `grep --label`, `chmod --reference`.** New programs `comm` (`-1 -2 -3`, `--check-order`,
   `--output-delimiter`, `--total`) and `join` (`-t -1 -2 -j -a -v -o -e -i`, `--header`).
 - **`tar --exclude`, `--owner`, `--group`, `--numeric-owner` and `--transform`.** `--exclude` takes a wildcard matched
@@ -58,11 +69,28 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   in `find -name`, `case` and `tar --exclude` are now stopped by the call's time limit like other patterns.
 - **jq `def`.** Functions with filter and `$value` parameters, recursion and lexical scope (Python and C#; the
   TypeScript port had them). Nesting stops at 100 calls with "recursion too deep", the same in every port.
+- **`tar` from a deleted working directory.** After `rm -rf` of the current directory, `tar tf /abs/a.tar` failed
+  with `tar: {file}: Cannot open`. tar now needs the working directory only when given `-C` or relative names, as
+  real tar does, and the spec tests check that every message lookup supplies all of its placeholders.
+- **`curl --retry-max-time` counts the waits already slept,** so a timer that wakes a millisecond early can no longer
+  add a retry.
+
+### Compatibility
+
 - **TypeScript: `Shell`'s internal members now show their types in the `.d.ts`.** The shell's source is split into
   `shell/*.ts` parts (see [docs/architecture.md](docs/architecture.md)). The 97 members that were `private`
   (`execScript`, `expandWords`, `cwdPath`, `lineno`, ...) are now typed members marked `@internal`, like the ones that
   already were; they appear in `dist/shell.d.ts` and the new `dist/shell/*.d.ts`, are not public API and may change.
   The public members and the package entry points' types are unchanged.
+- **The three ports follow one source layout.** They now share file names, sections and command
+  order ([docs/architecture.md](docs/architecture.md), checked by `tools/check_layout.py`). In Python, `topwater.shell`
+  is a package and the commands are split by domain (`topwater.commands.net` is now `topwater.commands.web`); imports
+  from the package's top level are unchanged. Every module now imports on its own in a fresh process.
+
+### Benchmark
+
+- **Round 2 results.** Large-document tasks and harder shell tasks, with function tools plus Python and Docker bash
+  plus Python as extra arms; see [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## 0.1.0-preview.4 (2026-11-26)
 
