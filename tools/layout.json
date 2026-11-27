@@ -3,7 +3,7 @@
   "roots": { "cs": "src/Topwater", "py": "python/src/topwater", "ts": "typescript/src" },
   "ignore": { "cs": ["bin/", "obj/", "Generated/"], "py": ["_spec.py"], "ts": ["spec.generated.ts"] },
   "legacy": {
-    "py": ["shell.py", "commands/more.py", "commands/net.py"]
+    "py": ["commands/more.py", "commands/net.py"]
   },
   "modules": [
     { "name": "shell", "cs": "Shell/Shell.cs", "py": "shell/__init__.py", "ts": "shell.ts",
