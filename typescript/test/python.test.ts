@@ -14,6 +14,7 @@ const ARTIFACTS = new URL('../../assets/python-wasm/', import.meta.url);
 const shell = (options: Partial<ShellOptions> = {}) => new Shell(options).allowPython({ artifacts: ARTIFACTS });
 const run = async (script: string, options: Partial<ShellOptions> = {}) => (await shell(options)).run(script);
 const T = 60_000;
+const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`; // a shell word
 
 // ---------- the artifacts ----------
 
@@ -66,6 +67,57 @@ describe('the command', () => {
     expect((await sh.run("python3 -c 'f = open(\"u\", \"w\"); f.write(\"kept\")'; cat u")).stdout).toBe('kept');
     // owner and mode come from the agent's user and umask, as for any command
     expect((await sh.run("ls -l out.txt | cut -d' ' -f1,3")).stdout).toBe('-rw-r--r-- agent\n');
+  }, T);
+
+  test('open files are one file', async () => {
+    // what the program wrote and flushed is the file's, by any name, before it is closed (as one inode's contents are)
+    const prog = `
+import os, shutil, tempfile
+f = open('a', 'w'); f.write('hello'); f.flush()
+print(repr(open('a').read()), os.stat('a').st_size, os.path.getsize('a'))
+shutil.copy('a', 'b'); print(repr(open('b').read()))
+t = open('t.tmp', 'w'); t.write('new'); t.flush(); os.replace('t.tmp', 'c'); t.write('er'); t.close()
+print(repr(open('c').read()), os.path.exists('t.tmp'))
+g = open('d', 'w'); g.write('AAAA'); g.flush(); h = open('d', 'a'); h.write('bb'); h.close(); g.close()
+print(repr(open('d').read()))
+with tempfile.TemporaryFile(dir='.') as tf:
+    tf.write(b'x' * 10); tf.flush()
+u = open('u', 'w'); u.write('gone'); os.unlink('u'); u.write('!'); u.close()
+os.mkdir('dir'); v = open('dir/v', 'w'); v.write('moved'); os.rename('dir', 'dir2'); v.close()
+print(repr(open('dir2/v').read()), os.path.exists('dir'))
+`;
+    const r = await run(`mkdir -p /tmp/o && cd /tmp/o && python3 -c ${q(prog)}; ls`);
+    expect([r.stdout, r.stderr]).toEqual(["'hello' 5 5\n'hello'\n'newer' False\n'AAAAbb'\n'moved' False\na\nb\nc\nd\ndir2\n", '']);
+  }, T);
+
+  test('output keeps its order', async () => {
+    const prog = "import sys\nfor i in (1, 2):\n    print('e%d' % i, file=sys.stderr, flush=True)\n    print('o%d' % i, flush=True)";
+    expect((await run(`python3 -c ${q(prog)} 2>&1`)).stdout).toBe('e1\no1\ne2\no2\n');
+    expect((await run(`x=$(python3 -c ${q(prog)} 2>&1); echo "$x"`)).stdout).toBe('e1\no1\ne2\no2\n');
+  }, T);
+
+  test('renames and links answer as Linux', async () => {
+    const prog = `
+import errno, os
+def t(f, *a):
+    try:
+        f(*a); print('ok')
+    except OSError as e:
+        print(type(e).__name__, errno.errorcode[e.errno])
+open('f1', 'w').write('1')
+t(os.rename, 'f1', 'f1'); print(open('f1').read())
+os.makedirs('full/e')
+t(os.rename, 'full', 'full/e'); print(os.path.isdir('full/e'))
+t(os.rename, 'full', 'full/e/x')
+t(os.link, 'full', 'l')
+`;
+    const r = await run(`cd /tmp && python3 -c ${q(prog)}`);
+    expect([r.stdout, r.stderr]).toEqual(['ok\n1\nOSError EINVAL\nTrue\nOSError EINVAL\nPermissionError EPERM\n', '']);
+  }, T);
+
+  test('abort', async () => {
+    const r = await run("python3 -c 'import os; os.abort()'");
+    expect([r.exitCode, r.stderr]).toEqual([134, 'python3: fatal error: the program called abort()\n']);
   }, T);
 
   test('scripts, modules, shebang and substitution', async () => {
@@ -173,6 +225,15 @@ describe('mounts', () => {
     expect([r.stdout, r.stderr]).toEqual(["['slow.txt'] late\n", '']);
   }, T);
 
+  test('a slow source ends at the time limit', async () => {
+    const sh = await shell();
+    const src = new MemorySource({ 'a.txt': 'source\n' });
+    await sh.mount('/mnt/m', src);
+    src.hook = async op => { if (op === 'read') await new Promise(r => setTimeout(r, 3000)); };
+    const r = await sh.run("timeout 1 python3 -c 'print(open(\"/mnt/\" + \"m/a.txt\").read())'; echo $?");
+    expect(r.stdout.endsWith('124\n')).toBe(true);
+  }, T);
+
   test('staged mount writes become changes', async () => {
     const sh = await shell();
     const src = new MemorySource({ 'a.txt': 'old\n' });
@@ -236,6 +297,21 @@ describe('hostile programs', () => {
     const r = await run("python3 -c 'while True: pass'", { maxCallDurationMs: 1000 });
     expect(r.exitCode).toBe(124);
     expect(r.trailer).toBeDefined();
+  }, T);
+
+  test('time limits hold however calls follow each other', async () => {
+    let r = await run("for i in 1 2 3; do timeout 1 python3 -c 'while True: pass'; echo $?; done");
+    expect(r.stdout).toBe('124\n124\n124\n');
+    r = await run("for i in 1 2 3; do timeout 1 python3 -c 'import time; time.sleep(5)'; echo $?; done");
+    expect(r.stdout).toBe('124\n124\n124\n');
+    r = await run("for i in $(seq 40); do python3 -c pass; done; " +
+      "timeout 5 python3 -c 'import time\nt = time.monotonic()\nwhile time.monotonic() - t < 2: pass'; echo $?");
+    expect(r.stdout).toBe('0\n');
+  }, 120_000);
+
+  test('a sleep never ends early', async () => {
+    const r = await run("python3 -c 'import time\nfor _ in range(5):\n    t = time.monotonic(); w = time.time(); time.sleep(0.05); print(time.monotonic() - t >= 0.05, time.time() - w >= 0.049)'");
+    expect(r.stdout).toBe('True True\n'.repeat(5));
   }, T);
 
   test('the shell thread stays free while the guest spins', async () => {

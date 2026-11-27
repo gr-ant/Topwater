@@ -26,6 +26,7 @@ export const STDLIB_PATH = '/usr/local/lib/python314.zip'; // where the snapshot
 // Browsers give a worker their own fixed stack.
 export const STACK_MB = 32;
 const PAGE = 65536;
+const MAX_MODULE = 64 << 20; // python.wasm is 19 MB unpacked
 
 // The few WebAssembly and Worker types used here (the package compiles without the DOM library).
 type WasmModule = object; // a compiled WebAssembly.Module: structured-cloneable, so it goes to each worker as it is
@@ -66,10 +67,7 @@ async function load(folder: string | URL | undefined, maxMemory: number): Promis
     throw new PythonUnavailable(isNode() ? 'this Node has no process.getBuiltinModule (Node 22.3 or later)' : 'this runtime has no Web Workers');
   const where = folder ?? await addOn();
   const gz = await readArtifact(where, 'python.wasm.gz');
-  let wasm: Uint8Array;
-  try {
-    wasm = new Uint8Array(await new Response(new Blob([gz as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
-  } catch { throw new PythonUnavailable('python.wasm.gz: not a gzip file'); }
+  const wasm = await gunzip(gz);
   await verify('python.wasm', wasm);
   const stdlib = await readArtifact(where, 'python314.zip');
   await verify('python314.zip', stdlib);
@@ -78,6 +76,25 @@ async function load(folder: string | URL | undefined, maxMemory: number): Promis
   } catch (e) {
     throw e instanceof PythonUnavailable ? e : new PythonUnavailable(`python.wasm: ${(e as Error).message}`);
   }
+}
+
+/** The module python.wasm.gz holds, read in pieces and refused past MAX_MODULE before its hash is checked: a file that
+ * unpacks to gigabytes is not the interpreter. */
+async function gunzip(gz: Uint8Array): Promise<Uint8Array> {
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    const reader = new Blob([gz as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      size += r.value.length;
+      if (size > MAX_MODULE) { void reader.cancel(); throw new PythonUnavailable('python.wasm.gz: not the expected file (it unpacks to more than 64 MB)'); }
+      parts.push(r.value);
+    }
+  } catch (e) {
+    if (e instanceof PythonUnavailable) throw e;
+    throw new PythonUnavailable('python.wasm.gz: not a gzip file');
+  }
+  return cat(parts);
 }
 
 async function addOn(): Promise<string | URL> {
@@ -98,8 +115,9 @@ async function readArtifact(folder: string | URL, name: string): Promise<Uint8Ar
     if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { code: r.status === 404 ? 'ENOENT' : '' });
     return new Uint8Array(await r.arrayBuffer());
   } catch (e) {
+    // the file name and the error's kind only: the agent sees this text, and Node's messages hold the host's paths
     const err = e as { code?: string; message?: string };
-    throw new PythonUnavailable(`${name}: ${err.code === 'ENOENT' ? ERRNO.ENOENT : err.message}`);
+    throw new PythonUnavailable(`${name}: ${err.code === 'ENOENT' ? ERRNO.ENOENT : err.code || (local ? 'could not be read' : err.message)}`);
   }
 }
 
@@ -177,21 +195,21 @@ export class Interrupted extends Error {}
 /** stdout plus stderr passed the shell's string limit: the guest is stopped and the call ends as for any command. */
 export class OutputFull extends Error {}
 
-/** The WASI errno for a filesystem error, by its text ("path: Permission denied"). Anything else (a mounted file not
- * fetched yet) is EIO, and its text is kept for the command to print after the program. */
-export function errnoOf(e: ShellError, g?: Guest): number {
-  const errno = BY_TEXT.get(e.message.slice(e.message.lastIndexOf(': ') + 2));
-  if (errno === undefined) { g?.notes.push(e.message); return EIO; }
-  return errno;
-}
+/** The WASI errno for a filesystem error, by its text ("path: Permission denied"); EIO for anything else (a mounted file
+ * not fetched yet). */
+export const errnoOf = (e: ShellError): number => BY_TEXT.get(e.message.slice(e.message.lastIndexOf(': ') + 2)) ?? EIO;
 
 export const errnoText = (errno: number) => TEXT.get(errno) ?? 'Input/output error';
 
-class OpenFile {
-  pos = 0;
+/** A file's contents while the program has it open, shared by every descriptor on it (as one inode's are): saved at close
+ * and sync, and before a call names a path (stat, rename, link), so other names see what was written. Once the file was
+ * unlinked or replaced (gone), its descriptors keep the contents, which are never saved. */
+class FileNode {
   dirty = false;
-  constructor(readonly path: string, public data: Uint8Array, public size: number, readonly read: boolean, readonly write: boolean,
-    public append: boolean, public stored: number, public mtime: bigint) {}
+  handles = 0;
+  gone = false;
+  constructor(public path: string, public data: Uint8Array, public size: number, public stored: number, public mtime: bigint,
+    readonly counted = true) {}
   bytes() { return this.data.subarray(0, this.size); }
   /** Room for `n` bytes, the new ones zero. */
   grow(n: number) {
@@ -199,6 +217,20 @@ class OpenFile {
     else if (n > this.size) this.data.fill(0, this.size, n);
     this.size = Math.max(this.size, n);
   }
+}
+
+/** A descriptor on a file: its own position and mode over the shared contents. */
+class OpenFile {
+  pos = 0;
+  constructor(readonly node: FileNode, readonly read: boolean, readonly write: boolean, public append: boolean) { node.handles++; }
+  get path() { return this.node.path; }
+  get data() { return this.node.data; }
+  get size() { return this.node.size; } set size(v: number) { this.node.size = v; }
+  get dirty() { return this.node.dirty; } set dirty(v: boolean) { this.node.dirty = v; }
+  get stored() { return this.node.stored; }
+  get mtime() { return this.node.mtime; } set mtime(v: bigint) { this.node.mtime = v; }
+  bytes() { return this.node.bytes(); }
+  grow(n: number) { this.node.grow(n); }
 }
 
 class OpenDir {
@@ -218,12 +250,13 @@ export class Guest {
   readonly args: Uint8Array[];
   readonly env: Uint8Array[];
   stdinPos = 0;
-  readonly stdout: Uint8Array[] = [];
-  readonly stderr: Uint8Array[] = [];
+  readonly output: [1 | 2, Uint8Array][] = []; // in the order written, so 2>&1 keeps it
   written = 0; // bytes of stdout and stderr
-  readonly started = performance.now();
+  readonly started = performance.now(); // the monotonic and CPU clocks count from here: nothing about the host's uptime
   readonly fds: Entry[] = [STDIN, STDOUT, STDERR, ROOT];
   buffered = 0; // bytes held in open files' buffers, at most maxMemory in all
+  readonly nodes = new Map<string, FileNode>(); // open files by real path
+  stopped = false; // the call ended (deadline, exit, output): a host call still waiting on a mount must not touch the files
   pending: Uint8Array | null = null;
   readonly writeBackErrors: [string, number][] = [];
   readonly notes: string[] = [];
@@ -263,17 +296,22 @@ export class Guest {
   }
 
   /** A filesystem call for the guest: its result, or WasiError with the errno. A mounted file or folder the source has
-   * not been asked for yet is fetched (this thread awaits the source while the guest waits) and the call tried once more. */
-  async call<T>(fn: () => T): Promise<T> {
+   * not been asked for yet is fetched (this thread awaits the source while the guest waits) and the call tried once more; a
+   * mount's failure is kept for the command to print after the program (the agent may run it again). `final`: the exit
+   * flush, which runs after the call ended. */
+  async call<T>(fn: () => T, final = false): Promise<T> {
     try { return fn(); } catch (e) {
       if (!(e instanceof ShellError)) throw e;
-      if (!BY_TEXT.has(e.message.slice(e.message.lastIndexOf(': ') + 2)) && this.fetch && await this.fetch()) {
+      let error = e;
+      if (errnoOf(e) === EIO && this.fetch && await this.fetch()) {
+        if (this.stopped && !final) throw new Interrupted(); // the call ended while it waited: nothing more reaches the files
         try { return fn(); } catch (again) {
           if (!(again instanceof ShellError)) throw again;
-          throw new WasiError(errnoOf(again, this));
+          error = again;
         }
       }
-      throw new WasiError(errnoOf(e, this));
+      if (errnoOf(error) === EIO && this.fetch) this.notes.push(error.message);
+      throw new WasiError(errnoOf(error));
     }
   }
 
@@ -287,27 +325,79 @@ export class Guest {
   /** How large the file may grow: what the filesystem has free, plus what it holds of this file already. */
   room(f: OpenFile): number { return this.fs.runAs !== null ? this.fs.capacity - this.fs.usedBytes + f.stored : 2 ** 62; }
 
-  async save(f: OpenFile) {
-    if (!f.dirty) return;
-    await this.call(() => this.fs.writeBytes(f.path, f.bytes()));
-    f.dirty = false; f.stored = f.size;
+  /** The key of a path's open file: its real path (shortcut: hard links are separate keys, so two names of one file opened
+   * at once are two buffers; upgrade if programs do that). follow false: the last name itself, as lstat. */
+  key(path: string, follow = true): string {
+    if (follow) return this.fs.realPath(path, false) ?? path;
+    const parent = VirtualFileSystem.getParent(path);
+    return (this.fs.realPath(parent) ?? parent).replace(/\/$/, '') + '/' + path.slice(path.lastIndexOf('/') + 1);
+  }
+
+  opened(key: string, data: Uint8Array, stored: number, mtime: bigint, read: boolean, write: boolean, append: boolean): OpenFile {
+    let node = this.nodes.get(key);
+    if (!node) {
+      this.reserve(data.length);
+      this.nodes.set(key, node = new FileNode(key, data, data.length, stored, mtime));
+    }
+    return new OpenFile(node, read, write, append);
+  }
+
+  release(f: OpenFile) {
+    const node = f.node;
+    if (--node.handles === 0 && node.counted) {
+      this.buffered -= node.size;
+      if (this.nodes.get(node.path) === node) this.nodes.delete(node.path);
+    }
+  }
+
+  async save(f: OpenFile | FileNode, final = false) {
+    const node = f instanceof OpenFile ? f.node : f;
+    if (!node.dirty || node.gone) return;
+    await this.call(() => this.fs.writeBytes(node.path, node.bytes()), final);
+    node.dirty = false; node.stored = node.size;
+  }
+
+  /** Before a call names a path: open files' writes are saved, so its size, a rename or a link sees them. A save that fails
+   * is left for close or exit to report. */
+  async sync() {
+    for (const node of [...this.nodes.values()]) {
+      try { await this.save(node); } catch (e) { if (!(e instanceof WasiError)) throw e; }
+    }
+  }
+
+  /** The file at key was unlinked or replaced: its open descriptors keep their contents, which are never saved. */
+  detach(key: string) {
+    const node = this.nodes.get(key);
+    if (node) { this.nodes.delete(key); node.gone = true; }
+  }
+
+  /** A rename: open files at src (or under it) are now at dst; one open at dst was replaced. */
+  moved(src: string, dst: string) {
+    this.detach(dst);
+    const under = src.replace(/\/$/, '') + '/';
+    for (const [key, node] of [...this.nodes]) {
+      if (key !== src && !key.startsWith(under)) continue;
+      this.nodes.delete(key);
+      node.path = dst + key.slice(src.length);
+      this.nodes.set(node.path, node);
+    }
   }
 
   /** At exit: files the program wrote but never closed are saved, as a real process's are. */
   async flushAll() {
-    for (const e of this.fds) {
-      if (!(e instanceof OpenFile) || !e.dirty) continue;
-      try { await this.save(e); } catch (err) {
+    for (const node of [...this.nodes.values()]) {
+      if (!node.dirty) continue;
+      try { await this.save(node, true); } catch (err) {
         if (!(err instanceof WasiError)) throw err;
-        this.writeBackErrors.push([e.path, err.errno]);
+        this.writeBackErrors.push([node.path, err.errno]);
       }
     }
   }
 
-  writeOutput(which: Uint8Array[], data: Uint8Array) {
+  writeOutput(which: 1 | 2, data: Uint8Array) {
     if (this.written + data.length > this.outputCap) throw new OutputFull();
     this.written += data.length;
-    which.push(data);
+    this.output.push([which, data]);
   }
 }
 
@@ -362,7 +452,8 @@ const cat = (parts: Uint8Array[]) => { const out = new Uint8Array(parts.reduce((
 /** Little-endian fields: [bytes, value] pairs (0 bytes of value pads). */
 const pack = (...fields: [number, number | bigint][]) => cat(fields.map(([n, v]) => le(n, BigInt(v))));
 const nowNs = () => BigInt(Math.round((performance.timeOrigin + performance.now()) * 1e6));
-const monoNs = () => BigInt(Math.round(performance.now() * 1e6));
+/** The monotonic and CPU clocks: nanoseconds since the call started. */
+const monoNs = (g: Guest) => BigInt(Math.round((performance.now() - g.started) * 1e6));
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 /** A 64-bit hash of the path (FNV-1a), odd so it is never 0. */
@@ -380,6 +471,7 @@ const ns = (ms: number) => BigInt(Math.round(ms)) * 1_000_000n;
 
 async function statPath(g: Guest, path: string, follow: boolean): Promise<Uint8Array> {
   if (path === STDLIB_PATH) return filestat(FILETYPE_REGULAR_FILE, g.stdlib.length, 0n, ino(path));
+  await g.sync();
   const st = await g.call(() => g.fs.stat(path, follow));
   return filestat(st.isSymlink ? FILETYPE_SYMBOLIC_LINK : st.isDirectory ? FILETYPE_DIRECTORY : FILETYPE_REGULAR_FILE, st.size, ns(st.modified), ino(path), st.links);
 }
@@ -433,7 +525,7 @@ function writeFrom(g: Guest, m: Mem, fd: number, iovsPtr: number, n: number, off
   if (e === STDOUT || e === STDERR) {
     if (offset !== null) throw new WasiError(ESPIPE);
     if (g.written + total > g.outputCap) throw new OutputFull();
-    g.writeOutput(e === STDOUT ? g.stdout : g.stderr, data());
+    g.writeOutput(e === STDOUT ? 1 : 2, data());
     return total;
   }
   if (!(e instanceof OpenFile)) throw new WasiError(e === ROOT || e instanceof OpenDir ? EISDIR : EBADF);
@@ -490,9 +582,8 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
   'wasi_snapshot_preview1.environ_get': errno((g, m, env, buf) => m.stringTable(g.env, env, buf)),
   'wasi_snapshot_preview1.clock_res_get': errno((_g, m, _id, out) => m.u64(out, 1000n)),
   'wasi_snapshot_preview1.clock_time_get': errno((g, m, clock, _precision, out) => {
-    // realtime: the shell's clock (virtual when the shell has one); CPU clocks: time since this call started
-    m.u64(out, clock === CLOCK_REALTIME ? (g.realtime === Date.now ? nowNs() : ns(g.realtime())) : clock === CLOCK_MONOTONIC ? monoNs()
-      : BigInt(Math.round((performance.now() - g.started) * 1e6)));
+    // realtime: the shell's clock (virtual when the shell has one); monotonic and CPU clocks: time since this call started
+    m.u64(out, clock === CLOCK_REALTIME ? (g.realtime === Date.now ? nowNs() : ns(g.realtime())) : monoNs(g));
   }),
   'wasi_snapshot_preview1.random_get': errno((_g, m, buf, n) => {
     if (!(n >= 0 && n <= MAX_RANDOM)) throw new WasiError(EINVAL);
@@ -577,7 +668,7 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
     const e = g.fd(fd);
     g.fds[fd] = null;
     if (e instanceof OpenFile) {
-      if (e.data !== g.stdlib) g.buffered -= e.size;
+      g.release(e);
       await g.save(e);
     }
   }),
@@ -613,7 +704,7 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
     if (path === STDLIB_PATH) {
       if (write || creat) throw new WasiError(EROFS);
       if (wantDir) throw new WasiError(ENOTDIR);
-      m.u32(out, g.alloc(new OpenFile(path, g.stdlib, g.stdlib.length, true, false, false, g.stdlib.length, 0n)));
+      m.u32(out, g.alloc(new OpenFile(new FileNode(path, g.stdlib, g.stdlib.length, g.stdlib.length, 0n, false), true, false, false)));
       return;
     }
     let st: ReturnType<VirtualFileSystem['stat']> | null = null, why = 0;
@@ -631,20 +722,20 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
       if (wantDir) throw new WasiError(ENOTDIR);
       if (creat && excl) throw new WasiError(EEXIST);
       if (write && !fs.canWrite(path) || read && !fs.canRead(path)) throw new WasiError(EACCES);
-      let data: Uint8Array, stored: number;
+      const key = g.key(path), node = g.nodes.get(key);
+      let data: Uint8Array = new Uint8Array(0), stored = 0;
       if (trunc) {
-        if (st.size) await g.call(() => fs.writeBytes(path, new Uint8Array(0))); // O_TRUNC empties the file now, as open(2) does
-        data = new Uint8Array(0); stored = 0;
-      } else {
+        if (st.size || node?.stored) await g.call(() => fs.writeBytes(path, new Uint8Array(0))); // O_TRUNC empties the file now, as open(2) does
+        if (node) { g.buffered -= node.size; node.size = 0; node.stored = 0; node.dirty = false; } // and for the descriptors already open on it
+      } else if (!node) {
         data = await g.call(() => fs.readBytes(path)); stored = data.length;
       }
-      g.reserve(data.length);
-      m.u32(out, g.alloc(new OpenFile(path, data, data.length, read, write, append, stored, ns(st.modified))));
+      m.u32(out, g.alloc(g.opened(key, data, stored, ns(st.modified), read, write, append)));
       return;
     }
     if (why !== ENOENT || !creat || wantDir) throw new WasiError(why);
     await g.call(() => fs.writeBytes(path, new Uint8Array(0))); // the parent must exist and be writable: the filesystem checks it as for any command
-    m.u32(out, g.alloc(new OpenFile(path, new Uint8Array(0), 0, read, write, append, 0, nowNs())));
+    m.u32(out, g.alloc(g.opened(g.key(path), new Uint8Array(0), 0, nowNs(), read, write, append)));
   }),
   'wasi_snapshot_preview1.path_filestat_get': errno(async (g, m, dirfd, flags, pathPtr, pathLen, buf) => {
     const path = g.resolve(dirfd, m.path(pathPtr, pathLen));
@@ -654,6 +745,7 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
     const path = g.resolve(dirfd, m.path(pathPtr, pathLen));
     if (path === STDLIB_PATH) throw new WasiError(EROFS);
     const when = fst & FSTFLAGS_MTIM_NOW ? g.realtime() : fst & FSTFLAGS_MTIM ? Number(mtim / 1_000_000n) : null;
+    await g.sync();
     await g.call(() => g.fs.stat(path));
     if (when !== null) await g.call(() => g.fs.setModifiedTime(path, when, !!(flags & LOOKUP_SYMLINK_FOLLOW)));
   }),
@@ -672,24 +764,32 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
     const path = g.resolve(dirfd, m.path(pathPtr, pathLen));
     if (path === STDLIB_PATH) throw new WasiError(EROFS);
     if ((await g.call(() => g.fs.stat(path, false))).isDirectory) throw new WasiError(EISDIR);
+    const key = g.key(path, false);
     await g.call(() => g.fs.delete(path));
+    g.detach(key);
   }),
   'wasi_snapshot_preview1.path_rename': errno(async (g, m, fd1, oldPtr, oldLen, fd2, newPtr, newLen) => {
     const src = g.resolve(fd1, m.path(oldPtr, oldLen));
     const dst = g.resolve(fd2, m.path(newPtr, newLen));
     if (src === STDLIB_PATH || dst === STDLIB_PATH) throw new WasiError(EROFS);
     const fs = g.fs;
+    await g.sync();
     const s = await g.call(() => fs.stat(src, false));
     const d = fs.exists(dst, false) ? await g.call(() => fs.stat(dst, false)) : null;
-    if (d?.isDirectory) { // rename(2): a directory replaces an empty one; anything else can't
+    const srcKey = g.key(src, false), dstKey = g.key(dst, false);
+    if (srcKey === dstKey || d && fs.sameFile(src, dst, false)) return; // rename(2): one file under both names stays as it is
+    if (s.isDirectory && dstKey.startsWith(srcKey.replace(/\/$/, '') + '/')) throw new WasiError(EINVAL); // into itself
+    if (d?.isDirectory) { // a directory replaces an empty one; anything else can't
       if (!s.isDirectory) throw new WasiError(EISDIR);
-      if (src === dst) return;
       await g.call(() => fs.delete(dst));
     } else if (d && s.isDirectory) throw new WasiError(ENOTDIR);
     await g.call(() => fs.move(src, dst));
+    g.moved(srcKey, dstKey);
   }),
   'wasi_snapshot_preview1.path_symlink': errno(async (g, m, oldPtr, oldLen, dirfd, newPtr, newLen) => {
-    const target = decodeBytes(m.path(oldPtr, oldLen));
+    const raw = m.path(oldPtr, oldLen);
+    if (raw.includes(0)) throw new WasiError(EINVAL);
+    const target = decodeBytes(raw);
     const link = g.resolve(dirfd, m.path(newPtr, newLen));
     if (link === STDLIB_PATH) throw new WasiError(EEXIST);
     await g.call(() => g.fs.createSymlink(link, target));
@@ -704,6 +804,8 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
     const src = g.resolve(fd1, m.path(oldPtr, oldLen));
     const dst = g.resolve(fd2, m.path(newPtr, newLen));
     if (src === STDLIB_PATH || dst === STDLIB_PATH) throw new WasiError(EROFS);
+    await g.sync();
+    if ((await g.call(() => g.fs.stat(src, !!(flags & LOOKUP_SYMLINK_FOLLOW)))).isDirectory) throw new WasiError(EPERM); // link(2): no hard links to directories
     await g.call(() => g.fs.createHardLink(src, dst, !!(flags & LOOKUP_SYMLINK_FOLLOW)));
   }),
   'wasi_snapshot_preview1.poll_oneoff': errno(async (g, m, subs, events, n, nevents) => {
@@ -717,7 +819,7 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
         const clock = raw.getUint32(i * 48 + 16, true), flags = raw.getUint16(i * 48 + 40, true);
         let timeout = raw.getBigUint64(i * 48 + 24, true);
         if (flags & SUBCLOCKFLAGS_ABSTIME) {
-          const now = clock === CLOCK_REALTIME ? nowNs() : monoNs();
+          const now = clock === CLOCK_REALTIME ? nowNs() : monoNs(g);
           timeout = timeout > now ? timeout - now : 0n;
         }
         if (wait === null || timeout < wait[0]) wait = [timeout, userdata];
@@ -733,11 +835,13 @@ export const IMPORTS: Record<string, (g: Guest, ...args: Arg[]) => Promise<numbe
       } else throw new WasiError(EINVAL);
     }
     if (!ready.length && wait !== null) {
-      // a real sleep, in slices, never past the call's deadline (where the guest is stopped)
-      const until = Date.now() + Number(wait[0] / 1_000_000n);
-      for (let now = Date.now(); now < until; now = Date.now()) {
-        if (now >= g.deadline) throw new Interrupted();
-        await sleep(Math.min(until, g.deadline) - now < MAX_SLEEP_SLICE ? Math.min(until, g.deadline) - now : MAX_SLEEP_SLICE);
+      // a real sleep on the monotonic clock, rounded up so it never ends early, in slices, never past the call's
+      // deadline (where the guest is stopped)
+      const until = performance.now() + Number((wait[0] + 999_999n) / 1_000_000n);
+      for (let now = performance.now(); now < until; now = performance.now()) {
+        const left = g.deadline - Date.now();
+        if (left <= 0) throw new Interrupted();
+        await sleep(Math.min(until - now, left, MAX_SLEEP_SLICE));
       }
       ready.push([wait[1], SUCCESS, EVENTTYPE_CLOCK, 0]);
     }
@@ -854,9 +958,11 @@ function httpTake(g: Guest, buf: number, n: number): number {
 
 // ---------- running a call ----------
 
-/** How a call ended: code (the exit status) unless timedOut, stackOverflow, or trap (another fatal error's text). */
+/** How a call ended: code (the exit status) unless timedOut, stackOverflow, aborted (abort()), or trap (another fatal
+ * error's text). */
 export class Outcome {
-  constructor(readonly code = 1, readonly timedOut = false, readonly stackOverflow = false, readonly trap: string | null = null) {}
+  constructor(readonly code = 1, readonly timedOut = false, readonly stackOverflow = false, readonly trap: string | null = null,
+    readonly aborted = false) {}
 }
 
 // The worker: plain JavaScript run from a string (no file to locate, in Node or behind a bundler). Each import posts
@@ -885,7 +991,9 @@ const start = ({ module, control }) => {
     if (exports._initialize) exports._initialize();
     port.postMessage({ done: exports.bashkit_run() });
   } catch (e) {
-    if (e !== STOP) port.postMessage({ error: String(e && e.message || e).split('\\n')[0].slice(0, 200), stack: e instanceof RangeError });
+    // abort(): wasm's unreachable, the C library's last resort (SIGABRT for a real process)
+    if (e !== STOP) port.postMessage({ error: String(e && e.message || e).split('\\n')[0].slice(0, 200), stack: e instanceof RangeError,
+      abort: e instanceof WebAssembly.RuntimeError && /unreachable/i.test(e.message) });
   }
 };
 if (node) port.once('message', start); else self.onmessage = e => start(e.data);
@@ -926,6 +1034,7 @@ export function run(rt: Runtime, guest: Guest): Promise<Outcome> {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      guest.stopped = true; // a call still awaiting a mount stops there
       Atomics.store(flag, 0, 2); // a worker waiting on a call unwinds; one running is stopped
       Atomics.notify(flag, 0);
       worker.terminate();
@@ -950,7 +1059,8 @@ export function run(rt: Runtime, guest: Guest): Promise<Outcome> {
         Atomics.store(flag, 0, 1);
         Atomics.notify(flag, 0);
       } else if (m.done !== undefined) finish(new Outcome(m.done));
-      else if (m.error !== undefined) finish(Date.now() >= guest.deadline ? new Outcome(1, true) : new Outcome(1, false, m.stack, m.stack ? null : m.error));
+      else if (m.error !== undefined) finish(Date.now() >= guest.deadline ? new Outcome(1, true) : m.abort ? new Outcome(1, false, false, null, true)
+        : new Outcome(1, false, m.stack, m.stack ? null : m.error));
     }, why => finish(Date.now() >= guest.deadline ? new Outcome(1, true) : new Outcome(1, false, false, why)));
     worker.post({ module: rt.module, control });
   });

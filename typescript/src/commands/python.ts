@@ -51,6 +51,16 @@ function bridge(ctx: CommandContext): wasi.HttpSender {
   };
 }
 
+/** Consecutive writes to one stream joined, so a multi-byte character split across writes decodes whole. */
+function runs(output: [1 | 2, Uint8Array][]): [1 | 2, Uint8Array][] {
+  const out: [1 | 2, Uint8Array[]][] = [];
+  for (const [which, data] of output) {
+    if (out.length && out[out.length - 1][0] === which) out[out.length - 1][1].push(data);
+    else out.push([which, [data]]);
+  }
+  return out.map(([which, parts]) => [which, concatBytes(parts)]);
+}
+
 async function python3(ctx: CommandContext, options: PythonOptions): Promise<number> {
   const sh = ctx.shell, spec = specOf('python3'), args = ctx.args;
   if (['-h', '-?', '--help', '--help-all'].includes(args[0])) { ctx.stdout.write(spec.help ?? ''); return 0; } // the spec's help, in our words
@@ -84,16 +94,19 @@ async function python3(ctx: CommandContext, options: PythonOptions): Promise<num
     if (e instanceof wasi.OutputFull) throw tooLarge('output', sh.options.maxStringBytes, 'write to a file in smaller pieces or filter earlier in the pipeline');
     throw e;
   }
-  if (guest.stdout.length) ctx.stdout.write(decodeBytes(concatBytes(guest.stdout)));
-  if (guest.stderr.length) ctx.stderr.write(decodeBytes(concatBytes(guest.stderr)));
+  for (const [which, data] of runs(guest.output)) (which === 1 ? ctx.stdout : ctx.stderr).write(decodeBytes(data)); // in the order written, so 2>&1 interleaves them as a real process's
   for (const note of new Set(guest.notes)) ctx.stderr.write(`python3: ${note}\n`); // a file a mount had not fetched yet: the agent should run it again
   for (const [path, errno] of guest.writeBackErrors)
     ctx.stderr.write(`python3: ${specMessage('python3', 'writeBack', { file: path, errno: wasi.errnoText(errno) })}\n`);
+  // past the call's (or `timeout`'s) limit, whatever the program saw: ends it as for any command. The guest stops at the
+  // deadline's millisecond, the shell's check only after it: wait that out
+  if (outcome.timedOut && Date.now() <= deadline) await new Promise(r => setTimeout(r, deadline - Date.now() + 1));
+  ctx.checkTime();
   if (outcome.timedOut) {
-    ctx.checkTime(); // the call's (or `timeout`'s) limit: ends it as for any command
     ctx.stderr.write(`python3: ${specMessage('python3', 'stopped')}\n`);
     return 1;
   }
+  if (outcome.aborted) { ctx.stderr.write(`python3: ${specMessage('python3', 'aborted')}\n`); return 134; }
   if (outcome.stackOverflow) { ctx.stderr.write(`python3: ${specMessage('python3', 'stackOverflow')}\n`); return 1; }
   if (outcome.trap !== null) { ctx.stderr.write(`python3: ${specMessage('python3', 'fatal', { reason: outcome.trap })}\n`); return 1; }
   const code = outcome.code & 0xff;

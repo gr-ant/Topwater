@@ -48,7 +48,7 @@ test('the python add-on carries the interpreter and needs nothing; the core carr
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const [packed] = JSON.parse(execFileSync(npm, ['pack', '--dry-run', '--json'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
   expect(packed.files.map((f: { path: string }) => f.path).sort()).toEqual(['LICENSE', 'README.md', 'index.d.ts', 'index.js',
-    'interpreter/PROVENANCE', 'interpreter/THIRD_PARTY_LICENSES.md', 'interpreter/python.wasm.gz', 'interpreter/python314.zip', 'package.json']);
+    'interpreter/MANIFEST', 'interpreter/PROVENANCE', 'interpreter/THIRD_PARTY_LICENSES.md', 'interpreter/python.wasm.gz', 'interpreter/python314.zip', 'package.json']);
   const { Shell } = await import('../src/index.js');
   const { artifacts } = await import(pathToFileURL(join(dir, 'index.js')).href);
   const sh = await new Shell().allowPython({ artifacts });
