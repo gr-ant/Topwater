@@ -707,7 +707,11 @@ sealed class MountPoint(MountManager mounts, string path, IMountSource? source, 
         {
             if (node is not Dir d) return;
             var bp = at.GetValueOrDefault(d);
-            if (d.Unlisted != null && bp != null) await GrowAsync([(bp, d, bp != "/" ? bp.Count(c => c == '/') : 0)], budget, deep: deep && name == null);
+            if (d.Unlisted != null && bp != null)
+            {
+                await GrowAsync([(bp, d, bp != "/" ? bp.Count(c => c == '/') : 0)], budget, deep: deep && name == null);
+                foreach (var (p, b) in Base) if (b.Node != null) at[b.Node] = p; // the directories it just placed, for the next name
+            }
             else if (name == null && deep)
                 await GrowAsync([.. MountManager.DirsUnder(d).Where(n => n.Unlisted != null && at.ContainsKey(n)).Select(n => (at[n], n, 0))], budget);
             if (name == null) return;

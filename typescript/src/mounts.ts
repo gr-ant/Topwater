@@ -663,8 +663,10 @@ class Mount {
     for (const name of [...rest, null]) {
       if (!(node instanceof Dir)) return;
       const bp = at.get(node);
-      if (node.unlisted && bp !== undefined) await this.grow([[bp, node, bp !== '/' ? bp.split('/').length - 1 : 0]], budget, deep && name === null);
-      else if (name === null && deep) {
+      if (node.unlisted && bp !== undefined) {
+        await this.grow([[bp, node, bp !== '/' ? bp.split('/').length - 1 : 0]], budget, deep && name === null);
+        for (const [p, b] of this.base) if (b.node) at.set(b.node, p); // the directories it just placed, for the next name
+      } else if (name === null && deep) {
         const queue: Grow[] = dirsUnder(node).filter(n => n.unlisted && at.has(n)).map(n => [at.get(n)!, n, 0]);
         await this.grow(queue, budget);
       }
