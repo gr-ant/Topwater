@@ -17,15 +17,27 @@ public static class BashTool
 
     /// <summary>
     /// <see cref="Description"/> for this shell: with web access (<see cref="Shell.AllowWeb(WebPolicy)"/>) it names the sites and methods
-    /// <c>curl</c> and <c>wget</c> can reach (the first 20 sites) instead of saying there is no network.
+    /// <c>curl</c> and <c>wget</c> can reach (the first 20 sites) instead of saying there is no network, and it names each mounted folder.
     /// </summary>
     public static string DescriptionFor(Shell shell)
     {
-        if (shell.Web is not { IsReplay: false, Policy: var p } || ReferenceEquals(p, WebSession.NoNetwork) || p.Domains.Count == 0) return Description;
-        var sites = string.Join(", ", p.Domains.Take(20).Select(d => d.Trim())) + (p.Domains.Count > 20 ? $", and {p.Domains.Count - 20} more" : "");
-        var methods = string.Join(", ", p.Methods.Select(m => m.ToUpperInvariant()));
-        return Description.Replace(NoNetwork, $"Python and package installation are not; `curl` and `wget` reach only these sites (methods: {methods}): {sites}. ");
+        var text = Description;
+        if (shell.Web is { IsReplay: false, Policy: var p } && !ReferenceEquals(p, WebSession.NoNetwork) && p.Domains.Count > 0)
+        {
+            var sites = string.Join(", ", p.Domains.Take(20).Select(d => d.Trim())) + (p.Domains.Count > 20 ? $", and {p.Domains.Count - 20} more" : "");
+            var methods = string.Join(", ", p.Methods.Select(m => m.ToUpperInvariant()));
+            text = text.Replace(NoNetwork, $"Python and package installation are not; `curl` and `wget` reach only these sites (methods: {methods}): {sites}. ");
+        }
+        return text + MountSentences(shell);
     }
+
+    /// <summary>One sentence per mount (docs/mounts.md), so the model knows the folders from outside are there.</summary>
+    static string MountSentences(Shell shell) => string.Concat(shell.Mounts.OrderBy(m => m.Path, StringComparer.Ordinal).Select(m => m.Mode switch
+    {
+        MountMode.ReadOnly => $" `{m.Path}` is a folder from outside, read-only.",
+        MountMode.Staged => $" `{m.Path}` is a folder from outside; your changes there are reviewed before they are saved (`mount --changes`).",
+        _ => $" `{m.Path}` is a folder from outside; your changes there are saved to it after each command.",
+    }));
 
     public const string InputSchemaJson = """
         {

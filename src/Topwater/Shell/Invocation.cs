@@ -144,9 +144,9 @@ public sealed partial class Shell
         var ctx = new CommandContext(this, name, argv.Skip(1).ToList(), io.Stdin, io.Out, io.Err, ct) { Fds = io.Fds };
         if (argv.Count == 2 && _builtinNames?.Contains(name) == true && Builtins.StandardOption(ctx, cmd, argv[1])) return 0;
         var mounts = _mounts.Items.Count > 0 ? _mounts : null;
-        if (mounts != null) await mounts.BeforeAsync(name, argv);
+        if (mounts != null) await mounts.BeforeAsync(name, argv, io.Err);
         try { return await RunHandlerAsync(cmd, ctx, name, io); }
-        finally { if (mounts != null && DateTime.UtcNow < _callDeadline) await mounts.AfterAsync(io.Err); }
+        finally { if (mounts != null && DateTime.UtcNow < _callDeadline) await mounts.AfterAsync(); }
     }
 
     async Task<int> RunHandlerAsync(RegisteredCommand cmd, CommandContext ctx, string name, Io io)

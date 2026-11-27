@@ -408,8 +408,15 @@ public sealed partial class Shell
     /// conflict or failure. Not bounded by the call time limit.</summary>
     public Task<MountApplyResult> ApplyChangesAsync(string path, IEnumerable<MountChange>? changes = null) => OffContext.Run(() => _mounts.Get(path).ApplyAsync(changes));
 
-    /// <summary>Drops a mount's pending changes: its files are the source's again (fetched again when read).</summary>
+    /// <summary>Drops a mount's pending changes, and the ones a loaded snapshot brought: its files are the source's again.</summary>
     public void DiscardChanges(string path) => _mounts.Discard(path);
+
+    /// <summary>The changes a snapshot loaded from a file brought for this mount (as untrusted as the file): not in the files,
+    /// never applied, until <see cref="AcceptSnapshotChangesAsync"/>.</summary>
+    public IReadOnlyList<MountChange> SnapshotChanges(string path) => [.. _mounts.Get(path).Held];
+
+    /// <summary>Puts a loaded snapshot's changes into the mount's files, where they become pending changes like the agent's.</summary>
+    public Task AcceptSnapshotChangesAsync(string path) => OffContext.Run(() => _mounts.AcceptAsync(path));
 
     /// <summary>Lists the source again, keeping the pending changes.</summary>
     public Task RefreshMountAsync(string path) => OffContext.Run(() => _mounts.RefreshAsync(path));
@@ -461,7 +468,11 @@ public sealed partial class Shell
                 if (_mounts.Items.Count > 0) await _mounts.PrepareAsync();
                 code = await ExecTopLevelAsync(Parser.Parse(commandLine), io, callToken);
             }
-            finally { await RunExitTrapAsync(io, callToken); }
+            finally
+            {
+                await RunExitTrapAsync(io, callToken);
+                if (_mounts.Items.Count > 0 && DateTime.UtcNow < _callDeadline) await _mounts.SettleAsync(io.Err);
+            }
         }
         catch (ParseException e) { stderr.GetStringBuilder().AppendLine($"bash: {e.Message}"); code = 2; }
         catch (ExitSignal e) { code = e.Code; }

@@ -50,6 +50,8 @@ public sealed class VirtualFileSystem
     {
         public readonly Names Children;
         public long Listed = Interlocked.Increment(ref ChangeClock); // when a name was last added, removed or replaced
+        /// <summary>A mounted directory not listed yet (Mounts.cs): called when it is looked into; notes it and returns why it can't be.</summary>
+        public Func<Dir, string>? Unlisted;
         public Dir() => Children = new(this);
     }
     /// <summary>A directory's names; adding, removing or replacing one marks the directory's list changed.</summary>
@@ -239,6 +241,7 @@ public sealed class VirtualFileSystem
             if (seg is "" or ".") continue;
             var dir = chain[^1].Dir;
             if (!Permits(dir, user, 1)) return Fail(CommandSpec.Errno.EACCES);
+            if (dir.Unlisted is { } unlisted && seg != "..") return Fail(unlisted(dir));
             if (seg == "..") { if (chain.Count > 1) chain.RemoveAt(chain.Count - 1); continue; }
             bool final = todo.All(t => t is "" or "."), bare = todo.Count == 0; // bare: no trailing slash, which would mean a directory
             if (!dir.Children.TryGetValue(seg, out var next))
@@ -497,7 +500,10 @@ public sealed class VirtualFileSystem
     {
         switch (Find(path, out var why))
         {
-            case Dir d: Require(d, 4, path); return d.Children.Keys.ToList();
+            case Dir d:
+                Require(d, 4, path);
+                if (d.Unlisted is { } u) throw new ShellException($"{path}: {u(d)}");
+                return d.Children.Keys.ToList();
             case null: throw new ShellException($"{path}: {why}");
             default: throw new ShellException($"{path}: {CommandSpec.Errno.ENOTDIR}");
         }
@@ -510,6 +516,7 @@ public sealed class VirtualFileSystem
         path = Normalize("/", path);
         if (path == "/") throw new ShellException("it is dangerous to operate recursively on '/'");
         var node = Find(path, out var why, follow: false) ?? throw new ShellException($"{path}: {why}");
+        if (node is Dir { Unlisted: { } u } ud) throw new ShellException($"{path}: {u(ud)}"); // what is in it is not known yet
         if (node is Dir d && d.Children.Count > 0 && !recursive) throw new ShellException($"{path}: {CommandSpec.Errno.ENOTEMPTY}");
         var spot = Place(path);
         var parent = spot.Parent!;
@@ -530,6 +537,7 @@ public sealed class VirtualFileSystem
         foreach (var (name, child) in d.Children)
         {
             RequireNotSticky(d, child, path + "/" + name);
+            if (child is Dir { Unlisted: { } u } unlisted) throw new ShellException($"{path}/{name}: {u(unlisted)}");
             if (child is Dir sub) RequireTreeRemovable(sub, path + "/" + name);
         }
     }
@@ -586,6 +594,7 @@ public sealed class VirtualFileSystem
                 return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = preserve ? f.Mode : Masked(f.Mode) & ~0xC00, Modified = preserve ? f.Modified : Clock() };
             }
             var dir = (Dir)n;
+            if (dir.Unlisted is { } u) throw new ShellException($"{path}: {u(dir)}");
             var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = preserve ? n.Mode : Masked(n.Mode), Modified = preserve ? n.Modified : Clock() };
             copying.Add(dir);
             foreach (var (k, v) in dir.Children)

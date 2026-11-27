@@ -327,8 +327,8 @@ public class SnapshotTests(ITestOutputHelper output)
     [Fact]
     public void ANewerFormatVersionIsRefusedClearly()
     {
-        var e = Assert.Throws<NotSupportedException>(() => ShellSnapshot.Load(new MemoryStream(Tamper(new Shell(), m => { m["version"] = 3; m["files"] = "changed shape"; }))));
-        Assert.Equal("snapshot format version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it", e.Message);
+        var e = Assert.Throws<NotSupportedException>(() => ShellSnapshot.Load(new MemoryStream(Tamper(new Shell(), m => { m["version"] = 4; m["files"] = "changed shape"; }))));
+        Assert.Equal("snapshot format version 4 is newer than this version of Topwater supports (3); upgrade Topwater to load it", e.Message);
     }
 
     [Fact]

@@ -670,7 +670,8 @@ public sealed class Recording
 
     static JsonObject MountEntryJson(MountEntry y)
     {
-        var e = new JsonObject { ["name"] = y.Name, ["type"] = y.IsDir ? "dir" : "file", ["size"] = y.Size };
+        var e = new JsonObject { ["name"] = y.Name, ["type"] = y.IsDir ? "dir" : "file" };
+        if (y.Size is { } size) e["size"] = size;
         if (y.Modified is { } t) e["mtime"] = ShellSnapshot.FormatTime(t);
         e["version"] = y.Version;
         return e;
@@ -693,7 +694,7 @@ public sealed class Recording
                 || (o["size"] != null && Int(o["size"]) is not >= 0) || (o["version"] != null && Str(o["version"]) == null))
                 throw Bad($"{where}: bad entry");
             DateTime? mtime = o["mtime"] == null ? null : ShellSnapshot.ParseTime(Str(o["mtime"]), where + ": mtime");
-            return new(name, Str(o["type"]) == "dir", Int(o["size"]) ?? 0, mtime, Version(o["version"], "version") ?? "");
+            return new(name, Str(o["type"]) == "dir", Int(o["size"]), mtime, Version(o["version"], "version") ?? "");
         }
         var output = new List<MountExchange>();
         for (int i = 0; i < list.Count; i++)

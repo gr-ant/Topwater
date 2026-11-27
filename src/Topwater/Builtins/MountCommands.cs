@@ -1,12 +1,19 @@
-// mount: the sources the host mounted (docs/mounts.md), the changes waiting in them, and listing them again. See docs/architecture.md.
+// mount: the sources the host mounted (docs/mounts.md), the changes waiting in them, listing them again, dropping changes. See docs/architecture.md.
 namespace Topwater;
 
 internal static partial class Builtins
 {
     static void RegisterMountCommands(Shell shell) => shell.Register("mount", Mount);
 
-    static string MountLine(MountInfo info) =>
-        $"{info.Type}:{info.Id} on {info.Path} type {info.Type} ({(info.Mode == MountMode.ReadOnly ? "ro" : "rw," + MountManager.ModeName(info.Mode))})" + (info.Error != null ? " " + info.Error : "");
+    /// <summary>`TYPE:ID on DIR type TYPE (OPTIONS)`, the options naming what a writable mount's source can't do.</summary>
+    static string MountLine(MountPoint m)
+    {
+        var caps = m.Capabilities();
+        var opts = m.Mode == MountMode.ReadOnly ? ["ro"]
+            : new[] { "rw", MountManager.ModeName(m.Mode) }.Concat(new[] { (MountCapabilities.Delete, "delete"), (MountCapabilities.Rename, "rename"), (MountCapabilities.Mkdir, "mkdir") }
+                .Where(c => !caps.HasFlag(c.Item1)).Select(c => "no-" + c.Item2)).ToArray();
+        return $"{m.Type}:{m.Id} on {m.Path} type {m.Type} ({string.Join(',', opts)})" + (m.Shown != null ? " " + m.Shown : "");
+    }
 
     static string MountChangeLine(MountPoint m, MountChange c) =>
         c.Kind == MountChangeKind.Rename ? $"rename {m.Machine(c.Path)} -> {m.Machine(c.To!)}" : $"{c.KindName} {m.Machine(c.Path)}";
@@ -33,16 +40,21 @@ internal static partial class Builtins
             if (a.Has('r'))
             {
                 try { await mounts.RefreshAsync(m.Path); }
-                catch (Exception stop) when (stop is OperationCanceledException or ControlFlow) { throw; }
-                catch (Exception e) // the source's own error, for the agent
+                catch (SourceFailure e)
                 {
-                    ctx.Stderr.WriteLine($"mount: {m.Path}: {e.Message}");
+                    ctx.Stderr.WriteLine($"mount: {m.Path}: {e.Safe}");
                     code = 1;
                 }
                 foreach (var w in m.Warnings) ctx.Stderr.WriteLine("mount: " + w);
             }
+            else if (a.Has('d')) mounts.Discard(m.Path, held: false);
             else if (a.Has('c')) foreach (var c in m.Changes()) ctx.Stdout.WriteLine(MountChangeLine(m, c));
-            else ctx.Stdout.WriteLine(MountLine(m.Info()));
+            else
+            {
+                ctx.Stdout.WriteLine(MountLine(m));
+                foreach (var w in m.Held.Count > 0 ? [.. m.Warnings, CommandSpec.Message("mount", "held", ("count", m.Held.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)))] : m.Warnings)
+                    ctx.Stdout.WriteLine("  " + w);
+            }
         }
         return code;
     }

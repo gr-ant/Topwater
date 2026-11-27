@@ -342,6 +342,7 @@ public sealed partial class Shell
                 try { Fs.AppendAllText(sink.Path, sink.ToString()); }
                 catch (ShellException e) { io.Err.WriteLine($"{ErrPrefix}{e.Message}"); code = 1; }
             }
+            if (_mounts.Items.Count > 0 && DateTime.UtcNow < _callDeadline) await _mounts.SettleAsync(io.Err); // live mode: what the command and its redirections wrote
         }
         return code;
     }

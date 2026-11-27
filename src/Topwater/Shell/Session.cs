@@ -31,7 +31,8 @@ public sealed partial class Shell
             if (command.Handler.Target is not HostCommand) fork._commands[name] = command;
         fork._builtinNames = _builtinNames == null ? null : new(_builtinNames);
         var state = CaptureState();
-        fork._mounts.Sources = new(_mounts.Sources); // the fork's mounts use the same sources
+        fork._mounts.Sources = new(_mounts.Sources); // the fork's mounts use the same sources (a replay's: its answers)
+        fork._mounts.ReplayAnswers = _mounts.ReplayAnswers;
         fork._mounts.Restore(state.Mounts);
         fork.ApplyState(state);
         fork.SyncProgramFiles();

@@ -19,8 +19,9 @@ public sealed class ShellSnapshot
 {
     /// <summary>The newest version of the saved format this Topwater writes; <see cref="Load(Stream, ShellOptions)"/> refuses newer ones. Version 2 added
     /// symbolic links (type "symlink" with a "target") and hard links (a "link" naming the entry's first path); a snapshot
-    /// without links is still written as version 1, so older Topwater can load it.</summary>
-    public const int FormatVersion = 2;
+    /// without links is still written as version 1, so older Topwater can load it. Version 3 added mounts (a reader that doesn't
+    /// know them would load the machine without them); only a snapshot with mounts is written as version 3.</summary>
+    public const int FormatVersion = 3;
     const string FormatName = "topwater-snapshot";
 
     internal ShellSnapshot(VirtualFileSystem fs, ShellState state, string user, string hostname, DateTime created)
@@ -127,7 +128,7 @@ public sealed class ShellSnapshot
         var names = new SortedSet<string>(st.Variables.Keys.Concat(st.Arrays.Keys).Concat(st.Attributes.Keys), StringComparer.Ordinal);
         var manifest = new Manifest
         {
-            Format = FormatName, Version = links ? FormatVersion : 1, Created = FormatTime(Created), User = User, Hostname = Hostname, Cwd = st.Cwd,
+            Format = FormatName, Version = st.Mounts.Count > 0 ? 3 : links ? 2 : 1, Created = FormatTime(Created), User = User, Hostname = Hostname, Cwd = st.Cwd,
             Files = files,
             Variables = names.Select(n => new VariableEntry
             {
@@ -520,7 +521,7 @@ public sealed class ShellSnapshot
         var output = new List<SavedMount>();
         long total = 0, count = 0;
         static string Canonical(string? p, string what) =>
-            p is { Length: > 0 and <= 4096 } && p[0] == '/' && !p.Contains(' ') && VirtualFileSystem.Normalize("/", p) == p && p != "/" ? p : throw Bad($"bad {what} {JsonSerializer.Serialize(p)}");
+            p is { Length: > 0 and <= 4096 } && p[0] == '/' && !p.Contains('\0') && VirtualFileSystem.Normalize("/", p) == p && p != "/" ? p : throw Bad($"bad {what} {JsonSerializer.Serialize(p)}");
         foreach (var d in raw ?? [])
         {
             if (d == null) throw Bad("a mount is not an object");
@@ -561,7 +562,7 @@ public sealed class ShellSnapshot
                 }
                 changes.Add(new(kind, cp, to, kind != MountChangeKind.Mkdir ? c.Version : null, content));
             }
-            output.Add(new(path, mode, d.Type!, d.Id!, changes));
+            output.Add(new(path, mode, d.Type!, d.Id!, changes, [], null));
         }
         return output;
     }
@@ -651,7 +652,7 @@ public sealed class ShellSnapshot
         public static MountJson From(SavedMount d, ZipArchive zip, HashSet<string> written) => new()
         {
             Path = d.Path, Mode = MountManager.ModeName(d.Mode), Type = d.Type, Id = d.Id,
-            Changes = [.. d.Changes.Select(c =>
+            Changes = [.. d.Held.Concat(d.Changes).Select(c => // every change in a file waits for the host when loaded
             {
                 var e = new ChangeJson { Kind = c.KindName, Path = c.Path, To = c.To, Version = c.Version };
                 if (c.Kind == MountChangeKind.Write && c.Content is { Length: > 0 } data)
