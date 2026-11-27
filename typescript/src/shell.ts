@@ -385,7 +385,7 @@ export class Shell implements ArithHost {
     this.deadline = callDeadline;
     const tee = (w: Writer, stream: 'stdout' | 'stderr'): Writer => onOutput ? { write(t) { w.write(t); onOutput(printable(t), stream); } } : w;
     const io: Io = { stdin: new StdinBuffer(''), out: new SwitchWriter(tee(stdout, 'stdout')), err: new SwitchWriter(tee(stderr, 'stderr')) };
-    const raw = (s: string) => { stderr.clear; (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
+    const raw = (s: string) => { (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
       // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
       try { code = await this.execTopLevel(parse(commandLine), io); } finally { await this.runExitTrap(io); }
