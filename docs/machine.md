@@ -43,7 +43,7 @@ do not: they reset after every call, so one stray `set -e` cannot affect later c
 | Files | `ls` `cd` `pwd` `cat` `mkdir` `rmdir` `rm` `cp` `mv` `ln` `touch` `find` `tree` `stat` `du` `df` `file` `realpath` `readlink` `basename` `dirname` `mktemp` `chmod` `chown` `chgrp` `umask` `less` `more` |
 | Text | `echo` `printf` `grep` `egrep` `fgrep` `head` `tail` `wc` `sort` `uniq` `cut` `sed` `tr` `tee` `xargs` `awk` `jq` `bc` `diff` `cmp` `nl` `tac` `rev` `paste` `column` `seq` |
 | Documents and binary | `to-markdown` `xxd` `hexdump` `od` `strings` `base64` `md5sum` `sha1sum` `sha256sum` `sha512sum` |
-| Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
+| Archives | `tar` (`c` `x` `t`, `-f` `-z` `-v` `-C` `-O` `--strip-components` `--exclude` `--owner` `--group` `--numeric-owner` `--transform`) `gzip` `gunzip` `zcat` (`-c` `-d` `-k` `-f` `-l` `-t` `-v` `-1`..`-9`) `zip` (`-r` `-q`) `unzip` (`-l` `-o` `-n` `-d` `-p` `-q`) |
 | Shell | `export` `unset` `env` `printenv` `set` `shift` `local` `declare` `read` `mapfile` `readarray` `alias` `unalias` `history` `which` `type` `command` `test` `[` `true` `false` `bash` `sh` `source` `eval` `let` `sleep` `timeout` `time` `help` |
 | System | `uname` `whoami` `hostname` `date` `ps` `id` `uptime` `free` `nproc` `clear` `sudo` `su` `apt` `apt-get` `apt-cache` `dpkg` (the six from `sudo` on only refuse; see [Programs that are not here](#programs-that-are-not-here)) |
 | Version control | `git`: see [git](#git) |
@@ -58,7 +58,7 @@ accepts, and which implementation accepts them, are in [`spec/commands`](../spec
 | `sed` | a full engine: addresses, `{}` blocks, hold space, labels and branches, `r` and `R`, `-i`, `-E` |
 | `ls` | the usual options plus `-s`, `--time-style` (`full-iso`, `long-iso`, `iso`, `+FORMAT`) and `--full-time` |
 | `awk` | patterns, ranges, `BEGIN`/`END`, fields, arrays, control flow, user-defined functions, `getline` from files, `printf` and the string functions. It behaves as Ubuntu's `mawk`: `--version` says so, and dividing by zero gives `inf`, `-inf` or `-nan` |
-| `jq` | a real parser with about 90 builtins: object construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_entries`, `reduce`, `@csv`, `--arg`, `-r`, `-e`, `-s` |
+| `jq` | a real parser with about 90 builtins: object construction, string interpolation, `select`, `map`, `sort_by`, `group_by`, `to_entries`, `reduce`, `def` (recursive functions, up to 100 calls deep), `@csv`, `--arg`, `-r`, `-e`, `-s` |
 | `bc` | .NET only. Arbitrary precision, the full language (variables, arrays, `define`, `if`/`while`/`for`, `print`, `ibase`/`obase`) and the `-l` math library. Output matches GNU bc 1.07.1 digit for digit on `+ - * / % ^` and `sqrt`; the `-l` functions are accurate to the requested scale, within a last digit or two of GNU at large scales. One run stops after 5 s and a number is capped at 100,000 digits. `read()` is not supported |
 
 Error messages follow bash 5.2 and GNU coreutils, grep and sed on Ubuntu 24.04. The shell's own errors start

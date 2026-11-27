@@ -51,8 +51,13 @@ function lookupVar(env: Env, name: string): { found: boolean; v: J } {
 
 // ---------- the evaluator ----------
 
+// nested calls of functions a filter defines; the same in every port, below any port's own stack limit
+// shortcut: real jq recurses far deeper (and tail calls without limit); raise with an explicit stack per port if needed
+const MAX_DEF_DEPTH = 100;
+
 class Interp {
   steps = 0;
+  depth = 0; // def calls in progress
   constructor(
     readonly ctx: CommandContext,
     readonly globals: Map<string, J>,
@@ -364,15 +369,29 @@ class Interp {
   }
 
   private *callUser(entry: Entry, args: Node[], inp: PV, env: Env): Generator<PV> {
+    if (this.depth >= MAX_DEF_DEPTH) throw new JqError(`recursion too deep (more than ${MAX_DEF_DEPTH} nested function calls)`);
     let base = entry.env;
     const valueParams: [string, number][] = [];
     entry.params.forEach((p, i) => {
       if (p[0] === '$') valueParams.push([p.slice(1), i]);
       else base = { parent: base, key: `${p}/0`, val: { params: [], body: args[i], env } satisfies Entry };
     });
-    if (valueParams.length === 0) { yield* this.ev(entry.body, inp, base); return; }
+    // counts only while the body runs, not while it waits suspended after a yield (`f + f` keeps one waiting)
+    const run = function* (I: Interp, e: Env): Generator<PV> {
+      const it = I.ev(entry.body, inp, e);
+      try {
+        for (;;) {
+          I.depth++;
+          let r: IteratorResult<PV>;
+          try { r = it.next(); } finally { I.depth--; }
+          if (r.done) return;
+          yield r.value;
+        }
+      } finally { it.return(undefined); }
+    };
+    if (valueParams.length === 0) { yield* run(this, base); return; }
     const go = function* (I: Interp, k: number, e: Env): Generator<PV> {
-      if (k === valueParams.length) { yield* I.ev(entry.body, inp, e); return; }
+      if (k === valueParams.length) { yield* run(I, e); return; }
       const [pname, idx] = valueParams[k];
       for (const x of I.ev(args[idx], untracked(inp), env)) {
         const bound: Env = { parent: { parent: e, key: '$' + pname, val: x.v }, key: `${pname}/0`, val: { params: [], body: { t: 'lit', v: x.v }, env: null } satisfies Entry };

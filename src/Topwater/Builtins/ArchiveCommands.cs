@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Topwater;
 
@@ -113,6 +115,119 @@ internal static partial class Builtins
         return name[..cut];
     }
 
+    /// <summary>--exclude: a pattern (whose * also matches /) against the whole name or any run of its components, so `sub`
+    /// leaves out d/sub and everything under it.</summary>
+    static bool TarExcluded(string name, List<Regex> patterns)
+    {
+        var parts = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < parts.Length; i++)
+            for (int j = i + 1; j <= parts.Length; j++)
+                if (patterns.Any(rx => rx.IsMatch(string.Join('/', parts[i..j])))) return true;
+        return false;
+    }
+
+    /// <summary>--transform: each s/REGEX/REPLACEMENT/FLAGS (any delimiter, several joined by ;) as (regex, replacement, all, nth).</summary>
+    static List<(Regex Rx, string Repl, bool All, int Nth)> TarTransforms(IReadOnlyList<string> exprs)
+    {
+        ShellException Bad(string key, params (string, string)[] values) =>
+            new(CommandSpec.Message("tar", key, values) + "\n" + CommandSpec.Of("tar").TryHelp.TrimEnd('\n'), 2);
+        var rules = new List<(Regex, string, bool, int)>();
+        foreach (var expr in exprs)
+        {
+            int i = 0;
+            while (i < expr.Length)
+            {
+                if (expr[i] == ';') { i++; continue; }
+                if (expr[i] != 's' || i + 1 >= expr.Length) throw Bad("badTransform");
+                char delim = expr[i + 1];
+                i += 2;
+                var parts = new List<string>();
+                for (int n = 0; n < 2; n++)
+                {
+                    var buf = new StringBuilder();
+                    while (i < expr.Length && expr[i] != delim)
+                    {
+                        if (expr[i] == '\\' && i + 1 < expr.Length)
+                        {
+                            if (expr[i + 1] == delim) buf.Append(delim); else buf.Append(expr, i, 2);
+                            i += 2;
+                            continue;
+                        }
+                        buf.Append(expr[i++]);
+                    }
+                    if (i >= expr.Length) throw Bad("badTransform");
+                    parts.Add(buf.ToString());
+                    i++;
+                }
+                bool all = false, extended = false, icase = false;
+                var digits = "";
+                for (; i < expr.Length && expr[i] != ';'; i++)
+                {
+                    char c = expr[i];
+                    if (char.IsAsciiDigit(c)) digits += c;
+                    else if ("gixsSrRhH".Contains(c)) // s/r/h (which names it applies to) are accepted; it applies to all
+                    {
+                        all |= c == 'g';
+                        icase |= c == 'i';
+                        extended |= c == 'x';
+                    }
+                    else throw Bad("badTransformFlag", ("flag", c.ToString()));
+                }
+                int nth = digits.Length > 0 ? int.Parse(digits, CultureInfo.InvariantCulture) : 1;
+                if (PosixRegexError(parts[0], extended, grep: false) is { } error) throw Bad("badTransformRegex", ("error", error));
+                var rx = new Regex(PosixToNet(parts[0], extended), (icase ? RegexOptions.IgnoreCase : 0) | RegexOptions.CultureInvariant, Shell.RegexTimeout);
+                int groups = rx.GetGroupNumbers().Length - 1;
+                if (Regex.Matches(parts[1], @"\\([0-9])").Any(m => m.Groups[1].Value[0] - '0' > groups)) throw Bad("badTransformBackReference");
+                rules.Add((rx, parts[1], all, nth));
+            }
+        }
+        return rules;
+    }
+
+    /// <summary>Applies the --transform rules in order. In a replacement &amp; is the match, \N a group, \&amp; a plain &amp;.</summary>
+    static string TarRename(string name, List<(Regex Rx, string Repl, bool All, int Nth)> rules)
+    {
+        static string Expand(Match m, string repl)
+        {
+            var output = new StringBuilder();
+            for (int k = 0; k < repl.Length; k++)
+            {
+                char c = repl[k];
+                if (c == '&') output.Append(m.Value);
+                else if (c == '\\' && k + 1 < repl.Length)
+                {
+                    char n = repl[++k];
+                    output.Append(char.IsAsciiDigit(n) ? m.Groups[n - '0'].Value : n == '&' ? "&" : $"{c}{n}");
+                }
+                else output.Append(c);
+            }
+            return output.ToString();
+        }
+        foreach (var (rx, repl, all, nth) in rules)
+        {
+            int count = 0;
+            name = rx.Replace(name, m => ++count == nth || (all && count > nth) ? Expand(m, repl) : m.Value);
+        }
+        return name;
+    }
+
+    /// <summary>--owner/--group NAME[:ID]: (id, name); a bare number is an id, a bare name gets its id when known.</summary>
+    static (int Id, string Name) TarIds(string? value, string user, string fatal)
+    {
+        if (value == null) return (-1, "");
+        var known = new Dictionary<string, int> { ["root"] = 0, [user] = 1000 };
+        int colon = value.IndexOf(':');
+        string name = colon >= 0 ? value[..colon] : value, ident = colon >= 0 ? value[(colon + 1)..] : "";
+        static bool Digits(string x) => x.Length > 0 && x.All(char.IsAsciiDigit);
+        if (colon < 0 && Digits(name)) (name, ident) = ("", name);
+        if (ident.Length == 0) return (known.GetValueOrDefault(name, 1000), name);
+        // shortcut: ids past 7 octal digits are refused (GNU tar stores them in base 256)
+        if (!Digits(ident) || ident.TrimStart('0').Length > 7 || int.Parse(ident, CultureInfo.InvariantCulture) > 0x1FFFFF)
+            throw new ShellException(CommandSpec.Message("tar", "badId", ("value", ident)) + "\ntar: " + fatal, 2);
+        int uid = int.Parse(ident, CultureInfo.InvariantCulture);
+        return (uid, name.Length > 0 ? name : known.FirstOrDefault(kv => kv.Value == uid).Key ?? "");
+    }
+
     static bool HasDotDot(string path) => path.Split('/').Contains("..");
 
     static string Reason(ShellException e) => e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) is var i and >= 0 ? i + 2 : 0)..];
@@ -159,6 +274,9 @@ internal static partial class Builtins
         var dir = ctx.ResolvePath(a.Value('C') ?? ".");
         // without -C the working directory is only needed for relative names, so a deleted one still lists /abs.tar
         if (a.Value('C') is { } cdir && !fs.IsDirectory(dir)) throw new ShellException(Fatal(CommandSpec.Message("tar", "cannotOpen", ("file", cdir), ("errno", fs.Exists(dir) ? "Not a directory" : fs.WhyMissing(dir)))), 2);
+        var excludes = a.All('\u0002').Select(p => Glob.ToRegex(p, slashes: true)).ToList();
+        var rules = TarTransforms(a.All('\u0006'));
+        bool numeric = a.Has('\u0005');
         int code = 0;
         void Fail(string msg) { ctx.Stderr.WriteLine("tar: " + msg); code = 2; }
         int Done()
@@ -175,12 +293,17 @@ internal static partial class Builtins
             var ms = new MemoryStream();
             bool stripped = false;
             var linked = new List<(string Path, string Member)>(); // files with several names already stored
+            var unrecoverable = CommandSpec.Message("tar", "unrecoverable");
+            var owner = TarIds(a.Value('\u0003'), ctx.Shell.Options.User, unrecoverable);
+            var group = TarIds(a.Value('\u0004'), ctx.Shell.Options.User, unrecoverable);
             using (var w = new TarWriter(ms, TarEntryFormat.Gnu, leaveOpen: true))
             {
             void Add(string name, string path)
                 {
                     if (path == archivePath) return; // the archive itself, as GNU tar skips it
+                    if (excludes.Count > 0 && TarExcluded(name, excludes)) return;
                     var member = name.TrimStart('/');
+                    if (rules.Count > 0) member = TarRename(member.TrimEnd('/'), rules).TrimStart('/') is { Length: > 0 } renamed ? renamed : ".";
                     try
                     {
                         var st = fs.Stat(path, follow: false); // a symbolic link is stored as one, never followed
@@ -188,12 +311,19 @@ internal static partial class Builtins
                         // a file with several names: the first goes in whole, later ones as links to it
                         var first = st.Links > 1 && !st.IsDirectory ? linked.FirstOrDefault(l => fs.SameFile(l.Path, path, follow: false)).Member : null;
                         var type = st.IsDirectory ? TarEntryType.Directory : first != null ? TarEntryType.HardLink : st.IsSymlink ? TarEntryType.SymbolicLink : TarEntryType.RegularFile;
+                        int uid = st.Owner == "root" ? 0 : 1000, gid = uid;
+                        string uname = st.Owner, gname = st.Owner;
+                        if (owner.Id >= 0) (uid, uname) = owner;
+                        if (group.Id >= 0) (gid, gname) = group;
+                        if (numeric) uname = gname = "";
                         var entry = new GnuTarEntry(type, member)
                         {
                             Mode = (UnixFileMode)(st.Mode & 0xFFF), ModificationTime = st.Modified,
-                            UserName = st.Owner, GroupName = st.Owner, Uid = st.Owner == "root" ? 0 : 1000, Gid = st.Owner == "root" ? 0 : 1000,
+                            UserName = uname, GroupName = gname, Uid = uid, Gid = gid,
                         };
-                        if ((first ?? st.LinkTarget) is { } linkName) entry.LinkName = linkName;
+                        var target = st.LinkTarget;
+                        if (rules.Count > 0 && !string.IsNullOrEmpty(target) && first == null) target = TarRename(target, rules);
+                        if ((first ?? target) is { } linkName) entry.LinkName = linkName;
                         var children = st.IsDirectory ? fs.List(path) : [];
                         if (type == TarEntryType.RegularFile) entry.DataStream = new MemoryStream(fs.ReadAllBytes(path));
                         if (st.Links > 1 && first == null && !st.IsDirectory) linked.Add((path, member));
@@ -274,6 +404,7 @@ internal static partial class Builtins
             var name = e.Name;
             var prefix = TarPrefix(name);
             var rel = name[prefix.Length..];
+            if (excludes.Count > 0 && TarExcluded(rel, excludes)) continue;
             if (wanted.Count > 0)
             {
                 int i = wanted.FindIndex(w => rel.TrimEnd('/') == w || rel.StartsWith(w + "/", StringComparison.Ordinal));
@@ -293,7 +424,7 @@ internal static partial class Builtins
                     TarEntryType.CharacterDevice => 'c', TarEntryType.BlockDevice => 'b', TarEntryType.Fifo => 'p', _ => '-',
                 };
                 var (uname, gname) = e is PosixTarEntry p ? (p.UserName, p.GroupName) : ("", "");
-                var ug = $"{(uname is "" ? e.Uid.ToString(CultureInfo.InvariantCulture) : uname)}/{(gname is "" ? e.Gid.ToString(CultureInfo.InvariantCulture) : gname)}";
+                var ug = numeric ? $"{e.Uid.ToString(CultureInfo.InvariantCulture)}/{e.Gid.ToString(CultureInfo.InvariantCulture)}" : $"{(uname is "" ? e.Uid.ToString(CultureInfo.InvariantCulture) : uname)}/{(gname is "" ? e.Gid.ToString(CultureInfo.InvariantCulture) : gname)}";
                 var size = (isFile ? e.Length : 0).ToString(CultureInfo.InvariantCulture);
                 ugWidth = Math.Max(ugWidth, ug.Length + 1 + size.Length); // grows like GNU tar's, so later columns stay aligned
                 var link = e.EntryType switch { TarEntryType.SymbolicLink => " -> " + e.LinkName, TarEntryType.HardLink => " link to " + e.LinkName[linkPrefix.Length..], _ => "" };
@@ -303,7 +434,13 @@ internal static partial class Builtins
             if (HasDotDot(prefix)) { Fail(CommandSpec.Message("tar", "memberDotDot", ("name", name))); continue; }
             var parts = rel.Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length <= strip) continue;
-            var target = VirtualFileSystem.Normalize(dir, string.Join('/', parts.Skip(strip)));
+            var keep = parts.Skip(strip).ToArray();
+            if (rules.Count > 0)
+            {
+                keep = TarRename(string.Join('/', keep), rules).Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (keep.Length == 0) continue;
+            }
+            var target = VirtualFileSystem.Normalize(dir, string.Join('/', keep));
             try
             {
                 if (a.Has('O'))
@@ -334,7 +471,7 @@ internal static partial class Builtins
                         break;
                     case TarEntryType.HardLink:
                         var linkParts = e.LinkName[linkPrefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
-                        var linkTarget = VirtualFileSystem.Normalize(dir, string.Join('/', linkParts.Skip(strip)));
+                        var linkTarget = VirtualFileSystem.Normalize(dir, TarRename(string.Join('/', linkParts.Skip(strip)), rules));
                         // only to a file this archive (or the target dir) already holds, never through a link it made
                         if (linkParts.Length <= strip || !fs.Exists(linkTarget, follow: false) || fs.IsDirectory(linkTarget, follow: false) || linkTarget == target || ThroughMadeLink(linkTarget))
                         {
@@ -346,7 +483,7 @@ internal static partial class Builtins
                         break;
                     case TarEntryType.SymbolicLink:
                         fs.CreateDirectory(VirtualFileSystem.GetParent(target), parents: true);
-                        fs.CreateSymlink(target, e.LinkName);
+                        fs.CreateSymlink(target, TarRename(e.LinkName, rules));
                         made.Add(target);
                         fs.SetModifiedTime(target, e.ModificationTime.UtcDateTime, follow: false);
                         break;

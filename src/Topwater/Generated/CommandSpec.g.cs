@@ -918,7 +918,7 @@ internal static partial class CommandSpec
             ["openFailed"] = "cannot open {file:shell-always} for reading: {errno}",
             ["readDirectory"] = "error reading {file:shell-always}: {errno}",
         }),
-        ["tar"] = new("tar", "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components)", null, "tar (GNU tar) 1.35", true, false, true, "tar", 1, "Try 'tar --help' or 'tar --usage' for more information.\n", ("cOoptvxz", "Cf\u0001", "directory=C,create=c,file=f,to-stdout=O,no-same-owner=o,preserve-permissions=p,strip-components=\u0001,list=t,verbose=v,extract=x,get=x,gunzip=z,gzip=z,ungzip=z"), new Dictionary<string, string>
+        ["tar"] = new("tar", "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components, --exclude, --transform)", null, "tar (GNU tar) 1.35", true, false, true, "tar", 1, "Try 'tar --help' or 'tar --usage' for more information.\n", ("cOoptvxz", "Cf\u0001\u0002\u0003\u0004\u0006", "directory=C,create=c,file=f,to-stdout=O,no-same-owner=o,preserve-permissions=p,strip-components=\u0001,list=t,verbose=v,extract=x,get=x,gunzip=z,gzip=z,ungzip=z,exclude=\u0002,owner=\u0003,group=\u0004,numeric-owner=\u0005,transform=\u0006,xform=\u0006"), new Dictionary<string, string>
         {
             ["oldOptionNeedsArgument"] = "Old option '{option}' requires an argument.",
             ["noMode"] = "You must specify one of the '-Acdtrux', '--delete' or '--test-label' options",
@@ -940,6 +940,11 @@ internal static partial class CommandSpec
             ["notFound"] = "{file}: Not found in archive",
             ["entryLimit"] = "archive exceeds the {limit}-entry extraction limit; stopping",
             ["byteLimit"] = "output exceeds the {limit}-byte extraction limit; stopping",
+            ["badTransform"] = "Invalid transform expression",
+            ["badTransformRegex"] = "Invalid transform expression: {error}",
+            ["badTransformFlag"] = "Unknown flag in transform expression: {flag}",
+            ["badTransformBackReference"] = "Invalid transform replacement: back reference out of range",
+            ["badId"] = "{value}: Invalid owner or group ID",
         }),
         ["tee"] = new("tee", "Copy stdin to stdout and files", null, "tee (GNU coreutils) 9.4", true, false, true, "tee", 1, "Try 'tee --help' for more information.\n", ("ai", "", "append=a,ignore-interrupts=i"), new Dictionary<string, string>
         {

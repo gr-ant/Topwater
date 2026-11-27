@@ -17,6 +17,7 @@ class Args:
     def __init__(self):
         self.flags: set[str] = set()
         self.values: dict[str, str] = {}
+        self.every: dict[str, list[str]] = {}  # each value of a repeated option, in order
         self.positional: list[str] = []
 
     def has(self, c: str) -> bool:
@@ -24,6 +25,13 @@ class Args:
 
     def value(self, c: str) -> str | None:
         return self.values.get(c)
+
+    def all(self, c: str) -> list[str]:
+        return self.every.get(c, [])
+
+    def put(self, c: str, v: str) -> None:
+        self.values[c] = v
+        self.every.setdefault(c, []).append(v)
 
     @staticmethod
     def parse(args, flags: "str | CommandSpec" = "", valued: str = "", longs: str = "") -> "Args":
@@ -48,10 +56,10 @@ class Args:
                 c = mapping[name]
                 if c in valued:
                     if eq:
-                        r.values[c] = inline
+                        r.put(c, inline)
                     elif i + 1 < len(args):
                         i += 1
-                        r.values[c] = args[i]
+                        r.put(c, args[i])
                     else:
                         raise UsageException(spec_format(GETOPT["missingLongArgument"], option=name))
                 else:
@@ -66,10 +74,10 @@ class Args:
                 c = a[k]
                 if c in valued:
                     if k + 1 < len(a):
-                        r.values[c] = a[k + 1:]
+                        r.put(c, a[k + 1:])
                     elif i + 1 < len(args):
                         i += 1
-                        r.values[c] = args[i]
+                        r.put(c, args[i])
                     else:
                         raise UsageException(spec_format(GETOPT["missingShortArgument"], option=c))
                     break

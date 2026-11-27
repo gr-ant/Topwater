@@ -12,6 +12,15 @@ internal sealed class Args
 
     public bool Has(char c) => Flags.Contains(c);
     public string? Value(char c) => Values.GetValueOrDefault(c);
+    public readonly Dictionary<char, List<string>> Every = [];  // each value of a repeated option, in order
+    public IReadOnlyList<string> All(char c) => Every.TryGetValue(c, out var l) ? l : [];
+
+    void Put(char c, string v)
+    {
+        Values[c] = v;
+        if (!Every.TryGetValue(c, out var l)) Every[c] = l = [];
+        l.Add(v);
+    }
 
     /// <param name="flags">Allowed boolean short flags, e.g. "rfi".</param>
     /// <param name="valued">Short options that take a value, e.g. "n".</param>
@@ -30,7 +39,7 @@ internal sealed class Args
                 string? inline = null;
                 if (name.IndexOf('=') is var eq and > 0) { inline = name[(eq + 1)..]; name = name[..eq]; }
                 if (!map.TryGetValue(name, out var c)) throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.UnrecognizedOption, ("option", a)));
-                if (valued.Contains(c)) r.Values[c] = inline ?? (i + 1 < args.Count ? args[++i] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingLongArgument, ("option", name))));
+                if (valued.Contains(c)) r.Put(c, inline ?? (i + 1 < args.Count ? args[++i] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingLongArgument, ("option", name)))));
                 else r.Flags.Add(c);
                 continue;
             }
@@ -40,7 +49,7 @@ internal sealed class Args
                 char c = a[k];
                 if (valued.Contains(c))
                 {
-                    r.Values[c] = k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Count ? args[++i] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingShortArgument, ("option", c.ToString())));
+                    r.Put(c, k + 1 < a.Length ? a[(k + 1)..] : i + 1 < args.Count ? args[++i] : throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.MissingShortArgument, ("option", c.ToString()))));
                     break;
                 }
                 if (!flags.Contains(c)) throw new UsageException(CommandSpec.Format(CommandSpec.Getopt.InvalidOption, ("option", c.ToString())));

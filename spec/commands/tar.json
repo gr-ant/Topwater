@@ -2,7 +2,7 @@
   "$schema": "../command.schema.json",
   "name": "tar",
   "category": "archive",
-  "summary": "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components)",
+  "summary": "Create, list or extract tar archives (c/x/t, -f, -z, -v, -C, -O, --strip-components, --exclude, --transform)",
   "version": "tar (GNU tar) 1.35",
   "tryHelp": [
     "Try 'tar --help' or 'tar --usage' for more information."
@@ -19,7 +19,12 @@
     {"short": "t", "long": ["list"], "description": "list the archive"},
     {"short": "v", "long": ["verbose"], "description": "list each member processed"},
     {"short": "x", "long": ["extract", "get"], "description": "extract"},
-    {"short": "z", "long": ["gunzip", "gzip", "ungzip"], "description": "gzip the archive"}
+    {"short": "z", "long": ["gunzip", "gzip", "ungzip"], "description": "gzip the archive"},
+    {"long": ["exclude"], "key": "\u0002", "arg": "PATTERN", "description": "leave out members whose name, or any trailing part of it, matches the shell wildcard PATTERN (a directory's contents go with it); may be repeated"},
+    {"long": ["owner"], "key": "\u0003", "arg": "NAME[:UID]", "description": "when creating, record NAME (or a numeric UID) as every member's owner"},
+    {"long": ["group"], "key": "\u0004", "arg": "NAME[:GID]", "description": "when creating, record NAME (or a numeric GID) as every member's group"},
+    {"long": ["numeric-owner"], "key": "\u0005", "description": "store and list owners and groups as numbers only"},
+    {"long": ["transform", "xform"], "key": "\u0006", "arg": "EXPRESSION", "description": "rename members with sed-style s/REGEX/REPLACEMENT/FLAGS (flags g, i, x for extended regexes, or a number; several separated by ;) when creating or extracting; may be repeated"}
   ],
   "messages": {
     "oldOptionNeedsArgument": "Old option '{option}' requires an argument.",
@@ -41,6 +46,11 @@
     "cannotMknod": "{name}: Cannot mknod: Operation not permitted",
     "notFound": "{file}: Not found in archive",
     "entryLimit": "archive exceeds the {limit}-entry extraction limit; stopping",
-    "byteLimit": "output exceeds the {limit}-byte extraction limit; stopping"
+    "byteLimit": "output exceeds the {limit}-byte extraction limit; stopping",
+    "badTransform": "Invalid transform expression",
+    "badTransformRegex": "Invalid transform expression: {error}",
+    "badTransformFlag": "Unknown flag in transform expression: {flag}",
+    "badTransformBackReference": "Invalid transform replacement: back reference out of range",
+    "badId": "{value}: Invalid owner or group ID"
   }
 }

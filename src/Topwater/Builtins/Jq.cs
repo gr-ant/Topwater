@@ -430,6 +430,7 @@ internal static class Jq
     sealed record ForeachN(Node Source, Pat Pattern, Node Init, Node Update, Node? Extract) : Node;
     sealed record AssignN(string Op, Node L, Node R) : Node;
     sealed record CallN(string Name, List<Node> Args) : Node;
+    sealed record DefN(string Key, List<string> Params, Node Body, Node Rest) : Node; // key: name/arity; a $param keeps its $
 
     abstract record Pat;
     sealed record VarPat(string Name) : Pat;
@@ -471,7 +472,32 @@ internal static class Jq
         Node Pipe()
         {
             System.Runtime.CompilerServices.RuntimeHelpers.EnsureSufficientExecutionStack();
-            if (IsOp("def")) throw new CompileError("`def` is not supported");
+            if (IsOp("def"))
+            {
+                _p++;
+                var t = Peek();
+                if (t.Kind != Tk.Ident || t.Text is "true" or "false" or "null") throw new CompileError(Unexpected().Message + ", expecting IDENT");
+                _p++;
+                var ps = new List<string>();
+                if (IsOp("("))
+                {
+                    _p++;
+                    while (true)
+                    {
+                        var q = Peek();
+                        if (q.Kind is not (Tk.Ident or Tk.Var)) throw new CompileError(Unexpected().Message + ", expecting IDENT or $name");
+                        _p++;
+                        ps.Add((q.Kind == Tk.Var ? "$" : "") + q.Text);
+                        if (!IsOp(";")) break;
+                        _p++;
+                    }
+                    Expect(")");
+                }
+                Expect(":");
+                var body = Pipe();
+                Expect(";");
+                return new DefN($"{t.Text}/{ps.Count}", ps, body, Pipe());
+            }
             var left = Comma();
             if (IsOp("as"))
             {
@@ -1301,8 +1327,61 @@ internal static class Jq
 
     // ---------- interpreter ----------
 
+    // nested calls of functions a filter defines; the same in every port, below any port's own stack limit
+    // shortcut: real jq recurses far deeper (and tail calls without limit); raise with an explicit stack per port if needed
+    const int MaxDefDepth = 100;
+
+    /// <summary>A def as its scope holds it (beside the $variables, keyed name/arity); the scope holds it too, for recursion.</summary>
+    sealed record Fn(List<string> Params, Node Body, Dictionary<string, object?> Scope);
+
+    /// <summary>A filter argument: runs where it was written.</summary>
+    sealed record Closure(Node Body, Dictionary<string, object?> Scope);
+
     sealed class Interpreter(IReadOnlyDictionary<string, string> env, CancellationToken ct)
     {
+        int _depth; // def calls in progress
+
+        static Dictionary<string, object?> Define(DefN d, Dictionary<string, object?> vs)
+        {
+            var scope = new Dictionary<string, object?>(vs);
+            scope[d.Key] = new Fn(d.Params, d.Body, scope);
+            return scope;
+        }
+
+        /// <summary>Calls a def: filter parameters are closures over the caller's scope, $parameters bind each value in turn.
+        /// run is Ev, or Paths for a call used as a path expression.</summary>
+        IEnumerable<T> Defined<T>(Fn fn, List<Node> args, object? v, Dictionary<string, object?> vs, Func<Node, object?, Dictionary<string, object?>, IEnumerable<T>> run)
+        {
+            if (_depth >= MaxDefDepth) throw new JqError($"recursion too deep (more than {MaxDefDepth} nested function calls)");
+            var call = new Dictionary<string, object?>(fn.Scope);
+            var values = new List<(string Name, Node Arg)>();
+            for (int i = 0; i < fn.Params.Count; i++)
+                if (fn.Params[i].StartsWith('$')) values.Add((fn.Params[i][1..], args[i]));
+                else call[$"{fn.Params[i]}/0"] = new Closure(args[i], vs);
+            return BindArgs(0, call);
+
+            IEnumerable<T> BindArgs(int i, Dictionary<string, object?> scope)
+            {
+                if (i == values.Count)
+                {
+                    // count only while the body runs: a body paused after a yield is not on the stack
+                    using var it = run(fn.Body, v, scope).GetEnumerator();
+                    while (true)
+                    {
+                        _depth++;
+                        try { if (!it.MoveNext()) yield break; }
+                        finally { _depth--; }
+                        yield return it.Current;
+                    }
+                }
+                foreach (var x in Ev(values[i].Arg, v, vs))
+                {
+                    var inner = new Dictionary<string, object?>(scope) { [values[i].Name] = x, [$"{values[i].Name}/0"] = new Closure(new Lit(x), []) };
+                    foreach (var y in BindArgs(i + 1, inner)) yield return y;
+                }
+            }
+        }
+
         static Dictionary<string, object?> With(Dictionary<string, object?> vs, string name, object? value) => new(vs) { [name] = value };
 
         Dictionary<string, object?> EnvObject() => env.ToDictionary(p => p.Key, p => (object?)p.Value);
@@ -1463,6 +1542,12 @@ internal static class Jq
                 case AssignN asg:
                     foreach (var x in Assign(asg.Op, asg.L, asg.R, v, vs)) yield return x;
                     break;
+                case DefN d:
+                    foreach (var x in Ev(d.Rest, v, Define(d, vs))) yield return x;
+                    break;
+                case CallN dc when vs.TryGetValue($"{dc.Name}/{dc.Args.Count}", out var f):
+                    foreach (var x in f is Closure cl ? Ev(cl.Body, v, cl.Scope) : Defined((Fn)f!, dc.Args, v, vs, Ev)) yield return x;
+                    break;
                 case CallN call:
                     foreach (var x in Call(call.Name, call.Args, v, vs)) yield return x;
                     break;
@@ -1602,6 +1687,12 @@ internal static class Jq
                     foreach (var x in Ev(a.Source, v, vs))
                         foreach (var bound in Bind(a.Pattern, x, vs))
                             foreach (var r in Paths(a.Body, v, bound)) yield return r;
+                    break;
+                case DefN d:
+                    foreach (var r in Paths(d.Rest, v, Define(d, vs))) yield return r;
+                    break;
+                case CallN dc when vs.TryGetValue($"{dc.Name}/{dc.Args.Count}", out var f):
+                    foreach (var r in f is Closure cl ? Paths(cl.Body, v, cl.Scope) : Defined((Fn)f!, dc.Args, v, vs, Paths)) yield return r;
                     break;
                 case CallN { Name: "empty", Args.Count: 0 }: break;
                 case CallN { Name: "select", Args.Count: 1 } sel:

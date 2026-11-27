@@ -9,6 +9,7 @@ import { InflateError, OutputLimitError, gunzip, inflateRaw } from '../inflate.j
 import { deflate } from '../compress.js';
 import { VirtualFileSystem } from '../vfs.js';
 import { globRegex } from '../glob.js';
+import { posixRegexError, posixToJs } from '../regex.js';
 import type { Shell } from '../shell.js';
 import { ZipFormatError, crc32, dosTime, fromDos, readZip, writeZip, type ZipEntry } from './zipfile.js';
 
@@ -82,7 +83,10 @@ function setString(block: Uint8Array, off: number, len: number, s: string) { blo
 function setOctal(block: Uint8Array, off: number, len: number, n: number) { setString(block, off, len, Math.max(0, Math.floor(n)).toString(8).padStart(len - 1, '0')); }
 
 /** type: file, hard link (`link` is the member it names), symbolic link (`link` is its target) or directory */
-interface TarMember { name: string; type: '0' | '1' | '2' | '5'; mode: number; mtime: number; owner: string; data: Uint8Array; link?: string }
+interface TarMember {
+  name: string; type: '0' | '1' | '2' | '5'; mode: number; mtime: number; owner: string; data: Uint8Array; link?: string;
+  ids?: { uid: number; gid: number; uname: string; gname: string }; // --owner/--group/--numeric-owner (else from owner)
+}
 
 function paxRecord(key: string, value: string): Uint8Array {
   const body = ` ${key}=${value}\n`;
@@ -104,15 +108,16 @@ function tarHeader(name: string, type: string, size: number, m: TarMember): Uint
   b.set(nameBytes.subarray(0, 100), 0);
   setOctal(b, 100, 8, m.mode & 0o7777);
   const id = m.owner === 'root' ? 0 : 1000;
-  setOctal(b, 108, 8, id);
-  setOctal(b, 116, 8, id);
+  const ids = m.ids ?? { uid: id, gid: id, uname: m.owner, gname: m.owner };
+  setOctal(b, 108, 8, ids.uid);
+  setOctal(b, 116, 8, ids.gid);
   setOctal(b, 124, 12, size);
   setOctal(b, 136, 12, m.mtime);
   b[156] = type.charCodeAt(0);
   setString(b, 257, 6, 'ustar\0');
   setString(b, 263, 2, '00');
-  setString(b, 265, 32, m.owner);
-  setString(b, 297, 32, m.owner);
+  setString(b, 265, 32, ids.uname);
+  setString(b, 297, 32, ids.gname);
   if (type !== 'x' && m.link !== undefined) setString(b, 157, 100, m.link);
   setString(b, 345, 155, prefix);
   b.fill(0x20, 148, 156);
@@ -215,6 +220,104 @@ function* readTar(data: Uint8Array): Generator<TarEntry> {
 const TAR_USAGE = '\n' + specOf('tar').tryHelp.replace(/\n+$/, '');
 const isFileType = (t: string) => t === '0' || t === '7';
 
+/** --exclude: a pattern (whose * also matches /) against the whole name or any run of its components, so `sub`
+ * leaves out d/sub and everything under it. */
+function tarExcluded(name: string, patterns: RegExp[]): boolean {
+  const parts = name.split('/').filter(Boolean);
+  for (let i = 0; i < parts.length; i++)
+    for (let j = i + 1; j <= parts.length; j++) if (patterns.some(rx => rx.test(parts.slice(i, j).join('/')))) return true;
+  return false;
+}
+
+type TarRule = [rx: RegExp, replacement: string, all: boolean, nth: number];
+
+/** --transform: each s/REGEX/REPLACEMENT/FLAGS (any delimiter, several joined by ;) as [regex, replacement, all, nth]. */
+function tarTransforms(exprs: string[]): TarRule[] {
+  const bad = (key: string, values: Record<string, string> = {}) => new ShellError(specMessage('tar', key, values) + TAR_USAGE, 2);
+  const rules: TarRule[] = [];
+  for (const expr of exprs) {
+    let i = 0;
+    while (i < expr.length) {
+      if (expr[i] === ';') { i++; continue; }
+      if (expr[i] !== 's' || i + 1 >= expr.length) throw bad('badTransform');
+      const delim = expr[i + 1];
+      i += 2;
+      const parts: string[] = [];
+      for (let n = 0; n < 2; n++) {
+        let buf = '';
+        while (i < expr.length && expr[i] !== delim) {
+          if (expr[i] === '\\' && i + 1 < expr.length) { buf += expr[i + 1] === delim ? delim : expr.slice(i, i + 2); i += 2; continue; }
+          buf += expr[i++];
+        }
+        if (i >= expr.length) throw bad('badTransform');
+        parts.push(buf);
+        i++;
+      }
+      let all = false, extended = false, icase = false, digits = '';
+      while (i < expr.length && expr[i] !== ';') {
+        const c = expr[i];
+        if (/[0-9]/.test(c)) digits += c;
+        else if ('gixsSrRhH'.includes(c)) { // s/r/h (which names it applies to) are accepted; it applies to all
+          all ||= c === 'g';
+          icase ||= c === 'i';
+          extended ||= c === 'x';
+        } else throw bad('badTransformFlag', { flag: c });
+        i++;
+      }
+      const nth = digits ? Number(digits) : 1;
+      const error = posixRegexError(parts[0], extended, false);
+      if (error) throw bad('badTransformRegex', { error });
+      const rx = new RegExp(posixToJs(parts[0], extended), icase ? 'gi' : 'g');
+      const groups = new RegExp(rx.source + '|').exec('')!.length - 1;
+      if ([...parts[1].matchAll(/\\([0-9])/g)].some(m => Number(m[1]) > groups)) throw bad('badTransformBackReference');
+      rules.push([rx, parts[1], all, nth]);
+    }
+  }
+  return rules;
+}
+
+/** Applies the --transform rules in order. In a replacement & is the match, \\N a group, \\& a plain &. */
+function tarRename(name: string, rules: TarRule[]): string {
+  const expand = (m: string[], repl: string) => {
+    let out = '';
+    for (let k = 0; k < repl.length; k++) {
+      const c = repl[k];
+      if (c === '&') out += m[0];
+      else if (c === '\\' && k + 1 < repl.length) {
+        const n = repl[++k];
+        out += /[0-9]/.test(n) ? m[Number(n)] ?? '' : n === '&' ? '&' : c + n;
+      } else out += c;
+    }
+    return out;
+  };
+  for (const [rx, repl, all, nth] of rules) {
+    let count = 0;
+    name = name.replace(rx, (...args: unknown[]) => {
+      const m = args.slice(0, args.findIndex(x => typeof x === 'number')) as string[];
+      count++;
+      return count === nth || (all && count > nth) ? expand(m, repl) : m[0];
+    });
+  }
+  return name;
+}
+
+/** --owner/--group NAME[:ID]: [id, name]; a bare number is an id, a bare name gets its id when known. */
+function tarIds(value: string | undefined, user: string, defaultId: number, defaultName: string): [number, string] {
+  if (value === undefined) return [defaultId, defaultName];
+  const known = new Map([['root', 0], [user, 1000]]);
+  const colon = value.indexOf(':');
+  let name = colon < 0 ? value : value.slice(0, colon), ident = colon < 0 ? '' : value.slice(colon + 1);
+  if (colon < 0 && /^[0-9]+$/.test(name)) [name, ident] = ['', name];
+  if (ident) {
+    // shortcut: ids past 7 octal digits are refused (GNU tar stores them in base 256)
+    if (!/^[0-9]+$/.test(ident) || Number(ident) > 0o7777777)
+      throw new ShellError(`${specMessage('tar', 'badId', { value: ident })}\ntar: ${specMessage('tar', 'unrecoverable', {})}`, 2);
+    const uid = Number(ident);
+    return [uid, name || ([...known].find(([, i]) => i === uid)?.[0] ?? '')];
+  }
+  return [known.get(name) ?? 1000, name];
+}
+
 async function tar(ctx: CommandContext): Promise<number> {
   let args = [...ctx.args];
   if (args.length > 0 && args[0].length > 0 && args[0][0] !== '-') {
@@ -240,6 +343,9 @@ async function tar(ctx: CommandContext): Promise<number> {
   const fs = ctx.fs;
   const fatal = (msg: string) => `${msg}\ntar: ${specMessage('tar', 'unrecoverable', {})}`;
   const dir = ctx.resolvePath(a.value('C') ?? '.');
+  const excludes = a.all('\u0002').map(p => globRegex(p, false, true));
+  const rules = tarTransforms(a.all('\u0006'));
+  const numeric = a.has('\u0005');
   // without -C the working directory is only needed for relative names, so a deleted one still lists /abs.tar
   if (a.value('C') !== undefined && !fs.isDirectory(dir)) throw new ShellError(fatal(specMessage('tar', 'cannotOpen', { file: a.value('C')!, errno: fs.exists(dir) ? 'Not a directory' : fs.whyMissing(dir) })), 2);
   let code = 0;
@@ -255,9 +361,14 @@ async function tar(ctx: CommandContext): Promise<number> {
     const verbose = archive === '-' ? ctx.stderr : ctx.stdout;
     const parts: Uint8Array[] = [];
     const linked: { path: string; member: string }[] = []; // files with several names already stored
+    const user = ctx.shell.options.user;
+    const owner = tarIds(a.value('\u0003'), user, -1, '');
+    const group = tarIds(a.value('\u0004'), user, -1, '');
     const add = (name: string, path: string) => {
       if (path === archivePath) return; // the archive itself, as GNU tar skips it
+      if (excludes.length && tarExcluded(name, excludes)) return;
       let member = name.replace(/^\/+/, '');
+      if (rules.length) member = tarRename(member.replace(/\/+$/, ''), rules).replace(/^\/+/, '') || '.';
       try {
         const st = fs.stat(path, false); // a symbolic link is stored as one, never followed
         if (st.isDirectory) member = member.replace(/\/+$/, '') + '/';
@@ -268,7 +379,14 @@ async function tar(ctx: CommandContext): Promise<number> {
         const data = type === '0' ? fs.readBytes(path) : new Uint8Array(0);
         if (st.links > 1 && first === undefined && !st.isDirectory) linked.push({ path, member });
         if (member !== '/') {
-          parts.push(...tarBlocks({ name: member, type, mode: st.mode, mtime: Math.floor(st.modified / 1000), owner: st.owner, data, link: first ?? st.linkTarget ?? undefined }));
+          const id = st.owner === 'root' ? 0 : 1000;
+          const ids = { uid: id, gid: id, uname: st.owner, gname: st.owner };
+          if (owner[0] >= 0) [ids.uid, ids.uname] = owner;
+          if (group[0] >= 0) [ids.gid, ids.gname] = group;
+          if (numeric) ids.uname = ids.gname = '';
+          let target = st.linkTarget ?? undefined;
+          if (rules.length && target && first === undefined) target = tarRename(target, rules);
+          parts.push(...tarBlocks({ name: member, type, mode: st.mode, mtime: Math.floor(st.modified / 1000), owner: st.owner, data, link: first ?? target, ids }));
           if (a.has('v')) verbose.write(member + '\n');
         }
         for (const c of children) add(name.replace(/\/+$/, '') + '/' + c, path.replace(/\/+$/, '') + '/' + c);
@@ -337,6 +455,7 @@ async function tar(ctx: CommandContext): Promise<number> {
         const name = e.name;
         const prefix = tarPrefix(name);
         const rel = name.slice(prefix.length);
+        if (excludes.length && tarExcluded(rel, excludes)) continue;
         if (wanted.length > 0) {
           const i = wanted.findIndex(w => rel.replace(/\/+$/, '') === w || rel.startsWith(w + '/'));
           if (i < 0) continue;
@@ -349,7 +468,7 @@ async function tar(ctx: CommandContext): Promise<number> {
         if (a.has('t')) {
           if (!a.has('v')) { ctx.stdout.write(name + '\n'); continue; }
           const kind = e.type === '5' ? 'd' : e.type === '2' ? 'l' : e.type === '1' ? 'h' : e.type === '3' ? 'c' : e.type === '4' ? 'b' : e.type === '6' ? 'p' : '-';
-          const ug = `${e.uname || e.uid}/${e.gname || e.gid}`;
+          const ug = numeric ? `${e.uid}/${e.gid}` : `${e.uname || e.uid}/${e.gname || e.gid}`;
           const size = String(isFile ? e.size : 0);
           ugWidth = Math.max(ugWidth, ug.length + 1 + size.length); // grows like GNU tar's, so later columns stay aligned
           const link = e.type === '2' ? ` -> ${e.link}` : e.type === '1' ? ` link to ${e.link.slice(linkPrefix.length)}` : '';
@@ -359,7 +478,12 @@ async function tar(ctx: CommandContext): Promise<number> {
         if (prefix.split('/').includes('..')) { fail(specMessage('tar', 'memberDotDot', { name: name })); continue; }
         const parts = nonEmpty(rel.split('/'));
         if (parts.length <= strip) continue;
-        const target = under(dir, parts.slice(strip));
+        let keep = parts.slice(strip);
+        if (rules.length) {
+          keep = nonEmpty(tarRename(keep.join('/'), rules).split('/'));
+          if (!keep.length) continue;
+        }
+        const target = under(dir, keep);
         try {
           if (a.has('O')) {
             if (!isFile) continue;
@@ -383,7 +507,7 @@ async function tar(ctx: CommandContext): Promise<number> {
             fs.setModifiedTime(target, e.mtime * 1000);
           } else if (e.type === '1') {
             const linkParts = nonEmpty(e.link.slice(linkPrefix.length).split('/'));
-            const linkTarget = under(dir, linkParts.slice(strip));
+            const linkTarget = under(dir, nonEmpty(tarRename(linkParts.slice(strip).join('/'), rules).split('/')));
             // only to a file this archive (or the target dir) already holds, never through a link it made
             if (linkParts.length <= strip || !fs.exists(linkTarget, false) || fs.isDirectory(linkTarget, false) || linkTarget === target || throughMadeLink(linkTarget)) {
               fail(`${name}: Cannot hard link to ‘${linkParts.join('/')}’: No such file or directory`);
@@ -393,7 +517,7 @@ async function tar(ctx: CommandContext): Promise<number> {
             fs.createHardLink(linkTarget, target);
           } else if (e.type === '2') {
             fs.mkdir(VirtualFileSystem.getParent(target), true);
-            fs.createSymlink(target, e.link);
+            fs.createSymlink(target, tarRename(e.link, rules));
             made.add(target);
             fs.setModifiedTime(target, e.mtime * 1000, false);
           } else fail(`${name}: Cannot mknod: Operation not permitted`);

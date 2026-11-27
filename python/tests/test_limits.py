@@ -198,3 +198,13 @@ def test_trailer_survives_the_output_caps():
     text = quick().run("seq 1 20000; seq 1 3000 >&2; sleep 99").to_tool_output()
     assert "[output truncated" in text
     assert text.endswith("Files and variables changed before this point are kept.]")
+
+
+def test_jq_def_recursion_is_bounded():
+    # a def that never stops recursing ends in an error, not a hang or a crash; 100 levels deep still works
+    r = Shell().run("jq -n 'def f: f; f'; echo $?; jq -n 'def r: if . < 99 then .+1 | r else . end; 0 | r'")
+    assert r.stdout == "5\n99\n"
+    assert "recursion too deep" in r.stderr
+    # paused calls are not nested ones: a wide recursion stays well under the limit
+    fib = "jq -nc 'def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; [range(15) | fib] | last'"
+    assert Shell().run(fib).stdout == "377\n"

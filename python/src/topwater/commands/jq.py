@@ -335,7 +335,26 @@ class _Parser:
 
     def pipe(self):
         if self.is_op("def"):
-            raise _Compile("`def` is not supported")
+            self.p += 1
+            kind, name = self.take()
+            if kind != "ident" or name in ("true", "false", "null"):
+                raise _Compile("syntax error, unexpected " + ("end of file" if kind == "eof" else repr(name)) + ", expecting IDENT")
+            params = []
+            if self.is_op("("):
+                self.p += 1
+                while True:
+                    kind, val = self.take()
+                    if kind not in ("ident", "var"):
+                        raise _Compile("syntax error, unexpected " + ("end of file" if kind == "eof" else repr(val)) + ", expecting IDENT or $name")
+                    params.append(("$" if kind == "var" else "") + val)
+                    if not self.is_op(";"):
+                        break
+                    self.p += 1
+                self.expect(")")
+            self.expect(":")
+            body = self.pipe()
+            self.expect(";")
+            return ("def", f"{name}/{len(params)}", params, body, self.pipe())
         left = self.comma()
         if self.is_op("as"):
             self.p += 1
@@ -1177,11 +1196,17 @@ def _fromjson(v):
     return values[0]
 
 
+# nested calls of functions a filter defines; the same in every port, below any port's own stack limit
+# shortcut: real jq recurses far deeper (and tail calls without limit); raise with an explicit stack per port if needed
+MAX_DEF_DEPTH = 100
+
+
 class Interpreter:
     def __init__(self, env: dict, ctx=None):
         self.env = env
         self.ctx = ctx
         self.steps = 0
+        self.depth = 0  # def calls in progress
 
     def step(self) -> None:
         """Stops endless generators (range(1e10), recurse without a base case) and honours the call's time limit."""
@@ -1301,10 +1326,56 @@ class Interpreter:
                             yield from ([acc] if extract is None else self.ev(extract, acc, bound))
         elif kind == "assign":
             yield from self._assign(node[1], node[2], node[3], v, vs)
+        elif kind == "def":
+            scope = dict(vs)  # functions live beside the variables, keyed name/arity; the body sees itself (recursion)
+            scope[node[1]] = ("fn", node[2], node[3], scope)
+            yield from self.ev(node[4], v, scope)
         elif kind == "call":
-            yield from self._call(node[1], node[2], v, vs)
+            fn = vs.get(f"{node[1]}/{len(node[2])}")
+            if fn is None:
+                yield from self._call(node[1], node[2], v, vs)
+            elif fn[0] == "closure":  # a filter argument: runs where it was written
+                yield from self.ev(fn[1], v, fn[2])
+            else:
+                yield from self._defined(fn, node[2], v, vs)
         else:
             raise JqError(f"cannot evaluate {kind}")
+
+    def _defined(self, fn, args, v, vs, run=None):
+        """Calls a def: filter parameters are closures over the caller's scope, $parameters bind each value in turn.
+        run is self.ev, or self.paths for a call used as a path expression."""
+        run = run or self.ev
+        _, params, body, scope = fn
+        if self.depth >= MAX_DEF_DEPTH:
+            raise JqError(f"recursion too deep (more than {MAX_DEF_DEPTH} nested function calls)")
+        call = dict(scope)
+        values = []
+        for p, a in zip(params, args):
+            if p.startswith("$"):
+                values.append((p[1:], a))
+            else:
+                call[f"{p}/0"] = ("closure", a, vs)
+
+        def bind(i, env):
+            if i == len(values):
+                # count only while the body runs: a body paused after a yield is not on the stack
+                it = run(body, v, env)
+                while True:
+                    self.depth += 1
+                    try:
+                        x = next(it)
+                    except StopIteration:
+                        return
+                    finally:
+                        self.depth -= 1
+                    yield x
+            name, a = values[i]
+            for x in self.ev(a, v, vs):
+                inner = dict(env)
+                inner[name] = x
+                inner[f"{name}/0"] = ("closure", ("lit", x), {})
+                yield from bind(i + 1, inner)
+        yield from bind(0, call)
 
     def _object(self, entries, i, acc, v, vs):
         if i == len(entries):
@@ -1405,6 +1476,13 @@ class Interpreter:
             for x in self.ev(node[1], v, vs):
                 for bound in self._bind(node[2], x, vs):
                     yield from self.paths(node[3], v, bound)
+        elif kind == "def":
+            scope = dict(vs)
+            scope[node[1]] = ("fn", node[2], node[3], scope)
+            yield from self.paths(node[4], v, scope)
+        elif kind == "call" and f"{node[1]}/{len(node[2])}" in vs:
+            fn = vs[f"{node[1]}/{len(node[2])}"]
+            yield from self.paths(fn[1], v, fn[2]) if fn[0] == "closure" else self._defined(fn, node[2], v, vs, self.paths)
         elif kind == "call":
             name, args = node[1], node[2]
             if name == "empty" and not args:

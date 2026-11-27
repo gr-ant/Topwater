@@ -161,4 +161,10 @@ describe('runaway constructs', () => {
     expect(text).toContain('command not found');
     expect(text.endsWith('[exit code 127]')).toBe(true);
   });
+  it('jq def recursion is bounded', async () => {
+    // a def that never stops recursing ends in an error, not a hang or a crash; 100 levels deep still works
+    const r = await new Shell().run("jq -n 'def f: f; f'; echo $?; jq -n 'def r: if . < 99 then .+1 | r else . end; 0 | r'");
+    expect(r.stdout).toBe('5\n99\n');
+    expect(r.stderr).toContain('recursion too deep');
+  });
 });

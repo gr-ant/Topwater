@@ -96,10 +96,17 @@ export interface CommandContext {
 export class Args {
   readonly flags = new Set<string>();
   readonly values = new Map<string, string>();
+  readonly every = new Map<string, string[]>(); // each value of a repeated option, in order
   readonly positional: string[] = [];
 
   has(c: string) { return this.flags.has(c); }
   value(c: string): string | undefined { return this.values.get(c); }
+  all(c: string): string[] { return this.every.get(c) ?? []; }
+  put(c: string, v: string): void {
+    this.values.set(c, v);
+    const l = this.every.get(c);
+    if (l) l.push(v); else this.every.set(c, [v]);
+  }
 
   /**
    * @param flags allowed boolean short flags, e.g. "rfi"
@@ -127,7 +134,7 @@ export class Args {
         if (c === undefined) throw new UsageException(specFormat(GETOPT.unrecognizedOption, { option: a }));
         if (valued.includes(c)) {
           if (inline === undefined && i + 1 >= args.length) throw new UsageException(specFormat(GETOPT.missingLongArgument, { option: name }));
-          r.values.set(c, inline ?? args[++i]);
+          r.put(c, inline ?? args[++i]);
         } else r.flags.add(c);
         continue;
       }
@@ -135,8 +142,8 @@ export class Args {
       for (let k = 1; k < a.length; k++) {
         const c = a[k];
         if (valued.includes(c)) {
-          if (k + 1 < a.length) r.values.set(c, a.slice(k + 1));
-          else if (i + 1 < args.length) r.values.set(c, args[++i]);
+          if (k + 1 < a.length) r.put(c, a.slice(k + 1));
+          else if (i + 1 < args.length) r.put(c, args[++i]);
           else throw new UsageException(specFormat(GETOPT.missingShortArgument, { option: c }));
           break;
         }

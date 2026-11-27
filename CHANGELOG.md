@@ -26,6 +26,11 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   --check` (trailing whitespace, a space before a tab in the indent, new blank lines at the end; exit 2), `git
   merge-base` (`-a`, `--octopus`, `--is-ancestor`) and `git fsck` (unreadable, missing and dangling objects, loose and
   packed).
+- **`tar --exclude`, `--owner`, `--group`, `--numeric-owner` and `--transform`.** `--exclude` takes a wildcard matched
+  against the name or any run of its components; `--transform`/`--xform` renames members with `s/regex/replacement/`
+  (flags `g`, `i`, `x`, a number). Repeated options now keep every value in all three ports.
+- **jq `def`.** Functions with filter and `$value` parameters, recursion and lexical scope (Python and C#; the
+  TypeScript port had them). Nesting stops at 100 calls with "recursion too deep", the same in every port.
 
 ## 0.1.0-preview.4 (2026-11-26)
 

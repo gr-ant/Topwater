@@ -271,6 +271,110 @@ def _tar_prefix(name: str) -> str:
 _USAGE = "\n" + COMMANDS["tar"].try_help.rstrip("\n")
 
 
+def _tar_excluded(name: str, patterns: list) -> bool:
+    """--exclude: a pattern (whose * also matches /) against the whole name or any run of its components, so `sub`
+    leaves out d/sub and everything under it."""
+    parts = [p for p in name.split("/") if p]
+    return any(rx.match("/".join(parts[i:j])) for i in range(len(parts)) for j in range(i + 1, len(parts) + 1) for rx in patterns)
+
+
+def _tar_transforms(exprs: list[str]) -> list:
+    """--transform: each s/REGEX/REPLACEMENT/FLAGS (any delimiter, several joined by ;) as (regex, replacement, all, nth)."""
+    from .text import posix_regex_error, posix_to_python
+
+    def bad(key: str, **values) -> ShellError:
+        return ShellError(spec_message("tar", key, **values) + _USAGE, 2)
+    rules = []
+    for expr in exprs:
+        i = 0
+        while i < len(expr):
+            if expr[i] == ";":
+                i += 1
+                continue
+            if expr[i] != "s" or i + 1 >= len(expr):
+                raise bad("badTransform")
+            delim, i = expr[i + 1], i + 2
+            parts = []
+            for _ in range(2):
+                buf = []
+                while i < len(expr) and expr[i] != delim:
+                    if expr[i] == "\\" and i + 1 < len(expr):
+                        buf.append(delim if expr[i + 1] == delim else expr[i:i + 2])
+                        i += 2
+                        continue
+                    buf.append(expr[i])
+                    i += 1
+                if i >= len(expr):
+                    raise bad("badTransform")
+                parts.append("".join(buf))
+                i += 1
+            all_, nth, extended, icase, digits = False, 1, False, False, ""
+            while i < len(expr) and expr[i] != ";":
+                c = expr[i]
+                if c.isdigit():
+                    digits += c
+                elif c in "gixsSrRhH":  # s/r/h (which names it applies to) are accepted; it applies to all
+                    all_ |= c == "g"
+                    icase |= c == "i"
+                    extended |= c == "x"
+                else:
+                    raise bad("badTransformFlag", flag=c)
+                i += 1
+            nth = int(digits) if digits else 1
+            error = posix_regex_error(parts[0], extended, grep=False)
+            if error:
+                raise bad("badTransformRegex", error=error)
+            rx = re.compile(posix_to_python(parts[0], extended), re.IGNORECASE if icase else 0)
+            if any(int(d) > rx.groups for d in re.findall(r"\\([0-9])", parts[1])):
+                raise bad("badTransformBackReference")
+            rules.append((rx, parts[1], all_, nth))
+    return rules
+
+
+def _tar_rename(name: str, rules: list) -> str:
+    """Applies the --transform rules in order. In a replacement & is the match, \\N a group, \\& a plain &."""
+    def expand(m: re.Match, repl: str) -> str:
+        out, k = [], 0
+        while k < len(repl):
+            c = repl[k]
+            if c == "&":
+                out.append(m.group(0))
+            elif c == "\\" and k + 1 < len(repl):
+                n = repl[k + 1]
+                out.append(m.group(int(n)) or "" if n.isdigit() else "&" if n == "&" else c + n)
+                k += 1
+            else:
+                out.append(c)
+            k += 1
+        return "".join(out)
+    for rx, repl, all_, nth in rules:
+        count = 0
+
+        def one(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return expand(m, repl) if count == nth or (all_ and count > nth) else m.group(0)
+        name = rx.sub(one, name)
+    return name
+
+
+def _tar_ids(value: str | None, user: str, default_id: int, default_name: str) -> tuple[int, str]:
+    """--owner/--group NAME[:ID]: (id, name); a bare number is an id, a bare name gets its id when known."""
+    if value is None:
+        return default_id, default_name
+    known = {"root": 0, user: 1000}
+    name, colon, ident = value.partition(":")
+    if not colon and name.isascii() and name.isdigit():
+        name, ident = "", name
+    if ident:
+        # shortcut: ids past 7 octal digits are refused (GNU tar stores them in base 256)
+        if not (ident.isascii() and ident.isdigit()) or int(ident) > 0o7777777:
+            raise ShellError(spec_message("tar", "badId", value=ident) + "\ntar: " + spec_message("tar", "unrecoverable"), 2)
+        uid = int(ident)
+        return uid, name or next((n for n, i in known.items() if i == uid), "")
+    return known.get(name, 1000), name
+
+
 def _tar(ctx):
     args = list(ctx.args)
     if args and args[0] and args[0][0] != "-":
@@ -297,6 +401,9 @@ def _tar(ctx):
     archive = a.value("f") or "-"
     fs = ctx.fs
     directory = ctx.resolve(a.value("C") or ".")
+    excludes = [glob_to_regex(p, slashes=True) for p in a.all("\x02")]
+    rules = _tar_transforms(a.all("\x06"))
+    numeric = a.has("\x05")
 
     def fatal(msg: str) -> str:
         return msg + "\ntar: " + spec_message("tar", "unrecoverable")
@@ -325,10 +432,18 @@ def _tar(ctx):
         stripped = False
         linked: list[tuple[str, str]] = []  # (path, member) of files with several names already stored
 
+        user = ctx.shell.user
+        owner = _tar_ids(a.value("\x03"), user, -1, "")
+        group = _tar_ids(a.value("\x04"), user, -1, "")
+
         def add(name: str, path: str) -> None:
             if path == archive_path:
                 return  # the archive itself, as GNU tar skips it
+            if excludes and _tar_excluded(name, excludes):
+                return
             member = name.lstrip("/")
+            if rules:
+                member = _tar_rename(member.rstrip("/"), rules).lstrip("/") or "."
             try:
                 st = fs.stat(path, follow=False)  # a symbolic link is stored as one, never followed
                 if st.is_dir:
@@ -346,9 +461,19 @@ def _tar(ctx):
                         out.write(_tar_header(b"././@LongLink", b"L", 0, 0, 0, len(raw) + 1, 0, "root", "root"))
                         out.write(_pad(raw + b"\0"))
                     mtime = max(0, int(st.modified.replace(tzinfo=_UTC).timestamp()))
-                    uid = 0 if st.owner == "root" else 1000
-                    link = (first if first is not None else st.link_target or "").encode("utf-8", "surrogateescape")
-                    out.write(_tar_header(raw, kind, st.mode & 0o7777, uid, uid, len(body), mtime, st.owner, st.owner, link))
+                    uid = gid = 0 if st.owner == "root" else 1000
+                    uname = gname = st.owner
+                    if owner[0] >= 0:
+                        uid, uname = owner
+                    if group[0] >= 0:
+                        gid, gname = group
+                    if numeric:
+                        uname = gname = ""
+                    target = st.link_target or ""
+                    if rules and target and first is None:
+                        target = _tar_rename(target, rules)
+                    link = (first if first is not None else target).encode("utf-8", "surrogateescape")
+                    out.write(_tar_header(raw, kind, st.mode & 0o7777, uid, gid, len(body), mtime, uname, gname, link))
                     out.write(_pad(body))
                     if a.has("v"):
                         verbose.write(member + "\n")
@@ -424,6 +549,8 @@ def _tar(ctx):
         name = e.name
         prefix = _tar_prefix(name)
         rel = name[len(prefix):]
+        if excludes and _tar_excluded(rel, excludes):
+            continue
         if wanted:
             hit = next((i for i, w in enumerate(wanted) if rel.rstrip("/") == w or rel.startswith(w + "/")), -1)
             if hit < 0:
@@ -441,7 +568,7 @@ def _tar(ctx):
                 ctx.print(name)
                 continue
             kind = {"5": "d", "2": "l", "1": "h", "3": "c", "4": "b", "6": "p"}.get(e.type, "-")
-            ug = f"{e.uname or e.uid}/{e.gname or e.gid}"
+            ug = f"{e.uid}/{e.gid}" if numeric else f"{e.uname or e.uid}/{e.gname or e.gid}"
             size = str(e.size if e.is_file else 0)
             ug_width = max(ug_width, len(ug) + 1 + len(size))  # grows like GNU tar's, so later columns stay aligned
             link = " -> " + e.link if e.type == "2" else " link to " + e.link[len(link_prefix):] if e.type == "1" else ""
@@ -454,7 +581,12 @@ def _tar(ctx):
         parts = [p for p in rel.split("/") if p]
         if len(parts) <= strip:
             continue
-        target = normalize(directory, "/".join(parts[strip:]))
+        keep = parts[strip:]
+        if rules:
+            keep = [p for p in _tar_rename("/".join(keep), rules).split("/") if p]
+            if not keep:
+                continue
+        target = normalize(directory, "/".join(keep))
         try:
             if a.has("O"):
                 if not e.is_file:
@@ -484,7 +616,7 @@ def _tar(ctx):
                 fs.set_modified_time(target, _utc_naive(e.mtime))
             elif e.type == "1":
                 link_parts = [p for p in e.link[len(link_prefix):].split("/") if p]
-                link_target = normalize(directory, "/".join(link_parts[strip:]))
+                link_target = normalize(directory, _tar_rename("/".join(link_parts[strip:]), rules))
                 # only to a file this archive (or the target dir) already holds, never through a link it made
                 if (len(link_parts) <= strip or not fs.exists(link_target, follow=False) or fs.is_dir(link_target, follow=False)
                         or link_target == target or through_made_link(link_target)):
@@ -494,7 +626,7 @@ def _tar(ctx):
                 fs.create_hard_link(link_target, target)
             elif e.type == "2":
                 fs.mkdir(get_parent(target), parents=True)
-                fs.create_symlink(target, e.link)
+                fs.create_symlink(target, _tar_rename(e.link, rules))
                 made.add(target)
                 fs.set_modified_time(target, _utc_naive(e.mtime), follow=False)
             else:

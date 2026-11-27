@@ -192,4 +192,13 @@ public class LimitTests
         Assert.Contains("[output truncated", text);
         Assert.EndsWith("Files and variables changed before this point are kept.]", text);
     }
+
+    [Fact]
+    public async Task JqDefRecursionIsBounded()
+    {
+        // a def that never stops recursing ends in an error, not a hang or a crash; 100 levels deep still works
+        var r = await new Shell().RunAsync("jq -n 'def f: f; f'; echo $?; jq -n 'def r: if . < 99 then .+1 | r else . end; 0 | r'");
+        Assert.Equal("5\n99\n", r.Stdout);
+        Assert.Contains("recursion too deep", r.Stderr);
+    }
 }
