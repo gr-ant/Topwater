@@ -537,7 +537,10 @@ class Mount {
       if (e === TIMED_OUT) {
         control.abort();
         this.mounts.log({ ...x, error: msg('timedOut') });
-        shell.checkTime(); // past the deadline by then: the call's time limit ends it, as anywhere else
+        // timers can fire a moment before the clock reaches the deadline; the call's time limit ends it, as anywhere else
+        const rest = shell.remainingMs();
+        if (rest >= 0 && rest < 1000) await new Promise(res => setTimeout(res, rest + 2));
+        shell.checkTime();
         throw new SourceFailure(msg('timedOut'), msg('timedOut'));
       }
       if (isControl(e)) throw e;
