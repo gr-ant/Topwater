@@ -537,6 +537,7 @@ class Mount {
       if (e === TIMED_OUT) {
         control.abort();
         this.mounts.log({ ...x, error: msg('timedOut') });
+        shell.checkTime(); // past the deadline by then: the call's time limit ends it, as anywhere else
         throw new SourceFailure(msg('timedOut'), msg('timedOut'));
       }
       if (isControl(e)) throw e;

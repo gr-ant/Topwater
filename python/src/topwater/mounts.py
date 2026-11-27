@@ -515,6 +515,12 @@ class _Mount:
                 r = await (asyncio.wait_for(r, max(left, 0)) if left != float("inf") else r)
         except asyncio.TimeoutError:
             self.mounts.log(MountExchange(**x, error=_msg("timedOut")))
+            # the timer can fire a moment before the deadline the shell checks; the call's time limit ends it, as anywhere else
+            rest = shell._deadline - time.monotonic()
+            if 0 < rest < 1:
+                await asyncio.sleep(rest)
+            if shell._deadline != float("inf"):
+                shell.check_deadline()
             raise _SourceFailure(_msg("timedOut"), _msg("timedOut")) from None
         except MountConflictError as e:
             self.mounts.log(MountExchange(**x, error=str(e) or "conflict", conflict=True))

@@ -545,6 +545,10 @@ sealed class MountPoint(MountManager mounts, string path, IMountSource? source, 
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             Mounts.Log(x with { Error = Msg("timedOut") });
+            // the timer can fire a moment before the deadline the shell checks; the call's time limit ends it, as anywhere else
+            var rest = shell.CallDeadline - DateTime.UtcNow;
+            if (bounded && rest > TimeSpan.Zero && rest < TimeSpan.FromSeconds(1)) await Task.Delay(rest);
+            if (bounded) shell.CheckDeadline();
             throw new SourceFailure(Msg("timedOut"), Msg("timedOut"));
         }
         catch (MountConflictException e)
