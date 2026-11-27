@@ -1,0 +1,909 @@
+2026-11-20T10:00:08Z INFO  [api] req=96aab0 user=u027 POST /cart 200 23ms
+2026-11-20T10:00:13Z INFO  [billing] req=d9992e user=u056 POST /search 200 201ms
+2026-11-20T10:00:32Z INFO  [worker] req=dc63be user=u009 POST /cart 200 60ms
+2026-11-20T10:00:43Z INFO  [api] req=c86d22 user=u048 GET /search 200 327ms
+2026-11-20T10:00:54Z INFO  [api] req=3bc588 user=u018 POST /search 200 289ms
+2026-11-20T10:01:10Z INFO  [api] req=8f5092 user=u039 GET /profile 200 238ms
+2026-11-20T10:01:29Z INFO  [auth] req=9f475e user=u032 GET /cart 200 178ms
+2026-11-20T10:01:37Z INFO  [api] req=ddac68 user=u009 GET /orders 201 532ms
+2026-11-20T10:01:54Z INFO  [auth] req=ef774d user=u007 POST /orders 200 268ms
+2026-11-20T10:02:01Z INFO  [worker] req=f2df8a user=u009 POST /search 200 290ms
+2026-11-20T10:02:13Z ERROR [billing] req=0328f4 upstream 502
+2026-11-20T10:02:27Z INFO  [billing] req=d33e6a user=u016 POST /search 200 79ms
+2026-11-20T10:02:45Z INFO  [api] req=b23b61 user=u035 GET /search 200 46ms
+2026-11-20T10:02:51Z INFO  [auth] req=f57892 user=u010 GET /search 200 77ms
+2026-11-20T10:03:01Z INFO  [worker] req=5b4f5a user=u035 GET /orders 200 168ms
+2026-11-20T10:03:20Z INFO  [worker] req=c7fa40 user=u014 GET /profile 404 62ms
+2026-11-20T10:03:25Z INFO  [api] req=d00f3e user=u053 POST /cart 200 83ms
+2026-11-20T10:03:40Z INFO  [auth] req=e53b54 user=u024 GET /cart 200 62ms
+2026-11-20T10:03:56Z INFO  [api] req=99ff1a user=u004 GET /orders 200 60ms
+2026-11-20T10:03:59Z INFO  [api] req=6fb1b1 user=u052 GET /orders 200 79ms
+2026-11-20T10:04:10Z ERROR [billing] req=544253 upstream 502
+2026-11-20T10:04:29Z INFO  [api] req=4fd43d user=u060 POST /profile 200 86ms
+2026-11-20T10:04:42Z INFO  [auth] req=4d25d3 user=u054 POST /profile 200 46ms
+2026-11-20T10:04:54Z WARN  [auth] login failed user=u040 ip=10.0.6.247
+2026-11-20T10:05:13Z INFO  [billing] req=0cfdbe user=u049 POST /search 200 84ms
+2026-11-20T10:05:15Z INFO  [auth] req=284237 user=u051 GET /orders 200 50ms
+2026-11-20T10:05:30Z INFO  [worker] req=0d00fa user=u046 POST /search 200 275ms
+2026-11-20T10:05:34Z INFO  [api] req=4ab773 user=u001 GET /search 200 151ms
+2026-11-20T10:05:40Z INFO  [api] req=b51911 user=u043 GET /search 200 236ms
+2026-11-20T10:05:50Z INFO  [api] req=618f87 user=u014 GET /cart 200 224ms
+2026-11-20T10:05:53Z WARN  [auth] login failed user=u057 ip=10.0.1.115
+2026-11-20T10:06:08Z INFO  [api] req=00336c user=u028 GET /orders 200 82ms
+2026-11-20T10:06:16Z INFO  [api] req=d72154 user=u025 GET /profile 200 132ms
+2026-11-20T10:06:21Z ERROR [api] req=ddb05a upstream 502
+2026-11-20T10:06:28Z INFO  [auth] req=c3049e user=u025 POST /search 200 56ms
+2026-11-20T10:06:31Z INFO  [api] req=074255 user=u028 GET /cart 200 56ms
+2026-11-20T10:06:46Z WARN  [auth] login failed user=u042 ip=10.0.5.196
+2026-11-20T10:06:58Z INFO  [worker] req=95beff user=u030 GET /search 200 78ms
+2026-11-20T10:07:08Z INFO  [api] req=23cfe5 user=u053 POST /orders 200 100ms
+2026-11-20T10:07:21Z INFO  [worker] req=121f7a user=u011 GET /search 200 175ms
+2026-11-20T10:07:30Z INFO  [billing] req=c330ac user=u005 GET /cart 200 87ms
+2026-11-20T10:07:49Z INFO  [auth] req=e56209 user=u011 POST /profile 200 59ms
+2026-11-20T10:08:07Z INFO  [api] req=178ddb user=u059 GET /orders 200 205ms
+2026-11-20T10:08:12Z INFO  [auth] req=d52087 user=u016 GET /cart 200 153ms
+2026-11-20T10:08:30Z INFO  [auth] req=8e6e53 user=u002 GET /cart 200 170ms
+2026-11-20T10:08:48Z INFO  [api] req=c9c46a user=u060 POST /cart 200 15ms
+2026-11-20T10:08:55Z INFO  [api] req=4c294e user=u054 POST /cart 200 135ms
+2026-11-20T10:09:07Z INFO  [billing] req=a03906 user=u057 POST /orders 500 277ms
+2026-11-20T10:09:10Z INFO  [auth] req=07ab89 user=u035 GET /profile 200 102ms
+2026-11-20T10:09:19Z INFO  [billing] req=914bf5 user=u038 POST /orders 200 43ms
+2026-11-20T10:09:38Z INFO  [api] req=0a8535 user=u047 POST /profile 200 249ms
+2026-11-20T10:09:43Z INFO  [worker] req=5663bd user=u044 GET /cart 200 115ms
+2026-11-20T10:09:49Z INFO  [api] req=f82b65 user=u025 POST /cart 200 151ms
+2026-11-20T10:10:04Z INFO  [api] req=ff8434 user=u003 GET /profile 200 56ms
+2026-11-20T10:10:19Z INFO  [api] req=f3c3ab user=u016 GET /cart 200 162ms
+2026-11-20T10:10:25Z WARN  [auth] login failed user=u008 ip=10.0.9.138
+2026-11-20T10:10:45Z ERROR [api] req=63dd5c disk quota exceeded
+2026-11-20T10:10:51Z INFO  [worker] req=179dca user=u017 GET /cart 200 217ms
+2026-11-20T10:10:58Z INFO  [worker] req=b6a7af user=u059 POST /orders 201 66ms
+2026-11-20T10:11:12Z INFO  [billing] req=286573 user=u007 GET /orders 200 955ms
+2026-11-20T10:11:32Z INFO  [billing] req=01fe7a user=u020 GET /cart 200 60ms
+2026-11-20T10:11:45Z INFO  [worker] req=3aa0b0 user=u015 GET /cart 201 157ms
+2026-11-20T10:11:59Z INFO  [api] req=77227e user=u032 GET /orders 200 123ms
+2026-11-20T10:12:15Z INFO  [api] req=f82b9c user=u001 GET /profile 500 87ms
+2026-11-20T10:12:28Z INFO  [auth] req=6c545d user=u051 POST /profile 200 99ms
+2026-11-20T10:12:47Z INFO  [auth] req=2c3ad8 user=u005 GET /orders 200 76ms
+2026-11-20T10:12:58Z INFO  [api] req=27f567 user=u059 POST /cart 200 86ms
+2026-11-20T10:13:04Z INFO  [api] req=bf698a user=u003 POST /cart 201 54ms
+2026-11-20T10:13:08Z INFO  [api] req=8ded48 user=u016 GET /orders 404 68ms
+2026-11-20T10:13:11Z INFO  [api] req=4c08ee user=u034 GET /profile 200 252ms
+2026-11-20T10:13:23Z INFO  [api] req=a88571 user=u059 POST /cart 201 137ms
+2026-11-20T10:13:29Z INFO  [api] req=b65f0c user=u050 GET /profile 200 588ms
+2026-11-20T10:13:40Z INFO  [api] req=f0d572 user=u007 POST /search 200 138ms
+2026-11-20T10:13:43Z ERROR [billing] req=f67f7d upstream 502
+2026-11-20T10:13:54Z INFO  [worker] req=b02d7d user=u040 POST /orders 201 192ms
+2026-11-20T10:13:56Z INFO  [api] req=afdd14 user=u006 GET /orders 200 35ms
+2026-11-20T10:14:16Z INFO  [api] req=151a52 user=u041 GET /search 200 88ms
+2026-11-20T10:14:36Z INFO  [billing] req=e1b9ea user=u048 POST /cart 200 228ms
+2026-11-20T10:14:49Z INFO  [billing] req=e0940e user=u056 GET /search 200 163ms
+2026-11-20T10:15:08Z WARN  [auth] login failed user=u046 ip=10.0.4.49
+2026-11-20T10:15:17Z INFO  [worker] req=895044 user=u045 GET /profile 200 95ms
+2026-11-20T10:15:26Z INFO  [billing] req=a94904 user=u048 GET /profile 200 160ms
+2026-11-20T10:15:30Z INFO  [api] req=ab1f95 user=u050 GET /search 200 74ms
+2026-11-20T10:15:48Z INFO  [api] req=a50da3 user=u034 POST /profile 200 14ms
+2026-11-20T10:15:51Z WARN  [auth] login failed user=u037 ip=10.0.0.72
+2026-11-20T10:15:59Z INFO  [api] req=390052 user=u028 POST /cart 201 95ms
+2026-11-20T10:16:15Z INFO  [billing] req=dff085 user=u030 GET /cart 500 64ms
+2026-11-20T10:16:20Z INFO  [api] req=a473eb user=u058 GET /cart 200 123ms
+2026-11-20T10:16:23Z WARN  [auth] login failed user=u018 ip=10.0.0.69
+2026-11-20T10:16:25Z INFO  [api] req=68444b user=u030 GET /cart 200 94ms
+2026-11-20T10:16:30Z INFO  [worker] req=9a381f user=u025 GET /search 200 428ms
+2026-11-20T10:16:40Z INFO  [api] req=3f950c user=u013 GET /search 404 128ms
+2026-11-20T10:16:59Z INFO  [api] req=de56fb user=u048 GET /profile 200 82ms
+2026-11-20T10:17:12Z INFO  [auth] req=3dcad9 user=u055 GET /profile 200 148ms
+2026-11-20T10:17:25Z WARN  [auth] login failed user=u041 ip=10.0.7.146
+2026-11-20T10:17:39Z INFO  [api] req=5ebc01 user=u033 POST /profile 200 42ms
+2026-11-20T10:17:58Z INFO  [api] req=c25134 user=u032 GET /search 200 54ms
+2026-11-20T10:18:01Z INFO  [auth] req=c7ca1e user=u058 GET /search 200 106ms
+2026-11-20T10:18:12Z INFO  [api] req=afa0fc user=u031 POST /profile 200 86ms
+2026-11-20T10:18:28Z INFO  [billing] req=e7c323 user=u025 GET /orders 200 56ms
+2026-11-20T10:18:44Z WARN  [auth] login failed user=u030 ip=10.0.3.37
+2026-11-20T10:19:01Z INFO  [api] req=05b9bb user=u047 GET /orders 200 294ms
+2026-11-20T10:19:15Z INFO  [auth] req=49490d user=u050 GET /search 200 245ms
+2026-11-20T10:19:29Z INFO  [api] req=77d6da user=u018 POST /cart 200 68ms
+2026-11-20T10:19:47Z WARN  [auth] login failed user=u028 ip=10.0.0.215
+2026-11-20T10:20:07Z INFO  [worker] req=30bcb3 user=u012 GET /orders 200 45ms
+2026-11-20T10:20:22Z INFO  [api] req=656d36 user=u057 GET /profile 200 440ms
+2026-11-20T10:20:27Z ERROR [api] req=1a6741 disk quota exceeded
+2026-11-20T10:20:35Z INFO  [worker] req=b8475d user=u011 POST /profile 404 34ms
+2026-11-20T10:20:37Z INFO  [api] req=c5d01b user=u029 GET /orders 200 175ms
+2026-11-20T10:20:43Z INFO  [worker] req=21b56a user=u015 POST /profile 201 224ms
+2026-11-20T10:20:50Z INFO  [auth] req=fde678 user=u054 GET /cart 200 88ms
+2026-11-20T10:21:08Z INFO  [api] req=7ab957 user=u014 GET /cart 200 227ms
+2026-11-20T10:21:28Z ERROR [worker] req=ca558b upstream 502
+2026-11-20T10:21:39Z INFO  [auth] req=65e7ed user=u012 GET /cart 200 77ms
+2026-11-20T10:21:53Z INFO  [worker] req=2c8229 user=u050 POST /profile 200 113ms
+2026-11-20T10:22:07Z INFO  [api] req=cd1d5c user=u018 GET /search 200 131ms
+2026-11-20T10:22:22Z INFO  [api] req=3cfbb6 user=u053 GET /search 201 60ms
+2026-11-20T10:22:40Z INFO  [worker] req=957e7a user=u016 GET /search 200 87ms
+2026-11-20T10:22:53Z INFO  [worker] req=6d3bcb user=u022 POST /orders 200 59ms
+2026-11-20T10:23:06Z WARN  [auth] login failed user=u018 ip=10.0.3.194
+2026-11-20T10:23:24Z INFO  [worker] req=64370d user=u024 POST /profile 200 163ms
+2026-11-20T10:23:40Z ERROR [api] req=8bd4e4 upstream 502
+2026-11-20T10:23:48Z INFO  [auth] req=a732b6 user=u017 POST /profile 200 19ms
+2026-11-20T10:24:02Z INFO  [api] req=fb6ef5 user=u060 GET /orders 200 136ms
+2026-11-20T10:24:22Z INFO  [auth] req=9ce764 user=u008 GET /search 200 89ms
+2026-11-20T10:24:25Z INFO  [api] req=439af6 user=u045 POST /cart 200 113ms
+2026-11-20T10:24:45Z INFO  [worker] req=0e8f4f user=u055 GET /orders 200 69ms
+2026-11-20T10:24:57Z INFO  [worker] req=787ab2 user=u015 GET /profile 200 156ms
+2026-11-20T10:25:11Z INFO  [api] req=916cc2 user=u019 POST /cart 200 71ms
+2026-11-20T10:25:28Z INFO  [api] req=c34e50 user=u029 GET /orders 200 105ms
+2026-11-20T10:25:30Z ERROR [api] req=e4b622 timeout talking to db
+2026-11-20T10:25:50Z INFO  [auth] req=71b909 user=u014 GET /search 200 86ms
+2026-11-20T10:26:03Z INFO  [api] req=d73ddf user=u009 POST /orders 200 122ms
+2026-11-20T10:26:07Z WARN  [auth] login failed user=u004 ip=10.0.8.122
+2026-11-20T10:26:09Z INFO  [api] req=ed18c0 user=u044 GET /orders 200 314ms
+2026-11-20T10:26:11Z INFO  [worker] req=5f8b8d user=u008 GET /cart 200 97ms
+2026-11-20T10:26:24Z INFO  [api] req=c72918 user=u050 GET /search 200 158ms
+2026-11-20T10:26:36Z INFO  [api] req=5c390e user=u030 GET /profile 201 54ms
+2026-11-20T10:26:47Z INFO  [api] req=6fd172 user=u046 GET /search 201 77ms
+2026-11-20T10:27:07Z INFO  [auth] req=3411c9 user=u032 POST /search 200 111ms
+2026-11-20T10:27:10Z INFO  [api] req=0b683c user=u045 GET /search 200 173ms
+2026-11-20T10:27:11Z INFO  [worker] req=3e3c6e user=u041 POST /search 500 181ms
+2026-11-20T10:27:27Z INFO  [api] req=feb235 user=u058 GET /cart 200 126ms
+2026-11-20T10:27:45Z WARN  [auth] login failed user=u019 ip=10.0.3.69
+2026-11-20T10:27:50Z INFO  [auth] req=6b63ac user=u051 GET /orders 200 245ms
+2026-11-20T10:27:56Z INFO  [auth] req=2d55bd user=u017 GET /profile 200 122ms
+2026-11-20T10:28:12Z INFO  [worker] req=d47ef4 user=u025 GET /search 200 94ms
+2026-11-20T10:28:29Z INFO  [api] req=a9a516 user=u050 GET /search 200 220ms
+2026-11-20T10:28:34Z INFO  [auth] req=1e3842 user=u015 GET /profile 200 761ms
+2026-11-20T10:28:48Z INFO  [api] req=1c82a2 user=u027 GET /search 200 66ms
+2026-11-20T10:28:57Z WARN  [auth] login failed user=u045 ip=10.0.3.22
+2026-11-20T10:29:05Z INFO  [worker] req=ca7c49 user=u060 GET /search 200 69ms
+2026-11-20T10:29:23Z INFO  [worker] req=27669e user=u060 POST /search 200 102ms
+2026-11-20T10:29:27Z INFO  [api] req=0689f2 user=u007 POST /profile 200 48ms
+2026-11-20T10:29:46Z INFO  [auth] req=552176 user=u053 GET /orders 200 86ms
+2026-11-20T10:29:58Z INFO  [api] req=bae90d user=u039 POST /orders 500 97ms
+2026-11-20T10:30:13Z INFO  [api] req=df4002 user=u001 GET /search 200 352ms
+2026-11-20T10:30:29Z INFO  [auth] req=d64737 user=u024 POST /orders 200 200ms
+2026-11-20T10:30:44Z INFO  [api] req=552298 user=u029 GET /profile 200 326ms
+2026-11-20T10:30:57Z INFO  [api] req=d0d1e0 user=u055 POST /cart 200 22ms
+2026-11-20T10:31:07Z INFO  [api] req=4c2d5d user=u060 GET /search 404 145ms
+2026-11-20T10:31:23Z INFO  [worker] req=69aec8 user=u035 POST /search 200 48ms
+2026-11-20T10:31:38Z INFO  [api] req=4691d3 user=u013 POST /search 200 58ms
+2026-11-20T10:31:40Z INFO  [worker] req=1d38ec user=u059 GET /profile 200 32ms
+2026-11-20T10:31:47Z INFO  [api] req=4d688f user=u028 POST /search 200 28ms
+2026-11-20T10:31:53Z INFO  [api] req=b91165 user=u037 POST /cart 201 69ms
+2026-11-20T10:31:59Z INFO  [worker] req=7e769f user=u057 POST /profile 200 103ms
+2026-11-20T10:32:10Z WARN  [auth] login failed user=u018 ip=10.0.4.84
+2026-11-20T10:32:16Z INFO  [api] req=0a76ae user=u030 GET /orders 200 192ms
+2026-11-20T10:32:36Z INFO  [api] req=efdc7e user=u050 POST /cart 200 60ms
+2026-11-20T10:32:40Z INFO  [worker] req=568d76 user=u059 GET /cart 200 241ms
+2026-11-20T10:32:49Z INFO  [worker] req=fe0b90 user=u044 POST /orders 200 84ms
+2026-11-20T10:32:59Z INFO  [billing] req=c75a03 user=u020 POST /search 200 136ms
+2026-11-20T10:33:00Z INFO  [auth] req=cb0dcf user=u031 GET /orders 200 126ms
+2026-11-20T10:33:14Z INFO  [auth] req=1140d1 user=u014 GET /cart 200 183ms
+2026-11-20T10:33:24Z INFO  [worker] req=f9e7cd user=u022 GET /profile 200 119ms
+2026-11-20T10:33:27Z INFO  [billing] req=d92a09 user=u004 POST /orders 200 43ms
+2026-11-20T10:33:34Z WARN  [auth] login failed user=u008 ip=10.0.6.65
+2026-11-20T10:33:42Z INFO  [api] req=6061e3 user=u050 POST /profile 200 232ms
+2026-11-20T10:34:02Z INFO  [auth] req=f050fd user=u002 GET /profile 200 130ms
+2026-11-20T10:34:22Z INFO  [api] req=da062f user=u046 GET /search 200 55ms
+2026-11-20T10:34:37Z INFO  [billing] req=2ae185 user=u035 POST /cart 200 220ms
+2026-11-20T10:34:50Z INFO  [api] req=175e83 user=u052 POST /cart 200 71ms
+2026-11-20T10:34:51Z ERROR [api] req=2323ef null customer id
+2026-11-20T10:34:59Z INFO  [api] req=6aee2d user=u021 GET /cart 500 263ms
+2026-11-20T10:35:02Z WARN  [auth] login failed user=u044 ip=10.0.0.71
+2026-11-20T10:35:13Z INFO  [api] req=7f3fe6 user=u041 GET /search 200 87ms
+2026-11-20T10:35:32Z INFO  [auth] req=cfba0b user=u045 GET /orders 200 259ms
+2026-11-20T10:35:48Z WARN  [auth] login failed user=u020 ip=10.0.7.181
+2026-11-20T10:36:07Z INFO  [auth] req=081080 user=u044 GET /profile 201 95ms
+2026-11-20T10:36:08Z INFO  [api] req=04a0c1 user=u014 POST /profile 200 71ms
+2026-11-20T10:36:12Z ERROR [billing] req=be2f94 upstream 502
+2026-11-20T10:36:17Z INFO  [api] req=735abd user=u047 GET /profile 200 45ms
+2026-11-20T10:36:27Z INFO  [auth] req=03e31a user=u050 GET /profile 200 82ms
+2026-11-20T10:36:31Z INFO  [billing] req=91f3a4 user=u043 GET /profile 200 71ms
+2026-11-20T10:36:34Z INFO  [auth] req=ac421b user=u057 POST /profile 200 35ms
+2026-11-20T10:36:42Z INFO  [api] req=688eab user=u047 POST /profile 500 96ms
+2026-11-20T10:36:50Z INFO  [api] req=1ecb97 user=u036 GET /profile 200 39ms
+2026-11-20T10:37:07Z WARN  [auth] login failed user=u003 ip=10.0.4.163
+2026-11-20T10:37:17Z INFO  [billing] req=33456b user=u036 GET /orders 200 180ms
+2026-11-20T10:37:26Z INFO  [billing] req=486d3b user=u003 POST /cart 200 34ms
+2026-11-20T10:37:31Z INFO  [api] req=84dec7 user=u055 POST /orders 200 113ms
+2026-11-20T10:37:37Z INFO  [billing] req=355ab8 user=u034 GET /search 200 76ms
+2026-11-20T10:37:54Z INFO  [worker] req=fbc8b6 user=u037 POST /orders 200 43ms
+2026-11-20T10:38:00Z INFO  [api] req=aa8a44 user=u010 GET /orders 500 83ms
+2026-11-20T10:38:19Z INFO  [api] req=2afd30 user=u014 GET /cart 200 135ms
+2026-11-20T10:38:23Z INFO  [api] req=a55a16 user=u013 GET /orders 200 208ms
+2026-11-20T10:38:40Z INFO  [api] req=770d07 user=u012 POST /profile 200 353ms
+2026-11-20T10:38:46Z INFO  [billing] req=ffd6e7 user=u023 GET /profile 201 42ms
+2026-11-20T10:38:53Z INFO  [api] req=0f0f45 user=u023 POST /search 200 96ms
+2026-11-20T10:38:57Z INFO  [auth] req=963698 user=u015 GET /cart 200 413ms
+2026-11-20T10:39:13Z INFO  [api] req=2552cc user=u049 GET /cart 200 104ms
+2026-11-20T10:39:24Z INFO  [worker] req=9bff3a user=u024 GET /cart 200 31ms
+2026-11-20T10:39:31Z INFO  [api] req=5733a6 user=u045 GET /cart 200 52ms
+2026-11-20T10:39:49Z INFO  [api] req=d3d216 user=u012 GET /orders 200 49ms
+2026-11-20T10:39:54Z INFO  [api] req=1401a4 user=u036 GET /cart 200 213ms
+2026-11-20T10:40:03Z INFO  [api] req=116261 user=u012 GET /orders 200 71ms
+2026-11-20T10:40:11Z WARN  [auth] login failed user=u043 ip=10.0.1.243
+2026-11-20T10:40:26Z INFO  [worker] req=1261e1 user=u004 POST /search 200 40ms
+2026-11-20T10:40:39Z INFO  [api] req=68908f user=u028 POST /search 201 213ms
+2026-11-20T10:40:55Z INFO  [api] req=b6c334 user=u028 GET /orders 200 45ms
+2026-11-20T10:41:07Z INFO  [api] req=68c27c user=u048 POST /profile 200 710ms
+2026-11-20T10:41:25Z WARN  [auth] login failed user=u016 ip=10.0.3.138
+2026-11-20T10:41:30Z INFO  [api] req=ff1ad6 user=u001 POST /profile 200 87ms
+2026-11-20T10:41:34Z INFO  [api] req=b936ff user=u001 POST /cart 201 37ms
+2026-11-20T10:41:52Z INFO  [worker] req=0c1f36 user=u026 POST /orders 200 74ms
+2026-11-20T10:41:57Z INFO  [api] req=a2d651 user=u013 GET /search 201 233ms
+2026-11-20T10:41:58Z INFO  [api] req=c2b90e user=u031 GET /search 200 106ms
+2026-11-20T10:42:12Z INFO  [billing] req=37b32d user=u007 GET /orders 201 181ms
+2026-11-20T10:42:17Z INFO  [auth] req=75ed4a user=u005 GET /orders 200 343ms
+2026-11-20T10:42:28Z ERROR [api] req=9ecbc5 null customer id
+2026-11-20T10:42:32Z INFO  [auth] req=0f4c8c user=u054 GET /search 201 133ms
+2026-11-20T10:42:51Z INFO  [worker] req=09f9e6 user=u003 GET /orders 200 16ms
+2026-11-20T10:43:02Z INFO  [auth] req=608909 user=u034 GET /cart 200 86ms
+2026-11-20T10:43:05Z INFO  [api] req=3a5c0f user=u049 GET /orders 200 47ms
+2026-11-20T10:43:10Z WARN  [auth] login failed user=u057 ip=10.0.4.42
+2026-11-20T10:43:17Z ERROR [api] req=351314 null customer id
+2026-11-20T10:43:21Z INFO  [worker] req=d98644 user=u040 POST /search 201 35ms
+2026-11-20T10:43:27Z INFO  [api] req=774a9e user=u015 POST /search 200 129ms
+2026-11-20T10:43:43Z INFO  [api] req=8468ad user=u037 GET /orders 200 101ms
+2026-11-20T10:43:51Z INFO  [auth] req=d5856d user=u040 GET /search 200 85ms
+2026-11-20T10:43:58Z INFO  [auth] req=ea3a18 user=u003 GET /search 200 273ms
+2026-11-20T10:44:10Z INFO  [api] req=6421cc user=u005 GET /profile 500 118ms
+2026-11-20T10:44:14Z INFO  [billing] req=28fa74 user=u023 GET /orders 200 87ms
+2026-11-20T10:44:21Z INFO  [api] req=ecad35 user=u046 POST /search 404 70ms
+2026-11-20T10:44:27Z INFO  [api] req=eadb4c user=u055 GET /search 200 167ms
+2026-11-20T10:44:33Z ERROR [api] req=ec3b55 upstream 502
+2026-11-20T10:44:41Z WARN  [auth] login failed user=u012 ip=10.0.2.58
+2026-11-20T10:44:59Z ERROR [api] req=808a1b disk quota exceeded
+2026-11-20T10:45:05Z INFO  [auth] req=002fcc user=u001 GET /cart 201 20ms
+2026-11-20T10:45:25Z WARN  [auth] login failed user=u048 ip=10.0.1.23
+2026-11-20T10:45:36Z INFO  [api] req=f13aca user=u002 GET /search 404 51ms
+2026-11-20T10:45:50Z INFO  [billing] req=eaa4ce user=u018 POST /orders 200 208ms
+2026-11-20T10:46:03Z ERROR [api] req=1bb28d disk quota exceeded
+2026-11-20T10:46:14Z INFO  [api] req=0bb8a7 user=u020 GET /cart 200 561ms
+2026-11-20T10:46:29Z INFO  [api] req=f13ccf user=u045 POST /orders 201 16ms
+2026-11-20T10:46:40Z INFO  [auth] req=745a3a user=u034 POST /profile 201 81ms
+2026-11-20T10:46:54Z INFO  [worker] req=d87ce4 user=u011 POST /profile 200 161ms
+2026-11-20T10:46:59Z INFO  [api] req=15394c user=u056 POST /cart 200 28ms
+2026-11-20T10:47:16Z INFO  [api] req=3d2c54 user=u006 POST /search 500 55ms
+2026-11-20T10:47:36Z INFO  [api] req=01f1c6 user=u056 GET /cart 200 182ms
+2026-11-20T10:47:41Z INFO  [api] req=1beed0 user=u034 POST /orders 200 34ms
+2026-11-20T10:47:44Z INFO  [billing] req=d71e10 user=u049 GET /search 200 446ms
+2026-11-20T10:47:47Z INFO  [api] req=338954 user=u023 POST /cart 200 110ms
+2026-11-20T10:48:05Z INFO  [worker] req=a63d80 user=u045 POST /orders 200 29ms
+2026-11-20T10:48:21Z INFO  [api] req=8f9764 user=u006 GET /cart 200 42ms
+2026-11-20T10:48:40Z ERROR [billing] req=6878a1 upstream 502
+2026-11-20T10:48:48Z INFO  [auth] req=1b1c01 user=u052 GET /cart 200 137ms
+2026-11-20T10:49:04Z ERROR [worker] req=d3d0a7 disk quota exceeded
+2026-11-20T10:49:24Z INFO  [auth] req=6596f6 user=u033 GET /profile 200 51ms
+2026-11-20T10:49:42Z INFO  [api] req=2a3eb2 user=u033 POST /search 200 107ms
+2026-11-20T10:49:44Z INFO  [api] req=ad81d4 user=u017 POST /cart 200 100ms
+2026-11-20T10:49:51Z WARN  [auth] login failed user=u033 ip=10.0.8.81
+2026-11-20T10:50:09Z ERROR [api] req=72ffd5 disk quota exceeded
+2026-11-20T10:50:13Z INFO  [billing] req=1ee6cf user=u013 GET /orders 200 54ms
+2026-11-20T10:50:19Z INFO  [worker] req=d78214 user=u009 POST /cart 200 181ms
+2026-11-20T10:50:23Z INFO  [auth] req=977363 user=u032 GET /cart 200 46ms
+2026-11-20T10:50:38Z INFO  [api] req=afe625 user=u019 POST /profile 200 101ms
+2026-11-20T10:50:55Z INFO  [api] req=35ed35 user=u040 GET /profile 200 79ms
+2026-11-20T10:51:01Z INFO  [api] req=69ebd0 user=u007 POST /orders 200 113ms
+2026-11-20T10:51:20Z INFO  [worker] req=047fce user=u052 POST /cart 200 78ms
+2026-11-20T10:51:36Z INFO  [billing] req=2f3bd5 user=u027 GET /search 200 189ms
+2026-11-20T10:51:43Z INFO  [api] req=0b8e7c user=u036 GET /cart 200 52ms
+2026-11-20T10:51:59Z INFO  [auth] req=95a636 user=u009 GET /search 200 110ms
+2026-11-20T10:52:19Z INFO  [api] req=af800c user=u047 POST /cart 404 62ms
+2026-11-20T10:52:26Z INFO  [worker] req=4e5acf user=u002 POST /profile 200 80ms
+2026-11-20T10:52:37Z INFO  [api] req=770e5c user=u055 GET /profile 200 86ms
+2026-11-20T10:52:53Z INFO  [worker] req=f42339 user=u049 GET /profile 200 133ms
+2026-11-20T10:53:11Z INFO  [worker] req=dc11e3 user=u021 GET /search 200 159ms
+2026-11-20T10:53:25Z INFO  [billing] req=3a83f2 user=u014 GET /search 200 131ms
+2026-11-20T10:53:37Z INFO  [api] req=be3edb user=u004 GET /search 200 191ms
+2026-11-20T10:53:52Z INFO  [api] req=1c49e8 user=u035 GET /profile 200 56ms
+2026-11-20T10:54:04Z INFO  [api] req=72576e user=u056 GET /search 200 63ms
+2026-11-20T10:54:19Z INFO  [worker] req=d1dc1a user=u003 GET /orders 404 132ms
+2026-11-20T10:54:24Z INFO  [api] req=5dc3bf user=u037 GET /profile 200 30ms
+2026-11-20T10:54:33Z INFO  [worker] req=371d55 user=u002 GET /profile 404 163ms
+2026-11-20T10:54:40Z INFO  [api] req=9f3b53 user=u046 POST /orders 200 74ms
+2026-11-20T10:54:55Z INFO  [api] req=254c21 user=u059 GET /search 200 32ms
+2026-11-20T10:54:58Z INFO  [api] req=1bb8e4 user=u026 POST /search 500 81ms
+2026-11-20T10:55:11Z INFO  [api] req=a4eba5 user=u014 GET /cart 200 178ms
+2026-11-20T10:55:29Z INFO  [api] req=6f63c4 user=u043 GET /orders 201 17ms
+2026-11-20T10:55:36Z INFO  [worker] req=ffc7b6 user=u030 GET /cart 200 119ms
+2026-11-20T10:55:56Z INFO  [api] req=e4171a user=u049 POST /profile 200 53ms
+2026-11-20T10:56:02Z INFO  [api] req=a7c304 user=u060 GET /cart 404 60ms
+2026-11-20T10:56:17Z INFO  [billing] req=5c05ed user=u003 POST /profile 200 564ms
+2026-11-20T10:56:25Z INFO  [auth] req=037e7a user=u027 POST /search 200 397ms
+2026-11-20T10:56:41Z INFO  [api] req=265626 user=u035 POST /cart 200 126ms
+2026-11-20T10:56:52Z INFO  [api] req=f68bf8 user=u014 POST /profile 200 107ms
+2026-11-20T10:57:10Z INFO  [worker] req=ecb4aa user=u050 GET /cart 404 71ms
+2026-11-20T10:57:23Z INFO  [api] req=0f56c9 user=u037 GET /orders 200 166ms
+2026-11-20T10:57:27Z INFO  [worker] req=f128fc user=u060 GET /search 404 107ms
+2026-11-20T10:57:29Z INFO  [api] req=48b865 user=u013 GET /profile 200 118ms
+2026-11-20T10:57:42Z ERROR [api] req=224954 null customer id
+2026-11-20T10:57:43Z INFO  [api] req=d4e9a9 user=u003 GET /cart 201 40ms
+2026-11-20T10:57:57Z INFO  [api] req=4e44e8 user=u012 POST /profile 200 119ms
+2026-11-20T10:57:58Z INFO  [api] req=3e52a8 user=u031 GET /profile 200 154ms
+2026-11-20T10:58:04Z INFO  [worker] req=07220f user=u021 GET /cart 500 32ms
+2026-11-20T10:58:08Z INFO  [api] req=c35870 user=u011 GET /search 200 33ms
+2026-11-20T10:58:16Z ERROR [api] req=7c3854 disk quota exceeded
+2026-11-20T10:58:20Z INFO  [api] req=69dfc4 user=u054 GET /cart 200 62ms
+2026-11-20T10:58:32Z INFO  [api] req=3d78ed user=u045 GET /orders 200 26ms
+2026-11-20T10:58:47Z INFO  [worker] req=7fbf6b user=u054 GET /orders 500 40ms
+2026-11-20T10:58:51Z INFO  [auth] req=701725 user=u047 GET /cart 200 135ms
+2026-11-20T10:59:07Z INFO  [auth] req=acf140 user=u021 GET /cart 200 96ms
+2026-11-20T10:59:19Z INFO  [auth] req=98e67f user=u033 GET /profile 200 78ms
+2026-11-20T10:59:28Z INFO  [api] req=440e55 user=u006 POST /cart 200 97ms
+2026-11-20T10:59:47Z INFO  [api] req=c72e94 user=u059 POST /profile 201 117ms
+2026-11-20T10:59:49Z INFO  [worker] req=3c5190 user=u025 POST /orders 201 73ms
+2026-11-20T11:00:06Z WARN  [auth] login failed user=u047 ip=10.0.1.15
+2026-11-20T11:00:19Z WARN  [auth] login failed user=u021 ip=10.0.1.22
+2026-11-20T11:00:26Z INFO  [api] req=a05034 user=u043 POST /orders 201 70ms
+2026-11-20T11:00:46Z INFO  [billing] req=7cbeca user=u034 GET /orders 200 50ms
+2026-11-20T11:01:04Z INFO  [worker] req=6f0be3 user=u010 POST /cart 500 137ms
+2026-11-20T11:01:11Z INFO  [worker] req=663dfe user=u056 POST /search 200 430ms
+2026-11-20T11:01:23Z INFO  [worker] req=7d4c5e user=u035 GET /search 500 226ms
+2026-11-20T11:01:37Z INFO  [api] req=3c7ff3 user=u020 GET /profile 200 105ms
+2026-11-20T11:01:42Z INFO  [api] req=9ed6ec user=u051 GET /orders 200 322ms
+2026-11-20T11:01:55Z INFO  [worker] req=c19402 user=u032 GET /orders 200 100ms
+2026-11-20T11:02:00Z WARN  [auth] login failed user=u028 ip=10.0.3.181
+2026-11-20T11:02:14Z INFO  [worker] req=4682e2 user=u006 GET /profile 200 44ms
+2026-11-20T11:02:27Z INFO  [worker] req=1146b2 user=u007 GET /orders 200 294ms
+2026-11-20T11:02:37Z INFO  [api] req=2cf60a user=u037 GET /cart 201 16ms
+2026-11-20T11:02:50Z INFO  [billing] req=3507d0 user=u039 GET /cart 200 178ms
+2026-11-20T11:03:10Z INFO  [api] req=c225c2 user=u024 GET /search 200 54ms
+2026-11-20T11:03:16Z INFO  [api] req=3feabb user=u036 POST /cart 201 98ms
+2026-11-20T11:03:23Z INFO  [api] req=ddc1b3 user=u013 GET /profile 200 47ms
+2026-11-20T11:03:27Z WARN  [auth] login failed user=u036 ip=10.0.2.101
+2026-11-20T11:03:30Z INFO  [api] req=636a4f user=u037 POST /search 404 48ms
+2026-11-20T11:03:36Z WARN  [auth] login failed user=u023 ip=10.0.1.234
+2026-11-20T11:03:54Z INFO  [api] req=448f07 user=u042 GET /search 404 27ms
+2026-11-20T11:04:07Z INFO  [api] req=bb7fa7 user=u043 POST /profile 200 376ms
+2026-11-20T11:04:25Z WARN  [auth] login failed user=u040 ip=10.0.5.99
+2026-11-20T11:04:38Z INFO  [api] req=cb9218 user=u021 POST /orders 404 43ms
+2026-11-20T11:04:50Z INFO  [worker] req=e681ab user=u049 GET /orders 200 179ms
+2026-11-20T11:05:01Z INFO  [worker] req=d2b896 user=u006 POST /profile 200 132ms
+2026-11-20T11:05:19Z ERROR [api] req=e2b3d0 disk quota exceeded
+2026-11-20T11:05:28Z INFO  [billing] req=11f931 user=u014 POST /orders 200 103ms
+2026-11-20T11:05:32Z INFO  [worker] req=e35b61 user=u012 GET /search 201 174ms
+2026-11-20T11:05:50Z INFO  [api] req=d4223d user=u003 POST /search 200 126ms
+2026-11-20T11:06:03Z INFO  [api] req=9b33eb user=u053 GET /cart 200 98ms
+2026-11-20T11:06:19Z INFO  [billing] req=87bf9f user=u021 GET /profile 200 195ms
+2026-11-20T11:06:27Z INFO  [api] req=1e3f49 user=u040 POST /profile 200 285ms
+2026-11-20T11:06:42Z ERROR [api] req=763c4f disk quota exceeded
+2026-11-20T11:06:47Z INFO  [api] req=45176b user=u045 GET /profile 200 122ms
+2026-11-20T11:07:03Z INFO  [worker] req=94bb4c user=u058 GET /search 201 98ms
+2026-11-20T11:07:09Z INFO  [api] req=76859b user=u010 GET /orders 201 34ms
+2026-11-20T11:07:16Z INFO  [api] req=4640d5 user=u058 POST /search 200 153ms
+2026-11-20T11:07:30Z INFO  [auth] req=202053 user=u013 GET /cart 201 209ms
+2026-11-20T11:07:48Z INFO  [api] req=26175c user=u001 GET /profile 200 50ms
+2026-11-20T11:08:07Z INFO  [worker] req=d78535 user=u024 GET /cart 200 212ms
+2026-11-20T11:08:21Z INFO  [api] req=3dbf00 user=u056 GET /cart 200 83ms
+2026-11-20T11:08:38Z WARN  [auth] login failed user=u009 ip=10.0.6.142
+2026-11-20T11:08:51Z INFO  [api] req=6a546e user=u024 GET /profile 200 380ms
+2026-11-20T11:09:10Z INFO  [worker] req=d5d177 user=u002 GET /profile 200 58ms
+2026-11-20T11:09:27Z INFO  [worker] req=b88afd user=u008 POST /search 200 49ms
+2026-11-20T11:09:39Z INFO  [worker] req=f00a76 user=u039 POST /cart 201 195ms
+2026-11-20T11:09:43Z INFO  [api] req=ec2f29 user=u048 GET /profile 200 90ms
+2026-11-20T11:10:01Z INFO  [api] req=386ef0 user=u039 GET /cart 200 15ms
+2026-11-20T11:10:14Z WARN  [auth] login failed user=u003 ip=10.0.9.21
+2026-11-20T11:10:27Z INFO  [auth] req=946f61 user=u051 GET /search 201 765ms
+2026-11-20T11:10:34Z INFO  [api] req=9a9d24 user=u051 POST /orders 200 109ms
+2026-11-20T11:10:44Z INFO  [api] req=26c948 user=u053 POST /cart 404 132ms
+2026-11-20T11:10:46Z INFO  [billing] req=faf048 user=u048 GET /cart 200 87ms
+2026-11-20T11:11:05Z INFO  [api] req=96660d user=u053 GET /search 200 52ms
+2026-11-20T11:11:15Z INFO  [api] req=1705f3 user=u028 GET /cart 200 33ms
+2026-11-20T11:11:26Z INFO  [auth] req=4a8b08 user=u029 GET /profile 200 36ms
+2026-11-20T11:11:38Z INFO  [auth] req=b6507c user=u001 GET /orders 200 172ms
+2026-11-20T11:11:46Z INFO  [auth] req=d25e1d user=u020 GET /orders 201 95ms
+2026-11-20T11:11:53Z INFO  [api] req=971ccb user=u054 GET /orders 200 73ms
+2026-11-20T11:12:08Z WARN  [auth] login failed user=u004 ip=10.0.6.51
+2026-11-20T11:12:25Z INFO  [api] req=2aba5a user=u006 GET /cart 200 122ms
+2026-11-20T11:12:41Z INFO  [api] req=26a634 user=u045 GET /orders 200 142ms
+2026-11-20T11:12:44Z INFO  [api] req=6a02f7 user=u023 GET /search 200 566ms
+2026-11-20T11:12:47Z INFO  [billing] req=6e8509 user=u023 GET /orders 404 83ms
+2026-11-20T11:12:56Z INFO  [api] req=253c67 user=u012 GET /search 201 289ms
+2026-11-20T11:13:04Z INFO  [auth] req=99c002 user=u044 POST /search 200 157ms
+2026-11-20T11:13:21Z ERROR [worker] req=7f3d08 timeout talking to db
+2026-11-20T11:13:41Z INFO  [auth] req=48032d user=u005 POST /search 200 392ms
+2026-11-20T11:13:45Z INFO  [api] req=573bf1 user=u021 POST /search 200 25ms
+2026-11-20T11:13:51Z INFO  [api] req=c4e1d5 user=u057 GET /cart 200 78ms
+2026-11-20T11:14:06Z INFO  [api] req=77de72 user=u057 POST /profile 200 140ms
+2026-11-20T11:14:25Z INFO  [api] req=6d4974 user=u029 GET /search 201 335ms
+2026-11-20T11:14:37Z INFO  [api] req=746cfa user=u004 GET /search 200 71ms
+2026-11-20T11:14:43Z INFO  [api] req=95b506 user=u047 GET /profile 200 154ms
+2026-11-20T11:14:52Z INFO  [api] req=9c2045 user=u057 GET /profile 200 171ms
+2026-11-20T11:15:11Z INFO  [worker] req=93aedb user=u042 GET /profile 500 94ms
+2026-11-20T11:15:30Z INFO  [api] req=8f5d58 user=u007 GET /cart 200 33ms
+2026-11-20T11:15:44Z INFO  [api] req=22a756 user=u024 GET /search 200 81ms
+2026-11-20T11:16:03Z INFO  [auth] req=add211 user=u006 GET /profile 200 231ms
+2026-11-20T11:16:16Z INFO  [billing] req=f2443c user=u030 GET /search 200 40ms
+2026-11-20T11:16:23Z ERROR [api] req=48c4d0 disk quota exceeded
+2026-11-20T11:16:42Z INFO  [api] req=25d677 user=u032 POST /search 200 149ms
+2026-11-20T11:16:55Z INFO  [worker] req=ad2174 user=u011 POST /search 200 127ms
+2026-11-20T11:17:07Z INFO  [api] req=2208e4 user=u054 POST /cart 200 87ms
+2026-11-20T11:17:27Z ERROR [api] req=9a3d57 upstream 502
+2026-11-20T11:17:30Z INFO  [api] req=935143 user=u055 GET /cart 200 220ms
+2026-11-20T11:17:35Z INFO  [api] req=989ebf user=u042 GET /profile 200 63ms
+2026-11-20T11:17:47Z INFO  [auth] req=f74da4 user=u052 GET /search 200 78ms
+2026-11-20T11:17:52Z INFO  [worker] req=846039 user=u040 GET /profile 404 589ms
+2026-11-20T11:18:00Z INFO  [worker] req=319728 user=u056 POST /profile 200 168ms
+2026-11-20T11:18:01Z INFO  [api] req=616131 user=u034 GET /cart 200 145ms
+2026-11-20T11:18:19Z INFO  [api] req=2b1df6 user=u044 GET /cart 200 31ms
+2026-11-20T11:18:24Z INFO  [worker] req=377f71 user=u007 GET /search 200 25ms
+2026-11-20T11:18:36Z ERROR [worker] req=da4690 timeout talking to db
+2026-11-20T11:18:45Z INFO  [api] req=c147fb user=u013 GET /search 500 92ms
+2026-11-20T11:18:56Z INFO  [api] req=b12383 user=u010 GET /profile 200 17ms
+2026-11-20T11:19:09Z WARN  [auth] login failed user=u052 ip=10.0.1.50
+2026-11-20T11:19:14Z INFO  [billing] req=925248 user=u027 GET /search 200 72ms
+2026-11-20T11:19:26Z INFO  [worker] req=e05fea user=u020 GET /search 200 46ms
+2026-11-20T11:19:39Z INFO  [worker] req=f42250 user=u050 GET /orders 200 84ms
+2026-11-20T11:19:52Z WARN  [auth] login failed user=u045 ip=10.0.5.15
+2026-11-20T11:20:11Z INFO  [auth] req=416e24 user=u013 GET /orders 200 66ms
+2026-11-20T11:20:20Z ERROR [api] req=4121a1 timeout talking to db
+2026-11-20T11:20:27Z INFO  [api] req=c67cfb user=u059 GET /profile 200 75ms
+2026-11-20T11:20:38Z INFO  [api] req=39b648 user=u056 GET /search 200 139ms
+2026-11-20T11:20:48Z INFO  [api] req=65bc07 user=u050 POST /search 200 56ms
+2026-11-20T11:20:56Z INFO  [worker] req=89e6af user=u047 GET /orders 200 73ms
+2026-11-20T11:21:06Z INFO  [auth] req=2df80b user=u043 GET /search 200 123ms
+2026-11-20T11:21:16Z INFO  [auth] req=08d3c1 user=u051 POST /cart 200 138ms
+2026-11-20T11:21:35Z INFO  [worker] req=4a8f54 user=u045 GET /profile 200 143ms
+2026-11-20T11:21:38Z INFO  [api] req=9a81cc user=u013 GET /cart 200 59ms
+2026-11-20T11:21:54Z INFO  [api] req=b2afbe user=u020 POST /cart 200 101ms
+2026-11-20T11:22:09Z INFO  [api] req=23eb2d user=u047 GET /profile 404 101ms
+2026-11-20T11:22:27Z WARN  [auth] login failed user=u008 ip=10.0.6.1
+2026-11-20T11:22:42Z INFO  [auth] req=6933e1 user=u042 GET /search 200 31ms
+2026-11-20T11:22:59Z ERROR [billing] req=958ae6 upstream 502
+2026-11-20T11:23:04Z INFO  [api] req=7f2fa0 user=u013 POST /cart 200 210ms
+2026-11-20T11:23:05Z INFO  [api] req=4da7ec user=u042 GET /search 201 120ms
+2026-11-20T11:23:16Z INFO  [api] req=b92579 user=u014 POST /cart 200 254ms
+2026-11-20T11:23:30Z INFO  [api] req=1d8791 user=u043 GET /profile 404 216ms
+2026-11-20T11:23:45Z INFO  [auth] req=7c8d03 user=u029 GET /orders 200 67ms
+2026-11-20T11:23:51Z INFO  [auth] req=4386f9 user=u045 POST /cart 200 44ms
+2026-11-20T11:23:54Z INFO  [api] req=cf4e1c user=u013 POST /orders 500 39ms
+2026-11-20T11:24:05Z INFO  [api] req=bee438 user=u003 GET /search 500 120ms
+2026-11-20T11:24:24Z INFO  [worker] req=4ad8bf user=u031 GET /search 404 70ms
+2026-11-20T11:24:35Z INFO  [worker] req=1bc3b3 user=u028 GET /orders 200 84ms
+2026-11-20T11:24:48Z INFO  [api] req=8833bc user=u011 GET /orders 200 283ms
+2026-11-20T11:24:49Z INFO  [worker] req=ea984f user=u027 GET /orders 200 143ms
+2026-11-20T11:24:53Z INFO  [api] req=824a48 user=u025 GET /profile 200 170ms
+2026-11-20T11:25:03Z INFO  [api] req=d012f9 user=u005 GET /cart 200 32ms
+2026-11-20T11:25:19Z INFO  [billing] req=4a355a user=u050 POST /search 200 48ms
+2026-11-20T11:25:39Z INFO  [api] req=845f43 user=u029 GET /search 200 26ms
+2026-11-20T11:25:41Z INFO  [auth] req=6bc7eb user=u029 POST /search 500 240ms
+2026-11-20T11:25:50Z INFO  [billing] req=597f71 user=u002 GET /cart 201 93ms
+2026-11-20T11:26:07Z INFO  [api] req=aea92f user=u047 GET /cart 201 63ms
+2026-11-20T11:26:12Z ERROR [billing] req=3a3f24 upstream 502
+2026-11-20T11:26:14Z INFO  [api] req=a22586 user=u028 POST /search 200 178ms
+2026-11-20T11:26:21Z INFO  [api] req=3efb78 user=u011 GET /orders 200 100ms
+2026-11-20T11:26:40Z INFO  [api] req=9d1cb4 user=u030 GET /profile 200 363ms
+2026-11-20T11:26:56Z INFO  [api] req=fcc157 user=u022 GET /cart 200 121ms
+2026-11-20T11:27:09Z INFO  [billing] req=7866de user=u054 GET /profile 200 324ms
+2026-11-20T11:27:21Z ERROR [worker] req=542d68 timeout talking to db
+2026-11-20T11:27:36Z INFO  [api] req=639b6d user=u038 POST /profile 200 88ms
+2026-11-20T11:27:45Z INFO  [billing] req=62cfce user=u008 GET /search 201 123ms
+2026-11-20T11:28:01Z INFO  [api] req=3c8eef user=u051 GET /orders 200 598ms
+2026-11-20T11:28:20Z INFO  [worker] req=11fafd user=u023 POST /cart 200 178ms
+2026-11-20T11:28:23Z INFO  [worker] req=ae0316 user=u010 GET /orders 200 149ms
+2026-11-20T11:28:24Z INFO  [worker] req=84615a user=u049 GET /search 200 57ms
+2026-11-20T11:28:29Z INFO  [api] req=477d77 user=u058 POST /cart 200 319ms
+2026-11-20T11:28:48Z WARN  [auth] login failed user=u023 ip=10.0.7.88
+2026-11-20T11:28:49Z INFO  [api] req=c568c6 user=u053 POST /profile 200 152ms
+2026-11-20T11:29:02Z INFO  [api] req=9c610d user=u029 POST /search 200 122ms
+2026-11-20T11:29:03Z INFO  [api] req=3f7a58 user=u060 GET /profile 200 44ms
+2026-11-20T11:29:06Z INFO  [worker] req=2a28f2 user=u032 GET /cart 200 73ms
+2026-11-20T11:29:10Z INFO  [worker] req=76abb2 user=u011 GET /orders 200 97ms
+2026-11-20T11:29:20Z INFO  [api] req=e2a964 user=u059 GET /search 200 404ms
+2026-11-20T11:29:34Z INFO  [auth] req=a02d53 user=u023 POST /cart 200 107ms
+2026-11-20T11:29:50Z ERROR [api] req=fa011a null customer id
+2026-11-20T11:30:04Z INFO  [api] req=ddb426 user=u055 POST /orders 200 119ms
+2026-11-20T11:30:05Z INFO  [worker] req=c4ee03 user=u060 GET /profile 201 131ms
+2026-11-20T11:30:11Z INFO  [api] req=193257 user=u028 GET /search 200 40ms
+2026-11-20T11:30:16Z WARN  [auth] login failed user=u058 ip=10.0.9.29
+2026-11-20T11:30:19Z INFO  [auth] req=480f00 user=u057 GET /orders 200 119ms
+2026-11-20T11:30:27Z INFO  [auth] req=cdf46c user=u030 GET /search 500 103ms
+2026-11-20T11:30:30Z INFO  [api] req=ae85bd user=u013 GET /profile 200 128ms
+2026-11-20T11:30:34Z INFO  [worker] req=a8f862 user=u023 GET /search 200 331ms
+2026-11-20T11:30:44Z INFO  [api] req=d3e89f user=u006 POST /search 200 35ms
+2026-11-20T11:31:02Z INFO  [api] req=7ef7aa user=u038 POST /orders 200 51ms
+2026-11-20T11:31:08Z INFO  [api] req=635394 user=u017 POST /orders 200 45ms
+2026-11-20T11:31:26Z INFO  [auth] req=e8e70e user=u012 GET /profile 200 160ms
+2026-11-20T11:31:33Z INFO  [auth] req=7bc7c4 user=u003 GET /search 200 256ms
+2026-11-20T11:31:38Z ERROR [worker] req=fc3881 disk quota exceeded
+2026-11-20T11:31:44Z INFO  [api] req=05d238 user=u005 POST /profile 200 99ms
+2026-11-20T11:31:59Z INFO  [api] req=282cfb user=u040 POST /profile 200 41ms
+2026-11-20T11:32:11Z INFO  [auth] req=e4be7c user=u055 GET /search 404 24ms
+2026-11-20T11:32:15Z INFO  [api] req=daa090 user=u041 POST /orders 200 43ms
+2026-11-20T11:32:20Z INFO  [api] req=eb8bf8 user=u026 POST /orders 200 72ms
+2026-11-20T11:32:27Z INFO  [api] req=9653da user=u046 GET /cart 200 238ms
+2026-11-20T11:32:42Z INFO  [api] req=caa2fe user=u033 GET /cart 200 124ms
+2026-11-20T11:32:59Z INFO  [billing] req=131796 user=u060 POST /search 200 274ms
+2026-11-20T11:33:06Z INFO  [billing] req=b4a228 user=u036 GET /search 404 235ms
+2026-11-20T11:33:20Z WARN  [auth] login failed user=u007 ip=10.0.6.218
+2026-11-20T11:33:23Z INFO  [api] req=828ba9 user=u036 GET /search 200 235ms
+2026-11-20T11:33:36Z INFO  [auth] req=1fa35f user=u049 GET /profile 200 87ms
+2026-11-20T11:33:38Z WARN  [auth] login failed user=u010 ip=10.0.2.133
+2026-11-20T11:33:57Z INFO  [auth] req=0f86f7 user=u032 GET /profile 200 77ms
+2026-11-20T11:34:03Z INFO  [api] req=a2194e user=u037 POST /orders 200 234ms
+2026-11-20T11:34:17Z INFO  [api] req=b47927 user=u036 GET /orders 200 109ms
+2026-11-20T11:34:36Z INFO  [auth] req=433278 user=u036 GET /cart 200 143ms
+2026-11-20T11:34:39Z INFO  [worker] req=c43f97 user=u043 GET /orders 200 336ms
+2026-11-20T11:34:51Z INFO  [auth] req=77432b user=u018 GET /search 200 174ms
+2026-11-20T11:35:04Z INFO  [api] req=ddc108 user=u003 POST /profile 200 54ms
+2026-11-20T11:35:09Z INFO  [worker] req=3176a4 user=u027 GET /cart 200 81ms
+2026-11-20T11:35:26Z INFO  [api] req=1a474d user=u002 POST /orders 200 85ms
+2026-11-20T11:35:35Z INFO  [api] req=d53126 user=u007 GET /search 200 70ms
+2026-11-20T11:35:53Z INFO  [api] req=68dd33 user=u020 GET /orders 201 77ms
+2026-11-20T11:36:10Z WARN  [auth] login failed user=u052 ip=10.0.5.198
+2026-11-20T11:36:27Z INFO  [billing] req=7e1631 user=u035 POST /search 200 212ms
+2026-11-20T11:36:35Z INFO  [api] req=287df0 user=u026 GET /cart 200 210ms
+2026-11-20T11:36:52Z INFO  [api] req=a714a9 user=u057 POST /profile 200 57ms
+2026-11-20T11:37:07Z INFO  [worker] req=4f684c user=u032 GET /search 404 126ms
+2026-11-20T11:37:15Z INFO  [api] req=f9fe6b user=u018 POST /orders 200 59ms
+2026-11-20T11:37:33Z INFO  [auth] req=0eccdd user=u031 POST /orders 200 70ms
+2026-11-20T11:37:41Z INFO  [worker] req=652584 user=u038 POST /profile 200 211ms
+2026-11-20T11:37:54Z INFO  [auth] req=3e9b62 user=u006 GET /profile 200 228ms
+2026-11-20T11:38:08Z INFO  [api] req=213521 user=u010 POST /orders 200 72ms
+2026-11-20T11:38:24Z WARN  [auth] login failed user=u027 ip=10.0.4.191
+2026-11-20T11:38:33Z INFO  [api] req=cf9e37 user=u043 GET /profile 200 98ms
+2026-11-20T11:38:36Z INFO  [billing] req=b6f498 user=u057 POST /search 200 117ms
+2026-11-20T11:38:50Z INFO  [api] req=04d73b user=u005 GET /profile 200 43ms
+2026-11-20T11:39:01Z INFO  [api] req=e2f97a user=u014 POST /cart 200 10ms
+2026-11-20T11:39:05Z INFO  [api] req=0da3d1 user=u005 GET /search 200 431ms
+2026-11-20T11:39:20Z INFO  [api] req=fd2208 user=u026 POST /search 200 31ms
+2026-11-20T11:39:32Z WARN  [auth] login failed user=u025 ip=10.0.6.45
+2026-11-20T11:39:52Z INFO  [worker] req=ccab7e user=u018 GET /search 200 245ms
+2026-11-20T11:40:09Z INFO  [auth] req=33ec56 user=u010 GET /search 200 114ms
+2026-11-20T11:40:13Z INFO  [worker] req=555c52 user=u016 GET /orders 200 57ms
+2026-11-20T11:40:30Z INFO  [api] req=44ff3e user=u039 GET /search 201 186ms
+2026-11-20T11:40:39Z INFO  [api] req=c04768 user=u017 POST /search 200 186ms
+2026-11-20T11:40:42Z INFO  [api] req=94ac59 user=u009 GET /profile 200 30ms
+2026-11-20T11:40:51Z INFO  [api] req=67a64e user=u031 POST /orders 200 190ms
+2026-11-20T11:41:11Z INFO  [billing] req=b1f19a user=u048 GET /profile 200 85ms
+2026-11-20T11:41:22Z INFO  [auth] req=fb1f19 user=u041 POST /orders 201 104ms
+2026-11-20T11:41:29Z ERROR [worker] req=316874 null customer id
+2026-11-20T11:41:38Z INFO  [api] req=4fe4bc user=u051 GET /search 200 97ms
+2026-11-20T11:41:53Z INFO  [api] req=e9246a user=u050 GET /search 200 55ms
+2026-11-20T11:42:05Z INFO  [api] req=1f07e7 user=u043 GET /orders 200 37ms
+2026-11-20T11:42:22Z INFO  [api] req=16fb26 user=u004 GET /cart 200 66ms
+2026-11-20T11:42:24Z WARN  [auth] login failed user=u010 ip=10.0.0.142
+2026-11-20T11:42:31Z INFO  [api] req=bf80c6 user=u029 GET /cart 200 40ms
+2026-11-20T11:42:51Z INFO  [api] req=e4ee0c user=u005 GET /cart 200 12ms
+2026-11-20T11:42:55Z INFO  [billing] req=0945f3 user=u027 POST /orders 200 57ms
+2026-11-20T11:42:58Z INFO  [auth] req=9d8bd2 user=u011 GET /profile 200 61ms
+2026-11-20T11:43:14Z INFO  [auth] req=19202f user=u022 GET /cart 200 76ms
+2026-11-20T11:43:19Z INFO  [worker] req=2bbeaa user=u004 POST /cart 200 45ms
+2026-11-20T11:43:38Z INFO  [worker] req=3e1295 user=u032 GET /search 200 23ms
+2026-11-20T11:43:58Z INFO  [billing] req=b1b695 user=u006 GET /profile 200 176ms
+2026-11-20T11:44:06Z INFO  [api] req=97b785 user=u014 POST /orders 200 112ms
+2026-11-20T11:44:16Z INFO  [auth] req=181a6f user=u053 POST /cart 200 74ms
+2026-11-20T11:44:20Z ERROR [billing] req=937c0e upstream 502
+2026-11-20T11:44:31Z INFO  [api] req=e3508e user=u060 GET /search 200 58ms
+2026-11-20T11:44:38Z INFO  [billing] req=b3275f user=u049 GET /profile 200 136ms
+2026-11-20T11:44:40Z INFO  [api] req=7a42da user=u038 POST /cart 200 104ms
+2026-11-20T11:44:43Z INFO  [api] req=a8484c user=u049 POST /cart 200 92ms
+2026-11-20T11:44:49Z INFO  [api] req=d4b9a8 user=u059 POST /cart 200 186ms
+2026-11-20T11:45:00Z INFO  [api] req=002772 user=u019 GET /profile 200 58ms
+2026-11-20T11:45:09Z INFO  [api] req=8c5849 user=u042 POST /profile 200 21ms
+2026-11-20T11:45:15Z INFO  [api] req=75051b user=u058 GET /orders 200 133ms
+2026-11-20T11:45:23Z INFO  [api] req=1284cc user=u027 POST /orders 200 37ms
+2026-11-20T11:45:32Z INFO  [worker] req=089212 user=u029 GET /orders 200 101ms
+2026-11-20T11:45:50Z INFO  [worker] req=a37ad8 user=u024 GET /orders 200 45ms
+2026-11-20T11:46:10Z INFO  [api] req=de1bd3 user=u028 POST /orders 200 10ms
+2026-11-20T11:46:11Z INFO  [worker] req=fbb508 user=u042 GET /search 404 23ms
+2026-11-20T11:46:15Z INFO  [worker] req=491730 user=u056 GET /orders 500 34ms
+2026-11-20T11:46:33Z INFO  [api] req=3f7e86 user=u024 POST /orders 200 80ms
+2026-11-20T11:46:42Z INFO  [auth] req=fa633a user=u057 GET /cart 200 388ms
+2026-11-20T11:46:59Z WARN  [auth] login failed user=u009 ip=10.0.6.233
+2026-11-20T11:47:18Z WARN  [auth] login failed user=u048 ip=10.0.9.233
+2026-11-20T11:47:19Z INFO  [worker] req=2ad855 user=u035 GET /orders 500 49ms
+2026-11-20T11:47:39Z INFO  [worker] req=ab73d3 user=u057 POST /search 200 80ms
+2026-11-20T11:47:53Z ERROR [api] req=a94656 null customer id
+2026-11-20T11:47:56Z INFO  [auth] req=a29e2b user=u006 GET /profile 500 16ms
+2026-11-20T11:48:15Z INFO  [api] req=faf64b user=u018 POST /orders 201 76ms
+2026-11-20T11:48:20Z INFO  [worker] req=f05115 user=u013 GET /cart 200 32ms
+2026-11-20T11:48:21Z INFO  [api] req=0123e2 user=u037 GET /orders 200 25ms
+2026-11-20T11:48:40Z INFO  [worker] req=979ae8 user=u057 POST /profile 200 144ms
+2026-11-20T11:48:59Z INFO  [worker] req=898362 user=u002 GET /search 200 79ms
+2026-11-20T11:49:10Z INFO  [api] req=f43f5e user=u026 POST /search 201 134ms
+2026-11-20T11:49:17Z INFO  [api] req=fdb6a7 user=u032 POST /search 200 285ms
+2026-11-20T11:49:35Z INFO  [worker] req=21efac user=u043 GET /profile 200 164ms
+2026-11-20T11:49:48Z ERROR [api] req=0f4c3a null customer id
+2026-11-20T11:50:01Z INFO  [api] req=995b1e user=u023 GET /profile 201 101ms
+2026-11-20T11:50:08Z INFO  [api] req=def767 user=u023 POST /cart 200 453ms
+2026-11-20T11:50:20Z INFO  [api] req=4f621f user=u018 GET /orders 200 53ms
+2026-11-20T11:50:34Z INFO  [api] req=a86b46 user=u036 GET /cart 200 29ms
+2026-11-20T11:50:49Z INFO  [worker] req=b620e8 user=u014 POST /profile 200 51ms
+2026-11-20T11:50:51Z INFO  [worker] req=c182ca user=u032 POST /search 200 125ms
+2026-11-20T11:51:07Z INFO  [worker] req=3cd91d user=u004 POST /profile 200 230ms
+2026-11-20T11:51:08Z INFO  [api] req=bfd878 user=u046 GET /search 200 56ms
+2026-11-20T11:51:16Z INFO  [api] req=564b30 user=u060 GET /search 404 117ms
+2026-11-20T11:51:18Z INFO  [api] req=68bcb6 user=u005 GET /orders 200 203ms
+2026-11-20T11:51:21Z INFO  [api] req=1ce666 user=u003 POST /orders 200 81ms
+2026-11-20T11:51:35Z WARN  [auth] login failed user=u044 ip=10.0.7.218
+2026-11-20T11:51:49Z INFO  [api] req=3335d5 user=u013 GET /profile 200 252ms
+2026-11-20T11:52:09Z ERROR [api] req=e032e8 timeout talking to db
+2026-11-20T11:52:29Z WARN  [auth] login failed user=u032 ip=10.0.6.202
+2026-11-20T11:52:48Z WARN  [auth] login failed user=u033 ip=10.0.0.183
+2026-11-20T11:53:00Z INFO  [billing] req=41453c user=u036 GET /profile 200 49ms
+2026-11-20T11:53:07Z INFO  [billing] req=57fca8 user=u029 GET /search 200 56ms
+2026-11-20T11:53:23Z INFO  [api] req=586a0e user=u004 GET /cart 200 329ms
+2026-11-20T11:53:27Z INFO  [worker] req=ace452 user=u031 GET /orders 201 42ms
+2026-11-20T11:53:35Z INFO  [api] req=e3672c user=u048 GET /search 201 66ms
+2026-11-20T11:53:41Z INFO  [api] req=501c5b user=u043 GET /search 200 20ms
+2026-11-20T11:53:57Z INFO  [api] req=09652f user=u029 POST /search 201 103ms
+2026-11-20T11:54:06Z INFO  [auth] req=ca430a user=u052 GET /search 200 38ms
+2026-11-20T11:54:10Z INFO  [billing] req=c9daa0 user=u010 POST /orders 200 216ms
+2026-11-20T11:54:11Z INFO  [worker] req=ec27dd user=u058 POST /orders 200 223ms
+2026-11-20T11:54:15Z INFO  [api] req=416035 user=u038 GET /search 200 17ms
+2026-11-20T11:54:29Z WARN  [auth] login failed user=u045 ip=10.0.1.152
+2026-11-20T11:54:47Z WARN  [auth] login failed user=u053 ip=10.0.2.117
+2026-11-20T11:55:03Z INFO  [auth] req=69f3ba user=u040 POST /cart 404 119ms
+2026-11-20T11:55:20Z INFO  [worker] req=8aa9e3 user=u019 GET /search 200 53ms
+2026-11-20T11:55:27Z INFO  [api] req=d2da23 user=u059 GET /search 201 195ms
+2026-11-20T11:55:35Z INFO  [api] req=445efa user=u032 POST /search 200 66ms
+2026-11-20T11:55:51Z INFO  [api] req=bd730c user=u007 GET /search 200 79ms
+2026-11-20T11:56:08Z INFO  [api] req=a1e961 user=u017 GET /profile 200 254ms
+2026-11-20T11:56:20Z WARN  [auth] login failed user=u054 ip=10.0.8.83
+2026-11-20T11:56:26Z ERROR [api] req=074bef upstream 502
+2026-11-20T11:56:44Z INFO  [api] req=be46c9 user=u052 GET /search 200 74ms
+2026-11-20T11:56:48Z INFO  [api] req=011267 user=u047 GET /search 200 64ms
+2026-11-20T11:57:01Z INFO  [api] req=f6bf42 user=u049 GET /search 200 71ms
+2026-11-20T11:57:12Z INFO  [api] req=54c8cf user=u038 GET /profile 200 212ms
+2026-11-20T11:57:24Z INFO  [auth] req=dd02fe user=u042 GET /cart 404 175ms
+2026-11-20T11:57:36Z ERROR [worker] req=adf283 disk quota exceeded
+2026-11-20T11:57:49Z INFO  [api] req=dcf3f3 user=u021 POST /search 200 32ms
+2026-11-20T11:58:01Z INFO  [worker] req=46eaee user=u014 GET /profile 200 101ms
+2026-11-20T11:58:10Z INFO  [api] req=337eb8 user=u060 GET /profile 404 36ms
+2026-11-20T11:58:30Z INFO  [api] req=5cf1e4 user=u015 GET /profile 200 878ms
+2026-11-20T11:58:33Z INFO  [auth] req=0dfa14 user=u050 GET /search 200 131ms
+2026-11-20T11:58:50Z INFO  [api] req=d293c6 user=u019 GET /orders 200 103ms
+2026-11-20T11:58:56Z INFO  [api] req=4a8ab4 user=u017 POST /orders 200 58ms
+2026-11-20T11:59:05Z INFO  [api] req=b02a6b user=u028 GET /orders 201 387ms
+2026-11-20T11:59:09Z INFO  [api] req=ec73b1 user=u030 POST /profile 200 119ms
+2026-11-20T11:59:16Z INFO  [api] req=a56765 user=u037 POST /profile 200 65ms
+2026-11-20T11:59:26Z INFO  [api] req=ce853d user=u002 GET /profile 200 83ms
+2026-11-20T11:59:42Z INFO  [billing] req=c9f803 user=u049 GET /orders 200 288ms
+2026-11-20T11:59:44Z INFO  [auth] req=46a9e1 user=u037 GET /cart 500 1289ms
+2026-11-20T12:00:02Z INFO  [api] req=4c823c user=u025 POST /cart 404 121ms
+2026-11-20T12:00:03Z INFO  [api] req=2cac2c user=u007 GET /cart 404 111ms
+2026-11-20T12:00:22Z INFO  [auth] req=efb294 user=u014 POST /cart 200 220ms
+2026-11-20T12:00:37Z INFO  [api] req=4930cb user=u012 POST /cart 200 18ms
+2026-11-20T12:00:42Z INFO  [billing] req=290752 user=u030 GET /orders 201 90ms
+2026-11-20T12:00:46Z ERROR [api] req=5abc62 upstream 502
+2026-11-20T12:00:59Z INFO  [worker] req=e40382 user=u008 GET /search 200 143ms
+2026-11-20T12:01:12Z INFO  [api] req=0eb1c5 user=u031 GET /cart 404 109ms
+2026-11-20T12:01:14Z INFO  [api] req=92e872 user=u013 GET /cart 200 18ms
+2026-11-20T12:01:21Z INFO  [api] req=c16050 user=u017 POST /cart 200 9ms
+2026-11-20T12:01:28Z INFO  [api] req=76717f user=u015 POST /orders 200 149ms
+2026-11-20T12:01:29Z WARN  [auth] login failed user=u025 ip=10.0.1.96
+2026-11-20T12:01:42Z INFO  [api] req=5e2a17 user=u047 GET /cart 200 39ms
+2026-11-20T12:02:02Z INFO  [api] req=739380 user=u036 POST /profile 404 113ms
+2026-11-20T12:02:07Z INFO  [auth] req=c1d766 user=u006 GET /cart 200 138ms
+2026-11-20T12:02:18Z INFO  [api] req=d0c122 user=u020 GET /search 200 64ms
+2026-11-20T12:02:24Z INFO  [api] req=3d1ab3 user=u010 GET /cart 200 517ms
+2026-11-20T12:02:29Z ERROR [api] req=88dfef upstream 502
+2026-11-20T12:02:38Z INFO  [billing] req=794878 user=u008 POST /orders 200 243ms
+2026-11-20T12:02:42Z INFO  [api] req=fc796f user=u013 POST /cart 200 292ms
+2026-11-20T12:02:55Z INFO  [api] req=3fa5a5 user=u018 POST /orders 200 65ms
+2026-11-20T12:03:00Z INFO  [api] req=469d72 user=u032 POST /cart 200 200ms
+2026-11-20T12:03:04Z INFO  [api] req=0bbcf0 user=u027 POST /orders 200 395ms
+2026-11-20T12:03:18Z INFO  [worker] req=2f784f user=u023 GET /search 200 143ms
+2026-11-20T12:03:22Z INFO  [api] req=d5b2e5 user=u041 GET /orders 200 282ms
+2026-11-20T12:03:37Z INFO  [api] req=fc203a user=u043 GET /search 200 110ms
+2026-11-20T12:03:40Z INFO  [api] req=8c5c4e user=u019 GET /profile 200 206ms
+2026-11-20T12:03:48Z ERROR [api] req=f7ca14 timeout talking to db
+2026-11-20T12:03:51Z INFO  [auth] req=c19b90 user=u011 GET /orders 200 104ms
+2026-11-20T12:04:05Z INFO  [worker] req=3d636a user=u051 GET /profile 200 165ms
+2026-11-20T12:04:08Z INFO  [api] req=a3de11 user=u017 POST /search 200 49ms
+2026-11-20T12:04:21Z WARN  [auth] login failed user=u043 ip=10.0.8.173
+2026-11-20T12:04:27Z INFO  [billing] req=097d31 user=u039 GET /profile 200 62ms
+2026-11-20T12:04:33Z INFO  [api] req=888322 user=u014 POST /orders 201 92ms
+2026-11-20T12:04:48Z INFO  [api] req=c5de45 user=u016 GET /profile 404 109ms
+2026-11-20T12:04:59Z INFO  [api] req=df6ffd user=u049 GET /cart 200 148ms
+2026-11-20T12:05:18Z INFO  [api] req=48d350 user=u058 GET /search 201 42ms
+2026-11-20T12:05:19Z INFO  [api] req=7c2597 user=u043 GET /search 200 60ms
+2026-11-20T12:05:35Z INFO  [api] req=3d2fe0 user=u040 GET /cart 200 58ms
+2026-11-20T12:05:37Z INFO  [auth] req=d1e5a3 user=u003 POST /orders 201 110ms
+2026-11-20T12:05:41Z INFO  [auth] req=14e449 user=u008 GET /orders 200 91ms
+2026-11-20T12:05:47Z INFO  [api] req=4d7447 user=u036 GET /search 200 32ms
+2026-11-20T12:05:54Z INFO  [worker] req=128a38 user=u019 GET /cart 200 210ms
+2026-11-20T12:06:14Z INFO  [api] req=1284e7 user=u015 POST /cart 201 75ms
+2026-11-20T12:06:25Z INFO  [worker] req=b18516 user=u046 GET /orders 500 418ms
+2026-11-20T12:06:28Z INFO  [worker] req=752bc2 user=u006 GET /cart 200 131ms
+2026-11-20T12:06:37Z INFO  [api] req=66bb8a user=u024 GET /profile 200 102ms
+2026-11-20T12:06:48Z INFO  [auth] req=24b67e user=u055 GET /orders 200 66ms
+2026-11-20T12:07:00Z INFO  [api] req=be202e user=u031 GET /profile 500 89ms
+2026-11-20T12:07:04Z INFO  [api] req=c3ad2b user=u059 POST /cart 200 60ms
+2026-11-20T12:07:10Z INFO  [api] req=50a9d3 user=u040 GET /cart 200 851ms
+2026-11-20T12:07:20Z INFO  [api] req=2ca6c0 user=u031 GET /orders 200 95ms
+2026-11-20T12:07:36Z INFO  [auth] req=062265 user=u052 GET /cart 200 75ms
+2026-11-20T12:07:42Z INFO  [worker] req=d6eac5 user=u001 GET /profile 200 75ms
+2026-11-20T12:07:55Z INFO  [api] req=564801 user=u009 POST /orders 200 371ms
+2026-11-20T12:07:57Z WARN  [auth] login failed user=u036 ip=10.0.0.135
+2026-11-20T12:08:09Z INFO  [billing] req=8cff71 user=u048 GET /profile 201 23ms
+2026-11-20T12:08:24Z INFO  [api] req=753ee1 user=u017 GET /orders 200 269ms
+2026-11-20T12:08:29Z INFO  [api] req=8d3048 user=u006 GET /cart 200 42ms
+2026-11-20T12:08:38Z INFO  [api] req=89fb63 user=u048 GET /orders 200 109ms
+2026-11-20T12:08:57Z INFO  [worker] req=d6f6e0 user=u052 GET /cart 200 65ms
+2026-11-20T12:09:08Z INFO  [worker] req=bbf327 user=u015 GET /orders 200 81ms
+2026-11-20T12:09:22Z ERROR [billing] req=057de6 timeout talking to db
+2026-11-20T12:09:33Z INFO  [worker] req=e83ed2 user=u045 GET /search 200 25ms
+2026-11-20T12:09:50Z INFO  [billing] req=33649a user=u009 GET /search 200 445ms
+2026-11-20T12:09:59Z INFO  [worker] req=b91317 user=u056 GET /search 201 132ms
+2026-11-20T12:10:12Z INFO  [api] req=36dca2 user=u020 GET /orders 200 163ms
+2026-11-20T12:10:24Z INFO  [api] req=63b892 user=u020 GET /search 200 53ms
+2026-11-20T12:10:40Z WARN  [auth] login failed user=u036 ip=10.0.9.245
+2026-11-20T12:10:57Z INFO  [api] req=d33209 user=u027 GET /search 200 227ms
+2026-11-20T12:11:12Z INFO  [api] req=f371cc user=u037 GET /cart 500 84ms
+2026-11-20T12:11:30Z WARN  [auth] login failed user=u031 ip=10.0.1.65
+2026-11-20T12:11:37Z WARN  [auth] login failed user=u039 ip=10.0.9.196
+2026-11-20T12:11:53Z INFO  [api] req=95906f user=u037 GET /orders 200 76ms
+2026-11-20T12:12:13Z INFO  [auth] req=ee8279 user=u031 GET /profile 500 352ms
+2026-11-20T12:12:26Z INFO  [worker] req=557806 user=u060 POST /search 200 131ms
+2026-11-20T12:12:43Z INFO  [api] req=b6fb1b user=u028 GET /profile 201 40ms
+2026-11-20T12:12:57Z INFO  [api] req=557726 user=u015 GET /orders 201 78ms
+2026-11-20T12:13:00Z INFO  [worker] req=3bf08b user=u053 GET /search 404 218ms
+2026-11-20T12:13:04Z INFO  [api] req=fffffa user=u003 GET /orders 200 41ms
+2026-11-20T12:13:12Z INFO  [api] req=8ea181 user=u012 POST /search 200 28ms
+2026-11-20T12:13:20Z INFO  [worker] req=1edb11 user=u028 GET /cart 200 51ms
+2026-11-20T12:13:32Z INFO  [auth] req=2f9e4d user=u034 GET /profile 200 134ms
+2026-11-20T12:13:34Z INFO  [worker] req=e0b903 user=u060 GET /cart 200 172ms
+2026-11-20T12:13:49Z INFO  [worker] req=27847a user=u052 GET /profile 200 125ms
+2026-11-20T12:14:07Z WARN  [auth] login failed user=u013 ip=10.0.6.237
+2026-11-20T12:14:15Z INFO  [auth] req=79dea2 user=u035 POST /search 200 122ms
+2026-11-20T12:14:27Z INFO  [api] req=bf3115 user=u015 GET /orders 200 63ms
+2026-11-20T12:14:30Z INFO  [billing] req=f55c29 user=u027 POST /search 200 15ms
+2026-11-20T12:14:50Z INFO  [worker] req=396577 user=u040 GET /search 200 78ms
+2026-11-20T12:15:01Z ERROR [worker] req=5e4672 upstream 502
+2026-11-20T12:15:12Z INFO  [auth] req=a95225 user=u057 GET /profile 500 131ms
+2026-11-20T12:15:18Z INFO  [api] req=2f579c user=u043 POST /orders 404 56ms
+2026-11-20T12:15:27Z INFO  [api] req=bde74d user=u042 POST /profile 200 298ms
+2026-11-20T12:15:36Z INFO  [api] req=12f6d1 user=u001 GET /orders 200 121ms
+2026-11-20T12:15:47Z INFO  [worker] req=90b530 user=u011 GET /orders 201 195ms
+2026-11-20T12:15:53Z INFO  [worker] req=af25ef user=u059 POST /profile 200 102ms
+2026-11-20T12:15:54Z INFO  [api] req=0e6ae5 user=u031 POST /profile 200 94ms
+2026-11-20T12:16:08Z INFO  [billing] req=8e017b user=u032 GET /cart 201 71ms
+2026-11-20T12:16:16Z INFO  [api] req=3b0c49 user=u009 POST /orders 201 209ms
+2026-11-20T12:16:20Z INFO  [worker] req=1e5923 user=u052 GET /orders 200 43ms
+2026-11-20T12:16:22Z INFO  [api] req=a86451 user=u008 POST /cart 200 56ms
+2026-11-20T12:16:34Z INFO  [api] req=5bb2cd user=u032 GET /orders 200 70ms
+2026-11-20T12:16:44Z INFO  [api] req=114249 user=u026 POST /cart 200 69ms
+2026-11-20T12:16:53Z INFO  [worker] req=7dffce user=u006 GET /cart 200 81ms
+2026-11-20T12:17:13Z INFO  [api] req=72278a user=u001 GET /cart 200 40ms
+2026-11-20T12:17:15Z INFO  [api] req=c385e0 user=u039 GET /profile 200 111ms
+2026-11-20T12:17:27Z INFO  [worker] req=243d40 user=u001 GET /orders 200 85ms
+2026-11-20T12:17:42Z ERROR [billing] req=49fc11 upstream 502
+2026-11-20T12:17:55Z WARN  [auth] login failed user=u024 ip=10.0.6.37
+2026-11-20T12:18:11Z ERROR [worker] req=718c79 upstream 502
+2026-11-20T12:18:18Z INFO  [api] req=85e29e user=u002 POST /cart 200 86ms
+2026-11-20T12:18:19Z INFO  [auth] req=d71276 user=u008 GET /profile 200 106ms
+2026-11-20T12:18:33Z INFO  [worker] req=4255d7 user=u052 POST /cart 200 155ms
+2026-11-20T12:18:37Z ERROR [worker] req=0b26d4 disk quota exceeded
+2026-11-20T12:18:39Z INFO  [api] req=cd930a user=u023 GET /cart 200 33ms
+2026-11-20T12:18:47Z INFO  [worker] req=2b842c user=u032 GET /search 200 53ms
+2026-11-20T12:18:58Z INFO  [api] req=aa6234 user=u008 GET /search 200 8ms
+2026-11-20T12:18:59Z INFO  [api] req=2a3d0b user=u013 GET /profile 200 271ms
+2026-11-20T12:19:06Z INFO  [api] req=52efff user=u060 GET /search 200 120ms
+2026-11-20T12:19:22Z INFO  [api] req=a2a273 user=u030 GET /profile 201 101ms
+2026-11-20T12:19:28Z INFO  [api] req=a5a1e3 user=u023 GET /profile 200 108ms
+2026-11-20T12:19:48Z INFO  [worker] req=6e0e06 user=u060 POST /profile 200 9ms
+2026-11-20T12:19:56Z INFO  [api] req=9218ab user=u040 POST /cart 200 124ms
+2026-11-20T12:20:04Z INFO  [worker] req=554c2e user=u010 GET /cart 200 404ms
+2026-11-20T12:20:09Z INFO  [api] req=c521fe user=u036 GET /profile 200 38ms
+2026-11-20T12:20:23Z INFO  [auth] req=1cfb6e user=u008 GET /profile 201 170ms
+2026-11-20T12:20:28Z INFO  [api] req=1b7515 user=u025 GET /cart 200 107ms
+2026-11-20T12:20:32Z INFO  [billing] req=904c0f user=u008 GET /search 200 122ms
+2026-11-20T12:20:51Z INFO  [api] req=2327a2 user=u034 GET /cart 201 32ms
+2026-11-20T12:21:05Z INFO  [api] req=dcf909 user=u047 GET /search 200 198ms
+2026-11-20T12:21:08Z INFO  [worker] req=1d41b4 user=u050 POST /search 200 20ms
+2026-11-20T12:21:28Z ERROR [api] req=cd619f timeout talking to db
+2026-11-20T12:21:44Z INFO  [billing] req=5754c1 user=u040 GET /profile 200 47ms
+2026-11-20T12:22:04Z INFO  [worker] req=189d70 user=u035 GET /search 200 234ms
+2026-11-20T12:22:12Z INFO  [worker] req=bd5c43 user=u002 GET /orders 200 106ms
+2026-11-20T12:22:31Z INFO  [api] req=95fa5d user=u002 POST /cart 200 136ms
+2026-11-20T12:22:47Z INFO  [billing] req=e80950 user=u002 POST /orders 200 126ms
+2026-11-20T12:22:53Z INFO  [worker] req=eedff2 user=u018 GET /cart 200 50ms
+2026-11-20T12:23:10Z INFO  [auth] req=4e9cb1 user=u033 POST /profile 201 50ms
+2026-11-20T12:23:19Z ERROR [worker] req=64116e timeout talking to db
+2026-11-20T12:23:26Z INFO  [billing] req=ad51f9 user=u036 POST /orders 404 44ms
+2026-11-20T12:23:38Z INFO  [auth] req=8063b7 user=u025 GET /cart 201 211ms
+2026-11-20T12:23:44Z INFO  [api] req=2886e4 user=u009 GET /search 200 43ms
+2026-11-20T12:24:01Z INFO  [api] req=4fabbb user=u036 POST /orders 200 72ms
+2026-11-20T12:24:06Z INFO  [worker] req=b5fbfa user=u036 GET /cart 200 36ms
+2026-11-20T12:24:15Z INFO  [billing] req=2580b1 user=u015 GET /profile 200 54ms
+2026-11-20T12:24:23Z INFO  [auth] req=3c1170 user=u021 GET /profile 200 106ms
+2026-11-20T12:24:32Z INFO  [api] req=dc6288 user=u030 GET /search 200 127ms
+2026-11-20T12:24:52Z INFO  [worker] req=20f6b9 user=u013 POST /orders 404 48ms
+2026-11-20T12:25:01Z INFO  [auth] req=d8bd44 user=u036 GET /search 200 285ms
+2026-11-20T12:25:15Z INFO  [auth] req=6b0bd3 user=u036 GET /search 200 152ms
+2026-11-20T12:25:27Z INFO  [billing] req=88a19f user=u042 GET /search 200 218ms
+2026-11-20T12:25:32Z INFO  [api] req=37ef10 user=u011 GET /cart 200 188ms
+2026-11-20T12:25:33Z INFO  [auth] req=778785 user=u039 GET /search 200 149ms
+2026-11-20T12:25:53Z INFO  [worker] req=a5efe5 user=u043 GET /cart 200 240ms
+2026-11-20T12:26:10Z INFO  [billing] req=caf273 user=u001 GET /cart 200 203ms
+2026-11-20T12:26:16Z INFO  [auth] req=166d13 user=u049 POST /search 200 102ms
+2026-11-20T12:26:19Z INFO  [api] req=5234aa user=u003 GET /orders 200 35ms
+2026-11-20T12:26:29Z INFO  [auth] req=9e9027 user=u016 GET /profile 200 65ms
+2026-11-20T12:26:38Z INFO  [api] req=ffcd89 user=u002 POST /cart 200 93ms
+2026-11-20T12:26:42Z INFO  [api] req=138cf5 user=u053 POST /cart 200 233ms
+2026-11-20T12:26:45Z WARN  [auth] login failed user=u007 ip=10.0.5.104
+2026-11-20T12:27:05Z INFO  [api] req=74d9ac user=u016 POST /search 200 101ms
+2026-11-20T12:27:10Z INFO  [worker] req=547dbb user=u035 GET /cart 200 105ms
+2026-11-20T12:27:21Z WARN  [auth] login failed user=u023 ip=10.0.2.204
+2026-11-20T12:27:28Z INFO  [api] req=fca343 user=u051 GET /profile 200 19ms
+2026-11-20T12:27:38Z INFO  [worker] req=6a2c33 user=u044 GET /search 200 584ms
+2026-11-20T12:27:39Z INFO  [api] req=116aa7 user=u003 GET /orders 200 95ms
+2026-11-20T12:27:46Z INFO  [worker] req=683dc9 user=u049 GET /cart 201 250ms
+2026-11-20T12:28:06Z INFO  [api] req=432733 user=u003 POST /profile 200 46ms
+2026-11-20T12:28:09Z INFO  [auth] req=529fb1 user=u015 GET /orders 200 114ms
+2026-11-20T12:28:20Z ERROR [worker] req=28fab1 timeout talking to db
+2026-11-20T12:28:32Z INFO  [api] req=17b93e user=u024 GET /cart 404 37ms
+2026-11-20T12:28:36Z WARN  [auth] login failed user=u056 ip=10.0.2.47
+2026-11-20T12:28:47Z INFO  [worker] req=974dbf user=u023 GET /profile 200 46ms
+2026-11-20T12:29:01Z INFO  [auth] req=935d10 user=u004 POST /orders 200 47ms
+2026-11-20T12:29:13Z INFO  [worker] req=34a6fa user=u014 POST /orders 200 59ms
+2026-11-20T12:29:24Z WARN  [auth] login failed user=u015 ip=10.0.3.51
+2026-11-20T12:29:26Z INFO  [worker] req=76a46f user=u023 GET /profile 200 103ms
+2026-11-20T12:29:38Z INFO  [billing] req=a4f5ca user=u058 POST /search 404 86ms
+2026-11-20T12:29:51Z INFO  [api] req=197374 user=u030 POST /profile 200 57ms
+2026-11-20T12:30:09Z INFO  [api] req=616096 user=u059 POST /orders 201 145ms
+2026-11-20T12:30:29Z INFO  [api] req=3858b5 user=u027 GET /search 200 214ms
+2026-11-20T12:30:45Z WARN  [auth] login failed user=u048 ip=10.0.5.144
+2026-11-20T12:30:51Z INFO  [worker] req=d0123b user=u005 POST /profile 200 348ms
+2026-11-20T12:31:11Z INFO  [auth] req=3fc5cf user=u035 GET /cart 200 65ms
+2026-11-20T12:31:22Z WARN  [auth] login failed user=u040 ip=10.0.0.1
+2026-11-20T12:31:36Z INFO  [auth] req=aa2ac5 user=u004 GET /orders 200 231ms
+2026-11-20T12:31:44Z INFO  [api] req=3fa21a user=u052 GET /orders 200 102ms
+2026-11-20T12:31:50Z INFO  [auth] req=a7fe27 user=u009 GET /orders 200 77ms
+2026-11-20T12:32:00Z INFO  [api] req=1355b7 user=u048 GET /profile 404 37ms
+2026-11-20T12:32:19Z INFO  [api] req=035f8d user=u010 GET /cart 200 274ms
+2026-11-20T12:32:25Z INFO  [api] req=4ad6bf user=u038 GET /search 200 130ms
+2026-11-20T12:32:35Z INFO  [auth] req=62242c user=u040 POST /profile 200 64ms
+2026-11-20T12:32:46Z INFO  [auth] req=f9ad56 user=u035 GET /cart 200 240ms
+2026-11-20T12:32:54Z INFO  [auth] req=71a70b user=u007 POST /orders 200 88ms
+2026-11-20T12:33:00Z INFO  [api] req=a27236 user=u033 POST /profile 200 38ms
+2026-11-20T12:33:10Z INFO  [auth] req=8a240b user=u056 GET /orders 200 254ms
+2026-11-20T12:33:19Z INFO  [worker] req=7e9764 user=u007 GET /search 201 202ms
+2026-11-20T12:33:38Z INFO  [worker] req=2c1697 user=u033 GET /search 200 16ms
+2026-11-20T12:33:55Z INFO  [auth] req=4e29dc user=u057 GET /cart 200 351ms
+2026-11-20T12:34:09Z INFO  [billing] req=ad69a2 user=u055 GET /orders 200 32ms
+2026-11-20T12:34:12Z INFO  [worker] req=c19086 user=u005 POST /cart 200 25ms
+2026-11-20T12:34:26Z INFO  [billing] req=d3f589 user=u044 GET /orders 201 115ms
+2026-11-20T12:34:36Z INFO  [worker] req=11bbbd user=u020 GET /cart 200 84ms
+2026-11-20T12:34:38Z INFO  [api] req=4254c3 user=u054 POST /orders 201 185ms
+2026-11-20T12:34:42Z INFO  [api] req=2193db user=u038 GET /orders 200 240ms
+2026-11-20T12:34:52Z INFO  [billing] req=984da3 user=u012 GET /profile 200 22ms
+2026-11-20T12:34:54Z INFO  [api] req=a4d4dc user=u052 POST /search 200 91ms
+2026-11-20T12:35:00Z INFO  [billing] req=c05166 user=u012 GET /search 200 253ms
+2026-11-20T12:35:06Z INFO  [auth] req=fecdd6 user=u046 GET /orders 201 166ms
+2026-11-20T12:35:15Z INFO  [api] req=c11bc3 user=u002 GET /search 200 189ms
+2026-11-20T12:35:27Z INFO  [api] req=6f632c user=u024 GET /profile 200 81ms
+2026-11-20T12:35:39Z WARN  [auth] login failed user=u028 ip=10.0.7.193
+2026-11-20T12:35:51Z INFO  [api] req=760ccc user=u057 POST /profile 200 124ms
+2026-11-20T12:35:55Z INFO  [api] req=bc5c05 user=u015 GET /orders 201 33ms
+2026-11-20T12:36:07Z INFO  [api] req=e174d9 user=u047 GET /orders 200 82ms
+2026-11-20T12:36:08Z INFO  [worker] req=4e72d6 user=u044 POST /cart 200 505ms
+2026-11-20T12:36:11Z INFO  [api] req=6f3615 user=u022 POST /profile 200 90ms
+2026-11-20T12:36:20Z INFO  [auth] req=c6b893 user=u048 POST /orders 200 27ms
+2026-11-20T12:36:37Z INFO  [auth] req=26b9d4 user=u060 GET /profile 200 341ms
+2026-11-20T12:36:38Z INFO  [billing] req=f53350 user=u027 GET /orders 200 115ms
+2026-11-20T12:36:54Z INFO  [api] req=023555 user=u022 POST /search 200 105ms
+2026-11-20T12:36:58Z INFO  [billing] req=2686ad user=u014 GET /search 200 279ms
+2026-11-20T12:37:05Z INFO  [worker] req=8d8dcd user=u043 POST /profile 200 111ms
+2026-11-20T12:37:07Z WARN  [auth] login failed user=u044 ip=10.0.7.158
+2026-11-20T12:37:21Z INFO  [billing] req=6930fa user=u057 GET /search 200 103ms
+2026-11-20T12:37:29Z INFO  [worker] req=a27077 user=u047 POST /search 200 34ms
+2026-11-20T12:37:45Z INFO  [api] req=57873f user=u032 GET /profile 200 169ms
+2026-11-20T12:37:49Z INFO  [api] req=d5d1fb user=u024 GET /cart 404 32ms
+2026-11-20T12:37:50Z INFO  [billing] req=ef4125 user=u039 POST /profile 404 165ms
+2026-11-20T12:38:06Z INFO  [api] req=d3b620 user=u021 GET /search 200 254ms
+2026-11-20T12:38:07Z INFO  [worker] req=84904c user=u027 POST /orders 404 247ms
+2026-11-20T12:38:12Z INFO  [api] req=2c6ec0 user=u004 GET /search 200 42ms
+2026-11-20T12:38:22Z INFO  [billing] req=a13a2f user=u032 GET /orders 201 70ms
+2026-11-20T12:38:39Z INFO  [api] req=1bae22 user=u059 GET /search 200 280ms
+2026-11-20T12:38:41Z INFO  [billing] req=bf17bc user=u052 GET /search 500 110ms
+2026-11-20T12:38:49Z INFO  [api] req=07e47a user=u036 GET /profile 200 44ms
+2026-11-20T12:38:50Z INFO  [worker] req=8bbd0c user=u018 GET /cart 201 86ms
+2026-11-20T12:38:58Z INFO  [auth] req=ad1bfe user=u009 POST /orders 200 536ms
+2026-11-20T12:39:13Z INFO  [billing] req=a75cad user=u018 POST /profile 200 128ms
+2026-11-20T12:39:15Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:17Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:19Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:21Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:23Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:25Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:27Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:29Z WARN  [auth] login failed user=u023 ip=203.0.113.9
+2026-11-20T12:39:31Z WARN  [auth] login failed user=u023 ip=203.0.113.9
