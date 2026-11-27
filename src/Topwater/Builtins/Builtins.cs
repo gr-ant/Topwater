@@ -99,6 +99,7 @@ internal static partial class Builtins
         RegisterDocumentCommands(shell);
         RegisterWebCommands(shell);
         Git.Register(shell);
+        RegisterMountCommands(shell);
     }
 
     /// <summary>`tool --version` / `tool --help` for built-ins, so probing them looks like a real system.</summary>

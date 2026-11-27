@@ -144,6 +144,7 @@ public sealed class ShellSnapshot
             Getopts = [st.Getopts.Optind, st.Getopts.Pos], Jobs = st.Jobs.Select(j => new[] { j.Key, j.Value }).ToList(),
             LastBackgroundPid = st.LastBackgroundPid, NextPid = st.NextPid,
             Clock = st.Clock is { } clock ? FormatTime(clock) : null, Random = st.Random?.ToString(CultureInfo.InvariantCulture),
+            Mounts = st.Mounts.Count > 0 ? [.. st.Mounts.Select(d => MountJson.From(d, zip, written))] : null,
         };
         using var m = zip.CreateEntry(name, CompressionLevel.Fastest).Open();
         JsonSerializer.Serialize(m, manifest, Json);
@@ -301,6 +302,7 @@ public sealed class ShellSnapshot
         countFiles?.Invoke(m.Files?.Count ?? 0); // before any entry is built
         var fs = ReadFiles(zip, m.Files ?? [], o);
         var state = ReadState(m, o);
+        state.Mounts = ReadMounts(m.Mounts, zip, o);
         return new ShellSnapshot(fs, state, user, hostname, ParseTime(m.Created, "created"));
     }
 
@@ -511,6 +513,59 @@ public sealed class ShellSnapshot
         };
     }
 
+    /// <summary>The mounts' definitions and pending changes (docs/mounts.md), checked like files: canonical paths, sizes within
+    /// MaxFileSystemBytes, at most MaxExtractEntries changes, blobs present and matching.</summary>
+    static List<SavedMount> ReadMounts(List<MountJson?>? raw, ZipArchive zip, ShellOptions o)
+    {
+        var output = new List<SavedMount>();
+        long total = 0, count = 0;
+        static string Canonical(string? p, string what) =>
+            p is { Length: > 0 and <= 4096 } && p[0] == '/' && !p.Contains(' ') && VirtualFileSystem.Normalize("/", p) == p && p != "/" ? p : throw Bad($"bad {what} {JsonSerializer.Serialize(p)}");
+        foreach (var d in raw ?? [])
+        {
+            if (d == null) throw Bad("a mount is not an object");
+            var path = Canonical(d.Path, "mount path");
+            if (output.Any(x => path == x.Path || path.StartsWith(x.Path + "/", StringComparison.Ordinal) || x.Path.StartsWith(path + "/", StringComparison.Ordinal)))
+                throw Bad($"{path}: mounts overlap");
+            var mode = MountManager.ParseMode(d.Mode) ?? throw Bad($"{path}: bad mount mode {JsonSerializer.Serialize(d.Mode)}");
+            foreach (var (v, what) in new[] { (d.Type, "type"), (d.Id, "id") })
+                if (v == null || v.Length > 256 || v.Any(c => c < 32)) throw Bad($"{path}: bad source {what}");
+            var changes = new List<MountChange>();
+            foreach (var c in d.Changes ?? [])
+            {
+                if (++count > o.MaxExtractEntries) throw Bad($"more than {o.MaxExtractEntries} mount changes (MaxExtractEntries)");
+                MountChangeKind kind = c?.Kind switch
+                {
+                    "write" => MountChangeKind.Write, "delete" => MountChangeKind.Delete, "rename" => MountChangeKind.Rename, "mkdir" => MountChangeKind.Mkdir,
+                    _ => throw Bad($"{path}: bad mount change"),
+                };
+                var cp = Canonical(c!.Path, "change path");
+                var to = kind == MountChangeKind.Rename ? Canonical(c.To, "change target") : null;
+                if (c.Version is { Length: > MountManager.MaxVersion }) throw Bad($"{cp}: bad version");
+                byte[]? content = null;
+                if (kind == MountChangeKind.Write)
+                {
+                    total += c.Size;
+                    if (c.Size < 0 || total > o.MaxFileSystemBytes) throw Bad($"mount changes hold more than {o.MaxFileSystemBytes} bytes (MaxFileSystemBytes)");
+                    content = [];
+                    if (c.Size > 0)
+                    {
+                        var blob = Check(c.Blob, Blob, cp + ": blob");
+                        var entry = zip.GetEntry("blobs/" + blob) ?? throw Bad($"{cp}: blob {blob} is missing");
+                        var bytes = new MemoryStream();
+                        using (var st = entry.Open()) ReadCapped(st, bytes, c.Size, "blob " + blob);
+                        content = bytes.ToArray();
+                        if (content.Length != c.Size || Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant() != blob)
+                            throw Bad($"{cp}: blob {blob} doesn't match its size and hash");
+                    }
+                }
+                changes.Add(new(kind, cp, to, kind != MountChangeKind.Mkdir ? c.Version : null, content));
+            }
+            output.Add(new(path, mode, d.Type!, d.Id!, changes));
+        }
+        return output;
+    }
+
     static string Check(string? value, Regex shape, string what) =>
         value != null && shape.IsMatch(value) ? value : throw Bad($"bad {what} {JsonSerializer.Serialize(value)}");
 
@@ -528,7 +583,7 @@ public sealed class ShellSnapshot
     }
 
     // an instant in UTC; a local time (the back-dated system files) is converted, an unspecified one taken as UTC
-    static string FormatTime(DateTime t) =>
+    internal static string FormatTime(DateTime t) =>
         (t.Kind == DateTimeKind.Local ? t.ToUniversalTime() : DateTime.SpecifyKind(t, DateTimeKind.Utc)).ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
 
     /// <summary>An ISO 8601 date and time (no zone: UTC) as UTC; the same shapes every port reads.</summary>
@@ -581,6 +636,43 @@ public sealed class ShellSnapshot
         // added in version 1 as optional fields: set only by a shell with a virtual clock / a random seed
         public string? Clock { get; set; }
         public string? Random { get; set; }
+        // added for mounted sources: each mount's definition and pending changes, never the source's files
+        public List<MountJson?>? Mounts { get; set; }
+    }
+
+    sealed class MountJson
+    {
+        public string? Path { get; set; }
+        public string? Mode { get; set; }
+        public string? Type { get; set; }
+        public string? Id { get; set; }
+        public List<ChangeJson?>? Changes { get; set; }
+
+        public static MountJson From(SavedMount d, ZipArchive zip, HashSet<string> written) => new()
+        {
+            Path = d.Path, Mode = MountManager.ModeName(d.Mode), Type = d.Type, Id = d.Id,
+            Changes = [.. d.Changes.Select(c =>
+            {
+                var e = new ChangeJson { Kind = c.KindName, Path = c.Path, To = c.To, Version = c.Version };
+                if (c.Kind == MountChangeKind.Write && c.Content is { Length: > 0 } data)
+                {
+                    e.Size = data.Length;
+                    e.Blob = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+                    if (written.Add(e.Blob)) using (var s = zip.CreateEntry("blobs/" + e.Blob, CompressionLevel.Fastest).Open()) s.Write(data);
+                }
+                return e;
+            })],
+        };
+    }
+
+    sealed class ChangeJson
+    {
+        public string? Kind { get; set; }
+        public string? Path { get; set; }
+        public string? To { get; set; }
+        public string? Version { get; set; }
+        public long Size { get; set; }
+        public string? Blob { get; set; }
     }
 
     sealed class FileEntry
@@ -655,6 +747,8 @@ internal sealed class ShellState
     /// <summary>The virtual clock's time (ShellOptions.StartTime) and the seeded random generator's state, when the shell has them.</summary>
     public DateTime? Clock { get; init; }
     public ulong? Random { get; init; }
+    /// <summary>The mounts' definitions and pending changes (Mounts.cs); their files are not in the snapshot.</summary>
+    public List<SavedMount> Mounts { get; set; } = [];
 
     public bool IsExported(string name) =>
         Attributes.TryGetValue(name, out var a) && a.Contains('x') || Variables.ContainsKey(name) && !Unexported.Contains(name);

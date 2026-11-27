@@ -28,6 +28,7 @@
     { "name": "snapshot", "cs": "ShellSnapshot.cs", "py": "snapshot.py", "ts": "snapshot.ts" },
     { "name": "recording", "cs": "Recording.cs", "py": "recording.py", "ts": "recording.ts" },
     { "name": "webaccess", "cs": "WebAccess.cs", "py": "webaccess.py", "ts": "web.ts" },
+    { "name": "mounts", "cs": "Mounts.cs", "py": "mounts.py", "ts": "mounts.ts", "sections": ["sources", "changes", "mounts"] },
     { "name": "spec", "cs": "CommandSpec.cs", "py": null, "ts": null,
       "note": "the lookups over the generated table; Python and TS generate them with the table (_spec.py, spec.generated.ts)" },
     { "name": "bytetext", "cs": "ByteText.cs", "py": "bytetext.py", "ts": "bytes.ts" },
@@ -109,6 +110,7 @@
       "sections": ["patches: apply, am, format-patch", "am", "format-patch", "bisect"] },
     { "name": "commands.gitcore", "cs": "Builtins/GitCore.cs", "py": "commands/gitcore.py", "ts": "commands/gitcore.ts",
       "sections": ["identity and dates", "objects", "the index", "config", "ignore rules", "line diff", "three-way line merge", "quoting"] },
-    { "name": "commands.gitpack", "cs": "Builtins/GitPack.cs", "py": "commands/gitpack.py", "ts": "commands/gitpack.ts" }
+    { "name": "commands.gitpack", "cs": "Builtins/GitPack.cs", "py": "commands/gitpack.py", "ts": "commands/gitpack.ts" },
+    { "name": "commands.mount", "cs": "Builtins/MountCommands.cs", "py": "commands/mount.py", "ts": "commands/mount.ts", "commands": ["mount"] }
   ]
 }

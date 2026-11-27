@@ -32,6 +32,7 @@ public sealed partial class Shell
     {
         Options = options;
         Fs = forked ?? Options.FileSystem ?? new VirtualFileSystem();
+        _mounts = new MountManager(this);
         Fs.Capacity = Options.MaxFileSystemBytes;
         _virtualNow = Options.StartTime?.UtcDateTime;
         if (Options.RandomSeed is { } seed) _random = (ulong)seed;
@@ -219,6 +220,10 @@ public sealed partial class Shell
     /// <summary>The web access in force (<see cref="AllowWeb(WebPolicy)"/>), or null: no network.</summary>
     internal WebSession? Web { get; private set; }
 
+    /// <summary>Outside sources shown as directories (<see cref="MountAsync"/>).</summary>
+    readonly MountManager _mounts;
+    internal MountManager MountTable => _mounts;
+
     // an upper bound on the characters variables hold, recounted exactly whenever it passes the limit
     long _variableChars;
 
@@ -383,6 +388,32 @@ public sealed partial class Shell
 
     internal void AllowWeb(WebSession session) => Web = session;
 
+    /// <summary>
+    /// Shows <paramref name="source"/> as the directory <paramref name="path"/> (docs/mounts.md): read-only, staged (a change set
+    /// you apply) or live (changes applied after every command). The mount point must be missing or an empty directory, outside
+    /// any other mount. Lists the source before it returns, so a bad credential fails here, in your code.
+    /// </summary>
+    public Task MountAsync(string path, IMountSource source, MountMode mode = MountMode.ReadOnly) => OffContext.Run(() => _mounts.MountAsync(path, source, mode));
+
+    /// <summary>Removes a mount and its pending changes; the mount point stays as an empty directory.</summary>
+    public void Unmount(string path) => _mounts.Unmount(path);
+
+    /// <summary>Every mount: path, mode, source type and id, and why it is unavailable.</summary>
+    public IReadOnlyList<MountInfo> Mounts => [.. _mounts.Items.Select(m => m.Info())];
+
+    /// <summary>The changes that would make a staged or live mount's source match its files, in an order that applies one after another.</summary>
+    public IReadOnlyList<MountChange> PendingChanges(string path) => _mounts.Get(path).Changes();
+
+    /// <summary>Applies the pending changes, or the ones given (from <see cref="PendingChanges"/>), in order, stopping at the first
+    /// conflict or failure. Not bounded by the call time limit.</summary>
+    public Task<MountApplyResult> ApplyChangesAsync(string path, IEnumerable<MountChange>? changes = null) => OffContext.Run(() => _mounts.Get(path).ApplyAsync(changes));
+
+    /// <summary>Drops a mount's pending changes: its files are the source's again (fetched again when read).</summary>
+    public void DiscardChanges(string path) => _mounts.Discard(path);
+
+    /// <summary>Lists the source again, keeping the pending changes.</summary>
+    public Task RefreshMountAsync(string path) => OffContext.Run(() => _mounts.RefreshAsync(path));
+
     public bool Unregister(string name)
     {
         using (Fs.AsRoot())
@@ -402,7 +433,7 @@ public sealed partial class Shell
         var started = NowUtc;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await RunCallAsync(commandLine, cancellationToken);
-        recorder.Add(commandLine, result, watch.Elapsed, started, Web?.TakeLog());
+        recorder.Add(commandLine, result, watch.Elapsed, started, Web?.TakeLog(), _mounts.TakeLog());
         return result;
     }
 
@@ -425,7 +456,11 @@ public sealed partial class Shell
         try
         {
             // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
-            try { code = await ExecTopLevelAsync(Parser.Parse(commandLine), io, callToken); }
+            try
+            {
+                if (_mounts.Items.Count > 0) await _mounts.PrepareAsync();
+                code = await ExecTopLevelAsync(Parser.Parse(commandLine), io, callToken);
+            }
             finally { await RunExitTrapAsync(io, callToken); }
         }
         catch (ParseException e) { stderr.GetStringBuilder().AppendLine($"bash: {e.Message}"); code = 2; }
@@ -477,6 +512,14 @@ public sealed partial class Shell
         _variableChars = Environment.Sum(e => (long)e.Key.Length + e.Value.Length)
             + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length)) - replacing + adding;
         if (_variableChars > max) throw TooLarge("variables in total", "keep big data in files and unset variables you no longer need");
+    }
+
+    /// <summary>When the running call must end (DateTime.MaxValue between calls): what bounds a mounted source's answers.</summary>
+    internal DateTime CallDeadline => _callDeadline;
+
+    internal void CheckDeadline()
+    {
+        if (DateTime.UtcNow >= _callDeadline) throw new OperationCanceledException();
     }
 
     static string Stopped(string why) =>

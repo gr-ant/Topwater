@@ -54,6 +54,8 @@ public sealed class Recording
     /// <summary>The web access the shell had (<see cref="Shell.AllowWeb(WebPolicy)"/>), without its credentials or handler; null: none.
     /// A replay serves the recorded responses under it and never touches the network.</summary>
     public WebPolicy? Web { get; set; }
+    /// <summary>What the mounts held when recording started, as answers to the listing and reads a replay starts with.</summary>
+    public List<MountExchange> MountStart { get; set; } = [];
 
     /// <summary>True when the recording ran on a virtual clock with a random seed, so a replay on the same Topwater must match exactly.</summary>
     public bool IsDeterministic => StartTime != null && RandomSeed != null;
@@ -82,6 +84,8 @@ public sealed class Recording
             MaxRequests = w.MaxRequests, Timeout = w.Timeout, MaxRedirects = w.MaxRedirects, ExplainBlocked = w.ExplainBlocked,
             Credentials = w.Credentials.Keys.ToDictionary(h => h, _ => (Func<string>)(() => ""), StringComparer.OrdinalIgnoreCase),
         }, [.. Calls.Skip(firstCall).SelectMany(c => c.Web ?? [])]));
+        // the recorded answers, never a real source (even if configure mounted one)
+        shell.MountTable.ReplayAnswers = [.. MountStart, .. Calls.Skip(firstCall).SelectMany(c => c.Mounts ?? [])];
         shell.Restore(start ?? Start);
         return shell;
     }
@@ -159,7 +163,7 @@ public sealed class Recording
 
     async Task<Recording> RerecordCoreAsync(IReplayTarget target, CancellationToken cancellationToken)
     {
-        var copy = new Recording(Start, CreateOptions()) { Created = DateTimeOffset.UtcNow, Metadata = new(Metadata, StringComparer.Ordinal), AppCommands = [.. AppCommands], Web = Web };
+        var copy = new Recording(Start, CreateOptions()) { Created = DateTimeOffset.UtcNow, Metadata = new(Metadata, StringComparer.Ordinal), AppCommands = [.. AppCommands], Web = Web, MountStart = MountStart };
         var shell = (target as ShellTarget)?.Shell;
         var before = shell?.Snapshot();
         for (int i = 0; i < Calls.Count; i++)
@@ -217,6 +221,7 @@ public sealed class Recording
                 MaxRequestsPerCall = p.MaxRequestsPerCall, MaxRequests = p.MaxRequests, TimeoutMs = (long)p.Timeout.TotalMilliseconds,
                 MaxRedirects = p.MaxRedirects, ExplainBlocked = p.ExplainBlocked, Credentials = [.. p.Credentials.Keys.Order(StringComparer.Ordinal)],
             } : null,
+            Mounts = MountStart.Count > 0 ? new JsonArray([.. MountStart.Select(x => MountExchangeEntry(x, zip, written))]) : null,
         };
         // the response bodies' blobs first: a zip writes one entry at a time
         var lines = Calls.Select(c => JsonSerializer.Serialize(new CallEntry
@@ -225,6 +230,7 @@ public sealed class Recording
             ElapsedMs = Math.Round(c.Elapsed.TotalMilliseconds, 3), Time = c.Time is { } t ? Iso(t) : null,
             Files = c.Files is { Count: > 0 } f ? f : null,
             Web = c.Web is { Count: > 0 } web ? [.. web.Select(x => ExchangeEntry.From(x, zip, written))] : null,
+            Mounts = c.Mounts is { Count: > 0 } mounts ? new JsonArray([.. mounts.Select(x => MountExchangeEntry(x, zip, written))]) : null,
         }, Json)).ToList();
         using (var w = new StreamWriter(zip.CreateEntry("history.jsonl", CompressionLevel.Fastest).Open(), new UTF8Encoding(false)) { NewLine = "\n" })
         {
@@ -334,7 +340,7 @@ public sealed class Recording
         var budget = new SnapshotBudget(limits);
         var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files)), limits);
         long webBytes = 0;
-        ReadCalls(reader, rec, (_, _) => null, limits, (blob, size, where) =>
+        Func<string?, long, string, byte[]> readBlob = (blob, size, where) =>
         {
             // every response body together within one machine's worth of files
             if ((webBytes += size) > limits.MaxFileSystemBytes) throw Bad($"{where}: the recorded responses hold more than {limits.MaxFileSystemBytes} bytes (MaxFileSystemBytes)");
@@ -347,7 +353,9 @@ public sealed class Recording
             if (b.Length != size || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(b)).ToLowerInvariant() != blob)
                 throw Bad($"{where}: blob {blob} doesn't hold the {size} bytes it should");
             return b;
-        });
+        };
+        ReadCalls(reader, rec, (_, _) => null, limits, readBlob);
+        rec.MountStart = MountExchanges(h.Mounts, "header mounts", readBlob);
 
         // the machine of the file is the one after the last checkpoint: a reader of either must see the same
         var (lastN, lastName) = checkpoints.Last();
@@ -537,6 +545,7 @@ public sealed class Recording
                 SnapshotAfter = e.Snapshot == null ? null : snap(e.Snapshot, $"call {e.Index}"),
                 Web = e.Web?.Select((x, i) => x?.ToExchange(blob ?? ((_, _, w) => throw Bad($"{w}: web responses need a .topwater file")), $"line {lineNo} web {i}")
                     ?? throw Bad($"line {lineNo}: null in web")).ToList(),
+                Mounts = e.Mounts == null ? null : MountExchanges(e.Mounts, $"line {lineNo} mounts", blob ?? ((_, _, w) => throw Bad($"{w}: source answers need a .topwater file"))),
             });
         }
     }
@@ -565,6 +574,7 @@ public sealed class Recording
         public List<string>? AppCommands { get; set; }
         public Dictionary<string, string>? Metadata { get; set; }
         public WebEntry? Web { get; set; }
+        public JsonNode? Mounts { get; set; }
         // old JSON Lines recordings only
         public SnapshotRef? Start { get; set; }
     }
@@ -633,6 +643,77 @@ public sealed class Recording
         }
     }
 
+    static readonly string[] MountOps = ["list", "stat", "read", "write", "delete", "rename", "mkdir"];
+
+    /// <summary>One question a mount asked its source and the answer; a read's bytes are a blob.</summary>
+    static JsonObject MountExchangeEntry(MountExchange x, ZipArchive zip, HashSet<string> written)
+    {
+        var e = new JsonObject { ["mount"] = x.Mount, ["op"] = x.Op, ["path"] = x.Path };
+        if (x.To != null) e["to"] = x.To;
+        if (x.Entries != null) e["entries"] = new JsonArray([.. x.Entries.Select(MountEntryJson)]);
+        if (x.Op == "stat" && x.Error == null) e["entry"] = x.Entry == null ? null : MountEntryJson(x.Entry);
+        if (x.Body != null)
+        {
+            e["size"] = x.Body.Length;
+            if (x.Body.Length > 0)
+            {
+                var blob = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(x.Body)).ToLowerInvariant();
+                e["body"] = blob;
+                if (written.Add(blob)) using (var s = zip.CreateEntry("blobs/" + blob, CompressionLevel.Fastest).Open()) s.Write(x.Body);
+            }
+        }
+        if (x.Version != null) e["version"] = x.Version;
+        if (x.Error != null) e["error"] = x.Error;
+        if (x.Conflict) e["conflict"] = true;
+        return e;
+    }
+
+    static JsonObject MountEntryJson(MountEntry y)
+    {
+        var e = new JsonObject { ["name"] = y.Name, ["type"] = y.IsDir ? "dir" : "file", ["size"] = y.Size };
+        if (y.Modified is { } t) e["mtime"] = ShellSnapshot.FormatTime(t);
+        e["version"] = y.Version;
+        return e;
+    }
+
+    /// <summary>Recorded source exchanges, checked: canonical paths, known operations, entries of the right shape, bodies as blobs.</summary>
+    static List<MountExchange> MountExchanges(JsonNode? raw, string where, Func<string?, long, string, byte[]> blob)
+    {
+        if (raw == null) return [];
+        if (raw is not JsonArray list) throw Bad($"{where}: not a list");
+        static string? Str(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+        static long? Int(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.Number && v.TryGetValue<long>(out var l) ? l : null;
+        string PathOf(JsonNode? n, string what) =>
+            Str(n) is { Length: > 0 and <= 4096 } p && p[0] == '/' && !p.Contains('\0') && VirtualFileSystem.Normalize("/", p) == p ? p : throw Bad($"{where}: bad {what} {n?.ToJsonString() ?? "null"}");
+        string? Version(JsonNode? n, string what) =>
+            n == null ? null : Str(n) is { Length: <= MountManager.MaxVersion } v ? v : throw Bad($"{where}: bad {what}");
+        MountEntry Entry(JsonNode? y)
+        {
+            if (y is not JsonObject o || Str(o["name"]) is not { } name || Str(o["type"]) is not ("dir" or "file")
+                || (o["size"] != null && Int(o["size"]) is not >= 0) || (o["version"] != null && Str(o["version"]) == null))
+                throw Bad($"{where}: bad entry");
+            DateTime? mtime = o["mtime"] == null ? null : ShellSnapshot.ParseTime(Str(o["mtime"]), where + ": mtime");
+            return new(name, Str(o["type"]) == "dir", Int(o["size"]) ?? 0, mtime, Version(o["version"], "version") ?? "");
+        }
+        var output = new List<MountExchange>();
+        for (int i = 0; i < list.Count; i++)
+        {
+            var w = $"{where} {i}";
+            if (list[i] is not JsonObject x || Str(x["op"]) is not { } op || !MountOps.Contains(op)) throw Bad($"{w}: not a mount exchange");
+            var error = x["error"];
+            var conflict = x["conflict"];
+            if ((error != null && Str(error) == null) || (conflict != null && conflict.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))) throw Bad($"{w}: bad error");
+            if (x["entries"] is { } entries && entries is not JsonArray) throw Bad($"{w}: entries is not a list");
+            var size = x["size"];
+            if (size != null && Int(size) is not >= 0) throw Bad($"{w}: bad size");
+            output.Add(new(PathOf(x["mount"], "mount"), op, PathOf(x["path"], "path"), op == "rename" ? PathOf(x["to"], "target") : null,
+                x["entries"] is JsonArray es ? [.. es.Select(Entry)] : null, x["entry"] == null ? null : Entry(x["entry"]),
+                size == null ? null : blob(Str(x["body"]), Int(size)!.Value, w), Version(x["version"], "version"), Str(error),
+                conflict?.GetValue<bool>() ?? false));
+        }
+        return output;
+    }
+
     sealed class OptionsEntry
     {
         public string? User { get; set; }
@@ -665,6 +746,7 @@ public sealed class Recording
         public string? Time { get; set; }
         public IReadOnlyList<string>? Files { get; set; }
         public List<ExchangeEntry?>? Web { get; set; }
+        public JsonNode? Mounts { get; set; }
         // old JSON Lines recordings only
         public SnapshotRef? Snapshot { get; set; }
     }
@@ -681,6 +763,8 @@ public sealed record RecordedCall(int Index, string Command, string Stdout, stri
     public IReadOnlyList<string>? Files { get; init; }
     /// <summary>The web requests the call made and what came back, in order (null: none).</summary>
     public IReadOnlyList<WebExchange>? Web { get; init; }
+    /// <summary>What the call asked mounted sources and what they answered, in order (null: none).</summary>
+    public IReadOnlyList<MountExchange>? Mounts { get; init; }
 
     public ShellResult Result => new(Stdout, Stderr, ExitCode) { Trailer = Trailer };
 
@@ -713,13 +797,15 @@ public sealed class ShellRecorder : IDisposable
         {
             Metadata = new(options.Metadata, StringComparer.Ordinal),
             AppCommands = [.. shell.AppCommandNames()],
+            MountStart = shell.MountTable.StartExchanges(),
         };
+        shell.MountTable.TakeLog();
     }
 
     /// <summary>The recording so far; it keeps growing until <see cref="Stop"/>.</summary>
     public Recording Recording { get; }
 
-    internal void Add(string command, ShellResult result, TimeSpan elapsed, DateTimeOffset started, List<WebExchange>? web = null)
+    internal void Add(string command, ShellResult result, TimeSpan elapsed, DateTimeOffset started, List<WebExchange>? web = null, List<MountExchange>? mounts = null)
     {
         Recording.Web ??= _shell.Web?.Policy;
         int index = Recording.Calls.Count;
@@ -730,7 +816,7 @@ public sealed class ShellRecorder : IDisposable
         if (index > 0 && !_keepLast) Recording.Calls[^1] = Recording.Calls[^1] with { SnapshotAfter = null };
         _keepLast = _every > 0 && (index + 1) % _every == 0;
         var after = _keepLast ? _shell.Snapshot() : new ShellSnapshot(_shell.Snapshot, _shell.Options.User, _shell.Options.Hostname, _shell.Now);
-        Recording.Calls.Add(RecordedCall.From(index, command, result, elapsed) with { Time = started, Files = _changes.Changes(), SnapshotAfter = after, Web = web is { Count: > 0 } ? web : null });
+        Recording.Calls.Add(RecordedCall.From(index, command, result, elapsed) with { Time = started, Files = _changes.Changes(), SnapshotAfter = after, Web = web is { Count: > 0 } ? web : null, Mounts = mounts is { Count: > 0 } ? mounts : null });
     }
 
     /// <summary>Snapshots the machine now and attaches it to the last call (a mark a viewer can jump to).</summary>

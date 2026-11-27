@@ -31,7 +31,7 @@ public readonly record struct FileStat(bool IsDirectory, long Size, DateTime Mod
 /// </summary>
 public sealed class VirtualFileSystem
 {
-    abstract class Node
+    internal abstract class Node
     {
         DateTime _modified = DateTime.UtcNow;
         string _owner = "root";
@@ -46,14 +46,14 @@ public sealed class VirtualFileSystem
     }
     /// <summary>Counts changes to every filesystem's nodes, so a <see cref="ChangeTracker"/> visits only what moved since it last looked.</summary>
     static long ChangeClock;
-    sealed class Dir : Node
+    internal sealed class Dir : Node
     {
         public readonly Names Children;
         public long Listed = Interlocked.Increment(ref ChangeClock); // when a name was last added, removed or replaced
         public Dir() => Children = new(this);
     }
     /// <summary>A directory's names; adding, removing or replacing one marks the directory's list changed.</summary>
-    sealed class Names(Dir owner) : SortedDictionary<string, Node>(StringComparer.Ordinal)
+    internal sealed class Names(Dir owner) : SortedDictionary<string, Node>(StringComparer.Ordinal)
     {
         public new Node this[string name] { get => base[name]; set { base[name] = value; Mark(); } }
         public new void Add(string name, Node node) { base.Add(name, node); Mark(); }
@@ -61,9 +61,11 @@ public sealed class VirtualFileSystem
         public new bool Remove(string name) { if (!base.Remove(name)) return false; Mark(); return true; }
         void Mark() => owner.Listed = Interlocked.Increment(ref ChangeClock);
     }
-    sealed class LinkNode : Node { string _target = ""; public string Target { get => _target; set { _target = value; Touch(); } } }
-    sealed class FileNode : Node
+    internal sealed class LinkNode : Node { string _target = ""; public string Target { get => _target; set { _target = value; Touch(); } } }
+    internal sealed class FileNode : Node
     {
+        /// <summary>A mounted file not fetched yet (Mounts.cs): called with the node and the path asked before its content is read, appended to or copied; it fills the node in or throws.</summary>
+        public Action<FileNode, string>? Loader;
         string? _text = "";
         System.Text.StringBuilder? _appended; // `>>` writes accumulate here, so append loops stay linear
         byte[]? _data;
@@ -83,6 +85,7 @@ public sealed class VirtualFileSystem
         /// <param name="reserve">Called with the change in size before anything changes; throws to refuse the write.</param>
         public void Store(string? text, byte[]? bytes, bool append, Action<long> reserve)
         {
+            if (Loader != null) { Loader = null; ReportedSize = null; } // replaced (the caller loaded it first if appending)
             if (bytes == null && ByteText.HasEscapes(text)) bytes = ByteText.Encode(text!); // binary that came through a pipe
             if (bytes != null || (append && Data != null))
             {
@@ -127,7 +130,7 @@ public sealed class VirtualFileSystem
     public long Capacity { get; set; } = long.MaxValue;
 
     /// <summary>Bytes all files hold now (what `df` reports as used).</summary>
-    public long UsedBytes { get; private set; }
+    public long UsedBytes { get; internal set; }
 
     /// <summary>Counts a change in stored bytes, refusing growth past <see cref="Capacity"/> for the agent (RunAs set).</summary>
     void Reserve(long delta, string path)
@@ -253,7 +256,7 @@ public sealed class VirtualFileSystem
         return chain.Count == 1 ? new(null, "/", _root, "/", "") : new(chain[^2].Dir, chain[^1].Name, chain[^1].Dir, Real("")[..^1], "");
     }
 
-    Node? Find(string path, bool follow = true) => Walk(path, follow).Node;
+    internal Node? Find(string path, bool follow = true) => Walk(path, follow).Node;
 
     Node? Find(string path, out string why, bool follow = true)
     {
@@ -388,7 +391,7 @@ public sealed class VirtualFileSystem
     {
         switch (Find(path, out var why))
         {
-            case FileNode f: Require(f, 4, path); return f;
+            case FileNode f: Require(f, 4, path); f.Loader?.Invoke(f, path); return f;
             case Dir: throw new ShellException($"{path}: {CommandSpec.Errno.EISDIR}");
             default: throw new ShellException($"{path}: {why}");
         }
@@ -420,6 +423,7 @@ public sealed class VirtualFileSystem
         {
             if (existing is not FileNode f) throw new ShellException($"{path}: {CommandSpec.Errno.EISDIR}");
             Require(f, 2, path);
+            if (append) f.Loader?.Invoke(f, path);
             f.Store(content, data, append, d => Reserve(d, path));
             f.Modified = Clock();
         }
@@ -576,6 +580,7 @@ public sealed class VirtualFileSystem
             }
             if (n is FileNode f)
             {
+                f.Loader?.Invoke(f, path);
                 // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
                 if (RunAs != null && UsedBytes + (cloned += f.Size) > Capacity) throw new ShellException($"{dest}: {NoSpace}");
                 return new FileNode { Content = f.Content, Data = f.Data, Size = f.Size, Owner = RunAs ?? parent.Owner, Mode = preserve ? f.Mode : Masked(f.Mode) & ~0xC00, Modified = preserve ? f.Modified : Clock() };

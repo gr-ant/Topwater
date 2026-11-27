@@ -6,13 +6,14 @@ public sealed partial class Shell
 {
     /// <summary>Captures the machine (files and session) as an immutable <see cref="ShellSnapshot"/>. Cheap: file contents
     /// and arrays are shared, not copied. Call it between calls, not from inside a running command.</summary>
-    public ShellSnapshot Snapshot() => new(Fs.Clone(), CaptureState(), Options.User, Options.Hostname, Now);
+    public ShellSnapshot Snapshot() => new(_mounts.Outside(Fs.Clone()), CaptureState(), Options.User, Options.Hostname, Now);
 
     /// <summary>Puts the machine back as <paramref name="snapshot"/> captured it. This shell keeps its own registered commands
     /// (and the /usr/bin entries that list them); the snapshot is unchanged and can be restored again.</summary>
     public void Restore(ShellSnapshot snapshot)
     {
         Fs.ReplaceWith(snapshot.Fs);
+        _mounts.Restore(snapshot.State.Mounts);
         ApplyState(snapshot.State);
         SyncProgramFiles();
         Hashed.Clear(); // the restored machine's programs may be elsewhere
@@ -25,11 +26,14 @@ public sealed partial class Shell
     /// </summary>
     public Shell Fork()
     {
-        var fork = new Shell(Options, Fs.Clone());
+        var fork = new Shell(Options, _mounts.Outside(Fs.Clone()));
         foreach (var (name, command) in _commands)
             if (command.Handler.Target is not HostCommand) fork._commands[name] = command;
         fork._builtinNames = _builtinNames == null ? null : new(_builtinNames);
-        fork.ApplyState(CaptureState());
+        var state = CaptureState();
+        fork._mounts.Sources = new(_mounts.Sources); // the fork's mounts use the same sources
+        fork._mounts.Restore(state.Mounts);
+        fork.ApplyState(state);
         fork.SyncProgramFiles();
         return fork;
     }
@@ -76,7 +80,7 @@ public sealed partial class Shell
             SetOptions = [.. OptionList.Where(o => o.On && SnapshotSetOptions.Contains(o.Name)).Select(o => o.Name)], IfsUnset = _ifsUnset, Shopts = [.. Shopts],
             Positional = [.. Positional], DirStack = [.. DirStack], History = [.. _history], LastExitCode = LastExitCode,
             SecondsBase = _secondsBase, LastArg = _lastArg, PipeStatus = [.. _pipeStatus], Getopts = GetoptsState, Jobs = new(_jobs),
-            LastBackgroundPid = _lastBg, NextPid = _nextPid, Clock = _virtualNow, Random = _random,
+            LastBackgroundPid = _lastBg, NextPid = _nextPid, Clock = _virtualNow, Random = _random, Mounts = _mounts.Capture(),
         };
     }
 
@@ -114,6 +118,6 @@ public sealed partial class Shell
         if (_virtualNow != null && s.Clock is { } clock) _virtualNow = clock;
         if (_random != null && s.Random is { } random) _random = random;
         _variableChars = Environment.Sum(e => (long)e.Key.Length + e.Value.Length) + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length));
-        _cwd = Fs.IsDirectory(s.Cwd) ? s.Cwd : "/";
+        _cwd = Fs.IsDirectory(s.Cwd) || _mounts.Find(s.Cwd) != null ? s.Cwd : "/"; // a mount is listed at the next call
     }
 }
