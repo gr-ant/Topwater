@@ -3,6 +3,7 @@
 Topwater gives an agent one `bash` tool on a simulated Linux machine, with the host's functions as programs inside it.
 This benchmark tests that against the two obvious alternatives, on the same tasks, models and data. This file is the
 method. It was committed before any paid run. Results are in [RESULTS.md](RESULTS.md).
+Round 2, an amendment with new tasks and arms, is at the end: [Round 2](#round-2-amendment-of-2026-11-26).
 
 ## Hypotheses
 
@@ -149,3 +150,143 @@ python3 benchmarks/run.py analyze
 Python 3.10+, standard library only, Topwater from this repository's `python/src`. The key is read from
 `$OPENROUTER_API_KEY` or `~/.config/topwater/openrouter.env` and is never written anywhere. Finished episodes are skipped
 on a rerun, so nothing is paid for twice. Episodes that failed for API or harness reasons are retried.
+
+## Round 2: amendment of 2026-11-26
+
+Written and committed after round 1's results and the project board's review of them (decision 039), and pushed
+**before any round-2 request is paid for**. Everything above stays as it was for round 1. Round 1 found the bash arms at the
+ceiling (A and C solved everything) and arm B failing where it had no way to run code. Round 2 asks three new
+questions: does Topwater keep up with real bash on harder shell work, what happens on documents too large to read
+in one go, and does arm B close the gap once it has a code tool.
+
+### New tasks (17)
+
+All in [bench/tasks2.py](bench/tasks2.py). Fixtures come from [fixtures/generate2.py](fixtures/generate2.py), a seeded
+generator that builds them in memory at run time, so the large ones never enter the repository
+(`python3 benchmarks/fixtures/generate2.py DIR` writes them out to look at). Each task brings its own files, loaded
+after round 1's fixtures, and the git tasks a setup script that builds the repository in the episode's machine.
+Every task has a reference bash solution, and expected values are computed from the generated data.
+
+**Large documents (`bigdoc`, 5), for H4 and H1:**
+
+| task | fixture | what it takes |
+|---|---|---|
+| `x_contract_clause` | 54,000-word contract (.docx, about 110 pages), 86 KB | the daily liquidated-damages amount and its clause, buried in article 31 of 40, with near-miss clauses (a superseded draft figure, a service credit) |
+| `x_orders_xlsx` | 40,000-row workbook, 1.5 MB (2.8 MB as Markdown) | revenue per category to a CSV, leaving out five data-entry outliers and naming them |
+| `x_deck_slide` | 160-slide deck (.pptx), 104 KB | the slide with the board-approved churn target, past a superseded draft target |
+| `x_access_log` | 240,000-line access log, 15.8 MB | requests and 5xx errors per hour to a CSV, the worst hour by error rate, the client with the most 5xx |
+| `x_supplier_search` | 48 supplier agreements (.docx), 153 KB | which one has a data processing addendum (another says it needs none) and its notice period |
+
+**Harder shell work (`hard`, 12), for H2.** Each needs several steps, most of them 10 or more tool calls for a model:
+
+| task | what it takes | reference on Topwater |
+|---|---|---|
+| `h_merge_conflict` | merge a branch, resolve conflicts in a bash function and a changelog so both sides' intent survives, commit | passes |
+| `h_patch_drift` | apply a `git format-patch` file whose context no longer matches, keeping author and message | **fails**: no `git am` (a manual edit and `git commit --author` works) |
+| `h_pickaxe` | find the commits that added and removed a setting | **fails**: no `git log -S`, no `rev-list --reverse` (a loop over `git show` works) |
+| `h_colstat_script` | write a bash tool with `getopts`, exit codes and a `trap`; the checker runs it on hidden input | passes |
+| `h_join_payroll` | join three headerless TSV files, aggregate, sort | **fails**: no `join` (awk works) |
+| `h_notice_dates` | contract renewal and notice dates with `date -d` month and day arithmetic | passes |
+| `h_photo_sort` | `find`/`mv` JPEGs (any case, spaces in names) into dated folders, remove empty directories | passes |
+| `h_site_domain` | `sed -i` across a tree with exclusions, a lookalike host to leave alone, a line-scoped edit | passes |
+| `h_sort_keys` | four-key sort, one key numeric descending, one a `m:ss.s` time | passes |
+| `h_ledger_jq` | balances from unordered events with `jq` `reduce`, then a replay in time order | passes |
+| `h_release_tar` | tar with a renamed top directory, exclusions and exact modes | passes |
+| `h_bisect` | first commit where a test script fails | **fails**: no `git bisect`, no `rev-list --reverse` (a checkout loop works) |
+
+The four "fails" are kept on purpose: real models will reach for those commands, and a loss there is a backlog item
+for Topwater, not a defect in the task. For each, the self-test also runs a second solution that avoids the missing
+feature and passes on Topwater, so every task is solvable in arm A. The self-test fails if one of those references
+starts passing on Topwater, so this table can't go stale. `patch` is missing in both Topwater and the Ubuntu images
+(stock `ubuntu:24.04` doesn't have it).
+
+### Arms in round 2
+
+| Arm | New? | The agent gets | Runs on |
+|---|---|---|---|
+| **A: Topwater** | | as in round 1. **It has no `python3`** | bigdoc, hard |
+| **B: function tools, no code** | | as in round 1; `read_document` takes `offset`/`limit` (lines of Markdown) in round-2 episodes, like `read_file`, since these documents don't fit in one reply | bigdoc |
+| **Bc: function tools + Python** | yes | arm B's tools plus `run_python` (Python 3, standard library). Files, documents, git and Python all act on one sandbox, a container like Cp's; the shop functions stay JSON tools and aren't reachable from Python, as in a hosted code interpreter. Python can start subprocesses, as most hosted interpreters allow | bigdoc; and round 1's files, multi and long-tail tasks if money is left (step 3) |
+| **Cp: real bash + Python** | yes | arm C on image `twbench-ubuntu:2`, which adds `python3`; its tool description says Python is available | bigdoc, hard |
+
+Arm C (no Python) isn't run on round-2 tasks; round 1 already measured it. That means the H2 comparison in round 2
+is **Topwater against a container as hosts usually run one, with Python**. Topwater has no Python, and a model that
+reaches for it in arm A gets `command not found`. That's a real difference between the two, so it counts against
+arm A in the results instead of being designed away. The tables count how often it happened.
+
+**Settings that change in round 2, and only for round-2 episodes:** the output limit per model call is **32,000
+tokens** (round 1: 12,000; four arm-B replies were cut at 12,000). Round-1 tasks, including step 1 below, keep
+12,000, so repeat 1 stays one design. Two settings apply to every episode from now on: a **cost fuse** stops an
+episode once it has used 400,000 prompt + completion tokens (`stop: token_limit`, scored as a failure; round 1's
+largest episode used 373,000, so no round-1 verdict would have changed), and the runner keeps a $1.00 reserve
+instead of $0.30 before each request. `finish_reason` is recorded for every call, and a reply cut by the output
+limit is its own stop (`length`).
+
+### Hypotheses for round 2
+
+The decision rules are round 1's: paired by (model, task, repeat), a 95% interval from a bootstrap over tasks, a
+5-point non-inferiority margin, "inconclusive" if the interval straddles the margin.
+
+- **H1, restated.** On the bigdoc tasks, A succeeds at least as often as B (lower end of A − B above −5 points) and
+  as often as Bc (the same rule for A − Bc), with mean tokens per episode at most 110% of each. A − Bc is the
+  comparison the board asked for: one bash tool against functions plus a code tool. If step 3 runs, A − Bc is also
+  reported on round 1's files, multi and long-tail tasks, as a secondary result.
+- **H2, on harder tasks.** On the hard tasks, the lower end of the A − Cp interval is above −5 points. Also reported:
+  A − Cp without the four tasks where Topwater lacks the command the reference uses. We expect A to lose some pairs.
+- **H4 (new).** On the bigdoc tasks, the shell arms (A and Cp) use fewer tokens than B (median and mean tokens per
+  episode lower in both) and succeed more often (lower end of A − B above 0). Bc is reported next to them, with no
+  hypothesis: it could match the shell arms.
+
+**Power, stated now.** Bigdoc is 5 tasks × 3 models = 15 pairs per comparison. Hard is 12 tasks × 3 models = 36
+pairs per repeat. A bootstrap over 5 tasks is coarse; H1 and H4 on bigdoc will be inconclusive unless the difference
+is large. H2 rests on the hard tasks.
+
+### Analysis plan for round 2
+
+Round 2's episodes go to `results/round2/` and are analysed apart from round 1 (`run.py analyze --out
+benchmarks/results/round2`): success per arm and model with Wilson intervals, the paired comparisons A − B, A − Bc,
+Bc − B, A − Cp and Cp − Bc, per category; tokens per episode by category (mean and median) for H4; failures by kind,
+including `length` and `token_limit` stops; `python3` and other unsupported commands hit in arm A; turns and tool
+calls, to check the "10 or more turns" intent. Arm-A failures on hard tasks are read one by one and sorted into
+missing feature, behaviour that differs from real bash, and the model's own error. RESULTS.md gets a round-2 section
+that reports what was measured, including where Topwater loses.
+
+### Spend plan
+
+Grant approved $25 in total. $8.00 is spent (round 1). After the key limit was raised, **round 2 may spend at most
+$14.00**, so every command below runs with `--budget 22`: the ledger already holds the $8.00, so no new request starts
+once the total passes $21.00 (the $1.00 reserve). Requests already in flight (at most 4, round 1's largest was $0.21)
+finish, so the total stays under $22.00. The key's own remaining limit ($14.95) is a second stop.
+
+There is no paid pilot for round 2. Estimates per episode, from round 1's measured costs ($0.0135 mean in the bash
+arms, $0.040 in arm B, $0.26 at worst):
+
+| step | what | episodes | per episode (estimate) | cost |
+|---|---|---|---|---|
+| 1 | finish round 1, repeat 1: the 11 tasks never run plus `m_top_skus`'s 4 missing cells, arms A, B, C | 103 | $0.024 (board's measure) | $2.50 |
+| 2 | round 2, repeat 1: bigdoc × A, Cp, Bc, B and hard × A, Cp, 3 models | 132 | A/Cp bigdoc $0.045, Bc $0.06, B $0.35 (most hit the fuse), hard $0.05 | $11.10 |
+| 3 | only if money is left: Bc on round 1's 15 files, multi and long-tail tasks | 45 | $0.02 | $0.90 |
+| 4 | only if money is left: round 2, repeat 2, arms A and Cp | 102 | $0.05 | $5.10 |
+
+Steps 1 and 2 project to $13.60, or $15.64 with round 1's 15% safety factor, which is over $14.00. So step 2 is
+expected to be cut by the budget stop. The cut is even by construction: each repeat takes its tasks in a seeded random
+order with all of a task's model × arm cells together, so the stop drops whole tasks, spread across both categories,
+and never one arm without the others. Steps 3 and 4 run only if the estimates turn out high. What was cut is reported.
+
+### Running round 2
+
+Only after this section is pushed.
+
+```sh
+docker build -t twbench-ubuntu:2 --build-arg EXTRA=python3 benchmarks/docker   # arms Cp and Bc
+python3 benchmarks/run.py selftest                                              # no model calls
+python3 benchmarks/run.py run --tasks round1 --arms A,B,C --reps 1 --budget 22                                    # step 1
+python3 benchmarks/run.py run --tasks round2 --arms A,B,Bc,Cp --reps 1 --budget 22 --out benchmarks/results/round2 # step 2
+python3 benchmarks/run.py run --tasks round1 --arms Bc --reps 1 --budget 22                                       # step 3
+python3 benchmarks/run.py run --tasks round2 --arms A,Cp --reps 2 --budget 22 --out benchmarks/results/round2     # step 4
+python3 benchmarks/run.py analyze && python3 benchmarks/run.py analyze --out benchmarks/results/round2
+```
+
+Each task runs only in the arms it lists (round 1's tasks in A, B and C, plus Bc for files, multi and long-tail), so
+step 3 runs Bc on just those 15 tasks. Every command is resumable and skips finished episodes. All steps share one
+spend ledger, so `--budget 22` caps the total, wherever it stops.
