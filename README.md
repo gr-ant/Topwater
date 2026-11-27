@@ -160,6 +160,26 @@ curl -fsSL https://gr-ant.github.io/Topwater/install.sh | sh          # Linux, m
 irm https://gr-ant.github.io/Topwater/install.ps1 | iex               # Windows
 ```
 
+From `0.1.0-preview.5` on, also as a container image for Linux (amd64 and arm64), with nothing to install but Docker:
+
+```bash
+docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "topwater": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "topwater:/data", "ghcr.io/gr-ant/topwater:preview", "mcp", "--state", "machine.topwater"]
+    }
+  }
+}
+```
+
+That is Claude Desktop's `claude_desktop_config.json`; the named volume `topwater` keeps the machine between
+restarts. VS Code and the other clients are in [Docker](docs/cli.md#docker).
+
 See [Command line and MCP server](docs/cli.md) for the commands, the options and a Claude Desktop config.
 
 ## Connect it to a model

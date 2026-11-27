@@ -171,6 +171,71 @@ jobs:
           tag=latest; case "$GITHUB_REF_NAME" in *-*) tag=next ;; esac
           npm publish ./topwater-*.tgz --ignore-scripts --provenance --access public --tag "$tag"
 
+  # The container image ghcr.io/gr-ant/topwater for linux/amd64 and linux/arm64, made from the binaries job's Linux
+  # binaries: docker/Dockerfile only copies them in, so there is no emulation and no repository code runs here.
+  # Tags: the version, preview (the newest release of any kind) and, for a tag without a "-" suffix, latest.
+  # Not gated by a variable: GHCR needs no account, publisher or secret, only this job's GITHUB_TOKEN, and an image
+  # can be deleted or re-tagged later. After the first push, set the package's visibility to public once.
+  docker:
+    needs: [publish, binaries]   # after every port's tests passed and NuGet has the version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # push to ghcr.io/gr-ant/topwater
+      id-token: write       # sign the build provenance attestation (Sigstore)
+      attestations: write   # store it with the repository
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: topwater-linux-*
+          path: dl
+          merge-multiple: true
+      - name: Build context and tags
+        id: meta
+        run: |
+          for a in x64:amd64 arm64:arm64; do
+            mkdir -p "ctx/linux-${a#*:}"
+            tar -xzf "dl/topwater-linux-${a%:*}.tar.gz" -C "ctx/linux-${a#*:}"
+          done
+          v="${GITHUB_REF_NAME#v}"; img=ghcr.io/gr-ant/topwater
+          tags="$img:$v,$img:preview"; case "$v" in *-*) ;; *) tags="$tags,$img:latest" ;; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ctx
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.source=https://github.com/gr-ant/Topwater
+            index:org.opencontainers.image.description=A simulated bash shell for AI agents: an interactive shell, one-shot runs and an MCP server with a sandboxed bash tool
+            index:org.opencontainers.image.licenses=MIT
+          provenance: mode=max
+          sbom: true
+      - name: Signed provenance (gh attestation verify oci://ghcr.io/gr-ant/topwater:<version> -R gr-ant/Topwater)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/gr-ant/topwater
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false   # storage records are for organization accounts
+
   github-release:
     needs: [publish, binaries]
     runs-on: ubuntu-latest

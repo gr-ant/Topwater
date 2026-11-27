@@ -3,6 +3,14 @@
 Topwater is in preview: APIs and file formats may change between previews. The packages are on NuGet, PyPI and npm
 (from 0.1.0-preview.4 for PyPI and npm).
 
+## Unreleased
+
+- **Container image.** From 0.1.0-preview.5 each release pushes `ghcr.io/gr-ant/topwater` for linux/amd64 and
+  linux/arm64 (tags: the version, `preview`, and `latest` for releases without a preview suffix):
+  `docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp`. It is the standalone Linux binary on Ubuntu's chiseled .NET
+  base, runs as a non-root user in `/data`, and carries an SBOM and a signed build provenance attestation. CI builds
+  it and smoke-tests a run, an MCP session and `--state` on every push. See [Docker](docs/cli.md#docker).
+
 ## 0.1.0-preview.4 (2026-11-26)
 
 First release on PyPI (`pip install --pre topwater`) and npm (`npm install topwater@next`).

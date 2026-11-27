@@ -7,6 +7,7 @@ client (Claude Desktop, Claude Code, Cursor, VS Code) a sandboxed `bash` tool wi
 - [Commands](#commands)
 - [Options](#options)
 - [MCP server](#mcp-server)
+- [Docker](#docker)
 - [What touches your computer](#what-touches-your-computer)
 
 ## Install
@@ -97,6 +98,66 @@ Use the full path to the binary (`~/.dotnet/tools/topwater` for the .NET tool, `
 install script, `%USERPROFILE%\.dotnet\tools\topwater.exe` on Windows): desktop apps often do not see your shell's
 `PATH`. Leave out `--state` for a fresh machine every time the app starts. Cursor, VS Code and other clients take the
 same `command` and `args`.
+
+## Docker
+
+From `0.1.0-preview.5` on, each release is also a container image, `ghcr.io/gr-ant/topwater`, for linux/amd64 and
+linux/arm64. Tags: the version (`0.1.0-preview.5`), `preview` for the newest release, and `latest` for the newest
+release without a preview suffix (there is none yet, so use `preview`).
+
+```bash
+docker run -it --rm ghcr.io/gr-ant/topwater:preview                          # an interactive shell
+docker run --rm ghcr.io/gr-ant/topwater:preview run "ls -la /etc | head"
+docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp                       # the MCP server over stdio
+```
+
+The entrypoint is `topwater`, so the arguments are the [commands](#commands) and [options](#options) above; with none
+it opens a shell. `-i` keeps stdin open, which the MCP server and piped scripts need, and `-t` gives the shell a
+terminal.
+
+The image runs as a non-root user (`app`, uid 1654) in `/data`, which that user owns, so relative paths such as
+`--state machine.topwater` land there. Keep the machine across runs in a named volume:
+
+```bash
+docker run -i --rm -v topwater:/data ghcr.io/gr-ant/topwater:preview mcp --state machine.topwater
+```
+
+For a host folder instead, on Linux add `--user "$(id -u):$(id -g)"` so the container can write it and the files are
+yours: `docker run -i --rm --user "$(id -u):$(id -g)" -v ~/.topwater:/data ...`. `--import` and `--export` take paths
+inside the container, so mount the host folder first: `-v "$PWD:/work" ... run --import /work/src:/home/agent/src`.
+
+MCP clients start the container as the server. Claude Desktop (Cursor takes the same `command` and `args`):
+
+```json
+{
+  "mcpServers": {
+    "topwater": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "topwater:/data", "ghcr.io/gr-ant/topwater:preview", "mcp", "--state", "machine.topwater"]
+    }
+  }
+}
+```
+
+VS Code (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "topwater": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "topwater:/data", "ghcr.io/gr-ant/topwater:preview", "mcp", "--state", "machine.topwater"]
+    }
+  }
+}
+```
+
+Leave out `-v` and `--state` for a fresh machine every time. The image is the release's standalone Linux binary on
+Ubuntu's chiseled .NET base (no shell, no package manager; about 50 MB), and the container sees no host files except
+the ones you mount. Each image has a signed build provenance attestation:
+`gh attestation verify oci://ghcr.io/gr-ant/topwater:0.1.0-preview.5 -R gr-ant/Topwater`. To build it yourself, see
+[`docker/Dockerfile`](../docker/Dockerfile).
 
 ## What touches your computer
 
