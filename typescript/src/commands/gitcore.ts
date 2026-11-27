@@ -33,7 +33,7 @@ export function objectId(kind: string, data: Uint8Array): string {
   return sha1(all);
 }
 
-// ---------- strings as Python sees them: code points, and byte order for paths ----------
+// strings as Python sees them: code points, and byte order for paths
 
 export const cpLen = (s: string) => { let n = 0; for (const _ of s) n++; return n; };
 export const cpSlice = (s: string, a: number, b?: number) => [...s].slice(a, b).join('');
@@ -548,7 +548,8 @@ export class IgnoreRules {
   }
 }
 
-// ---------- line diff (lines are surrogate-escaped text, each with its newline) ----------
+// ---------- line diff ----------
+// lines are surrogate-escaped text, each with its newline
 
 export function splitLines(data: Uint8Array | string): string[] {
   const lines = (typeof data === 'string' ? data : decodeBytes(data)).split('\n');
