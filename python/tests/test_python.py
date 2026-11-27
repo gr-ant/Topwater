@@ -61,6 +61,60 @@ def test_files_are_the_machines_files():
     assert sh.run("ls -l out.txt | cut -d' ' -f1,3").stdout == "-rw-r--r-- agent\n"
 
 
+def test_open_files_are_one_file():
+    # what the program wrote and flushed is the file's, by any name, before it is closed (as one inode's contents are)
+    sh = shell()
+    prog = """
+import os, shutil, tempfile
+f = open('a', 'w'); f.write('hello'); f.flush()
+print(repr(open('a').read()), os.stat('a').st_size, os.path.getsize('a'))
+shutil.copy('a', 'b'); print(repr(open('b').read()))
+t = open('t.tmp', 'w'); t.write('new'); t.flush(); os.replace('t.tmp', 'c'); t.write('er'); t.close()
+print(repr(open('c').read()), os.path.exists('t.tmp'))
+g = open('d', 'w'); g.write('AAAA'); g.flush(); h = open('d', 'a'); h.write('bb'); h.close(); g.close()
+print(repr(open('d').read()))
+with tempfile.TemporaryFile(dir='.') as tf:
+    tf.write(b'x' * 10); tf.flush()
+u = open('u', 'w'); u.write('gone'); os.unlink('u'); u.write('!'); u.close()
+os.mkdir('dir'); v = open('dir/v', 'w'); v.write('moved'); os.rename('dir', 'dir2'); v.close()
+print(repr(open('dir2/v').read()), os.path.exists('dir'))
+"""
+    sh.run("mkdir -p /tmp/o && cd /tmp/o")
+    r = sh.run(f"python3 -c {sh_quote(prog)}; ls")
+    assert r.stdout == ("'hello' 5 5\n'hello'\n'newer' False\n'AAAAbb'\n'moved' False\n"
+                        "a\nb\nc\nd\ndir2\n"), r.stderr
+
+
+def test_output_keeps_its_order():
+    prog = "import sys\nfor i in (1, 2):\n    print('e%d' % i, file=sys.stderr, flush=True)\n    print('o%d' % i, flush=True)"
+    assert run(f"python3 -c {sh_quote(prog)} 2>&1").stdout == "e1\no1\ne2\no2\n"
+    assert run(f"x=$(python3 -c {sh_quote(prog)} 2>&1); echo \"$x\"").stdout == "e1\no1\ne2\no2\n"
+
+
+def test_renames_and_links_answer_as_linux():
+    prog = """
+import errno, os
+def t(f, *a):
+    try:
+        f(*a); print('ok')
+    except OSError as e:
+        print(type(e).__name__, errno.errorcode[e.errno])
+open('f1', 'w').write('1')
+t(os.rename, 'f1', 'f1'); print(open('f1').read())
+os.makedirs('full/e')
+t(os.rename, 'full', 'full/e'); print(os.path.isdir('full/e'))
+t(os.rename, 'full', 'full/e/x')
+t(os.link, 'full', 'l')
+"""
+    r = run(f"cd /tmp && python3 -c {sh_quote(prog)}")
+    assert r.stdout == "ok\n1\nOSError EINVAL\nTrue\nOSError EINVAL\nPermissionError EPERM\n" and r.stderr == ""
+
+
+def test_abort():
+    r = run("python3 -c 'import os; os.abort()'")
+    assert r.exit_code == 134 and r.stderr == "python3: fatal error: the program called abort()\n"
+
+
 def test_scripts_modules_shebang_and_substitution():
     sh = shell()
     sh.run("mkdir -p /tmp/w && cd /tmp/w")
@@ -118,11 +172,35 @@ def test_unavailable_add_on_fails_in_host_code(tmp_path):
 
 
 def test_compile_cache_dir(tmp_path):
-    wasi.runtime(ARTIFACTS, tmp_path)
-    assert len(list(tmp_path.glob("*.cwasm"))) == 1
-    wasi._RUNTIMES.pop((str(Path(ARTIFACTS).resolve()), str(tmp_path)))
-    sh = Shell().allow_python(PythonOptions(artifacts=ARTIFACTS, cache_dir=str(tmp_path)))  # deserialized, not compiled
+    import os
+    cache = tmp_path / "cache"
+    wasi.runtime(ARTIFACTS, cache)
+    [cwasm] = cache.glob("*.cwasm")
+    assert [p.name for p in cache.iterdir()] == [cwasm.name]  # no temporary file left
+    if hasattr(os, "getuid"):
+        assert cache.stat().st_mode & 0o777 == 0o700 and cwasm.stat().st_mode & 0o777 == 0o600
+    key = (str(Path(ARTIFACTS).resolve()), str(cache))
+
+    def reload():
+        wasi._RUNTIMES.pop(key)
+        return wasi.runtime(ARTIFACTS, cache)
+
+    sh = Shell().allow_python(PythonOptions(artifacts=ARTIFACTS, cache_dir=str(cache)))  # deserialized, not compiled
     assert sh.run("python3 -c 'print(3)'").stdout == "3\n"
+    # a file that is not the one this module and wasmtime wrote is never loaded: it is compiled again and replaced
+    good = cwasm.read_bytes()
+    cwasm.write_bytes(good[:32] + b"\0" + good[33:])
+    assert reload().module is not None and cwasm.read_bytes() == good
+    if hasattr(os, "getuid"):  # nor one others may write
+        cwasm.chmod(0o666)
+        calls = []
+        original = wasi._load_cached
+        try:
+            wasi._load_cached = lambda *a: calls.append(original(*a)) or calls[-1]
+            reload()
+        finally:
+            wasi._load_cached = original
+        assert calls == [None]
 
 
 # ---------- mounts ----------
@@ -147,6 +225,20 @@ def test_staged_mount_writes_become_changes():
     changes = {(c.kind, c.path, c.content) for c in sh.pending_changes("/mnt/st")}
     assert changes == {("write", "/a.txt", b"old\nmore\n"), ("write", "/b.txt", b"b\n")}
     assert all(op != "write" for op, _ in src.calls)  # nothing reached the source
+
+
+def test_a_slow_mount_source_ends_at_the_time_limit():
+    import asyncio
+    sh = shell()
+    src = MemorySource({"a.txt": "source\n"})
+    sh.mount("/mnt/m", src)
+
+    async def hook(op, path):
+        if op == "read":
+            await asyncio.sleep(3)
+    src.hook = hook
+    r = sh.run("timeout 1 python3 -c 'print(open(\"/mnt/\" + \"m/a.txt\").read())'; echo $?")
+    assert r.stdout.endswith("124\n")
 
 
 # ---------- the web ----------
@@ -206,6 +298,46 @@ def test_busy_loop_and_sleep_end_at_the_time_limit():
     assert r.exit_code == 124 and r.trailer is not None
 
 
+def test_time_limits_hold_however_calls_follow_each_other():
+    # one ticker however close the calls are: three timeouts in a row all reach their limit
+    r = run("for i in 1 2 3; do timeout 1 python3 -c 'while True: pass'; echo $?; done")
+    assert r.stdout == "124\n124\n124\n"
+    # many quick calls first do not make a later program's limit come early
+    r = run("for i in $(seq 40); do python3 -c pass; done; "
+            "timeout 5 python3 -c 'import time\nt = time.monotonic()\nwhile time.monotonic() - t < 2: pass'; echo $?")
+    assert r.stdout == "0\n"
+
+
+def test_a_cancelled_call_stops_its_guest():
+    import asyncio
+    import threading
+    import time
+
+    sh = shell()
+    writer = "import time\nfor i in range(1000):\n    open(f'/tmp/w{i}', 'w').write('x')\n    time.sleep(0.01)"
+
+    async def cancel(script):
+        task = asyncio.ensure_future(sh.run_async(script))
+        await asyncio.sleep(1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(cancel(f"python3 -c {sh_quote(writer)}"))
+    files = set(sh.fs.listdir("/tmp"))
+    time.sleep(0.5)
+    assert files and set(sh.fs.listdir("/tmp")) == files  # nothing was written after the cancel
+    asyncio.run(cancel("python3 -c 'while True: pass'"))
+    time.sleep(0.5)
+    assert not [t for t in threading.enumerate() if t.name == "topwater-python3"]
+
+
+def sh_quote(s: str) -> str:
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def test_memory_is_capped():
     sh = Shell().allow_python(PythonOptions(artifacts=ARTIFACTS, max_memory=96 << 20))
     r = sh.run("python3 -c 'x = bytearray(200 << 20)'")
@@ -248,7 +380,7 @@ def test_a_write_that_repeats_one_buffer_is_refused_before_it_is_copied():
 
     g = wasi.Guest(Shell().fs, [], [], b"", 1 << 20, 256 << 20, b"", float("inf"))
     g.memory = Memory()
-    g.fds.append(wasi._File("/tmp/f", bytearray(), False, True, False, 0, 0))
+    g.fds.append(wasi._File(wasi._Node("/tmp/f", bytearray(), 0, 0), False, True, False))
     wasi._local.guest = g
     try:
         with pytest.raises(wasi.OutputFull):

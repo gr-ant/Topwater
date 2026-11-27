@@ -9,8 +9,11 @@ See docs/python.md and .team/design/python3-wasm.md (the contract the C# and Typ
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
+import stat
 import struct
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -70,34 +73,32 @@ class Runtime:
         config.max_wasm_stack = MAX_WASM_STACK
         self.engine = wasmtime.Engine(config)
         digest = ARTIFACT_SHA256["python.wasm.xz"][:16]
-        cached = Path(cache_dir) / f"python-{digest}-wasmtime-{_version(wasmtime)}.cwasm" if cache_dir is not None else None
-        self.module = None
-        if cached is not None and cached.is_file():
-            try:  # the host's own cache directory: as trusted as the host's code
-                self.module = wasmtime.Module.deserialize_file(self.engine, str(cached))
-            except Exception:
-                self.module = None
+        version = _version(wasmtime)
+        cached = Path(cache_dir) / f"python-{digest}-wasmtime-{version}.cwasm" if cache_dir is not None else None
+        # the cache holds machine code: tied to this module and wasmtime, and refused unless only this user can write it
+        key = f"{ARTIFACT_SHA256['python.wasm.xz']} {version}".encode()
+        self.module = _load_cached(wasmtime, self.engine, cached, key) if cached is not None else None
         if self.module is None:
             self.module = wasmtime.Module(self.engine, lzma.decompress(wasm_xz))
             if cached is not None:
-                cached.parent.mkdir(parents=True, exist_ok=True)
-                tmp = cached.with_suffix(f".{os.getpid()}.tmp")
-                tmp.write_bytes(self.module.serialize())
-                os.replace(tmp, cached)
+                _store_cached(cached, key, self.module.serialize())
         self.linker = wasmtime.Linker(self.engine)
         _define(self.linker, wasmtime)
         self._calls = 0
+        self._ticking = False
         self._lock = threading.Lock()
 
     def ticking(self):
-        """Keeps the epoch ticking while a call runs (a store's deadline is counted in ticks); stops when none does."""
+        """Keeps the epoch ticking while a call runs; stops when none does. One ticker at most, however calls start and end:
+        each tick only makes the running guests look at the clock (_on_epoch), so a second ticker would do no harm but waste."""
         runtime = self
 
         class _Ticking:
             def __enter__(self):
                 with runtime._lock:
                     runtime._calls += 1
-                    if runtime._calls == 1:
+                    if not runtime._ticking:
+                        runtime._ticking = True
                         threading.Thread(target=runtime._tick, name="topwater-python-epoch", daemon=True).start()
 
             def __exit__(self, *exc):
@@ -111,6 +112,7 @@ class Runtime:
             time.sleep(EPOCH_TICK)
             with self._lock:
                 if self._calls == 0:
+                    self._ticking = False
                     return
             self.engine.increment_epoch()
 
@@ -146,6 +148,59 @@ def _version(wasmtime) -> str:
         return version("wasmtime")
     except Exception:
         return getattr(wasmtime, "__version__", "unknown")
+
+
+def _owned_by_me(st) -> bool:
+    """POSIX: owned by this user and writable by nobody else. Elsewhere the folder's own permissions decide."""
+    return not hasattr(os, "getuid") or (st.st_uid == os.getuid() and not st.st_mode & 0o022)
+
+
+def _load_cached(wasmtime, engine, path: Path, key: bytes):
+    """The compiled module in the host's cache, or None when it is missing, stale, foreign or tampered with: its first 32
+    bytes are an HMAC of the rest keyed to the pinned module and the wasmtime version. A same-user attacker could forge
+    one, but such a user can change the host's code too."""
+    try:
+        if not _owned_by_me(os.stat(path.parent)):
+            return None
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or not _owned_by_me(st):
+                return None
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                blob = f.read()
+        finally:
+            os.close(fd)
+        mac, body = blob[:32], blob[32:]
+        if len(mac) != 32 or not hmac.compare_digest(mac, hmac.new(key, body, hashlib.sha256).digest()):
+            return None
+        return wasmtime.Module.deserialize(engine, body)
+    except Exception:  # missing, unreadable or not loadable: compile instead
+        return None
+
+
+def _store_cached(path: Path, key: bytes, body: bytes) -> None:
+    """Writes the compiled module for later processes: the folder only this user may enter, the file only this user may
+    read, through an unpredictable temporary name. A cache that can't be written is skipped."""
+    tmp = None
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not _owned_by_me(os.stat(path.parent)):
+            return
+        fd, tmp = tempfile.mkstemp(prefix=".python-", suffix=".tmp", dir=path.parent)
+        with os.fdopen(fd, "wb") as f:
+            f.write(hmac.new(key, body, hashlib.sha256).digest())
+            f.write(body)
+        os.replace(tmp, path)
+        tmp = None
+    except OSError:
+        pass
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 # ---------- guest state ----------
@@ -199,37 +254,53 @@ class OutputFull(Exception):
 
 def _fs(fn, *args, **kwargs):
     """A filesystem call for the guest: its result, or WasiError with the errno. A mounted file or folder the source has not
-    been asked for yet is fetched (the host waits, within the call's time) and the call tried once more."""
+    been asked for yet is fetched (the host waits, within the call's time) and the call tried once more; a mount's failure
+    is kept for the command to print after the program (the agent may run it again)."""
     try:
         return fn(*args, **kwargs)
     except ShellError as e:
         g = getattr(_local, "guest", None)
-        if _BY_TEXT.get(str(e).rsplit(": ", 1)[-1]) is None and g is not None and g.fetch is not None and g.fetch():
+        mounted = g is not None and g.fetch is not None
+        if errno_of(e) == EIO and mounted and g.fetch():
+            _guest()  # cancelled while it waited: nothing more reaches the filesystem
             try:
                 return fn(*args, **kwargs)
             except ShellError as again:
-                raise WasiError(errno_of(again)) from None
+                e = again
+        if errno_of(e) == EIO and mounted:
+            g.notes.append(str(e))
         raise WasiError(errno_of(e)) from None
 
 
 def errno_of(e: ShellError) -> int:
-    """The WASI errno for a filesystem error, by its text ("path: Permission denied"). Anything else (a mounted file not
-    fetched yet) is EIO, and its text is kept for the command to print after the program."""
-    errno = _BY_TEXT.get(str(e).rsplit(": ", 1)[-1])
-    if errno is None:
-        g = getattr(_local, "guest", None)
-        if g is not None:
-            g.notes.append(str(e))
-        return EIO
-    return errno
+    """The WASI errno for a filesystem error, by its text ("path: Permission denied"); EIO for anything else (a mounted
+    file not fetched yet)."""
+    return _BY_TEXT.get(str(e).rsplit(": ", 1)[-1], EIO)
+
+
+class _Node:
+    """A file's contents while the program has it open, shared by every descriptor on it (as one inode's are): saved at
+    close and sync, and before a call names a path (stat, rename, link), so other names see what was written. Once the
+    file was unlinked or replaced (gone), its descriptors keep the contents, which are never saved."""
+    __slots__ = ("path", "data", "dirty", "stored", "mtime", "handles", "counted", "gone")
+
+    def __init__(self, path: str, data, stored: int, mtime: int, counted: bool = True):
+        self.path, self.data, self.dirty, self.stored, self.mtime = path, data, False, stored, mtime
+        self.handles, self.counted, self.gone = 0, counted, False
+
+
+def _shared(name: str):
+    return property(lambda f: getattr(f.node, name), lambda f, v: setattr(f.node, name, v))
 
 
 class _File:
-    __slots__ = ("path", "data", "pos", "read", "write", "append", "dirty", "stored", "mtime")
+    """A descriptor on a file: its own position and mode over the shared contents."""
+    __slots__ = ("node", "pos", "read", "write", "append")
+    path, data, dirty, stored, mtime = (_shared(n) for n in ("path", "data", "dirty", "stored", "mtime"))
 
-    def __init__(self, path: str, data, read: bool, write: bool, append: bool, stored: int, mtime: int):
-        self.path, self.data, self.pos = path, data, 0
-        self.read, self.write, self.append, self.dirty, self.stored, self.mtime = read, write, append, False, stored, mtime
+    def __init__(self, node: _Node, read: bool, write: bool, append: bool):
+        self.node, self.pos, self.read, self.write, self.append = node, 0, read, write, append
+        node.handles += 1
 
 
 class _Dir:
@@ -252,14 +323,19 @@ class Guest:
         self.args = [bytetext.encode(a).replace(b"\0", b"") for a in args]
         self.env = [bytetext.encode(f"{k}={v}") for k, v in env if k and "=" not in k and "\0" not in k + v]
         self.stdin, self.stdin_pos = stdin, 0
-        self.stdout, self.stderr = bytearray(), bytearray()
+        self.output: list[tuple[int, bytes]] = []  # (1 or 2, bytes) in the order written, so 2>&1 keeps it
+        self.written = 0
         self.output_cap = output_cap
         self.max_memory = max_memory
         self.stdlib = stdlib
         self.deadline = deadline
-        self.started = time.perf_counter_ns()
+        self.started = time.monotonic_ns()  # the monotonic and CPU clocks count from here: nothing about the host's uptime
+        self.wake = threading.Event()  # set on cancel: a sleeping guest wakes
         self.fds: list = [_STDIN, _STDOUT, _STDERR, _ROOT]
         self.buffered = 0  # bytes held in open files' buffers, at most max_memory in all
+        self.nodes: dict[str, _Node] = {}  # open files by real path
+        self.cancelled = False  # the command was cancelled: every host call stops the guest, nothing more is saved
+        self.stopped = False  # the epoch callback stopped the guest at the deadline or on cancel
         self.http, self.pending = http, None
         self.fetch = fetch  # fetch() -> bool: fetches what mounts were asked for and missed; None: no mounts
         self.write_back_errors: list[tuple[str, int]] = []
@@ -308,24 +384,74 @@ class Guest:
         """How large the file may grow: what the filesystem has free, plus what it holds of this file already."""
         return self.fs.capacity - self.fs.used_bytes + f.stored if self.fs.run_as is not None else 1 << 62
 
-    def save(self, f: _File) -> None:
-        if f.dirty:
-            _fs(self.fs.write_bytes, f.path, bytes(f.data))
-            f.dirty, f.stored = False, len(f.data)
+    def node(self, path: str, follow: bool = True) -> str:
+        """The key of a path's open file: its real path (shortcut: hard links are separate keys, so two names of one file
+        opened at once are two buffers; upgrade if programs do that)."""
+        if follow:
+            return self.fs.real_path(path, existing=False)[0] or path
+        parent = get_parent(path)
+        return (self.fs.real_path(parent)[0] or parent).rstrip("/") + "/" + path.rsplit("/", 1)[-1]
+
+    def opened(self, key: str, data, stored: int, mtime: int, read: bool, write: bool, append: bool) -> _File:
+        node = self.nodes.get(key)
+        if node is None:
+            self.reserve(len(data))
+            node = self.nodes[key] = _Node(key, data, stored, mtime)
+        return _File(node, read, write, append)
+
+    def release(self, f: _File) -> None:
+        node = f.node
+        node.handles -= 1
+        if node.handles == 0 and node.counted:
+            self.buffered -= len(node.data)
+            if self.nodes.get(node.path) is node:
+                del self.nodes[node.path]
+
+    def save(self, f) -> None:
+        node = f.node if isinstance(f, _File) else f
+        if node.dirty and not node.gone:
+            _fs(self.fs.write_bytes, node.path, bytes(node.data))
+            node.dirty, node.stored = False, len(node.data)
+
+    def sync(self) -> None:
+        """Before a call names a path: open files' writes are saved, so its size, a rename or a link sees them. A save that
+        fails is left for close or exit to report."""
+        for node in list(self.nodes.values()):
+            try:
+                self.save(node)
+            except WasiError:
+                pass
+
+    def detach(self, key: str) -> None:
+        """The file at key was unlinked or replaced: its open descriptors keep their contents, which are never saved."""
+        node = self.nodes.pop(key, None)
+        if node is not None:
+            node.gone = True
+
+    def moved(self, src: str, dst: str) -> None:
+        """A rename: open files at src (or under it) are now at dst; one open at dst was replaced."""
+        self.detach(dst)
+        for key in [k for k in self.nodes if k == src or k.startswith(src.rstrip("/") + "/")]:
+            node = self.nodes.pop(key)
+            node.path = dst + key[len(src):]
+            self.nodes[node.path] = node
 
     def flush_all(self) -> None:
-        """At exit: files the program wrote but never closed are saved, as a real process's are."""
-        for entry in self.fds:
-            if isinstance(entry, _File) and entry.dirty:
+        """At exit: files the program wrote but never closed are saved, as a real process's are; not when cancelled."""
+        if self.cancelled:
+            return
+        for node in list(self.nodes.values()):
+            if node.dirty:
                 try:
-                    self.save(entry)
+                    self.save(node)
                 except WasiError as e:
-                    self.write_back_errors.append((entry.path, e.errno))
+                    self.write_back_errors.append((node.path, e.errno))
 
-    def write_output(self, which: bytearray, data: bytes) -> None:
-        if len(self.stdout) + len(self.stderr) + len(data) > self.output_cap:
+    def write_output(self, which: int, data: bytes) -> None:
+        if self.written + len(data) > self.output_cap:
             raise OutputFull()
-        which += data
+        self.written += len(data)
+        self.output.append((which, data))
 
 
 def errno_text(errno: int) -> str:
@@ -338,7 +464,10 @@ _local = threading.local()  # the guest of the call running on this thread: the 
 
 
 def _guest() -> Guest:
-    return _local.guest
+    g = _local.guest
+    if g.cancelled:  # the command was cancelled: the guest stops at its next call, as at the deadline
+        raise Interrupted()
+    return g
 
 
 def _mem(caller):
@@ -416,6 +545,7 @@ def _ns(when) -> int:
 def _stat_path(g: Guest, path: str, follow: bool) -> bytes:
     if path == STDLIB_PATH:
         return _filestat(FILETYPE_REGULAR_FILE, len(g.stdlib), 0, _ino(path))
+    g.sync()
     st = _fs(g.fs.stat, path, follow)
     kind = FILETYPE_SYMBOLIC_LINK if st.is_symlink else FILETYPE_DIRECTORY if st.is_dir else FILETYPE_REGULAR_FILE
     return _filestat(kind, st.size, _ns(st.modified), _ino(path), st.links)
@@ -466,10 +596,8 @@ def clock_res_get(c, _id, out):
 def clock_time_get(c, clock, _precision, out):
     if clock == CLOCK_REALTIME:
         now = time.time_ns()
-    elif clock == CLOCK_MONOTONIC:
-        now = time.monotonic_ns()
-    else:  # process and thread CPU time: time since this call started
-        now = time.perf_counter_ns() - _guest().started
+    else:  # monotonic, process and thread CPU time: time since this call started
+        now = time.monotonic_ns() - _guest().started
     _u64(c, out, now)
 
 
@@ -632,9 +760,9 @@ def _write_from(c, fd: int, iovs_ptr: int, n: int, offset: int | None) -> int:
     if e in (_STDOUT, _STDERR):
         if offset is not None:
             raise WasiError(ESPIPE)
-        if len(g.stdout) + len(g.stderr) + total > g.output_cap:
+        if g.written + total > g.output_cap:
             raise OutputFull()
-        g.write_output(g.stdout if e is _STDOUT else g.stderr, data())
+        g.write_output(1 if e is _STDOUT else 2, data())
         return total
     if not isinstance(e, _File):
         raise WasiError(EISDIR if e is _ROOT or isinstance(e, _Dir) else EBADF)
@@ -699,8 +827,7 @@ def fd_close(c, fd):
     e = g.fd(fd)
     g.fds[fd] = None
     if isinstance(e, _File):
-        if e.data is not g.stdlib:
-            g.buffered -= len(e.data)
+        g.release(e)
         g.save(e)
 
 
@@ -771,7 +898,7 @@ def path_open(c, dirfd, _dirflags, path_ptr, path_len, oflags, rights, _inheriti
             raise WasiError(EROFS)
         if want_dir:
             raise WasiError(ENOTDIR)
-        _u32(c, out, g.alloc(_File(path, g.stdlib, True, False, False, len(g.stdlib), 0)))
+        _u32(c, out, g.alloc(_File(_Node(path, g.stdlib, len(g.stdlib), 0, counted=False), True, False, False)))
         return
     try:
         st = _fs(fs.stat, path)
@@ -791,20 +918,26 @@ def path_open(c, dirfd, _dirflags, path_ptr, path_len, oflags, rights, _inheriti
             raise WasiError(EEXIST)
         if write and not fs.can_write(path) or read and not fs.can_read(path):
             raise WasiError(EACCES)
+        key = g.node(path)
+        node = g.nodes.get(key)
         if trunc:
-            if st.size:
+            if st.size or node is not None and node.stored:
                 _fs(fs.write_bytes, path, b"")  # O_TRUNC empties the file now, as open(2) does
+            if node is not None:  # and for the descriptors already open on it
+                g.buffered -= len(node.data)
+                node.data, node.stored, node.dirty = bytearray(), 0, False
             data, stored = bytearray(), 0
+        elif node is not None:
+            data, stored = node.data, node.stored
         else:
             raw = _fs(fs.read_bytes, path)
             data, stored = (bytearray(raw) if write else raw), len(raw)
-        g.reserve(len(data))
-        _u32(c, out, g.alloc(_File(path, data, read, write, append, stored, _ns(st.modified))))
+        _u32(c, out, g.alloc(g.opened(key, data, stored, _ns(st.modified), read, write, append)))
         return
     if why != ENOENT or not creat or want_dir:
         raise WasiError(why)
     _fs(fs.write_bytes, path, b"")  # the parent must exist and be writable: the filesystem checks it as for any command
-    _u32(c, out, g.alloc(_File(path, bytearray(), read, write, append, 0, time.time_ns())))
+    _u32(c, out, g.alloc(g.opened(g.node(path), bytearray(), 0, time.time_ns(), read, write, append)))
 
 
 @_errno
@@ -827,6 +960,7 @@ def path_filestat_set_times(c, dirfd, flags, path_ptr, path_len, _atim, mtim, fs
         when = datetime.fromtimestamp(mtim / 1e9, timezone.utc)
     else:
         when = None
+    g.sync()
     _fs(g.fs.stat, path)
     if when is not None:
         _fs(g.fs.set_modified_time, path, when.replace(tzinfo=None), follow=bool(flags & LOOKUP_SYMLINK_FOLLOW))
@@ -862,7 +996,9 @@ def path_unlink_file(c, dirfd, path_ptr, path_len):
         raise WasiError(EROFS)
     if _fs(g.fs.stat, path, follow=False).is_dir:
         raise WasiError(EISDIR)
+    key = g.node(path, follow=False)
     _fs(g.fs.delete, path)
+    g.detach(key)
 
 
 @_errno
@@ -873,23 +1009,31 @@ def path_rename(c, fd1, old_ptr, old_len, fd2, new_ptr, new_len):
     if STDLIB_PATH in (src, dst):
         raise WasiError(EROFS)
     fs = g.fs
+    g.sync()
     s = _fs(fs.stat, src, follow=False)
     d = _fs(fs.stat, dst, follow=False) if fs.exists(dst, follow=False) else None
-    if d is not None and d.is_dir:  # rename(2): a directory replaces an empty one; anything else can't
+    src_key, dst_key = g.node(src, follow=False), g.node(dst, follow=False)
+    if src_key == dst_key or d is not None and fs.same_file(src, dst, follow=False):
+        return  # rename(2): one file under both names stays as it is
+    if s.is_dir and dst_key.startswith(src_key.rstrip("/") + "/"):
+        raise WasiError(EINVAL)  # into itself
+    if d is not None and d.is_dir:  # a directory replaces an empty one; anything else can't
         if not s.is_dir:
             raise WasiError(EISDIR)
-        if src == dst:
-            return
         _fs(fs.delete, dst)
     elif d is not None and s.is_dir:
         raise WasiError(ENOTDIR)
     _fs(fs.move, src, dst)
+    g.moved(src_key, dst_key)
 
 
 @_errno
 def path_symlink(c, old_ptr, old_len, dirfd, new_ptr, new_len):
     g = _guest()
-    target = bytetext.decode(_path(c, old_ptr, old_len))
+    raw = _path(c, old_ptr, old_len)
+    if b"\0" in raw:
+        raise WasiError(EINVAL)
+    target = bytetext.decode(raw)
     link = g.resolve(dirfd, _path(c, new_ptr, new_len))
     if link == STDLIB_PATH:
         raise WasiError(EEXIST)
@@ -913,6 +1057,9 @@ def path_link(c, fd1, flags, old_ptr, old_len, fd2, new_ptr, new_len):
     dst = g.resolve(fd2, _path(c, new_ptr, new_len))
     if STDLIB_PATH in (src, dst):
         raise WasiError(EROFS)
+    g.sync()
+    if _fs(g.fs.stat, src, bool(flags & LOOKUP_SYMLINK_FOLLOW)).is_dir:
+        raise WasiError(EPERM)  # link(2): no hard links to directories
     _fs(g.fs.create_hard_link, src, dst, bool(flags & LOOKUP_SYMLINK_FOLLOW))
 
 
@@ -928,7 +1075,7 @@ def poll_oneoff(c, subs, events, n, nevents):
         if kind == EVENTTYPE_CLOCK:
             clock, timeout, _precision, flags = struct.unpack_from("<I4xQQH", raw, i * 48 + 16)
             if flags & SUBCLOCKFLAGS_ABSTIME:
-                now = time.time_ns() if clock == CLOCK_REALTIME else time.monotonic_ns()
+                now = time.time_ns() if clock == CLOCK_REALTIME else time.monotonic_ns() - g.started
                 timeout = max(0, timeout - now)
             if sleep is None or timeout < sleep[0]:
                 sleep = (timeout, userdata)
@@ -947,9 +1094,9 @@ def poll_oneoff(c, subs, events, n, nevents):
         # a real sleep, in slices, never past the call's deadline (the epoch then stops the guest)
         until = time.monotonic() + sleep[0] / 1e9
         while (now := time.monotonic()) < until:
-            if now >= g.deadline:
+            if now >= g.deadline or g.cancelled:
                 raise Interrupted()
-            time.sleep(min(until, g.deadline) - now if min(until, g.deadline) - now < MAX_SLEEP_SLICE else MAX_SLEEP_SLICE)
+            g.wake.wait(min(until, g.deadline, now + MAX_SLEEP_SLICE) - now)
         ready.append((sleep[1], SUCCESS, EVENTTYPE_CLOCK, 0))
     _write(c, events, b"".join(struct.pack("<QHB5xQ8x", u, err, k, nb) for u, err, k, nb in ready))
     _u32(c, nevents, len(ready))
@@ -1101,10 +1248,38 @@ def http_take(c, buf, n):
 # ---------- running a call ----------
 
 class Outcome:
-    """How a call ended: code (the exit status) unless timed_out, stack_overflow, or trap (another fatal error's text)."""
+    """How a call ended: code (the exit status) unless timed_out, stack_overflow, aborted (abort()), or trap (another
+    fatal error's text)."""
 
-    def __init__(self, code: int = 1, timed_out: bool = False, stack_overflow: bool = False, trap: str | None = None):
-        self.code, self.timed_out, self.stack_overflow, self.trap = code, timed_out, stack_overflow, trap
+    def __init__(self, code: int = 1, timed_out: bool = False, stack_overflow: bool = False, trap: str | None = None,
+                 aborted: bool = False):
+        self.code, self.timed_out, self.stack_overflow, self.trap, self.aborted = code, timed_out, stack_overflow, trap, aborted
+
+
+_EpochCallback = None
+
+
+def _on_epoch(store, guest: Guest) -> None:
+    """Each epoch tick asks the guest's store whether to go on: it stops at the call's deadline or on cancel, by the real
+    clock, so ticks that come late or twice change nothing. wasmtime-py 51 has no wrapper for this C API, hence ctypes."""
+    import ctypes
+    from wasmtime import _ffi as ffi
+    global _EpochCallback
+    if _EpochCallback is None:
+        _EpochCallback = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.POINTER(ffi.wasmtime_context_t), ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint8))
+
+    def check(_context, _data, delta, kind):
+        if guest.cancelled or time.monotonic() >= guest.deadline:
+            guest.stopped = True
+            return ctypes.cast(ffi.wasmtime_error_new(b"the call's time is up"), ctypes.c_void_p).value
+        delta[0], kind[0] = 1, 0  # trap again at the next tick; 0: continue (don't yield)
+        return 0
+
+    callback = _EpochCallback(check)
+    ffi.wasmtime_store_epoch_deadline_callback(store.ptr(), callback, None, ctypes.cast(0, ctypes.CFUNCTYPE(None, ctypes.c_void_p)))
+    store.set_epoch_deadline(1)
+    return callback  # kept alive by the caller while the store runs
 
 
 def run(rt: Runtime, guest: Guest) -> Outcome:
@@ -1112,7 +1287,7 @@ def run(rt: Runtime, guest: Guest) -> Outcome:
     wasmtime = rt.wasmtime
     store = wasmtime.Store(rt.engine)
     store.set_limits(memory_size=guest.max_memory, instances=1, tables=4, memories=1)
-    store.set_epoch_deadline(max(1, int((guest.deadline - time.monotonic()) / EPOCH_TICK) + 1))
+    callback = _on_epoch(store, guest)  # noqa: F841 (must outlive the call)
     _local.guest = guest
     try:
         with rt.ticking():
@@ -1128,12 +1303,16 @@ def run(rt: Runtime, guest: Guest) -> Outcome:
         return Outcome(timed_out=True)
     except wasmtime.Trap as e:
         code = getattr(e, "trap_code", None)
-        if code == wasmtime.TrapCode.INTERRUPT or time.monotonic() >= guest.deadline:
+        if guest.stopped or code == wasmtime.TrapCode.INTERRUPT or time.monotonic() >= guest.deadline:
             return Outcome(timed_out=True)
         if code == wasmtime.TrapCode.STACK_OVERFLOW:
             return Outcome(stack_overflow=True)
+        if code == wasmtime.TrapCode.UNREACHABLE:  # abort(): the C library's last resort, SIGABRT for a real process
+            return Outcome(aborted=True)
         return Outcome(trap=str(e).split("\n", 1)[0][:200])
     except wasmtime.WasmtimeError as e:  # instantiation: the memory limit is below the snapshot's own memory
+        if guest.stopped:
+            return Outcome(timed_out=True)
         return Outcome(trap=str(e).split("\n", 1)[0][:200])
     finally:
         _local.guest = None
