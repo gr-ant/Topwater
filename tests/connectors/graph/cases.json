@@ -1,0 +1,534 @@
+{
+ "about": "The Microsoft Graph connector against a fake Graph (docs/connectors/graph-design.md), run by every port that has the connector (python/tests/test_graph.py). The fake is built from `tree` (a case may have its own): {site, libraries: {name: {path: text, \"folder/\": null}}, lists: {name: {columns: {name: type, or a list of choices}, items: [fields]}}, subsites: {name: tree}}; ids are given in creation order and the clock starts at 2026-01-01T00:00:00Z and moves one second with every change. The site is mounted at /mnt/sp in `mode` with token secret-token. Steps: run (stdout, stderr, exitCode), changes (the pending change set as `kind path [-> to]`, with the source's note after ` # ` when it has one), apply (paths applied, the one it stopped at, conflict), graph (the fake's outline), edit {library, path, content} (someone changes a file), fault {method, path, status, headers, body, times}.",
+ "tree": {
+  "site": "Sandbox",
+  "libraries": {
+   "Documents": {
+    "Inbox/Budget final.xlsx": "budget v3",
+    "Inbox/Budget final (1).xlsx": "budget v3",
+    "Inbox/random notes.txt": "call the vendor\n",
+    "Inbox/Q4 launch checklist.md": "- [ ] ship\n",
+    "Projects/Designs/brand colours.txt": "teal #0f766e\n",
+    "Archive/": null,
+    "Untitled document.docx": "doc"
+   },
+   "Site Assets": {}
+  },
+  "lists": {
+   "Project Tracker": {
+    "columns": {
+     "Status": [
+      "Not started",
+      "In progress",
+      "Done",
+      "Blocked"
+     ],
+     "Owner": "text",
+     "DueDate": "dateTime",
+     "Budget": "currency",
+     "Notes": "note",
+     "Score": "calculated"
+    },
+    "items": [
+     {
+      "Title": "Status page",
+      "Status": "Not started",
+      "Owner": "Priya",
+      "DueDate": "2026-12-10T08:00:00Z",
+      "Budget": 1200
+     },
+     {
+      "Title": "Pricing page",
+      "Status": "In progress",
+      "Owner": "Sam",
+      "Budget": 800
+     }
+    ]
+   },
+   "Contacts": {
+    "columns": {
+     "Email": "text"
+    },
+    "items": [
+     {
+      "Title": "Jane Doe",
+      "Email": "jane@example.com"
+     },
+     {
+      "Title": "Jane Doe",
+      "Email": "jane.doe@example.com"
+     }
+    ]
+   },
+   "Projects": {
+    "columns": {},
+    "items": []
+   },
+   "Hidden": {
+    "hidden": true,
+    "columns": {},
+    "items": []
+   }
+  },
+  "subsites": {
+   "Projects": {
+    "libraries": {
+     "Documents": {
+      "plan.txt": "subsite plan\n"
+     }
+    },
+    "subsites": {
+     "Deep": {
+      "libraries": {
+       "Documents": {
+        "deep.txt": "deep\n"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "a site shows its libraries, lists and subsites, told apart on a clash",
+   "mode": "read-only",
+   "steps": [
+    {
+     "run": "mount; ls /mnt/sp; ls /mnt/sp/Contacts /mnt/sp/Projects '/mnt/sp/Projects (site)' '/mnt/sp/Projects (site)/Deep/Documents'",
+     "expect": {
+      "stdout": "graph:https://fake.sharepoint.com/sites/Sandbox on /mnt/sp type graph (ro)\nContacts\nDocuments\nProject Tracker\nProjects\nProjects (site)\nSite Assets\n/mnt/sp/Contacts:\nJane Doe (2).md\nJane Doe.md\n\n/mnt/sp/Projects:\n\n/mnt/sp/Projects (site):\nDeep\nDocuments\n\n/mnt/sp/Projects (site)/Deep/Documents:\ndeep.txt\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "cat '/mnt/sp/Projects (site)/Documents/plan.txt' /mnt/sp/Documents/Inbox/random\\ notes.txt",
+     "expect": {
+      "stdout": "subsite plan\ncall the vendor\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "cat '/mnt/sp/Project Tracker/Status page.md'",
+     "expect": {
+      "stdout": "---\nBudget: 1200\nCreated: \"2026-01-01T00:00:00Z\"\nCreated By: \"Grant Miller\"\nDueDate: \"2026-12-10T08:00:00Z\"\nID: 1\nModified: \"2026-01-01T00:00:00Z\"\nModified By: \"Grant Miller\"\nNotes: null\nOwner: \"Priya\"\nScore: null\nStatus: \"Not started\"\n# read-only: Created, Created By, ID, Modified, Modified By, Score\n---\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "echo x > /mnt/sp/Documents/x.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "bash: line 1: /mnt/sp/Documents/x.txt: Permission denied\n",
+      "exitCode": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "staged restructuring becomes a change set with cross-library moves noted",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cd /mnt/sp/Documents && mv 'Inbox/Q4 launch checklist.md' Projects/ && mv Inbox/random\\ notes.txt Archive/ && mv 'Untitled document.docx' 'Kickoff notes.docx' && rm 'Inbox/Budget final (1).xlsx' && mkdir Projects/Website && mv Projects/Designs '/mnt/sp/Projects (site)/Documents/'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "sed -i 's/^Status: .*/Status: \"In progress\"/' '/mnt/sp/Project Tracker/Status page.md'; mount -c",
+     "expect": {
+      "stdout": "rename /mnt/sp/Documents/Inbox/random notes.txt -> /mnt/sp/Documents/Archive/random notes.txt\nrename /mnt/sp/Documents/Untitled document.docx -> /mnt/sp/Documents/Kickoff notes.docx\nrename /mnt/sp/Documents/Inbox/Q4 launch checklist.md -> /mnt/sp/Documents/Projects/Q4 launch checklist.md\nmkdir /mnt/sp/Documents/Projects/Website\nrename /mnt/sp/Documents/Projects/Designs -> /mnt/sp/Projects (site)/Documents/Designs\nwrite /mnt/sp/Project Tracker/Status page.md\ndelete /mnt/sp/Documents/Inbox/Budget final (1).xlsx\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      "rename /Documents/Inbox/random notes.txt -> /Documents/Archive/random notes.txt",
+      "rename /Documents/Untitled document.docx -> /Documents/Kickoff notes.docx",
+      "rename /Documents/Inbox/Q4 launch checklist.md -> /Documents/Projects/Q4 launch checklist.md",
+      "mkdir /Documents/Projects/Website",
+      "rename /Documents/Projects/Designs -> /Projects (site)/Documents/Designs # copy + delete: /Documents/Projects/Designs moves to another library, list or site; the copy gets a new id and loses version history and sharing",
+      "write /Project Tracker/Status page.md",
+      "delete /Documents/Inbox/Budget final (1).xlsx"
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/Documents/Inbox/random notes.txt",
+       "/Documents/Untitled document.docx",
+       "/Documents/Inbox/Q4 launch checklist.md",
+       "/Documents/Projects/Website",
+       "/Documents/Projects/Designs",
+       "/Project Tracker/Status page.md",
+       "/Documents/Inbox/Budget final (1).xlsx"
+      ],
+      "failed": null,
+      "conflict": false,
+      "error": null
+     }
+    },
+    {
+     "graph": true,
+     "expect": [
+      "/Documents/Archive/",
+      "/Documents/Archive/random notes.txt ('call the vendor\\n')",
+      "/Documents/Inbox/",
+      "/Documents/Inbox/Budget final.xlsx ('budget v3')",
+      "/Documents/Kickoff notes.docx ('doc')",
+      "/Documents/Projects/",
+      "/Documents/Projects/Q4 launch checklist.md ('- [ ] ship\\n')",
+      "/Documents/Projects/Website/",
+      "/Project Tracker#1 'Status page' {\"Budget\": 1200, \"DueDate\": \"2026-12-10T08:00:00Z\", \"Owner\": \"Priya\", \"Status\": \"In progress\"}",
+      "/Project Tracker#2 'Pricing page' {\"Budget\": 800, \"Owner\": \"Sam\", \"Status\": \"In progress\"}",
+      "/Contacts#1 'Jane Doe' {\"Email\": \"jane@example.com\"}",
+      "/Contacts#2 'Jane Doe' {\"Email\": \"jane.doe@example.com\"}",
+      "/Projects/Documents/Designs/",
+      "/Projects/Documents/Designs/brand colours.txt ('teal #0f766e\\n')",
+      "/Projects/Documents/plan.txt ('subsite plan\\n')",
+      "/Projects/Deep/Documents/deep.txt ('deep\\n')",
+      ""
+     ]
+    },
+    {
+     "run": "mount -c; ls '/mnt/sp/Projects (site)/Documents/Designs'",
+     "expect": {
+      "stdout": "brand colours.txt\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "list items: read-only columns, choices and unknown columns are refused; new items, renames and deletes apply",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cd '/mnt/sp/Project Tracker' && sed -i 's/^ID: .*/ID: 7/' 'Pricing page.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Project Tracker/Pricing page.md",
+      "conflict": false,
+      "error": "/Project Tracker/Pricing page.md: ID can't be changed (set by SharePoint)"
+     }
+    },
+    {
+     "run": "mount --discard /mnt/sp; cd '/mnt/sp/Project Tracker' && sed -i 's/^Status: .*/Status: \"Someday\"/' 'Status page.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Project Tracker/Status page.md",
+      "conflict": false,
+      "error": "/Project Tracker/Status page.md: Status: expected one of Not started, In progress, Done, Blocked"
+     }
+    },
+    {
+     "run": "mount --discard /mnt/sp; cd '/mnt/sp/Project Tracker' && printf -- '---\\nStatus: \"Done\"\\nColour: \"red\"\\n---\\n' > 'New one.md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Project Tracker/New one.md",
+      "conflict": false,
+      "error": "/Project Tracker/New one.md: no column Colour in this list"
+     }
+    },
+    {
+     "run": "mount --discard /mnt/sp; cd '/mnt/sp/Project Tracker' && printf -- '---\\nStatus: \"Done\"\\nOwner: \"Lee\"\\n---\\n' > 'New one.md' && mv 'Pricing page.md' 'Pricing page v2.md' && rm /mnt/sp/Contacts/'Jane Doe (2).md'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/Project Tracker/Pricing page.md",
+       "/Project Tracker/New one.md",
+       "/Contacts/Jane Doe (2).md"
+      ],
+      "failed": null,
+      "conflict": false,
+      "error": null
+     }
+    },
+    {
+     "graph": true,
+     "expect": [
+      "/Documents/Archive/",
+      "/Documents/Inbox/",
+      "/Documents/Inbox/Budget final (1).xlsx ('budget v3')",
+      "/Documents/Inbox/Budget final.xlsx ('budget v3')",
+      "/Documents/Inbox/Q4 launch checklist.md ('- [ ] ship\\n')",
+      "/Documents/Inbox/random notes.txt ('call the vendor\\n')",
+      "/Documents/Projects/",
+      "/Documents/Projects/Designs/",
+      "/Documents/Projects/Designs/brand colours.txt ('teal #0f766e\\n')",
+      "/Documents/Untitled document.docx ('doc')",
+      "/Project Tracker#1 'Status page' {\"Budget\": 1200, \"DueDate\": \"2026-12-10T08:00:00Z\", \"Owner\": \"Priya\", \"Status\": \"Not started\"}",
+      "/Project Tracker#2 'Pricing page v2' {\"Budget\": 800, \"Owner\": \"Sam\", \"Status\": \"In progress\"}",
+      "/Project Tracker#3 'New one' {\"Owner\": \"Lee\", \"Status\": \"Done\"}",
+      "/Contacts#1 'Jane Doe' {\"Email\": \"jane@example.com\"}",
+      "/Projects/Documents/plan.txt ('subsite plan\\n')",
+      "/Projects/Deep/Documents/deep.txt ('deep\\n')",
+      ""
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a file changed in SharePoint after it was read is a conflict",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "echo more >> '/mnt/sp/Documents/Inbox/random notes.txt'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "edit": {
+      "library": "Documents",
+      "path": "Inbox/random notes.txt",
+      "content": "someone else\n"
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Documents/Inbox/random notes.txt",
+      "conflict": true,
+      "error": "/Documents/Inbox/random notes.txt: version \"c:{00000007-0000-4000-8000-000000000007},2\", expected \"c:{00000007-0000-4000-8000-000000000007},1\""
+     }
+    },
+    {
+     "graph": true,
+     "expect": [
+      "/Documents/Archive/",
+      "/Documents/Inbox/",
+      "/Documents/Inbox/Budget final (1).xlsx ('budget v3')",
+      "/Documents/Inbox/Budget final.xlsx ('budget v3')",
+      "/Documents/Inbox/Q4 launch checklist.md ('- [ ] ship\\n')",
+      "/Documents/Inbox/random notes.txt ('someone else\\n')",
+      "/Documents/Projects/",
+      "/Documents/Projects/Designs/",
+      "/Documents/Projects/Designs/brand colours.txt ('teal #0f766e\\n')",
+      "/Documents/Untitled document.docx ('doc')",
+      "/Project Tracker#1 'Status page' {\"Budget\": 1200, \"DueDate\": \"2026-12-10T08:00:00Z\", \"Owner\": \"Priya\", \"Status\": \"Not started\"}",
+      "/Project Tracker#2 'Pricing page' {\"Budget\": 800, \"Owner\": \"Sam\", \"Status\": \"In progress\"}",
+      "/Contacts#1 'Jane Doe' {\"Email\": \"jane@example.com\"}",
+      "/Contacts#2 'Jane Doe' {\"Email\": \"jane.doe@example.com\"}",
+      "/Projects/Documents/plan.txt ('subsite plan\\n')",
+      "/Projects/Deep/Documents/deep.txt ('deep\\n')",
+      ""
+     ]
+    }
+   ]
+  },
+  {
+   "name": "names SharePoint refuses fail at apply with a clear message, and nothing is sent",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "cd /mnt/sp/Documents && echo a > 'a:b.txt' && echo b > ' lead.txt'",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/Documents/ lead.txt",
+      "conflict": false,
+      "error": "/Documents/ lead.txt: SharePoint doesn't allow this name (no \" * : < > ? \\ |, leading or trailing spaces, trailing dot, reserved names such as CON or .lock, _vti_, or ~$ at the start)"
+     }
+    },
+    {
+     "run": "mount --discard /mnt/sp; mkdir /mnt/sp/NewLibrary",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [],
+      "failed": "/NewLibrary",
+      "conflict": false,
+      "error": "/NewLibrary: new libraries, lists and sites aren't created from here; create them in SharePoint"
+     }
+    }
+   ]
+  },
+  {
+   "name": "throttling is waited out",
+   "mode": "staged",
+   "steps": [
+    {
+     "fault": {
+      "method": "GET",
+      "path": "/children$",
+      "status": 429,
+      "headers": [
+       [
+        "Retry-After",
+        "0"
+       ]
+      ],
+      "times": 2
+     }
+    },
+    {
+     "run": "ls /mnt/sp/Documents/Archive /mnt/sp/Documents/Projects",
+     "expect": {
+      "stdout": "/mnt/sp/Documents/Archive:\n\n/mnt/sp/Documents/Projects:\nDesigns\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "fault": {
+      "method": "PUT",
+      "path": "/content$",
+      "status": 503,
+      "headers": [
+       [
+        "Retry-After",
+        "0"
+       ]
+      ],
+      "times": 1
+     }
+    },
+    {
+     "run": "echo hi > /mnt/sp/Documents/Archive/hi.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/Documents/Archive/hi.txt"
+      ],
+      "failed": null,
+      "conflict": false,
+      "error": null
+     }
+    },
+    {
+     "graph": true,
+     "expect": [
+      "/Documents/Archive/",
+      "/Documents/Archive/hi.txt ('hi\\n')",
+      "/Documents/Inbox/",
+      "/Documents/Inbox/Budget final (1).xlsx ('budget v3')",
+      "/Documents/Inbox/Budget final.xlsx ('budget v3')",
+      "/Documents/Inbox/Q4 launch checklist.md ('- [ ] ship\\n')",
+      "/Documents/Inbox/random notes.txt ('call the vendor\\n')",
+      "/Documents/Projects/",
+      "/Documents/Projects/Designs/",
+      "/Documents/Projects/Designs/brand colours.txt ('teal #0f766e\\n')",
+      "/Documents/Untitled document.docx ('doc')",
+      "/Project Tracker#1 'Status page' {\"Budget\": 1200, \"DueDate\": \"2026-12-10T08:00:00Z\", \"Owner\": \"Priya\", \"Status\": \"Not started\"}",
+      "/Project Tracker#2 'Pricing page' {\"Budget\": 800, \"Owner\": \"Sam\", \"Status\": \"In progress\"}",
+      "/Contacts#1 'Jane Doe' {\"Email\": \"jane@example.com\"}",
+      "/Contacts#2 'Jane Doe' {\"Email\": \"jane.doe@example.com\"}",
+      "/Projects/Documents/plan.txt ('subsite plan\\n')",
+      "/Projects/Deep/Documents/deep.txt ('deep\\n')",
+      ""
+     ]
+    }
+   ]
+  },
+  {
+   "name": "live mode writes through and reports a refusal",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "echo hi > /mnt/sp/Documents/Archive/hi.txt; mv /mnt/sp/Documents/Archive/hi.txt /mnt/sp/Documents/Archive/hello.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "touch /mnt/sp/Documents/CON; mount -c",
+     "expect": {
+      "stdout": "write /mnt/sp/Documents/CON\n",
+      "stderr": "mount: /mnt/sp/Documents/CON: /Documents/CON: SharePoint doesn't allow this name (no \" * : < > ? \\ |, leading or trailing spaces, trailing dot, reserved names such as CON or .lock, _vti_, or ~$ at the start); the change stays pending (mount --discard /mnt/sp drops your changes)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "graph": true,
+     "expect": [
+      "/Documents/Archive/",
+      "/Documents/Archive/hello.txt ('hi\\n')",
+      "/Documents/Inbox/",
+      "/Documents/Inbox/Budget final (1).xlsx ('budget v3')",
+      "/Documents/Inbox/Budget final.xlsx ('budget v3')",
+      "/Documents/Inbox/Q4 launch checklist.md ('- [ ] ship\\n')",
+      "/Documents/Inbox/random notes.txt ('call the vendor\\n')",
+      "/Documents/Projects/",
+      "/Documents/Projects/Designs/",
+      "/Documents/Projects/Designs/brand colours.txt ('teal #0f766e\\n')",
+      "/Documents/Untitled document.docx ('doc')",
+      "/Project Tracker#1 'Status page' {\"Budget\": 1200, \"DueDate\": \"2026-12-10T08:00:00Z\", \"Owner\": \"Priya\", \"Status\": \"Not started\"}",
+      "/Project Tracker#2 'Pricing page' {\"Budget\": 800, \"Owner\": \"Sam\", \"Status\": \"In progress\"}",
+      "/Contacts#1 'Jane Doe' {\"Email\": \"jane@example.com\"}",
+      "/Contacts#2 'Jane Doe' {\"Email\": \"jane.doe@example.com\"}",
+      "/Projects/Documents/plan.txt ('subsite plan\\n')",
+      "/Projects/Deep/Documents/deep.txt ('deep\\n')",
+      ""
+     ]
+    }
+   ]
+  }
+ ]
+}
