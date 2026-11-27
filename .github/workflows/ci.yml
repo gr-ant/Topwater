@@ -16,6 +16,8 @@ jobs:
       # spec/ must satisfy its JSON schemas, and the ports' generated tables must match it (see spec/README.md)
       - run: python3 tools/spec-gen/gen.py --check
       - run: python3 tools/spec-gen/test_gen.py
+      # the three ports keep the same files, sections and command order (docs/architecture.md)
+      - run: python3 tools/check_layout.py --self-test && python3 tools/check_layout.py
 
   dotnet:
     runs-on: ubuntu-latest

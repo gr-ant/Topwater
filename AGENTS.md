@@ -40,6 +40,12 @@ Run probes with a time limit and without container logs. A runaway probe once fi
 timeout 60 docker run --rm --log-driver none ubuntu:24.04 bash -c 'timeout 5 ...'
 ```
 
+## Source layout
+
+The three ports keep a mirrored layout: the same files, sections and command order, mapped in
+[docs/architecture.md](docs/architecture.md). Keep it when you add or move code; `tools/check_layout.py` enforces it
+against `tools/layout.json`.
+
 ## Tests
 
 | Port | Command |
@@ -48,6 +54,7 @@ timeout 60 docker run --rm --log-driver none ubuntu:24.04 bash -c 'timeout 5 ...
 | Python | `cd python && python -m pytest -q` |
 | TypeScript | `cd typescript && npm ci && npx vitest run && npm run typecheck` |
 | Spec | `python3 tools/spec-gen/gen.py --check && python3 tools/spec-gen/test_gen.py` |
+| Layout | `python3 tools/check_layout.py` |
 
 A few tests measure real time and can fail on a heavily loaded machine; rerun them alone before believing them.
 
