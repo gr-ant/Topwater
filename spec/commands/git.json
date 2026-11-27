@@ -30,8 +30,14 @@
     "   switch     change branch (checkout also restores files)",
     "   merge      join histories (fast-forward or three-way with conflict markers)",
     "   tag        name a commit",
+    "   bisect     find the commit that introduced a change",
+    "   merge-base find a common ancestor",
     "",
-    "Plumbing: rev-parse, rev-list, ls-files, cat-file, config.",
+    "Patches:",
+    "   apply        apply a diff to the work tree or the index",
+    "   format-patch write commits as mail patches; am applies them as commits",
+    "",
+    "Plumbing: rev-parse, rev-list, ls-files, cat-file, config, fsck.",
     "",
     "'git help <command>' or 'git <command> --help' describes one command."
   ],
@@ -141,6 +147,8 @@
         {"short": "u", "long": ["untracked-files"], "arg": "<mode>", "description": "which untracked files to list: no, normal (directories collapsed) or all; -u alone means all", "custom": true}
       ],
       "messages": {
+        "amInProgress": "You are in the middle of an am session.\n  (fix conflicts and then run \"git am --continue\")\n  (use \"git am --skip\" to skip this patch)\n  (use \"git am --abort\" to restore the original branch)",
+        "bisecting": "You are currently bisecting, started from branch '{branch}'.\n  (use \"git bisect reset\" to get back to the original branch)",
         "onBranch": "On branch {branch}",
         "detachedAt": "HEAD detached at {commit}",
         "detachedFrom": "HEAD detached from {commit}",
@@ -356,7 +364,7 @@
         {"long": ["exit-code"], "key": "\u0007", "description": "exit 1 when there are differences"},
         {"short": "p", "long": ["patch"], "description": "show a patch (the default)", "ignored": true},
         {"long": ["no-color"], "key": "\u0018", "description": "accepted and ignored (output is never colored)", "ignored": true},
-        {"long": ["check"], "key": "\u0010", "description": "instead of a diff, list added lines with trailing whitespace or a space before a tab in the indent, and added blank lines at the end of a file; exit 2 when there are any"},
+        {"long": ["check"], "key": "\u0010", "description": "instead of a diff, list added lines with trailing whitespace, a space before a tab in the indent or a leftover conflict marker, and added blank lines at the end of a file; exit 2 when there are any"},
         {"long": ["color"], "arg": "<when>", "description": "accepted and ignored, with or without =<when> (output is never colored)", "custom": true, "ignored": true}
       ],
       "messages": {
@@ -364,6 +372,7 @@
         "checkSpaceTab": "space before tab in indent",
         "checkLine": "{file}:{line}: {problems}.",
         "checkBlankEof": "{file}:{line}: new blank line at EOF.",
+        "checkMarker": "{file}:{line}: leftover conflict marker",
         "checkWith": "fatal: options '--name-only', '--name-status', '--check', and '-s' cannot be used together",
         "tooManyRevisions": "error: too many revisions; give at most two"
       }
@@ -908,6 +917,9 @@
         "noSuchFile": "error: {path}: No such file or directory",
         "notInIndex": "error: {path}: does not exist in index",
         "notMatchIndex": "error: {path}: does not match index",
+        "beyondLink": "error: affected file '{path}' is beyond a symbolic link",
+        "invalidPath": "error: invalid path '{path}'",
+        "modeMismatch": "error: new mode ({new}) of {path} does not match old mode ({old})",
         "checking": "Checking patch {path}...",
         "appliedCleanly": "Applied patch {path} cleanly.",
         "hunkOffset": "Hunk #{number} succeeded at {line} (offset {offset}).",

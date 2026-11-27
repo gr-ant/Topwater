@@ -3320,9 +3320,10 @@ def _bracket(inner: str) -> str:
     return "".join(out)
 
 
-def glob_to_regex(pattern: str, ignore_case: bool = False, slashes: bool = False) -> re.Pattern:
-    """slashes=True for case/[[ ]]/${x%pat} matching, where * also matches '/'."""
-    return _cached("^" + glob_to_regex_body(pattern, slashes) + r"\Z", (re.IGNORECASE if ignore_case else 0) | re.S)
+def glob_to_regex(pattern: str, ignore_case: bool = False, slashes: bool = False) -> "TimedPattern":
+    """slashes=True for case/[[ ]]/${x%pat} matching, where * also matches '/'. Timed: a pattern like *a*a*a*b
+    backtracks for ages on a long name, and the call's time limit must still stop it."""
+    return TimedPattern(_cached("^" + glob_to_regex_body(pattern, slashes) + r"\Z", (re.IGNORECASE if ignore_case else 0) | re.S))
 
 
 def _join(display: str, name: str) -> str:

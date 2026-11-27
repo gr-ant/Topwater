@@ -1365,6 +1365,12 @@ internal static partial class Builtins
                 row.AddRange((f2 ?? []).Where((_, n) => n != k2));
             }
             lines.Add(string.Join(outSep, row));
+            if (lines.Count >= 1024)  // written as it goes: one repeated key can pair up into far more rows than fit in memory
+            {
+                ctx.CancellationToken.ThrowIfCancellationRequested();
+                ctx.Stdout.Write(string.Concat(lines.Select(x => x + "\n")));
+                lines.Clear();
+            }
         }
         int i = 0, j = 0;
         if (a.Has('\u0001') && (left.Count > 0 || right.Count > 0))
@@ -1395,7 +1401,6 @@ internal static partial class Builtins
                 if (!only)
                     for (int x = i; x < i2; x++)
                         for (int y = j; y < j2; y++) Emit(left[x], right[y]);
-                if (lines.Count > 1_000_000) throw new ShellException("output too large");
                 (i, j) = (i2, j2);
             }
         }

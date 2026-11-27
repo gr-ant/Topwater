@@ -274,8 +274,8 @@ internal static partial class Builtins
         var dir = ctx.ResolvePath(a.Value('C') ?? ".");
         // without -C the working directory is only needed for relative names, so a deleted one still lists /abs.tar
         if (a.Value('C') is { } cdir && !fs.IsDirectory(dir)) throw new ShellException(Fatal(CommandSpec.Message("tar", "cannotOpen", ("file", cdir), ("errno", fs.Exists(dir) ? "Not a directory" : fs.WhyMissing(dir)))), 2);
-        var excludes = a.All('\u0002').Select(p => Glob.ToRegex(p, slashes: true)).ToList();
-        var rules = TarTransforms(a.All('\u0006'));
+        var excludes = a.All('\u0002').Select(p => ctx.Shell.Timed(Glob.ToRegex(p, slashes: true))).ToList();
+        var rules = TarTransforms(a.All('\u0006')).Select(r => (ctx.Shell.Timed(r.Rx), r.Repl, r.All, r.Nth)).ToList();
         bool numeric = a.Has('\u0005');
         int code = 0;
         void Fail(string msg) { ctx.Stderr.WriteLine("tar: " + msg); code = 2; }
@@ -386,6 +386,15 @@ internal static partial class Builtins
         var wanted = a.Positional.Select(p => p.TrimEnd('/')).ToList();
         var found = new bool[wanted.Count];
         var announced = new HashSet<string>();
+        // a --transform result, with any leading / or ../ it produced stripped (and said once), as GNU tar does: the check
+        // against leaving the target directory runs on the name that is written
+        string[] Renamed(string name, string key)
+        {
+            var output = rules.Count > 0 ? TarRename(name, rules) : name;
+            var cut = TarPrefix(output);
+            if (cut.Length > 0 && announced.Add(key + cut)) ctx.Stderr.WriteLine(CommandSpec.Message("tar", key, ("prefix", cut)));
+            return output[cut.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
+        }
         var info = a.Has('O') ? ctx.Stderr : ctx.Stdout;
         int ugWidth = 19;
         using var reader = new TarReader(new MemoryStream(data));
@@ -437,7 +446,7 @@ internal static partial class Builtins
             var keep = parts.Skip(strip).ToArray();
             if (rules.Count > 0)
             {
-                keep = TarRename(string.Join('/', keep), rules).Split('/', StringSplitOptions.RemoveEmptyEntries);
+                keep = Renamed(string.Join('/', keep), "removingLeading");
                 if (keep.Length == 0) continue;
             }
             var target = VirtualFileSystem.Normalize(dir, string.Join('/', keep));
@@ -471,7 +480,7 @@ internal static partial class Builtins
                         break;
                     case TarEntryType.HardLink:
                         var linkParts = e.LinkName[linkPrefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
-                        var linkTarget = VirtualFileSystem.Normalize(dir, TarRename(string.Join('/', linkParts.Skip(strip)), rules));
+                        var linkTarget = VirtualFileSystem.Normalize(dir, string.Join('/', Renamed(string.Join('/', linkParts.Skip(strip)), "removingLeadingLink")));
                         // only to a file this archive (or the target dir) already holds, never through a link it made
                         if (linkParts.Length <= strip || !fs.Exists(linkTarget, follow: false) || fs.IsDirectory(linkTarget, follow: false) || linkTarget == target || ThroughMadeLink(linkTarget))
                         {

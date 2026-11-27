@@ -539,6 +539,7 @@ public sealed partial class Shell
         Web?.BeginCall();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(Options.MaxCallDuration);
+        _callDeadline = Options.MaxCallDuration < TimeSpan.FromDays(365) ? DateTime.UtcNow + Options.MaxCallDuration : DateTime.MaxValue;
         var callToken = budget.Token; // everything below, built-ins included, sees the call's time limit
         Fs.RunAs = Options.User; // the agent's commands run as a regular user
         var io = new Io(new StdinBuffer(""), new SwitchWriter(stdout), new SwitchWriter(stderr));
@@ -568,6 +569,7 @@ public sealed partial class Shell
         {
             // shortcut: `set -e` / `set -o pipefail` last for one tool call, so a stray `set -e` can't poison the session.
             Errexit = Pipefail = Nounset = Noglob = Xtrace = Noclobber = false;
+            _callDeadline = DateTime.MaxValue;
             Fds.Clear();
             Fs.RunAs = previousUser;
             if (_procSubCount > 0 && Fs.IsDirectory("/dev/fd"))
@@ -1043,6 +1045,17 @@ public sealed partial class Shell
     /// <summary>User-supplied patterns can backtrack exponentially, and a regex match ignores cancellation.</summary>
     internal static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(5);
 
+    DateTime _callDeadline = DateTime.MaxValue;
+
+    /// <summary>re, or a copy whose match timeout is what the call has left when that is shorter, so one slow match cannot
+    /// outlast the call's time limit.</summary>
+    internal Regex Timed(Regex re)
+    {
+        var left = _callDeadline - DateTime.UtcNow;
+        if (left >= re.MatchTimeout) return re;
+        return new Regex(re.ToString(), re.Options, left > TimeSpan.FromMilliseconds(1) ? left : TimeSpan.FromMilliseconds(1));
+    }
+
     void CheckIterations(ref int n, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -1417,6 +1430,11 @@ public sealed partial class Shell
             io.Err.WriteLine($"{(e is UsageException || Builtins.IsShellBuiltin(this, name) ? ErrPrefix : "")}{name}: {e.Message}");
             return e is UsageException ? 2 : e.ExitCode;
         }
+        catch (RegexMatchTimeoutException) when (DateTime.UtcNow >= _callDeadline - TimeSpan.FromMilliseconds(50))
+        {
+            throw new OperationCanceledException();  // the match ran into the call's time limit
+        }
+        catch (RegexMatchTimeoutException) { throw new LimitExceeded("pattern matching took too long"); }
         catch (Exception e) when (e is FormatException or OverflowException)
         {
             io.Err.WriteLine($"{name}: invalid number{(BadNumber.Match(e.Message) is { Success: true } m ? $": '{m.Groups[1].Value}'" : "")}");

@@ -167,4 +167,54 @@ describe('runaway constructs', () => {
     expect(r.stdout).toBe('5\n99\n');
     expect(r.stderr).toContain('recursion too deep');
   });
+
+  // Board 041: inputs that used to run for minutes or grow without bound now stop inside a short call limit.
+  it('git apply hunk search is linear', async () => {
+    const sh = quick(2);
+    sh.fs.mkdir('/tmp/w', true);
+    const n = 30000;
+    sh.fs.writeBytes('/tmp/w/big', new TextEncoder().encode('x\n'.repeat(n)));
+    sh.fs.writeBytes('/tmp/w/p', new TextEncoder().encode(`--- a/big\n+++ b/big\n@@ -1,${n + 1} +1,${n + 1} @@\n` + ' x\n'.repeat(n) + '-absent\n+y\n'));
+    const start = Date.now();
+    const r = await sh.run('cd /tmp/w && git apply p; echo $?');
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(r.stdout).toBe('1\n');
+    expect(r.stderr).toContain('patch does not apply');
+  });
+  it('join on one repeated key streams its output', async () => {
+    const sh = quick(1);
+    sh.fs.mkdir('/tmp/w', true);
+    sh.fs.writeBytes('/tmp/w/a', new TextEncoder().encode('k v\n'.repeat(10000)));
+    const before = process.memoryUsage().heapUsed;
+    const r = await sh.run('cd /tmp/w && join a a > /dev/null');
+    expect(r.exitCode).not.toBe(0); // the time limit ends 100 million rows
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(256 * 1024 * 1024);
+  });
+  // name lengths picked so an unbounded match would take long: these must end near the limit
+  for (const [cmd, n] of [
+    ["tar -cf t.tar --transform='s/\\(a*\\)*b/x/' $n", 26],
+    ["tar -cf t.tar --transform='s/(a|aa)+b/x/x' $n", 36],
+    ["tar -cf t.tar --exclude='*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b' $n", 32],
+    ["find . -name '*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b'", 32],
+  ] as [string, number][]) {
+    it(`tar and find patterns honour the time limit: ${cmd}`, async () => {
+      const start = Date.now();
+      await quick(1).run(`mkdir -p /tmp/w && cd /tmp/w && n=${'a'.repeat(n)}c && echo x > $n && ${cmd}`);
+      expect(Date.now() - start).toBeLessThan(3000);
+    });
+  }
+  it('jq depth limit is the same for every kind of function', async () => {
+    const sh = new Shell();
+    const kinds: Record<string, string> = {
+      filter: 'def f(n): if n == 0 then 0 else 1 + f(n-1) end; f({})',
+      value: 'def f($n): if $n == 0 then 0 else 1 + f($n-1) end; f({})',
+      none: 'def r: if . < {} then .+1 | r else . end; 0 | r',
+    };
+    for (const [name, src] of Object.entries(kinds)) {
+      expect((await sh.run(`jq -n '${src.replaceAll('{}', '99')}'`)).stdout, name).toBe('99\n');
+      const r = await sh.run(`jq -n '${src.replaceAll('{}', '100')}'`);
+      expect(r.exitCode, name).toBe(5);
+      expect(r.stderr, name).toContain('recursion too deep');
+    }
+  });
 });

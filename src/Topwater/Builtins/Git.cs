@@ -393,7 +393,7 @@ internal static partial class Git
         public string? ReadRef(string name, int depth = 0)
         {
             if (depth > 5) return null;
-            if (!Regex.IsMatch(name, @"^[A-Za-z0-9_./-]+\z") || name.Contains("..") || name.StartsWith('/') || name.EndsWith('/')) return null;
+            if (!Regex.IsMatch(name, @"^[A-Za-z0-9_./-]+\z") || name.Contains("..") || name.Split('/').Any(p => p is "" or ".")) return null;  // refs/heads/. (from `git checkout .`) names no ref
             var text = !Fs.IsDirectory(GPath(name), false) ? GText(name) : null;
             if (text != null)
             {

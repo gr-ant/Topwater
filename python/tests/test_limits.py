@@ -208,3 +208,58 @@ def test_jq_def_recursion_is_bounded():
     # paused calls are not nested ones: a wide recursion stays well under the limit
     fib = "jq -nc 'def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; [range(15) | fib] | last'"
     assert Shell().run(fib).stdout == "377\n"
+
+
+# Board 041: inputs that used to run for minutes or grow without bound now stop inside a one-second call limit.
+
+def test_git_apply_hunk_search_is_linear():
+    sh = Shell(max_call_duration=2)
+    sh.fs.mkdir("/tmp/w", parents=True)
+    sh.fs.write_bytes("/tmp/w/big", b"x\n" * 30000)
+    n = 30000
+    patch = f"--- a/big\n+++ b/big\n@@ -1,{n + 1} +1,{n + 1} @@\n" + " x\n" * n + "-absent\n+y\n"
+    sh.fs.write_bytes("/tmp/w/p", patch.encode())
+    start = time.monotonic()
+    r = sh.run("cd /tmp/w && git apply p; echo $?")
+    assert time.monotonic() - start < 2
+    assert r.stdout == "1\n" and "patch does not apply" in r.stderr
+
+
+def test_join_on_one_repeated_key_streams_its_output():
+    import tracemalloc
+    sh = Shell(max_call_duration=1)
+    sh.fs.mkdir("/tmp/w", parents=True)
+    sh.fs.write_bytes("/tmp/w/a", b"k v\n" * 10000)
+    tracemalloc.start()
+    try:
+        r = sh.run("cd /tmp/w && join a a > /dev/null")
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert r.exit_code != 0  # the time limit ends 100 million rows
+    assert peak < 64 * 1024 * 1024
+
+
+# name lengths picked so the unbounded match takes about 10 s: the old code fails this quickly, without hanging
+@pytest.mark.parametrize("cmd,n", [
+    ("tar -cf t.tar --transform='s/\\(a*\\)*b/x/' $n", 26),
+    ("tar -cf t.tar --transform='s/(a|aa)+b/x/x' $n", 36),
+    ("tar -cf t.tar --exclude='*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b' $n", 32),
+    ("find . -name '*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b'", 32),
+])
+def test_tar_and_find_patterns_honour_the_time_limit(cmd, n):
+    sh = Shell(max_call_duration=1)
+    start = time.monotonic()
+    sh.run(f"mkdir -p /tmp/w && cd /tmp/w && n={'a' * n}c && echo x > $n && {cmd}")
+    assert time.monotonic() - start < 3
+
+
+def test_jq_depth_limit_is_the_same_for_every_kind_of_function():
+    sh = Shell()
+    kinds = {"filter": "def f(n): if n == 0 then 0 else 1 + f(n-1) end; f({})",
+             "value": "def f($n): if $n == 0 then 0 else 1 + f($n-1) end; f({})",
+             "none": "def r: if . < {} then .+1 | r else . end; 0 | r"}
+    for name, src in kinds.items():
+        assert sh.run(f"jq -n '{src.format(99)}'").stdout == "99\n", name
+        r = sh.run(f"jq -n '{src.format(100)}'")
+        assert r.exit_code == 5 and "recursion too deep" in r.stderr, name

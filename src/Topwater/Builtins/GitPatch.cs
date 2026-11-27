@@ -173,6 +173,33 @@ internal static partial class Git
 
     sealed class ApplyFailed : Exception;
 
+    /// <summary>Every index at or after pos where pre occurs in lines, in linear time (Knuth-Morris-Pratt over the lines), so
+    /// a file of identical lines cannot make the search quadratic.</summary>
+    static List<int> FindLines(List<string> lines, List<string> pre, int pos, Action check)
+    {
+        if (pre.Count == 0) return Enumerable.Range(pos, Math.Max(0, lines.Count + 1 - pos)).ToList();
+        var fail = new int[pre.Count];
+        for (int i = 1, k = 0; i < pre.Count; i++)
+        {
+            while (k > 0 && pre[i] != pre[k]) k = fail[k - 1];
+            if (pre[i] == pre[k]) k++;
+            fail[i] = k;
+        }
+        var hits = new List<int>();
+        for (int i = pos, k = 0; i < lines.Count; i++)
+        {
+            if (i % 4096 == 0) check();
+            while (k > 0 && lines[i] != pre[k]) k = fail[k - 1];
+            if (lines[i] == pre[k]) k++;
+            if (k == pre.Count)
+            {
+                hits.Add(i - k + 1);
+                k = fail[k - 1];
+            }
+        }
+        return hits;
+    }
+
     /// <summary>data with fp's hunks applied. Each hunk's lines must match exactly, though it may sit at an offset from the line
     /// the patch names (nearest first); there is no fuzz.</summary>
     static byte[] ApplyHunks(Cmd g, byte[] data, FilePatch fp, string path, bool verbose)
@@ -188,10 +215,8 @@ internal static partial class Git
             var post = body.Where(l => l.Sign != '-').Select(l => l.Text).ToList();
             int start = (oc > 0 ? os - 1 : os) + offset;
             int? found = null;
-            bool Fits(int p) => pos <= p && p <= lines.Count - pre.Count && lines.Skip(p).Take(pre.Count).SequenceEqual(pre);
-            for (int d = 0; d <= Math.Max(lines.Count, 1) && found == null; d++)
-                foreach (var p in d > 0 ? [start + d, start - d] : new[] { start })
-                    if (Fits(p)) { found = p; break; }
+            foreach (var p in FindLines(lines, pre, pos, g.Check))  // the nearest, and after the named line on a tie
+                if (found is not { } f || Math.Abs(p - start) < Math.Abs(f - start) || (Math.Abs(p - start) == Math.Abs(f - start) && p >= start)) found = p;
             if (found is not { } at)
             {
                 if (verbose) g.Err(SubMsg("apply", "searching", ("lines", Text(string.Concat(pre)))) + "\n");
@@ -224,21 +249,49 @@ internal static partial class Git
             {
                 var full = top.TrimEnd('/') + "/" + p;
                 if (repo != null) return repo.WtStat(p);
+                if (fs.IsSymlink(full)) return ("120000", ByteText.Encode(fs.ReadLink(full)));
                 if (fs.IsFile(full)) return ((fs.Stat(full).Mode & 0x40) != 0 ? "100755" : "100644", fs.ReadAllBytes(full));
                 return null;
             }
             return entries.TryGetValue(p, out var e) ? (e.Mode, repo!.Typed(e.Sha, "blob")) : null;
+        }
+        // whether a directory above p is a symbolic link (or a file or link these patches make), which git refuses to write through
+        bool BeyondLink(string p)
+        {
+            var parts = p.Split('/')[..^1];
+            for (int k = 1; k <= parts.Length; k++)
+            {
+                var above = string.Join("/", parts[..k]);
+                if ((state.TryGetValue(above, out var sv) && sv != null) || (worktree && fs.IsSymlink(top.TrimEnd('/') + "/" + above))) return true;
+            }
+            return false;
         }
         bool ok = true;
         foreach (var fp in patches)
         {
             var path = fp.New ?? fp.Old ?? "";
             foreach (var p in new[] { fp.Old, fp.New })
-                if (p != null) CheckPath(p);  // both sides: a rename must not reach outside the work tree either
+                if (p != null)
+                {
+                    try { CheckPath(p); }  // both sides: a rename must not reach outside the work tree either
+                    catch (GitException) { throw SubFatal("apply", "invalidPath", ("path", p)); }
+                }
             if (verbose) g.Err(SubMsg("apply", "checking", ("path", path)) + "\n");
             if (fp.Binary)
             {
                 g.Err(SubMsg("apply", "binary", ("path", path)) + "\n");
+                ok = false;
+                continue;
+            }
+            if (fp.OldMode != null && fp.NewMode != null && (fp.OldMode == "120000") != (fp.NewMode == "120000"))
+            {
+                g.Err(SubMsg("apply", "modeMismatch", ("path", path), ("new", fp.NewMode), ("old", fp.OldMode)) + "\n");
+                ok = false;
+                continue;
+            }
+            if (new[] { fp.Old, fp.New }.FirstOrDefault(p => p != null && BeyondLink(p)) is { } linked)
+            {
+                g.Err(SubMsg("apply", "beyondLink", ("path", linked)) + "\n");
                 ok = false;
                 continue;
             }
@@ -259,7 +312,7 @@ internal static partial class Git
                 {
                     if (Current(fp.Old) is not { } have)
                     {
-                        g.Err(SubMsg("apply", worktree ? "noSuchFile" : "notInIndex", ("path", fp.Old)) + "\n");
+                        g.Err(SubMsg("apply", index ? "notInIndex" : "noSuchFile", ("path", fp.Old)) + "\n");
                         throw new ApplyFailed();
                     }
                     if (index && worktree && !state.ContainsKey(fp.Old) && !(entries.TryGetValue(fp.Old, out var e) && ObjectId("blob", have.Data) == e.Sha))
@@ -284,7 +337,13 @@ internal static partial class Git
                 continue;
             }
             if (fp.Old != null && fp.Old != fp.New) state[fp.Old] = null;
-            if (fp.New != null) state[fp.New] = (fp.NewMode ?? oldMode ?? "100644", newData);
+            if (fp.New != null)
+            {
+                var mode = fp.NewMode ?? oldMode ?? "100644";
+                if (mode != "120000")  // any executable bit makes an executable file, as git reads modes
+                    mode = mode.Length > 0 && mode.All(ch => ch is >= '0' and <= '7') && (Convert.ToInt64(mode.Length > 20 ? mode[^20..] : mode, 8) & 0x49) != 0 ? "100755" : "100644";
+                state[fp.New] = (mode, newData);
+            }
         }
         if (!ok || check) return ok;
         foreach (var fp in patches)
@@ -303,8 +362,13 @@ internal static partial class Git
                 else
                 {
                     fs.CreateDirectory(VirtualFileSystem.GetParent(full), parents: true);
-                    fs.WriteAllBytes(full, put.Data);
-                    fs.Chmod(full, (put.Mode == "100755" ? 0x1FF : 0x1B6) & ~fs.Umask);
+                    if (fs.IsSymlink(full) || (put.Mode == "120000" && fs.Exists(full, false))) fs.Delete(full);  // a link is replaced, never written through
+                    if (put.Mode == "120000") fs.CreateSymlink(full, ByteText.Decode(put.Data));
+                    else
+                    {
+                        fs.WriteAllBytes(full, put.Data);
+                        fs.Chmod(full, (put.Mode == "100755" ? 0x1FF : 0x1B6) & ~fs.Umask);
+                    }
                 }
             }
             if (index)
@@ -398,6 +462,37 @@ internal static partial class Git
 
     // ---------- am ----------
 
+    /// <summary>RFC 2047 encoded words (=?UTF-8?q?J=C3=BCrgen?=, =?UTF-8?b?...?=) in a mail header, as git format-patch writes
+    /// non-ASCII names and subjects; the space between two encoded words goes.</summary>
+    static string DecodeWords(string value)
+    {
+        const string word = @"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=";
+        static string One(Match m)
+        {
+            string charset = m.Groups[1].Value.ToLowerInvariant(), kind = m.Groups[2].Value.ToLowerInvariant(), text = m.Groups[3].Value;
+            try
+            {
+                byte[] raw;
+                if (kind == "b") raw = Convert.FromBase64String(text + new string('=', (4 - text.Length % 4) % 4));
+                else
+                {
+                    var q = text.Replace('_', ' ');
+                    if (q.Any(c => c > 0xff)) return m.Value;
+                    raw = Encoding.Latin1.GetBytes(Regex.Replace(q, "=([0-9A-Fa-f]{2})", h => ((char)Convert.ToByte(h.Groups[1].Value, 16)).ToString()));
+                }
+                return charset switch
+                {
+                    "iso-8859-1" or "latin-1" => Encoding.Latin1.GetString(raw),
+                    "us-ascii" => new string(raw.Select(b => b < 0x80 ? (char)b : '\uFFFD').ToArray()),
+                    _ => Encoding.UTF8.GetString(raw),
+                };
+            }
+            catch (FormatException) { return m.Value; }
+        }
+        value = Regex.Replace(value, $@"({word})\s+(?={word})", "$1");
+        return Regex.Replace(value, word, One);
+    }
+
     /// <summary>(name, email, date, subject, body, patch) from one message as git format-patch writes it.</summary>
     static (string Name, string Email, string? Date, string Subject, string Body, byte[] Patch) ParseMail(string text)
     {
@@ -415,9 +510,11 @@ internal static partial class Git
                 headers[last] = line[(colon + 1)..].Trim();
             }
         }
+        foreach (var k in new[] { "from", "subject" })
+            if (headers.TryGetValue(k, out var hv)) headers[k] = DecodeWords(hv);
         var from = headers.GetValueOrDefault("from", "");
         var m = Regex.Match(from, @"\A\s*(.*?)\s*<([^<>]*)>\s*\z", RegexOptions.Singleline);
-        var (name, email) = m.Success ? (m.Groups[1].Value.Trim('"'), m.Groups[2].Value) : (from, from);
+        var (name, email) = m.Success ? (m.Groups[1].Value.Replace("\"", ""), m.Groups[2].Value) : (from, from);
         var subject = headers.GetValueOrDefault("subject", "");
         subject = Regex.Replace(subject, @"^(\s*(\[[^\]]*\]|re:)\s*)+", "", RegexOptions.IgnoreCase);
         subject = Regex.Replace(subject, @"\s+", " ").Trim();
@@ -706,13 +803,26 @@ internal static partial class Git
         int bestScore = -1, reach = 0;
         if (total > 1)
         {
-            // shortcut: counts reachable candidates per commit (quadratic); fine for the histories a machine holds
+            var inside = order.ToDictionary(c => c, c => repo.Commit(c).Parents.Where(candidates.Contains).ToList(), StringComparer.Ordinal);
+            bool linear = inside.Values.All(ps => ps.Count <= 1);
+            var weight = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var c in order)  // oldest first, so a parent's count is known
+            {
+                if (linear && inside[c].All(weight.ContainsKey))  // itself plus what its one parent reaches: linear time
+                    weight[c] = 1 + (inside[c].Count > 0 ? weight[inside[c][0]] : 0);
+                else
+                {
+                    // shortcut: with merges, counts reachable candidates per commit (quadratic); fine for the histories a machine holds
+                    var mine = Ancestors(repo, [c]);
+                    mine.IntersectWith(candidates);
+                    weight[c] = mine.Count;
+                }
+                g.Check();
+            }
             foreach (var c in order)
             {
                 if (skipped.Contains(c) || c == bad) continue;
-                var mine = Ancestors(repo, [c]);
-                mine.IntersectWith(candidates);
-                int w = mine.Count;
+                int w = weight[c];
                 if (Math.Min(w, total - w) > bestScore) (best, bestScore, reach) = (c, Math.Min(w, total - w), w);
             }
         }
@@ -759,7 +869,7 @@ internal static partial class Git
         if (action == "start")
         {
             var revs = rest.Where(r => r != "--").Select(CommitArg).ToList();
-            if (busy) BisectClear(repo);
+            BisectClear(repo);  // marks left without a session (bisect reset run from bisect run) go too
             repo.GWrite("BISECT_START", (repo.Branch() ?? repo.Head() ?? "") + "\n");
             BisectLog(repo, "git bisect start" + string.Concat(rest.Where(r => r != "--").Select(r => $" '{r}'")) + "\n");
             if (revs.Count > 0) BisectMark(repo, "bad", revs[0]);
@@ -823,6 +933,7 @@ internal static partial class Git
                     g.Err(SubMsg("bisect", "runFailed", ("code", code.ToString()), ("command", shown)) + "\n");
                     return 127;
                 }
+                if (!repo.GExists("BISECT_START")) return 1;  // the command ended the session (git bisect reset): nothing left to mark
                 BisectMark(repo, code == 125 ? "skip" : code == 0 ? "good" : "bad", repo.Head()!);
                 var result = BisectNext(g, repo);
                 if (result == "found")

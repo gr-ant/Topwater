@@ -844,6 +844,11 @@ function join(ctx: CommandContext): number {
       row.push(...(f1 ?? []).filter((_, i) => i !== k1), ...(f2 ?? []).filter((_, i) => i !== k2));
     }
     lines.push(row.join(outSep));
+    if (lines.length >= 1024) { // written as it goes: one repeated key can pair up into far more rows than fit in memory
+      ctx.checkTime();
+      ctx.stdout.write(lines.map(x => x + '\n').join(''));
+      lines.length = 0;
+    }
   };
   let i = 0, j = 0;
   if (a.has('\u0001') && (left.length || right.length)) {
@@ -865,7 +870,6 @@ function join(ctx: CommandContext): number {
       while (i2 < left.length && key(left[i2], 0) === aKey) i2++;
       while (j2 < right.length && key(right[j2], 1) === aKey) j2++;
       if (!only.size) for (const x of left.slice(i, i2)) for (const y of right.slice(j, j2)) emit(x, y);
-      if (lines.length > 1_000_000) throw new ShellError('output too large');
       [i, j] = [i2, j2];
     }
   }

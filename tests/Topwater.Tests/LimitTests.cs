@@ -201,4 +201,79 @@ public class LimitTests
         Assert.Equal("5\n99\n", r.Stdout);
         Assert.Contains("recursion too deep", r.Stderr);
     }
+
+    // Board 041: inputs that used to run for minutes or grow without bound now stop inside a short call limit.
+
+    [Fact]
+    public async Task GitApplyHunkSearchIsLinear()
+    {
+        var sh = Quick(2);
+        sh.Fs.CreateDirectory("/tmp/w", true);
+        sh.Fs.WriteAllBytes("/tmp/w/big", System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("x\n", 30000))));
+        const int n = 30000;
+        var patch = $"--- a/big\n+++ b/big\n@@ -1,{n + 1} +1,{n + 1} @@\n" + string.Concat(Enumerable.Repeat(" x\n", n)) + "-absent\n+y\n";
+        sh.Fs.WriteAllBytes("/tmp/w/p", System.Text.Encoding.ASCII.GetBytes(patch));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var r = await sh.RunAsync("cd /tmp/w && git apply p; echo $?");
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), watch.Elapsed.ToString());
+        Assert.Equal("1\n", r.Stdout);
+        Assert.Contains("patch does not apply", r.Stderr);
+    }
+
+    [Fact]
+    public async Task JoinOnOneRepeatedKeyStreamsItsOutput()
+    {
+        var sh = Quick(1);
+        sh.Fs.CreateDirectory("/tmp/w", true);
+        sh.Fs.WriteAllBytes("/tmp/w/a", System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("k v\n", 10000))));
+        // the managed heap is sampled while join runs (other tests share the process, so the bound is loose): holding
+        // the product grew it by gigabytes
+        long peak = 0;
+        using var done = new CancellationTokenSource();
+        var sampler = Task.Run(async () =>
+        {
+            while (!done.IsCancellationRequested)
+            {
+                peak = Math.Max(peak, GC.GetTotalMemory(false));
+                await Task.Delay(10);
+            }
+        });
+        var r = await sh.RunAsync("cd /tmp/w && join a a > /dev/null");
+        done.Cancel();
+        await sampler;
+        Assert.NotEqual(0, r.ExitCode);  // the time limit ends 100 million rows
+        Assert.True(peak < 1L << 30, $"peak heap {peak >> 20} MB");
+    }
+
+    // name lengths picked so the unbounded match takes about 10 s in Python
+    [Theory]
+    [InlineData("tar -cf t.tar --transform='s/\\(a*\\)*b/x/' $n", 26)]
+    [InlineData("tar -cf t.tar --transform='s/(a|aa)+b/x/x' $n", 36)]
+    [InlineData("tar -cf t.tar --exclude='*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b' $n", 32)]
+    [InlineData("find . -name '*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b'", 32)]
+    public async Task TarAndFindPatternsHonourTheTimeLimit(string cmd, int n)
+    {
+        var sh = Quick(1);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await sh.RunAsync($"mkdir -p /tmp/w && cd /tmp/w && n={new string('a', n)}c && echo x > $n && {cmd}");
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), watch.Elapsed.ToString());
+    }
+
+    [Fact]
+    public async Task JqDepthLimitIsTheSameForEveryKindOfFunction()
+    {
+        var sh = new Shell();
+        var kinds = new Dictionary<string, string>
+        {
+            ["filter"] = "def f(n): if n == 0 then 0 else 1 + f(n-1) end; f(N)",
+            ["value"] = "def f($n): if $n == 0 then 0 else 1 + f($n-1) end; f(N)",
+            ["none"] = "def r: if . < N then .+1 | r else . end; 0 | r",
+        };
+        foreach (var (name, src) in kinds)
+        {
+            Assert.True((await sh.RunAsync($"jq -n '{src.Replace("N", "99")}'")).Stdout == "99\n", name);
+            var r = await sh.RunAsync($"jq -n '{src.Replace("N", "100")}'");
+            Assert.True(r.ExitCode == 5 && r.Stderr.Contains("recursion too deep"), name);
+        }
+    }
 }

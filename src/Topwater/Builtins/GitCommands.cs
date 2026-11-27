@@ -133,6 +133,8 @@ internal static partial class Git
             if (s.Head != null && TrackingText(repo, b) is { } t) output.AddRange([t, ""]);
         }
         bool merging = repo.GExists("MERGE_HEAD");
+        if (repo.GExists("rebase-apply/next")) output.AddRange([M("amInProgress"), ""]);
+        if (repo.GExists("BISECT_START")) output.AddRange([M("bisecting", ("branch", (repo.GText("BISECT_START") ?? "").Trim())), ""]);
         if (s.Head == null) output.AddRange(["", committing ? M("initialCommit") : M("noCommitsYet"), ""]);
         if (merging)
         {
@@ -1049,6 +1051,12 @@ internal static partial class Git
                 for (int j = s2; j < e2; j++)
                 {
                     var text = ly[j].TrimEnd('\n');
+                    if (Regex.IsMatch(text, @"\A(<{7}|={7}|>{7})(?:[ \t\r]|\z)"))
+                    {
+                        bad = true;
+                        g.Out(SubMsg("diff", "checkMarker", ("file", name), ("line", (j + 1).ToString())) + "\n");
+                        continue;
+                    }
                     var problems = new List<string>();
                     if (text.Length > 0 && text[^1] is ' ' or '\t' or '\r') problems.Add(SubMsg("diff", "checkTrailing"));
                     var indent = text[..(text.Length - text.TrimStart(' ', '\t').Length)];

@@ -314,8 +314,8 @@ class Repo:
         """The object a ref (HEAD, refs/heads/x, ...) points to, following symbolic refs; None when it doesn't exist."""
         if depth > 5:
             return None
-        if not re.fullmatch(r"[A-Za-z0-9_./-]+", name) or ".." in name or name.startswith("/") or name.endswith("/"):
-            return None
+        if not re.fullmatch(r"[A-Za-z0-9_./-]+", name) or ".." in name or any(p in ("", ".") for p in name.split("/")):
+            return None  # refs/heads/. (from `git checkout .`) names no ref
         text = self.gtext(name) if not self.fs.is_dir(self._gpath(name), follow=False) else None
         if text is not None:
             text = text.strip()
@@ -1618,6 +1618,10 @@ def long_status(repo: Repo, s: Status, committing: bool = False) -> str:
         if t:
             out += [t, ""]
     merging = repo.gexists("MERGE_HEAD")
+    if repo.gexists("rebase-apply/next"):
+        out += [M("amInProgress"), ""]
+    if repo.gexists("BISECT_START"):
+        out += [M("bisecting", branch=(repo.gtext("BISECT_START") or "").strip()), ""]
     if s.head is None:
         out += ["", M("initialCommit") if committing else M("noCommitsYet"), ""]
     if merging:
@@ -2451,6 +2455,10 @@ def whitespace_check(g: Git, repo: Repo, a: dict, b: dict, changes, b_worktree: 
         for _, _, s2, e2 in myers(lx, ly, g.ctx.check_time):
             for j in range(s2, e2):
                 text = ly[j].rstrip(b"\n")
+                if re.match(rb"(<{7}|={7}|>{7})(?:[ \t\r]|$)", text):
+                    bad = True
+                    g.out(sub_msg("diff", "checkMarker", file=name, line=str(j + 1)) + "\n")
+                    continue
                 problems = []
                 if text and text[-1:] in b" \t\r":
                     problems.append(sub_msg("diff", "checkTrailing"))
@@ -2716,7 +2724,7 @@ def git_checkout(g: Git, args) -> int:
         return 0
     if not o.has("\x01") and target in ("HEAD", "@") and repo.head_ref() and len(o.args) == 1:
         return move_head(g, repo, repo.head_ref(), repo.head(), repo.branch(), force, quiet, stay=True)
-    if not o.has("\x01") and repo.read_ref("refs/heads/" + target) and len(o.args) == 1:
+    if not o.has("\x01") and valid_branch_name(target) and repo.read_ref("refs/heads/" + target) and len(o.args) == 1:
         return move_head(g, repo, "refs/heads/" + target, repo.read_ref("refs/heads/" + target), target, force, quiet)
     sha = try_resolve(repo, target)
     c = peel(repo, sha, "commit") if sha else None
@@ -4042,6 +4050,32 @@ class ApplyFailed(Exception):
     pass
 
 
+def find_lines(lines: list, pre: list, pos: int, check) -> list[int]:
+    """Every index at or after pos where pre occurs in lines, in linear time (Knuth-Morris-Pratt over the lines), so
+    a file of identical lines cannot make the search quadratic."""
+    if not pre:
+        return list(range(pos, len(lines) + 1))
+    fail, k = [0] * len(pre), 0
+    for i in range(1, len(pre)):
+        while k and pre[i] != pre[k]:
+            k = fail[k - 1]
+        if pre[i] == pre[k]:
+            k += 1
+        fail[i] = k
+    hits, k = [], 0
+    for i in range(pos, len(lines)):
+        if i % 4096 == 0:
+            check()
+        while k and lines[i] != pre[k]:
+            k = fail[k - 1]
+        if lines[i] == pre[k]:
+            k += 1
+        if k == len(pre):
+            hits.append(i - k + 1)
+            k = fail[k - 1]
+    return hits
+
+
 def apply_hunks(g: Git, data: bytes, fp: FilePatch, path: str, verbose: bool) -> bytes:
     """data with fp's hunks applied. Each hunk's lines must match exactly, though it may sit at an offset from the line
     the patch names (nearest first); there is no fuzz."""
@@ -4052,14 +4086,8 @@ def apply_hunks(g: Git, data: bytes, fp: FilePatch, path: str, verbose: bool) ->
         pre = [t for s, t in body if s != "+"]
         post = [t for s, t in body if s != "-"]
         start = (os_ - 1 if oc else os_) + offset
-        found = None
-        for d in range(max(len(lines), 1) + 1):
-            for p in ((start + d, start - d) if d else (start,)):
-                if pos <= p <= len(lines) - len(pre) and lines[p:p + len(pre)] == pre:
-                    found = p
-                    break
-            if found is not None:
-                break
+        hits = find_lines(lines, pre, pos, g.ctx.check_time)
+        found = min(hits, key=lambda p: (abs(p - start), p < start), default=None)
         if found is None:
             if verbose:
                 g.err(sub_msg("apply", "searching", lines="".join(x.decode("utf-8", "surrogateescape") for x in pre)) + "\n")
@@ -4088,21 +4116,45 @@ def apply_patches(g: Git, repo, top: str, patches: list[FilePatch], index: bool,
             full = top.rstrip("/") + "/" + p
             if repo:
                 return repo.wt_stat(p)
+            if fs.is_symlink(full):
+                return "120000", fs.read_link(full).encode("utf-8", "surrogateescape")
             if fs.is_file(full):
                 return ("100755" if fs.stat(full).mode & 0o100 else "100644"), fs.read_bytes(full)
             return None
         e = entries.get(p)
         return (e.mode, repo.typed(e.sha, "blob")) if e else None
+
+    def beyond_link(p: str) -> bool:
+        """Whether a directory above p is a symbolic link (or a file or link these patches make), which git refuses
+        to write through."""
+        parts = p.split("/")[:-1]
+        for k in range(1, len(parts) + 1):
+            above = "/".join(parts[:k])
+            if state.get(above) is not None or (worktree and fs.is_symlink(top.rstrip("/") + "/" + above)):
+                return True
+        return False
     ok = True
     for fp in patches:
         path = fp.new or fp.old or ""
         for p in (fp.old, fp.new):
             if p is not None:
-                check_path(p)  # both sides: a rename must not reach outside the work tree either
+                try:
+                    check_path(p)  # both sides: a rename must not reach outside the work tree either
+                except GitError:
+                    raise sub_fatal("apply", "invalidPath", path=p) from None
         if verbose:
             g.err(sub_msg("apply", "checking", path=path) + "\n")
         if fp.binary:
             g.err(sub_msg("apply", "binary", path=path) + "\n")
+            ok = False
+            continue
+        if fp.old_mode and fp.new_mode and (fp.old_mode == "120000") != (fp.new_mode == "120000"):
+            g.err(sub_msg("apply", "modeMismatch", path=path, new=fp.new_mode, old=fp.old_mode) + "\n")
+            ok = False
+            continue
+        linked = next((p for p in (fp.old, fp.new) if p is not None and beyond_link(p)), None)
+        if linked is not None:
+            g.err(sub_msg("apply", "beyondLink", path=linked) + "\n")
             ok = False
             continue
         try:
@@ -4114,7 +4166,7 @@ def apply_patches(g: Git, repo, top: str, patches: list[FilePatch], index: bool,
             else:
                 have = current(fp.old)
                 if have is None:
-                    g.err(sub_msg("apply", "noSuchFile" if worktree else "notInIndex", path=fp.old) + "\n")
+                    g.err(sub_msg("apply", "notInIndex" if index else "noSuchFile", path=fp.old) + "\n")
                     raise ApplyFailed()
                 if index and worktree and fp.old not in state:
                     e = entries.get(fp.old)
@@ -4134,7 +4186,10 @@ def apply_patches(g: Git, repo, top: str, patches: list[FilePatch], index: bool,
         if fp.old is not None and fp.old != fp.new:
             state[fp.old] = None
         if fp.new is not None:
-            state[fp.new] = (fp.new_mode or old_mode or "100644", new_data)
+            mode = fp.new_mode or old_mode or "100644"
+            if mode != "120000":  # any executable bit makes an executable file, as git reads modes
+                mode = "100755" if re.fullmatch(r"[0-7]+", mode) and int(mode, 8) & 0o111 else "100644"
+            state[fp.new] = (mode, new_data)
     if not ok or check:
         return ok
     for fp in patches:
@@ -4151,8 +4206,13 @@ def apply_patches(g: Git, repo, top: str, patches: list[FilePatch], index: bool,
                     fs.delete(full)
             else:
                 fs.mkdir(get_parent(full), parents=True)
-                fs.write_bytes(full, v[1])
-                fs.chmod(full, (0o777 if v[0] == "100755" else 0o666) & ~g.ctx.shell.umask)
+                if fs.is_symlink(full) or (v[0] == "120000" and fs.exists(full, follow=False)):
+                    fs.delete(full)  # a link is replaced, never written through
+                if v[0] == "120000":
+                    fs.create_symlink(full, v[1].decode("utf-8", "surrogateescape"))
+                else:
+                    fs.write_bytes(full, v[1])
+                    fs.chmod(full, (0o777 if v[0] == "100755" else 0o666) & ~g.ctx.shell.umask)
         if index:
             if v is None:
                 entries.pop(p, None)
@@ -4237,6 +4297,24 @@ def git_apply(g: Git, args) -> int:
 
 # ---------- am ----------
 
+def decode_words(value: str) -> str:
+    """RFC 2047 encoded words (=?UTF-8?q?J=C3=BCrgen?=, =?UTF-8?b?...?=) in a mail header, as git format-patch writes
+    non-ASCII names and subjects; the space between two encoded words goes."""
+    import base64
+
+    def one(m: re.Match) -> str:
+        charset, kind, text = m.group(1), m.group(2).lower(), m.group(3)
+        try:
+            raw = (base64.b64decode(text + "=" * (-len(text) % 4)) if kind == "b"
+                   else re.sub(rb"=([0-9A-Fa-f]{2})", lambda h: bytes([int(h.group(1), 16)]), text.replace("_", " ").encode("latin-1")))
+            return raw.decode(charset if charset.lower() in ("utf-8", "us-ascii", "iso-8859-1", "latin-1") else "utf-8", "replace")
+        except (ValueError, UnicodeError):
+            return m.group(0)
+    word = r"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?="
+    value = re.sub(rf"({word})\s+(?={word})", r"\1", value)
+    return re.sub(word, one, value)
+
+
 def parse_mail(text: str) -> tuple[str, str, str | None, str, str, bytes]:
     """(name, email, date, subject, body, patch) from one message as git format-patch writes it."""
     head, _, rest = text.partition("\n\n")
@@ -4249,8 +4327,11 @@ def parse_mail(text: str) -> tuple[str, str, str | None, str, str, bytes]:
             last, _, v = line.partition(":")
             last = last.strip().lower()
             headers[last] = v.strip()
+    for k in ("from", "subject"):
+        if k in headers:
+            headers[k] = decode_words(headers[k])
     m = re.fullmatch(r"\s*(.*?)\s*<([^<>]*)>\s*", headers.get("from", ""))
-    name, email = (m.group(1).strip('"'), m.group(2)) if m else (headers.get("from", ""), headers.get("from", ""))
+    name, email = (m.group(1).replace('"', ""), m.group(2)) if m else (headers.get("from", ""), headers.get("from", ""))
     subject = headers.get("subject", "")
     subject = re.sub(r"^(\s*(\[[^\]]*\]|re:)\s*)+", "", subject, flags=re.I)
     subject = re.sub(r"\s+", " ", subject).strip()
@@ -4503,11 +4584,20 @@ def bisect_next(g: Git, repo: Repo) -> str:
     total = len(candidates)
     best, best_score, reach = None, -1, 0
     if total > 1:
-        # shortcut: counts reachable candidates per commit (quadratic); fine for the histories a machine holds
+        inside = {c: [p for p in repo.commit(c).parents if p in candidates] for c in order}
+        linear = all(len(ps) <= 1 for ps in inside.values())
+        weight: dict[str, int] = {}
+        for c in order:  # oldest first, so a parent's count is known
+            if linear and all(p in weight for p in inside[c]):  # itself plus what its one parent reaches: linear time
+                weight[c] = 1 + (weight[inside[c][0]] if inside[c] else 0)
+            else:
+                # shortcut: with merges, counts reachable candidates per commit (quadratic); fine for the histories a machine holds
+                weight[c] = len(ancestors(repo, [c], check) & candidates)
+            check()
         for c in order:
             if c in skipped or c == bad:
                 continue
-            w = len(ancestors(repo, [c], check) & candidates)
+            w = weight[c]
             if min(w, total - w) > best_score:
                 best, best_score, reach = c, min(w, total - w), w
     if best is None:
@@ -4552,8 +4642,7 @@ async def git_bisect(g: Git, args) -> int:
         return c
     if action == "start":
         revs = [commit_arg(r) for r in rest if r != "--"]
-        if busy:
-            bisect_clear(repo)
+        bisect_clear(repo)  # marks left without a session (bisect reset run from bisect run) go too
         repo.gwrite("BISECT_START", ((repo.branch() or repo.head() or "") + "\n").encode())
         bisect_log(repo, "git bisect start" + "".join(f" '{r}'" for r in rest if r != "--") + "\n")
         if revs:
@@ -4606,10 +4695,10 @@ async def git_bisect(g: Git, args) -> int:
             if code < 0 or code >= 128:
                 g.err(sub_msg("bisect", "runFailed", code=str(code), command=shown) + "\n")
                 return 127
+            if not repo.gexists("BISECT_START"):
+                return 1  # the command ended the session (git bisect reset): nothing left to mark
             head = repo.head()
             bisect_mark(g, repo, "skip" if code == 125 else "good" if code == 0 else "bad", head)
-            if code == 125:
-                pass
             result = bisect_next(g, repo)
             if result == "found":
                 g.out(sub_msg("bisect", "runFound") + "\n")

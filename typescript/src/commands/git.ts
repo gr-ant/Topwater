@@ -283,7 +283,7 @@ class Repo {
   /** The object a ref (HEAD, refs/heads/x, ...) points to, following symbolic refs; null when it doesn't exist. */
   readRef(name: string, depth = 0): string | null {
     if (depth > 5) return null;
-    if (!/^[A-Za-z0-9_./-]+$/.test(name) || name.includes('..') || name.startsWith('/') || name.endsWith('/')) return null;
+    if (!/^[A-Za-z0-9_./-]+$/.test(name) || name.includes('..') || name.split('/').some(p => p === '' || p === '.')) return null; // refs/heads/. (from `git checkout .`) names no ref
     let text = !this.fs.isDirectory(this.gpath(name), false) ? this.gtext(name) : null;
     if (text !== null) {
       text = text.trim();
@@ -1431,6 +1431,8 @@ function longStatus(repo: Repo, s: Status, committing = false): string {
     if (t) out.push(t, '');
   }
   const merging = repo.gexists('MERGE_HEAD');
+  if (repo.gexists('rebase-apply/next')) out.push(M('amInProgress'), '');
+  if (repo.gexists('BISECT_START')) out.push(M('bisecting', { branch: (repo.gtext('BISECT_START') ?? '').trim() }), '');
   if (s.head === null) out.push('', committing ? M('initialCommit') : M('noCommitsYet'), '');
   if (merging) out.push(s.unmerged.size ? M('unmergedHeader') : M('mergeFixed'), '');
   const label = (key: string) => ljust(M(key) + ' ', 12);
@@ -2188,6 +2190,11 @@ function whitespaceCheck(g: Git, repo: Repo, a: Files, b: Files, changes: Change
     for (const [, , s2, e2] of myers(lx, ly, g.check)) {
       for (let j = s2; j < e2; j++) {
         const text = rstripChars(ly[j], '\n');
+        if (/^(<{7}|={7}|>{7})(?:[ \t\r]|$)/.test(text)) {
+          bad = true;
+          g.out(subMsg('diff', 'checkMarker', { file: name, line: String(j + 1) }) + '\n');
+          continue;
+        }
         const problems: string[] = [];
         if (text && ' \t\r'.includes(text[text.length - 1])) problems.push(subMsg('diff', 'checkTrailing'));
         const indent = /^[ \t]*/.exec(text)![0];
@@ -2431,7 +2438,7 @@ function gitCheckout(g: Git, args: string[]): number {
   }
   if (!o.has('\x01') && (target === 'HEAD' || target === '@') && repo.headRef() && o.args.length === 1)
     return moveHead(g, repo, repo.headRef(), repo.head(), repo.branch()!, force, quiet, null, false, true);
-  if (!o.has('\x01') && repo.readRef('refs/heads/' + target) && o.args.length === 1)
+  if (!o.has('\x01') && validBranchName(target) && repo.readRef('refs/heads/' + target) && o.args.length === 1)
     return moveHead(g, repo, 'refs/heads/' + target, repo.readRef('refs/heads/' + target), target, force, quiet);
   const sha = tryResolve(repo, target);
   const c = sha ? peel(repo, sha, 'commit') : null;
@@ -3594,6 +3601,28 @@ function parsePatch(data: Uint8Array, strip: number): FilePatch[] {
 
 class ApplyFailed extends Error {}
 
+/** Every index at or after pos where pre occurs in lines, in linear time (Knuth-Morris-Pratt over the lines), so
+ * a file of identical lines cannot make the search quadratic. */
+function findLines(lines: string[], pre: string[], pos: number, check: () => void): number[] {
+  const hits: number[] = [];
+  if (!pre.length) { for (let i = pos; i <= lines.length; i++) hits.push(i); return hits; }
+  const fail = new Array<number>(pre.length).fill(0);
+  let k = 0;
+  for (let i = 1; i < pre.length; i++) {
+    while (k && pre[i] !== pre[k]) k = fail[k - 1];
+    if (pre[i] === pre[k]) k++;
+    fail[i] = k;
+  }
+  k = 0;
+  for (let i = pos; i < lines.length; i++) {
+    if (i % 4096 === 0) check();
+    while (k && lines[i] !== pre[k]) k = fail[k - 1];
+    if (lines[i] === pre[k]) k++;
+    if (k === pre.length) { hits.push(i - k + 1); k = fail[k - 1]; }
+  }
+  return hits;
+}
+
 /** data with fp's hunks applied. Each hunk's lines must match exactly, though it may sit at an offset from the line
  * the patch names (nearest first); there is no fuzz. */
 function applyHunks(g: Git, data: Uint8Array, fp: FilePatch, path: string, verbose: boolean): Uint8Array {
@@ -3605,11 +3634,9 @@ function applyHunks(g: Git, data: Uint8Array, fp: FilePatch, path: string, verbo
     const pre = body.filter(([s]) => s !== '+').map(([, t]) => t);
     const post = body.filter(([s]) => s !== '-').map(([, t]) => t);
     const start = (oc ? os - 1 : os) + offset;
-    const fits = (p: number) => pos <= p && p <= lines.length - pre.length && pre.every((t, j) => lines[p + j] === t);
-    let found: number | null = null;
-    for (let d = 0; d <= Math.max(lines.length, 1) && found === null; d++) {
-      for (const p of d ? [start + d, start - d] : [start]) if (fits(p)) { found = p; break; }
-    }
+    let found: number | null = null; // the nearest hit; of two as near, the later one
+    for (const p of findLines(lines, pre, pos, g.check))
+      if (found === null || Math.abs(p - start) < Math.abs(found - start) || (Math.abs(p - start) === Math.abs(found - start) && found < start && p >= start)) found = p;
     if (found === null) {
       if (verbose) g.err(subMsg('apply', 'searching', { lines: pre.join('') }) + '\n');
       g.err(subMsg('apply', 'patchFailed', { path, line: String(os) }) + '\n');
@@ -3637,19 +3664,47 @@ function applyPatches(g: Git, repo: Repo | null, top: string, patches: FilePatch
     if (worktree) {
       const full = rstripChars(top, '/') + '/' + p;
       if (repo) return repo.wtStat(p);
+      if (fs.isSymlink(full)) return ['120000', encodeText(fs.readLink(full))];
       if (fs.isFile(full)) return [fs.stat(full).mode & 0o100 ? '100755' : '100644', fs.readBytes(full)];
       return null;
     }
     const e = entries.get(p);
     return e ? [e.mode, repo!.typed(e.sha, 'blob')] : null;
   };
+  /** Whether a directory above p is a symbolic link (or a file or link these patches make), which git refuses
+   * to write through. */
+  const beyondLink = (p: string) => {
+    const parts = p.split('/').slice(0, -1);
+    for (let k = 1; k <= parts.length; k++) {
+      const above = parts.slice(0, k).join('/');
+      if (state.get(above) || (worktree && fs.isSymlink(rstripChars(top, '/') + '/' + above))) return true;
+    }
+    return false;
+  };
   let ok = true;
   for (const fp of patches) {
     const path = fp.neu || fp.old || '';
-    for (const p of [fp.old, fp.neu]) if (p !== null) checkPath(p); // both sides: a rename must not reach outside the work tree either
+    for (const p of [fp.old, fp.neu]) {
+      if (p === null) continue;
+      try { checkPath(p); } catch (e) { // both sides: a rename must not reach outside the work tree either
+        if (e instanceof GitError) throw subFatal('apply', 'invalidPath', { path: p });
+        throw e;
+      }
+    }
     if (verbose) g.err(subMsg('apply', 'checking', { path }) + '\n');
     if (fp.binary) {
       g.err(subMsg('apply', 'binary', { path }) + '\n');
+      ok = false;
+      continue;
+    }
+    if (fp.oldMode && fp.newMode && (fp.oldMode === '120000') !== (fp.newMode === '120000')) {
+      g.err(subMsg('apply', 'modeMismatch', { path, new: fp.newMode, old: fp.oldMode }) + '\n');
+      ok = false;
+      continue;
+    }
+    const linked = [fp.old, fp.neu].find(p => p !== null && beyondLink(p));
+    if (linked) {
+      g.err(subMsg('apply', 'beyondLink', { path: linked }) + '\n');
       ok = false;
       continue;
     }
@@ -3664,7 +3719,7 @@ function applyPatches(g: Git, repo: Repo | null, top: string, patches: FilePatch
       } else {
         const have = current(fp.old);
         if (have === null) {
-          g.err(subMsg('apply', worktree ? 'noSuchFile' : 'notInIndex', { path: fp.old }) + '\n');
+          g.err(subMsg('apply', index ? 'notInIndex' : 'noSuchFile', { path: fp.old }) + '\n');
           throw new ApplyFailed();
         }
         if (index && worktree && !state.has(fp.old)) {
@@ -3691,7 +3746,11 @@ function applyPatches(g: Git, repo: Repo | null, top: string, patches: FilePatch
       continue;
     }
     if (fp.old !== null && fp.old !== fp.neu) state.set(fp.old, null);
-    if (fp.neu !== null) state.set(fp.neu, [fp.newMode || oldMode || '100644', newData]);
+    if (fp.neu !== null) {
+      let mode = fp.newMode || oldMode || '100644';
+      if (mode !== '120000') mode = /^[0-7]+$/.test(mode) && parseInt(mode, 8) & 0o111 ? '100755' : '100644'; // any executable bit makes an executable file, as git reads modes
+      state.set(fp.neu, [mode, newData]);
+    }
   }
   if (!ok || check) return ok;
   if (verbose) for (const fp of patches) g.err(subMsg('apply', 'appliedCleanly', { path: (fp.neu || fp.old)! }) + '\n');
@@ -3704,8 +3763,12 @@ function applyPatches(g: Git, repo: Repo | null, top: string, patches: FilePatch
         else if (fs.exists(full, false)) fs.delete(full);
       } else {
         fs.mkdir(VirtualFileSystem.getParent(full), true);
-        fs.writeBytes(full, v[1]);
-        fs.chmod(full, (v[0] === '100755' ? 0o777 : 0o666) & ~fs.umask);
+        if (fs.isSymlink(full) || (v[0] === '120000' && fs.exists(full, false))) fs.delete(full); // a link is replaced, never written through
+        if (v[0] === '120000') fs.createSymlink(full, decodeBytes(v[1]));
+        else {
+          fs.writeBytes(full, v[1]);
+          fs.chmod(full, (v[0] === '100755' ? 0o777 : 0o666) & ~fs.umask);
+        }
       }
     }
     if (index) {
@@ -3791,6 +3854,31 @@ function gitApply(g: Git, args: string[]): number {
 
 // ---------- am ----------
 
+/** RFC 2047 encoded words (=?UTF-8?q?J=C3=BCrgen?=, =?UTF-8?b?...?=) in a mail header, as git format-patch writes
+ * non-ASCII names and subjects; the space between two encoded words goes. */
+function decodeWords(value: string): string {
+  const word = String.raw`=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=`;
+  value = value.replace(new RegExp(`(${word})\\s+(?=${word})`, 'g'), '$1');
+  return value.replace(new RegExp(word, 'g'), (all, charset: string, kind: string, text: string) => {
+    let raw: Uint8Array;
+    if (kind.toLowerCase() === 'b') {
+      const t = text + '='.repeat((4 - text.length % 4) % 4);
+      try { raw = Uint8Array.from(atob(t.replace(/[^A-Za-z0-9+/=]/g, '')), c => c.charCodeAt(0)); } catch { return all; }
+    } else {
+      const t = text.replaceAll('_', ' ');
+      if ([...t].some(c => c.charCodeAt(0) > 255)) return all;
+      const bytes: number[] = [];
+      for (let i = 0; i < t.length; i++) {
+        const h = /^=([0-9A-Fa-f]{2})/.exec(t.slice(i, i + 3));
+        if (h) { bytes.push(parseInt(h[1], 16)); i += 2; } else bytes.push(t.charCodeAt(i));
+      }
+      raw = Uint8Array.from(bytes);
+    }
+    const latin = ['iso-8859-1', 'latin-1'].includes(charset.toLowerCase());
+    return new TextDecoder(latin ? 'latin1' : 'utf-8').decode(raw); // unknown charsets as UTF-8; bad bytes become U+FFFD
+  });
+}
+
 type Mail = [name: string, email: string, date: string | null, subject: string, body: string, patch: Uint8Array];
 
 /** [name, email, date, subject, body, patch] from one message as git format-patch writes it. */
@@ -3806,9 +3894,10 @@ function parseMail(text: string): Mail {
       headers.set(last, v.trim());
     }
   }
+  for (const k of ['from', 'subject']) if (headers.has(k)) headers.set(k, decodeWords(headers.get(k)!));
   const from = headers.get('from') ?? '';
   const m = /^\s*(.*?)\s*<([^<>]*)>\s*$/.exec(from);
-  const [name, email] = m ? [stripChars(m[1], '"'), m[2]] : [from, from];
+  const [name, email] = m ? [m[1].replaceAll('"', ''), m[2]] : [from, from];
   let subject = headers.get('subject') ?? '';
   subject = subject.replace(/^(\s*(\[[^\]]*\]|re:)\s*)+/i, '');
   subject = subject.replace(/\s+/g, ' ').trim();
@@ -4059,11 +4148,23 @@ function bisectNext(g: Git, repo: Repo): string {
   const total = candidates.size;
   let best: string | null = null, bestScore = -1, reach = 0;
   if (total > 1) {
-    // shortcut: counts reachable candidates per commit (quadratic); fine for the histories a machine holds
+    const inside = new Map(order.map(c => [c, repo.commit(c).parents.filter(p => candidates.has(p))]));
+    const linear = [...inside.values()].every(ps => ps.length <= 1);
+    const weight = new Map<string, number>();
+    for (const c of order) { // oldest first, so a parent's count is known
+      const ps = inside.get(c)!;
+      if (linear && ps.every(p => weight.has(p))) weight.set(c, 1 + (ps.length ? weight.get(ps[0])! : 0)); // itself plus what its one parent reaches: linear time
+      else {
+        // shortcut: with merges, counts reachable candidates per commit (quadratic); fine for the histories a machine holds
+        let w = 0;
+        for (const x of ancestors(repo, [c], check)) if (candidates.has(x)) w++;
+        weight.set(c, w);
+      }
+      check();
+    }
     for (const c of order) {
       if (skipped.has(c) || c === bad) continue;
-      let w = 0;
-      for (const x of ancestors(repo, [c], check)) if (candidates.has(x)) w++;
+      const w = weight.get(c)!;
       if (Math.min(w, total - w) > bestScore) [best, bestScore, reach] = [c, Math.min(w, total - w), w];
     }
   }
@@ -4106,7 +4207,7 @@ async function gitBisect(g: Git, args: string[]): Promise<number> {
   if (action === 'start') {
     const named = rest.filter(r => r !== '--');
     const revs = named.map(commitArg);
-    if (busy) bisectClear(repo);
+    bisectClear(repo); // marks left without a session (bisect reset run from bisect run) go too
     repo.gwrite('BISECT_START', (repo.branch() || repo.head() || '') + '\n');
     bisectLog(repo, 'git bisect start' + named.map(r => ` '${r}'`).join('') + '\n');
     if (revs.length) bisectMark(repo, 'bad', revs[0]);
@@ -4150,6 +4251,7 @@ async function gitBisect(g: Git, args: string[]): Promise<number> {
         g.err(subMsg('bisect', 'runFailed', { code: String(code), command: shown }) + '\n');
         return 127;
       }
+      if (!repo.gexists('BISECT_START')) return 1; // the command ended the session (git bisect reset): nothing left to mark
       bisectMark(repo, code === 125 ? 'skip' : code === 0 ? 'good' : 'bad', repo.head()!);
       const result = bisectNext(g, repo);
       if (result === 'found') { g.out(subMsg('bisect', 'runFound') + '\n'); return 0; }

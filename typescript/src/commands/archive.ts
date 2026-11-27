@@ -447,6 +447,17 @@ async function tar(ctx: CommandContext): Promise<number> {
     const wanted = a.positional.map(p => p.replace(/\/+$/, ''));
     const found = wanted.map(() => false);
     const announced = new Set<string>();
+    /** A --transform result, with any leading / or ../ it produced stripped (and said once), as GNU tar does: the
+     * check against leaving the target directory runs on the name that is written. */
+    const renamed = (name: string, key: string): string[] => {
+      const out = rules.length ? tarRename(name, rules) : name;
+      const cut = tarPrefix(out);
+      if (cut && !announced.has(key + cut)) {
+        announced.add(key + cut);
+        ctx.stderr.write(specMessage('tar', key, { prefix: cut }) + '\n');
+      }
+      return nonEmpty(out.slice(cut.length).split('/'));
+    };
     const info = a.has('O') ? ctx.stderr : ctx.stdout;
     let ugWidth = 19;
     try {
@@ -480,7 +491,7 @@ async function tar(ctx: CommandContext): Promise<number> {
         if (parts.length <= strip) continue;
         let keep = parts.slice(strip);
         if (rules.length) {
-          keep = nonEmpty(tarRename(keep.join('/'), rules).split('/'));
+          keep = renamed(keep.join('/'), 'removingLeading');
           if (!keep.length) continue;
         }
         const target = under(dir, keep);
@@ -507,7 +518,7 @@ async function tar(ctx: CommandContext): Promise<number> {
             fs.setModifiedTime(target, e.mtime * 1000);
           } else if (e.type === '1') {
             const linkParts = nonEmpty(e.link.slice(linkPrefix.length).split('/'));
-            const linkTarget = under(dir, nonEmpty(tarRename(linkParts.slice(strip).join('/'), rules).split('/')));
+            const linkTarget = under(dir, renamed(linkParts.slice(strip).join('/'), 'removingLeadingLink'));
             // only to a file this archive (or the target dir) already holds, never through a link it made
             if (linkParts.length <= strip || !fs.exists(linkTarget, false) || fs.isDirectory(linkTarget, false) || linkTarget === target || throughMadeLink(linkTarget)) {
               fail(`${name}: Cannot hard link to ‘${linkParts.join('/')}’: No such file or directory`);

@@ -20,7 +20,7 @@ const MAX_STEPS = 20_000_000;
 
 interface PV { v: J; p: J[] | null | undefined }
 type Env = { parent: Env; key: string; val: any } | null;
-interface Entry { params: string[]; body: Node; env: Env }
+interface Entry { params: string[]; body: Node; env: Env; closure?: true } // closure: a filter argument, run where it was written
 type Native = (I: Interp, a: Node[], inp: PV, env: Env) => Iterable<PV>;
 
 class StepLimit extends Error {}
@@ -369,12 +369,13 @@ class Interp {
   }
 
   private *callUser(entry: Entry, args: Node[], inp: PV, env: Env): Generator<PV> {
+    if (entry.closure) { yield* this.ev(entry.body, inp, entry.env); return; } // not a nested call: no depth
     if (this.depth >= MAX_DEF_DEPTH) throw new JqError(`recursion too deep (more than ${MAX_DEF_DEPTH} nested function calls)`);
     let base = entry.env;
     const valueParams: [string, number][] = [];
     entry.params.forEach((p, i) => {
       if (p[0] === '$') valueParams.push([p.slice(1), i]);
-      else base = { parent: base, key: `${p}/0`, val: { params: [], body: args[i], env } satisfies Entry };
+      else base = { parent: base, key: `${p}/0`, val: { params: [], body: args[i], env, closure: true } satisfies Entry };
     });
     // counts only while the body runs, not while it waits suspended after a yield (`f + f` keeps one waiting)
     const run = function* (I: Interp, e: Env): Generator<PV> {
@@ -394,7 +395,7 @@ class Interp {
       if (k === valueParams.length) { yield* run(I, e); return; }
       const [pname, idx] = valueParams[k];
       for (const x of I.ev(args[idx], untracked(inp), env)) {
-        const bound: Env = { parent: { parent: e, key: '$' + pname, val: x.v }, key: `${pname}/0`, val: { params: [], body: { t: 'lit', v: x.v }, env: null } satisfies Entry };
+        const bound: Env = { parent: { parent: e, key: '$' + pname, val: x.v }, key: `${pname}/0`, val: { params: [], body: { t: 'lit', v: x.v }, env: null, closure: true } satisfies Entry };
         yield* go(I, k + 1, bound);
       }
     };

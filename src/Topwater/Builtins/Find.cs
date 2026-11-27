@@ -213,12 +213,12 @@ internal sealed class Find
         {
             case "-name" or "-iname":
             {
-                var re = Glob.ToRegex(Arg(), ignoreCase: tok == "-iname");
+                var re = _ctx.Shell.Timed(Glob.ToRegex(Arg(), ignoreCase: tok == "-iname"));
                 return e => T(re.IsMatch(e.Name));
             }
             case "-path" or "-ipath" or "-wholename":
             {
-                var re = Glob.ToRegex(Arg(), ignoreCase: tok == "-ipath", slashes: true);
+                var re = _ctx.Shell.Timed(Glob.ToRegex(Arg(), ignoreCase: tok == "-ipath", slashes: true));
                 return e => T(re.IsMatch(e.Display));
             }
             case "-regex":

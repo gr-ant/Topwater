@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .. import bytetext
-from ..shell import glob_to_regex
+from ..shell import TimedPattern, glob_to_regex
 from .._spec import COMMANDS
 from ..vfs import ShellError, format_mode, get_parent, normalize
 from . import Args, spec_message
@@ -324,7 +324,7 @@ def _tar_transforms(exprs: list[str]) -> list:
             error = posix_regex_error(parts[0], extended, grep=False)
             if error:
                 raise bad("badTransformRegex", error=error)
-            rx = re.compile(posix_to_python(parts[0], extended), re.IGNORECASE if icase else 0)
+            rx = TimedPattern(re.compile(posix_to_python(parts[0], extended), re.IGNORECASE if icase else 0))
             if any(int(d) > rx.groups for d in re.findall(r"\\([0-9])", parts[1])):
                 raise bad("badTransformBackReference")
             rules.append((rx, parts[1], all_, nth))
@@ -531,6 +531,16 @@ def _tar(ctx):
             p = get_parent(p)
         return False
 
+    def renamed(name: str, key: str) -> list[str]:
+        """A --transform result, with any leading / or ../ it produced stripped (and said once), as GNU tar does: the
+        check against leaving the target directory runs on the name that is written."""
+        out = _tar_rename(name, rules) if rules else name
+        cut = _tar_prefix(out)
+        if cut and key + cut not in announced:
+            announced.add(key + cut)
+            ctx.stderr.write(spec_message("tar", key, prefix=cut) + "\n")
+        return [p for p in out[len(cut):].split("/") if p]
+
     wanted = [p.rstrip("/") for p in a.positional]
     found = [False] * len(wanted)
     announced: set[str] = set()
@@ -583,7 +593,7 @@ def _tar(ctx):
             continue
         keep = parts[strip:]
         if rules:
-            keep = [p for p in _tar_rename("/".join(keep), rules).split("/") if p]
+            keep = renamed("/".join(keep), "removingLeading")
             if not keep:
                 continue
         target = normalize(directory, "/".join(keep))
@@ -616,7 +626,7 @@ def _tar(ctx):
                 fs.set_modified_time(target, _utc_naive(e.mtime))
             elif e.type == "1":
                 link_parts = [p for p in e.link[len(link_prefix):].split("/") if p]
-                link_target = normalize(directory, _tar_rename("/".join(link_parts[strip:]), rules))
+                link_target = normalize(directory, "/".join(renamed("/".join(link_parts[strip:]), "removingLeadingLink")))
                 # only to a file this archive (or the target dir) already holds, never through a link it made
                 if (len(link_parts) <= strip or not fs.exists(link_target, follow=False) or fs.is_dir(link_target, follow=False)
                         or link_target == target or through_made_link(link_target)):

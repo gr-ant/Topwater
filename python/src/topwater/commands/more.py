@@ -1465,6 +1465,10 @@ def _join_cmd(ctx):
             row = [src[k] if k < len(src) else ""]
             row += [x for i, x in enumerate(f1 or []) if i != k1] + [x for i, x in enumerate(f2 or []) if i != k2]
         lines.append(out_sep.join(row))
+        if len(lines) >= 1024:  # written as it goes: one repeated key can pair up into far more rows than fit in memory
+            ctx.check_time()
+            ctx.stdout.write("".join(x + "\n" for x in lines))
+            lines.clear()
     i = j = 0
     if a.has("\x01") and (left or right):
         emit(left[0] if left else None, right[0] if right else None)
@@ -1491,8 +1495,6 @@ def _join_cmd(ctx):
                 for x in left[i:i2]:
                     for y in right[j:j2]:
                         emit(x, y)
-            if len(lines) > 1_000_000:
-                raise ShellError("output too large")
             i, j = i2, j2
     ctx.stdout.write("".join(x + "\n" for x in lines))
     return 0

@@ -255,7 +255,7 @@ internal static partial class Git
         if (target == null) return o.Has("\x01") ? MoveHead(g, repo, null, repo.Head(), "HEAD", force, quiet) : 0;
         if (!o.Has("\x01") && target is "HEAD" or "@" && repo.HeadRef() is { } stayRef && o.Args.Count == 1)
             return MoveHead(g, repo, stayRef, repo.Head(), repo.Branch()!, force, quiet, stay: true);
-        if (!o.Has("\x01") && repo.ReadRef("refs/heads/" + target) is { } bsha && o.Args.Count == 1)
+        if (!o.Has("\x01") && ValidBranchName(target) && repo.ReadRef("refs/heads/" + target) is { } bsha && o.Args.Count == 1)
             return MoveHead(g, repo, "refs/heads/" + target, bsha, target, force, quiet);
         var sha = TryResolve(repo, target);
         var c = sha != null ? Peel(repo, sha, "commit") : null;

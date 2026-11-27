@@ -7,6 +7,7 @@ import * as zlib from 'node:zlib';
 import { makeEnv } from './harness.js';
 import { registerArchives } from '../src/commands/archive.js';
 import { decodeBytes, encodeText } from '../src/bytes.js';
+import { Shell } from '../src/index.js';
 
 let env = makeEnv();
 const H = '/home/agent';
@@ -659,5 +660,22 @@ describe.skipIf(!real)('interop with the real tar, gzip, zip and unzip', () => {
       writeFileSync(join(dir, 'upd.zip'), env.fs.readBytes(`${H}/real.zip`));
       expect(spawnSync('unzip', ['-t', '-q', join(dir, 'upd.zip')]).status).toBe(0);
     } finally { cleanup(); }
+  });
+});
+
+describe('tar --transform on extract', () => {
+  it('cannot leave the target directory', async () => {
+    const sh = new Shell();
+    await sh.run('mkdir -p /tmp/w/a/b/c');
+    sh.fs.writeBytes('/tmp/w/h.tar', tarOf(tarMember('pkg-1.0/ok.txt', { data: 'fine\n' }), tarMember('pkg-../pkg-../pkg-../esc1', { data: 'pwned\n' }),
+      tarMember('pkg-1.0/hl', { type: '1', link: 'pkg-../pkg-../pkg-../victim' })));
+    sh.fs.writeBytes('/tmp/w/victim', encodeText('secret\n'));
+    const r = await sh.run("cd /tmp/w/a/b/c && tar -xf /tmp/w/h.tar --transform='s,pkg-,,g'; echo $?; " +
+      "tar -xf /tmp/w/h.tar --transform='s,^pkg-1.0,../../../../esc,'; echo $?");
+    expect(r.stdout).toBe('2\n2\n');
+    expect(decodeBytes(sh.fs.readBytes('/tmp/w/a/b/c/esc1'))).toBe('pwned\n');
+    for (const p of ['/tmp/w/esc1', '/esc', '/tmp/esc']) expect(sh.fs.exists(p), p).toBe(false);
+    expect(decodeBytes(sh.fs.readBytes('/tmp/w/a/b/c/esc/ok.txt'))).toBe('fine\n');
+    expect(decodeBytes(sh.fs.readBytes('/tmp/w/victim'))).toBe('secret\n');
   });
 });

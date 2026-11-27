@@ -302,3 +302,28 @@ def test_bisect_run_with_skips_still_finds_the_commit():
     r = sh.run("cd /tmp/w && for i in 2 3 4 5 6; do echo $i > f; git commit -qam c$i; done; git bisect start HEAD HEAD~5 >/dev/null; "
                "git bisect run sh -c 'n=$(cat f); [ $n = 3 ] && exit 125; [ $n -lt 5 ]' | tail -1; git log -1 --format=%s")
     assert r.stdout == "bisect found first bad commit\nc5\n", r.stderr
+
+
+def test_tar_transform_cannot_leave_the_target_directory():
+    import io as _io
+    import tarfile
+    buf = _io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.GNU_FORMAT) as t:
+        for name, data in (("pkg-1.0/ok.txt", b"fine\n"), ("pkg-../pkg-../pkg-../esc1", b"pwned\n")):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            t.addfile(info, _io.BytesIO(data))
+        link = tarfile.TarInfo("pkg-1.0/hl")
+        link.type, link.linkname = tarfile.LNKTYPE, "pkg-../pkg-../pkg-../victim"
+        t.addfile(link)
+    sh = Shell()
+    sh.run("mkdir -p /tmp/w/a/b/c")
+    sh.fs.write_bytes("/tmp/w/h.tar", buf.getvalue())
+    sh.fs.write_bytes("/tmp/w/victim", b"secret\n")
+    r = sh.run("cd /tmp/w/a/b/c && tar -xf /tmp/w/h.tar --transform='s,pkg-,,g'; echo $?; "
+               "tar -xf /tmp/w/h.tar --transform='s,^pkg-1.0,../../../../esc,'; echo $?")
+    assert r.stdout == "2\n2\n"
+    assert sh.fs.read_bytes("/tmp/w/a/b/c/esc1") == b"pwned\n"
+    assert not sh.fs.exists("/tmp/w/esc1") and not sh.fs.exists("/esc") and not sh.fs.exists("/tmp/esc")
+    assert sh.fs.read_bytes("/tmp/w/a/b/c/esc/ok.txt") == b"fine\n"
+    assert sh.fs.read_bytes("/tmp/w/victim") == b"secret\n"

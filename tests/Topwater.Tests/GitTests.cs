@@ -455,4 +455,27 @@ public class GitTests
             + "git bisect run sh -c 'n=$(cat f); [ $n = 3 ] && exit 125; [ $n -lt 5 ]' | tail -1; git log -1 --format=%s");
         Assert.Equal("bisect found first bad commit\nc5\n", r.Stdout);
     }
+
+    [Fact]
+    public async Task TarTransformCannotLeaveTheTargetDirectory()
+    {
+        var buf = new MemoryStream();
+        using (var t = new System.Formats.Tar.TarWriter(buf, System.Formats.Tar.TarEntryFormat.Gnu, leaveOpen: true))
+        {
+            foreach (var (name, data) in new[] { ("pkg-1.0/ok.txt", "fine\n"), ("pkg-../pkg-../pkg-../esc1", "pwned\n") })
+                t.WriteEntry(new System.Formats.Tar.GnuTarEntry(System.Formats.Tar.TarEntryType.RegularFile, name) { DataStream = new MemoryStream(Encoding.UTF8.GetBytes(data)) });
+            t.WriteEntry(new System.Formats.Tar.GnuTarEntry(System.Formats.Tar.TarEntryType.HardLink, "pkg-1.0/hl") { LinkName = "pkg-../pkg-../pkg-../victim" });
+        }
+        var sh = new Shell();
+        await sh.RunAsync("mkdir -p /tmp/w/a/b/c");
+        sh.Fs.WriteAllBytes("/tmp/w/h.tar", buf.ToArray());
+        sh.Fs.WriteAllText("/tmp/w/victim", "secret\n");
+        var r = await sh.RunAsync("cd /tmp/w/a/b/c && tar -xf /tmp/w/h.tar --transform='s,pkg-,,g'; echo $?; "
+            + "tar -xf /tmp/w/h.tar --transform='s,^pkg-1.0,../../../../esc,'; echo $?");
+        Assert.Equal("2\n2\n", r.Stdout);
+        Assert.Equal("pwned\n", sh.Fs.ReadAllText("/tmp/w/a/b/c/esc1"));
+        Assert.False(sh.Fs.Exists("/tmp/w/esc1") || sh.Fs.Exists("/esc") || sh.Fs.Exists("/tmp/esc"));
+        Assert.Equal("fine\n", sh.Fs.ReadAllText("/tmp/w/a/b/c/esc/ok.txt"));
+        Assert.Equal("secret\n", sh.Fs.ReadAllText("/tmp/w/victim"));
+    }
 }
