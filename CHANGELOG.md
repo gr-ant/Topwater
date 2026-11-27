@@ -5,14 +5,16 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 
 ## Unreleased
 
-- **`python3`, opt-in (Python first).** `shell.allow_python()` gives the agent real CPython 3.14, compiled to
+- **`python3`, opt-in (Python and TypeScript).** `shell.allow_python()` (TypeScript `await shell.allowPython()`) gives the agent real CPython 3.14, compiled to
   WebAssembly, that reads and writes the machine's files and nothing else: `-c`, files, `-m`, stdin, `#!` scripts,
   pipelines and the standard library (`json`, `csv`, `sqlite3`, `re`, `zlib`, ...), with HTTP from `urllib`, `requests`
   and `httpx` going through the web policy. The interpreter is bashkit's build, checked against pinned hashes, and
   ships in a separate add-on (`pip install 'topwater[python]'`, which brings `wasmtime`); the core package stays
   dependency-free. Topwater implements the WebAssembly system interface itself over the virtual filesystem, so
   permissions, the disk cap and mount modes hold as for any command. Time, memory, stack, output and descriptors are
-  bounded. .NET (`Topwater.Python`) and TypeScript follow. See [Python](docs/python.md).
+  bounded. TypeScript's add-on is `npm install topwater-python` (no dependencies; the program runs in a worker that the
+  shell stops at the time limit; browser pages need cross-origin isolation). .NET (`Topwater.Python`) follows. See
+  [Python](docs/python.md).
 - **Mounted sources.** A host can show an outside store of files as a directory in the machine:
   `shell.MountAsync("/mnt/notes", source, MountMode.Staged)` (Python `shell.mount`, TypeScript `shell.mount`). A source
   is a small class with `list`, `stat`, `read` and, if it can, `write`, `delete`, `rename` and `mkdir`; its credentials
