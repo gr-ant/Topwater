@@ -894,6 +894,15 @@ internal static partial class CommandSpec
             ["noDirectory"] = "{dir}: No such file or directory",
         }),
         ["pwd"] = new("pwd", "Print the working directory", null, "pwd (GNU coreutils) 9.4", true, true, true, "pwd", 1, "Try 'pwd --help' for more information.\n", null, Empty),
+        ["python3"] = new("python3", "Run Python 3 programs in a WebAssembly sandbox", "usage: python3 [option] ... [-c cmd | -m mod | file | -] [arg] ...\nRuns CPython 3.14, compiled to WebAssembly, on this machine's files.\n\n  -c cmd   run the program given as a string (ends the options)\n  -m mod   run a library module as a script (ends the options)\n  file     run the program in a file\n  -        read the program from standard input, as with no file at all\n  arg ...  handed to the program in sys.argv[1:]\n  -W arg   set a warnings filter\n  -x       skip the first line of the program\n  -h       show this help (also -? and --help)\n  -V       show the version (also --version)\n\nAccepted and ignored: -b -B -d -E -i -I -O -P -q -R -s -S -u -v -X opt\nOnly the standard library is there: no pip, subprocesses, threads or sockets.\nHTTP (urllib.request, requests, httpx) reaches only what the web policy allows.\n", "Python 3.14.8", true, false, true, "python3", 1, "Try 'python3 --help' for more information.\n", null, new Dictionary<string, string>
+        {
+            ["unavailable"] = "the Python add-on is not available: {reason}",
+            ["fatal"] = "fatal error: {reason}",
+            ["stackOverflow"] = "fatal error: the interpreter ran out of stack",
+            ["stopped"] = "fatal error: the program was stopped at the time limit",
+            ["writeBack"] = "could not save {file}, which the program left open: {errno}",
+            ["httpFailed"] = "{method} {url}: {reason}",
+        }),
         ["read"] = new("read", "Split one input line into variables", null, "read (GNU coreutils) 9.4", false, true, false, "read", 1, "Try 'read --help' for more information.\n", ("aers", "diNnptu", ""), Empty),
         ["readarray"] = new("readarray", "Read lines from stdin into an array (-t drops the newlines)", null, "readarray (GNU coreutils) 9.4", true, true, false, "readarray", 1, "Try 'readarray --help' for more information.\n", ("t", "CcdnOsu", ""), Empty),
         ["readlink"] = new("readlink", "Print where a symbolic link points (-f: the full resolved path)", null, "readlink (GNU coreutils) 9.4", true, false, true, "readlink", 1, "Try 'readlink --help' for more information.\n", ("efmnqsvz", "", "canonicalize-existing=e,canonicalize=f,canonicalize-missing=m,no-newline=n,quiet=q,silent=s,verbose=v,zero=z"), new Dictionary<string, string>

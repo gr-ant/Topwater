@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <PackageId>Topwater.Python</PackageId>
+    <Description>python3 for a Topwater shell: CPython 3.14 compiled to WebAssembly, running over the shell's virtual files and web policy and nothing else.</Description>
+    <PackageTags>agents;ai;llm;tool-use;python;webassembly;wasi;sandbox;bash;shell</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Wasmtime" Version="50.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Topwater\Topwater.csproj" />
+    <InternalsVisibleTo Include="Topwater.Tests" />
+  </ItemGroup>
+
+  <!-- The interpreter, carried in the assembly: python.wasm.gz is assets/python-wasm/python.wasm.xz recompressed by
+       tools/python-wasm/gzip_module.py (.NET reads no xz); the stdlib zip is the vendored file itself. -->
+  <ItemGroup>
+    <EmbeddedResource Include="python.wasm.gz" LogicalName="python.wasm.gz" />
+    <EmbeddedResource Include="..\..\assets\python-wasm\python314.zip" LogicalName="python314.zip" Link="python314.zip" />
+    <None Include="..\..\assets\python-wasm\THIRD_PARTY_LICENSES.md" Pack="true" PackagePath="python-wasm" Visible="false" />
+    <None Include="..\..\assets\python-wasm\PROVENANCE" Pack="true" PackagePath="python-wasm" Visible="false" />
+    <None Include="..\..\assets\python-wasm\MANIFEST" Pack="true" PackagePath="python-wasm" Visible="false" />
+  </ItemGroup>
+
+</Project>

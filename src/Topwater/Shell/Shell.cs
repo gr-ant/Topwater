@@ -320,6 +320,9 @@ public sealed partial class Shell
         return this;
     }
 
+    /// <summary>An opt-in built-in the host enabled after construction (python3): its --help and --version are the spec's.</summary>
+    internal void MarkBuiltin(string name) => _builtinNames?.Add(name);
+
     void WriteProgramFile(string name)
     {
         bool shellOnly = CommandSpec.Commands.TryGetValue(name, out var spec) && !spec.ProgramFile && (_builtinNames is null || _builtinNames.Contains(name));

@@ -100,6 +100,7 @@ internal static partial class Builtins
         RegisterWebCommands(shell);
         Git.Register(shell);
         RegisterMountCommands(shell);
+        RegisterPythonCommand(shell);
     }
 
     /// <summary>`tool --version` / `tool --help` for built-ins, so probing them looks like a real system.</summary>

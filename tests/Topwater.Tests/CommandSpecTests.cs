@@ -12,10 +12,12 @@ public class CommandSpecTests
 {
     static readonly string Dir = Path.Combine(AppContext.BaseDirectory, "spec");
 
-    static readonly Dictionary<string, JsonElement> Spec = Directory.GetFiles(Path.Combine(Dir, "commands"), "*.json")
+    static readonly Dictionary<string, JsonElement> All = Directory.GetFiles(Path.Combine(Dir, "commands"), "*.json")
         .Select(f => JsonDocument.Parse(File.ReadAllText(f)).RootElement)
         .Where(c => !c.TryGetProperty("ports", out var p) || p.EnumerateArray().Any(x => x.GetString() == "cs"))
         .ToDictionary(c => c.GetProperty("name").GetString()!);
+    static readonly Dictionary<string, JsonElement> Spec = All.Where(c => !c.Value.TryGetProperty("enabledBy", out _)).ToDictionary(); // what every shell has
+    static readonly List<string> OptIn = [.. All.Keys.Where(n => !Spec.ContainsKey(n)).Order(StringComparer.Ordinal)]; // what the host turns on (python3: AllowPython)
 
     static readonly JsonElement Defaults = JsonDocument.Parse(File.ReadAllText(Path.Combine(Dir, "shell.json"))).RootElement.GetProperty("defaults");
 
@@ -51,6 +53,21 @@ public class CommandSpecTests
         var registered = new Shell().Commands.Keys.ToHashSet();
         Assert.Empty(Spec.Keys.Where(n => !registered.Contains(n)));   // in the spec, not registered
         Assert.Empty(registered.Where(n => !Spec.ContainsKey(n)));     // registered, not in the spec (add it, or mark the port missing)
+    }
+
+    [Fact]
+    public async Task OptInCommandsExistOnlyOnceEnabled()
+    {
+        Assert.Empty(OptIn.Where(new Shell().Commands.ContainsKey));
+        Assert.Equal(["python3"], OptIn); // a new one needs its enabling call here
+        var sh = Topwater.Python.PythonShellExtensions.AllowPython(new Shell());
+        var c = All["python3"];
+        Assert.Equal(Str(c, "summary"), sh.Commands["python3"].Description);
+        var help = Lines(c.GetProperty("help"), "python3", Str(c, "summary")!);
+        Assert.Equal(help, (await sh.RunAsync("python3 --help")).Stdout);
+        Assert.Equal(help, (await sh.RunAsync("python3 -h")).Stdout);
+        Assert.Equal(Str(c, "version") + "\n", (await sh.RunAsync("python3 --version")).Stdout);
+        Assert.Equal(Str(c, "version") + "\n", (await sh.RunAsync("python3 -V")).Stdout);
     }
 
     [Theory]

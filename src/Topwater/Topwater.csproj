@@ -13,6 +13,8 @@
   <ItemGroup>
     <!-- the web access tests reach a loopback server through the real connection path (WebAddresses' test hooks) -->
     <InternalsVisibleTo Include="Topwater.Tests" />
+    <!-- the python3 add-on: its command uses the shell's files, web session, mounts and limits like a built-in -->
+    <InternalsVisibleTo Include="Topwater.Python" />
   </ItemGroup>
 
 </Project>

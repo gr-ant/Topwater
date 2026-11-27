@@ -29,9 +29,9 @@
     { "name": "recording", "cs": "Recording.cs", "py": "recording.py", "ts": "recording.ts" },
     { "name": "webaccess", "cs": "WebAccess.cs", "py": "webaccess.py", "ts": "web.ts" },
     { "name": "mounts", "cs": "Mounts.cs", "py": "mounts.py", "ts": "mounts.ts", "sections": ["sources", "changes", "mounts"] },
-    { "name": "wasi", "cs": null, "py": "wasi.py", "ts": null,
+    { "name": "wasi", "cs": "../Topwater.Python/Wasi.cs", "py": "wasi.py", "ts": null,
       "sections": ["artifacts and runtime", "guest state", "wasi functions", "http bridge", "running a call"],
-      "note": "python3's WASI preview1 host; C# (Wasi.cs) and TS (wasi.ts) still to come (docs/python.md)" },
+      "note": "python3's WASI preview1 host; C# keeps it in the Topwater.Python add-on (it needs Wasmtime); TS (wasi.ts) still to come (docs/python.md)" },
     { "name": "spec", "cs": "CommandSpec.cs", "py": null, "ts": null,
       "note": "the lookups over the generated table; Python and TS generate them with the table (_spec.py, spec.generated.ts)" },
     { "name": "bytetext", "cs": "ByteText.cs", "py": "bytetext.py", "ts": "bytes.ts" },
@@ -115,7 +115,7 @@
       "sections": ["identity and dates", "objects", "the index", "config", "ignore rules", "line diff", "three-way line merge", "quoting"] },
     { "name": "commands.gitpack", "cs": "Builtins/GitPack.cs", "py": "commands/gitpack.py", "ts": "commands/gitpack.ts" },
     { "name": "commands.mount", "cs": "Builtins/MountCommands.cs", "py": "commands/mount.py", "ts": "commands/mount.ts", "commands": ["mount"] },
-    { "name": "commands.python", "cs": null, "py": "commands/python.py", "ts": null, "commands": ["python3"],
-      "note": "opt-in (allow_python); C# (Builtins/PythonCommand.cs) and TS (commands/python.ts) still to come" }
+    { "name": "commands.python", "cs": "Builtins/PythonCommand.cs", "py": "commands/python.py", "ts": null, "commands": ["python3"],
+      "note": "opt-in (allow_python); C#: the registrar, whose handler, options and AllowPython are in the add-on (../Topwater.Python/PythonCommand.cs); TS (commands/python.ts) still to come" }
   ]
 }

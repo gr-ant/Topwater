@@ -41,6 +41,7 @@
     <ProjectReference Include="..\..\src\Topwater.Containers\Topwater.Containers.csproj" />
     <ProjectReference Include="..\..\src\Topwater.Cli\Topwater.Cli.csproj" />
     <ProjectReference Include="..\..\src\Topwater.Replay\Topwater.Replay.csproj" />
+    <ProjectReference Include="..\..\src\Topwater.Python\Topwater.Python.csproj" />
   </ItemGroup>
 
 </Project>
