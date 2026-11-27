@@ -221,6 +221,16 @@ def test_a_command_in_a_mount_directory_fetches_it():
     assert sh.run("cd /mnt/s/d && grep -r hello").stdout == "a.txt:hello\n"
 
 
+def test_a_file_deleted_in_a_renamed_directory():
+    src = MemorySource({"d/a.txt": "a\n", "d/b.txt": "b\n"})
+    sh = Shell()
+    sh.mount("/mnt/s", src, "staged")
+    sh.run("rm /mnt/s/d/b.txt; mv /mnt/s/d /mnt/s/e")
+    assert [(c.kind, c.path, c.to) for c in sh.pending_changes("/mnt/s")] == [("rename", "/d", "/e"), ("delete", "/e/b.txt", None)]
+    assert sh.apply_changes("/mnt/s").failed is None
+    assert src.tree() == {"/e": None, "/e/a.txt": b"a\n"}
+
+
 def test_a_relative_mount_point_is_refused():
     with pytest.raises(ValueError):
         Shell().mount("mnt/s", MemorySource())

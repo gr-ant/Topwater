@@ -634,7 +634,12 @@ class Mount {
       }
     };
     walk(root, '/', '/');
-    const deletes = gone.filter(p => !dropped.has(p)).map(p => mountChange('delete', p, { version: this.oldVersion(p) }));
+    // where a path is once the renames before the deletes are applied (its directory may have been renamed)
+    const moved = (p: string): string => {
+      for (const r of renames) if (p.startsWith(r.path + '/')) p = r.to! + p.slice(r.path.length);
+      return p;
+    };
+    const deletes = gone.filter(p => !dropped.has(p)).map(p => mountChange('delete', moved(p), { version: this.oldVersion(p) }));
     return [...first, ...renames, ...mkdirs, ...writes, ...deletes];
   }
 

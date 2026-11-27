@@ -654,7 +654,14 @@ class _Mount:
                     writes.append(MountChange("write", p, version=version, content=n.raw()))
 
         walk(root, "/", "/")
-        deletes = [MountChange("delete", p, version=self.old_version(p)) for p in gone if p not in dropped]
+        def moved(p: str) -> str:
+            """Where a path is once the renames before the deletes are applied (its directory may have been renamed)."""
+            for r in renames:
+                if p.startswith(r.path + "/"):
+                    p = r.to + p[len(r.path):]
+            return p
+
+        deletes = [MountChange("delete", moved(p), version=self.old_version(p)) for p in gone if p not in dropped]
         return first + renames + mkdirs + writes + deletes
 
     async def apply(self, changes: list[MountChange] | None) -> MountApplyResult:

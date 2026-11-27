@@ -509,6 +509,57 @@
    ]
   },
   {
+   "name": "deleting inside a renamed directory",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "rm /mnt/src/notes/b.md; mv /mnt/src/notes /mnt/src/kept",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "rename",
+       "path": "/notes",
+       "to": "/kept",
+       "version": "3"
+      },
+      {
+       "kind": "delete",
+       "path": "/kept/b.md",
+       "version": "5"
+      }
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/notes",
+       "/kept/b.md"
+      ],
+      "failed": null,
+      "conflict": false
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/kept": null,
+      "/kept/a.md": "hello\nworld\n",
+      "/top.txt": "top\n"
+     }
+    }
+   ]
+  },
+  {
    "name": "mount errors",
    "mode": "staged",
    "steps": [
