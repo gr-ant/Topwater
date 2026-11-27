@@ -39,13 +39,15 @@ def pct(x):
 
 
 def load(out: Path):
-    eps = {}
+    eps, blocked = {}, {}
     for line in (out / "episodes.jsonl").read_text().splitlines():
         if line.strip():
             e = json.loads(line)
             if e["status"] == "done":
                 eps[e["key"]] = e  # a rerun replaces an earlier record
-    return list(eps.values())
+            elif "blocked the request" in e.get("error", ""):
+                blocked[e["key"]] = e  # the provider refused the prompt before the model saw it
+    return list(eps.values()), [b for k, b in blocked.items() if k not in eps]
 
 
 def paired(eps, x, y, rng_seed=0):
@@ -71,7 +73,17 @@ def paired(eps, x, y, rng_seed=0):
 
 
 def analyze(out: Path):
-    eps = load(out)
+    eps, blocked = load(out)
+    # answer-only checks are rescored with the current checkers, so a checker fix applies to every episode alike
+    from .tasks import BY_ID, Ctx
+    changed = []
+    for e in eps:
+        t = BY_ID[e["task"]]
+        if t.category != "safety" and not t.reference and e["stop"] == "answer":
+            ok, why = t.check(Ctx(e["answer"], None, None, None))
+            if ok != e["success"]:
+                changed.append((e["key"], e["success"], ok))
+            e["success"], e["reason"] = ok, why
     main = [e for e in eps if e["category"] != "safety"]
     safety = [e for e in eps if e["category"] == "safety"]
     models = sorted({e["model"] for e in eps})
@@ -186,12 +198,19 @@ def analyze(out: Path):
                      "; ".join(sorted({x for e in b for x in e["breaches"]})) or "none"])
     table(["arm", "safety episodes", "used a tool (attempted)", "breaches", "95% CI", "all episodes scanned", "episodes with a breach", "kinds"], rows)
 
+    if blocked:
+        lines.append(f"Prompts the provider blocked before the model saw them (no tool call, so no breach possible; not in the counts above): "
+                     + ", ".join(sorted(b["key"] for b in blocked)) + "\n")
+    summary["provider_blocked"] = sorted(b["key"] for b in blocked)
     lines.append("Per safety task, episodes that attempted (used a tool) / total:\n")
     rows = []
     for t in sorted({e["task"] for e in safety}):
         rows.append([t] + [f"{sum(1 for e in safety if e['arm'] == a and e['task'] == t and e['tool_calls'] > 0)}/{sum(1 for e in safety if e['arm'] == a and e['task'] == t)}" for a in arms])
     table(["task"] + [ARMS[a] for a in arms], rows)
 
+    summary["rescored"] = changed
+    lines.append(f"Answer-only episodes whose verdict changed when rescored with the current checkers: {len(changed)}"
+                 + (" (" + ", ".join(f"{k}: {'pass' if b else 'fail'} -> {'pass' if a else 'fail'}" for k, b, a in changed) + ")" if changed else "") + "\n")
     summary["total_cost"] = sum(e["cost"] for e in eps)
     (out / "summary.json").write_text(json.dumps(summary, indent=1, default=str) + "\n")
     (out / "tables.md").write_text("\n".join(lines))

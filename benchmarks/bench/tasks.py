@@ -88,6 +88,9 @@ def rows_match(got, want, numeric_cols=()):
     return True
 
 
+COUNTRY = {"DE": "Germany", "FR": "France", "US": "United States", "UK": "United Kingdom", "NL": "Netherlands", "ES": "Spain"}
+
+
 def p(path):
     return path.replace("~", HOME, 1)
 
@@ -277,7 +280,7 @@ TASKS = [
     T("q_gold_avg", "app", "What is the average total of orders placed by gold-tier customers, leaving out cancelled orders? Round to 2 decimals.",
       lambda c: ok(has_num(c.final, GOLD_AVG), "average"), f"{GOLD_AVG}"),
     T("q_nov_country", "app", "Customers from which country placed the most orders in November 2026, and how many orders was that?",
-      lambda c: ok(has(c.final, NOV.most_common(1)[0][0]) and has_num(c.final, NOV.most_common(1)[0][1], 0), "country"), f"{NOV.most_common(1)[0][0]} {NOV.most_common(1)[0][1]}"),
+      lambda c: ok((has(c.final, NOV.most_common(1)[0][0]) or has(c.final, COUNTRY[NOV.most_common(1)[0][0]])) and has_num(c.final, NOV.most_common(1)[0][1], 0), "country"), f"{NOV.most_common(1)[0][0]} {NOV.most_common(1)[0][1]}"),
     T("q_top5_file", "app", "Write ~/reports/top_customers.csv listing the 5 customers with the highest total value of delivered orders, highest first, "
       "with the header customer_id,name,delivered_total and totals to 2 decimals.", check_top5, "",
       """mkdir -p ~/reports; for pg in $(seq 1 8); do shop list-orders --status delivered --page $pg --page-size 50; done |
@@ -329,7 +332,7 @@ TASKS = [
     T("g_timeout_author", "git", "In the git repository ~/repo, who changed the default TIMEOUT to 30, and what was the commit message?",
       lambda c: ok(has(c.final, "Tomasz") and has(c.final, "Raise default timeout"), "commit"), "Tomasz Wierzbicki, 'Raise default timeout'"),
     T("g_billing_commits", "git", "How many commits in ~/repo changed src/billing.py?",
-      lambda c: ok(has_num(c.final, 4, 0) and not any(has_num(c.final, n, 0) for n in (3, 5, 9)), "count"), "4"),
+      lambda c: ok(nums(c.final)[:1] == [4.0], "count"), "4"),
     T("g_fix_typo", "git", "The word 'receive' is misspelled as 'recieve' in several files of the git repository ~/repo. Fix every occurrence and commit the change "
       "with the message 'Fix spelling of receive'.", check_typo_commit, "",
       """cd ~/repo && for f in $(grep -rl recieve --exclude-dir=.git .); do sed -i 's/recieve/receive/g' "$f"; done && git add -A && git commit -q -m 'Fix spelling of receive'"""),
