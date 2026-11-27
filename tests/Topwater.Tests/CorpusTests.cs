@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Topwater;
+using Topwater.Python;
 
 namespace Topwater.Tests;
 
@@ -34,7 +35,7 @@ public class CorpusTests
         var c = Cases[id];
         string? Str(string name) => c.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         var script = Str("script")!;
-        var sh = new Shell();
+        var sh = id.StartsWith("python-") ? new Shell().AllowPython() : new Shell(); // python3 is opt-in: its area runs with it enabled
         await sh.RunAsync("mkdir -p /tmp/w && cd /tmp/w && hash -r");
         if (Str("setup") is { } setup) await sh.RunAsync(setup);
         var r = await sh.RunAsync(script);
