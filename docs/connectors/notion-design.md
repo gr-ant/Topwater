@@ -76,7 +76,7 @@ A folder is a page, a database, or one data source of a database with several. I
 - In a database folder: with one data source, a file `Title.md` per row (rows are never folders; their subpages stay in
   their text as tags); with several, a folder per data source, named for its `name`, holding the rows.
 
-Names, from a title:
+Names, from a title (steps 1 to 3 are the shared `common.safe_name` with `Untitled` as the fallback):
 
 1. Each control character (below U+0020, and U+007F) becomes a space; `/` becomes `∕` (U+2215); trim spaces at both
    ends.
@@ -229,6 +229,9 @@ in the allowed text (a page: the current view, so only nested tags; a row: the c
 
 ## Rows: front matter
 
+The format and its parser are the shared ones in `connectors/common.py` (`front_matter`, `split_front_matter`), the
+same as for SharePoint list items; this connector never writes the optional `# comment` line.
+
 Rendering: `---\n`, then for each property except the title, sorted by name (ordinal): the name, bare if it matches
 `[A-Za-z0-9_][A-Za-z0-9_ .()/-]*` and doesn't end in a space, else as a JSON string; `: `; the value as JSON (Python's
 `json.dumps(..., ensure_ascii=False)`: `", "` between list items, `": "` in objects); `\n`. Then `---\n`. Rows always
@@ -266,6 +269,9 @@ and the value is converted as in the table, or refused with "expected ...". Name
 
 ## Requests
 
+Requests go through the shared client in `connectors/common.py` (`Api("Notion", ...)`, see [README.md](README.md));
+what follows is what it does for Notion. Its failure messages are `common.MESSAGES` with `{service}` = `Notion`.
+
 - Headers: `Authorization: Bearer <token>` (the token asked again for every attempt), `Notion-Version: 2026-03-11`,
   `Accept: application/json`, and `Content-Type: application/json` with a body. GET query strings are URL-encoded.
 - Rate: one request every `1/rate` seconds (3 a second by default), shared by every request of the source, waited
@@ -276,8 +282,10 @@ and the value is converted as in the table, or refused with "expected ...". Name
     (HTTP 429)". Out of tries: "Notion is busy (HTTP 429); tried 5 times".
   - No answer (connection, timeout): GET waits 2^attempt seconds and tries again; anything else fails at once with
     "Notion did not answer; the change may or may not have been made". GET out of tries: "Notion did not answer".
-- A response over 32,000,000 bytes is refused. A body that isn't a JSON object: "Notion sent a response that isn't a
-  JSON object (HTTP n)". Status 400 and up: an API error with `code` and `message` (cut at 100 and 1,000 characters).
+- A response over 32,000,000 bytes is refused. Status 400 and up: an API error with `code` and `message` (cut at 100
+  and 1,000 characters; both empty when the body isn't JSON). Below 400, an empty body is `{}`; one that isn't a JSON
+  object: "Notion sent a response that isn't a JSON object (HTTP n)".
+- A token function that isn't async is called in a worker thread, so a blocking refresh doesn't hold the event loop.
 - 404 on a GET is "not there" (null) where the operation expects that; elsewhere API errors become messages.
 
 ## Messages
@@ -291,7 +299,7 @@ command instead of the source. `test_refusals_come_through_the_mount_whatever_co
 
 The Python port keeps the texts in one table, `MESSAGES` (key → template with `{path}`, `{name}`, ...), and the limits
 as constants at the top of the file, so that a later `spec/connectors/notion.json` can hold both for every port; C# and
-TS keep the same keys.
+TS keep the same keys. The request failures and the front matter messages are the shared `common.MESSAGES`.
 
 What the agent sees (the framework prefixes the machine path, as for every source):
 

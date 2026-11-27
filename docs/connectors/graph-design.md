@@ -226,7 +226,7 @@ These are the tables a port copies word for word, kept apart from the code in `g
 | Limits | `SIMPLE_UPLOAD`, `CHUNK`, `PAGE`, `MAX_LIST_REQUESTS`, `MAX_SITE_DEPTH`, `MAX_PATH`, `MAX_COPY_BYTES`, `MAX_COPY_ENTRIES`, `MAX_ITEM_BYTES` | |
 | Name rules | `_ILLEGAL` (`" * : < > ? / \ \|`), `_RESERVED` (`CON PRN AUX NUL COM0-9 LPT0-9 .LOCK DESKTOP.INI`, compared upper-case) | plus: no leading or trailing space, no trailing dot, no `_vti_` anywhere (any case), no `~$` start, not `forms` at a library's top; a path over `MAX_PATH` characters counting the library's server-relative path |
 | Column types | `_TYPES` (the facets looked for, in order), `EDITABLE_TYPES`, `_SKIP`, `_SET_BY_SHAREPOINT` | |
-| Retries | `common.MAX_RETRIES`, `common.MAX_RETRY_AFTER`, `common.MAX_RESPONSE` | shared with Notion |
+| Retries | `common.MAX_RETRIES`, `common.MAX_RETRY_AFTER`, `common.MAX_RESPONSE`, `common.MESSAGES` | shared with Notion |
 | Names from titles | `common.safe_name`, `common.unique`, `common.SLASH`, `common.NAME_BYTES` | shared with Notion |
 
 ## The fake and the shared cases
@@ -269,23 +269,12 @@ change set with notes. `--apply` applies it; `--base` points it at a scratch cop
 
 ## Shared with the Notion connector
 
-Both connectors follow the same plan: the core package's `connectors` folder, a token or token function from the host,
-a stdlib transport that can be replaced, a stateful fake plus `tests/connectors/<name>/cases.json`, a design note and a
-user guide in `docs/connectors/`, `TOPWATER_LIVE_<NAME>=1` with `~/.config/topwater/<name>.env`, scratch-only live
-tests, and a `python/examples/<...>_restructure.py` demo. To reconcile when both are merged:
+Both connectors follow the plan in [README.md](README.md). `connectors/common.py` holds what they share: `Api`,
+`front_matter` / `split_front_matter` / `scalar` (the exact rules of notion-design.md "Rows: front matter", plus the
+optional `# comment` line Graph writes for read-only columns), `safe_name`, `unique` and `common.MESSAGES` (the request
+and front matter failures, with `{service}`). Each connector keeps its own messages, limits, illegal-name tables and
+naming on top of `safe_name` (Notion's sticky, created-order names; Graph's `unique`).
 
-- **`connectors/common.py`** is written for both: `Api` (token function, rate spacing under a loop-bound lock,
-  429/503/5xx/no-answer retries with `Retry-After` shared by every request, response cap, error code and message),
-  `front_matter` / `split_front_matter` / `scalar` (the exact rules of notion-design.md "Rows: front matter", plus an
-  optional `# comment` line), and `safe_name` (Notion's rule: control characters to spaces, `/` to `∕`, `(.)`, 200
-  bytes) and `unique`. The Notion connector still has private copies (`_request`, `_retry_after`, `_front`,
-  `_split_front`, `_scalar`, `_name`); it should import these instead, keeping its sticky, created-order naming on top
-  of `safe_name`. Its messages use `Notion` where Graph's use `Microsoft Graph`; `Api(service=...)` already does that.
-- **Layout and docs rows**: both branches add the same `connectors` row to `tools/layout.json` and the connectors
-  paragraph to `docs/architecture.md` §10, and lines to `CHANGELOG.md`, `README.md`, `docs/README.md` and
-  `docs/mounts.md`. Those conflict textually only; keep both.
-- **`note(change)`** is Graph's. If Notion (or another source) needs to say something about a change, the framework
-  could ask every source for it and show it in `mount -c` and `MountChange`: a change to all three ports' `mounts`,
-  not made here.
-- **Spec**: both have their messages, limits, name rules and type tables as data, ready for `spec/connectors/<name>.json`
-  and a generator like `tools/spec-gen/gen.py`; nothing is generated yet.
+**`note(change)`** is Graph's. If Notion (or another source) needs to say something about a change, the framework could
+ask every source for it and show it in `mount -c` and `MountChange`: a change to all three ports' `mounts`, not made
+yet (a follow-up in [README.md](README.md#follow-ups)).

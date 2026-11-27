@@ -10,6 +10,7 @@ and say where each implementation differs.
 | [Your programs](programs.md) | Your functions, JSON Schema tools, MCP servers, authenticated HTTP APIs and real host programs as commands |
 | [Web access](web.md) | `curl` and `wget` to the sites you allow: the policy, the guarantees, recordings |
 | [Mounted sources](mounts.md) | Outside files as a folder: modes, change sets, writing a source, safety |
+| [Connectors](connectors/README.md) | What a connector is, what Notion and Graph share, how to write a new one |
 | [Notion](connectors/notion.md) | A Notion page tree as a mounted folder: setup, the file view, what can change, conflicts, limits |
 | [OneDrive and SharePoint](connectors/graph.md) | A SharePoint site (libraries, lists, subsites) or a drive as a mounted folder: setup, the file view, what can change, limits |
 | [Connect to a model](integrations.md) | The tool definition, and the adapters for agent frameworks |

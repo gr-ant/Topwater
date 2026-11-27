@@ -66,7 +66,7 @@
     { "name": "connectors.notion", "cs": null, "py": "connectors/notion.py", "ts": null,
       "note": "pending in C# (Connectors/NotionSource.cs) and TS (connectors/notion.ts): Python is the reference, docs/connectors/notion-design.md" },
     { "name": "connectors.common", "cs": null, "py": "connectors/common.py", "ts": null,
-      "note": "pending in C# (Connectors/ConnectorCommon.cs) and TS (connectors/common.ts): what every connector shares, docs/connectors/graph-design.md" },
+      "note": "pending in C# (Connectors/ConnectorCommon.cs) and TS (connectors/common.ts): what every connector shares, docs/connectors/README.md" },
     { "name": "connectors.graph", "cs": null, "py": "connectors/graph.py", "ts": null,
       "note": "pending in C# (Connectors/GraphSource.cs) and TS (connectors/graph.ts): Python is the reference, docs/connectors/graph-design.md" },
 

@@ -321,8 +321,8 @@ class WikiSource implements MountSource {
 // await shell.mount('/mnt/wiki', new WikiSource('team', { 'plan.md': '# Plan\nDraft\n' }), 'staged');
 ```
 
-Two sources come with Topwater, and connectors for outside stores (Python for now): [Notion](connectors/notion.md) and
-[OneDrive and SharePoint](connectors/graph.md):
+[Connectors](connectors/README.md) for outside stores (Python for now) show [Notion](connectors/notion.md) and
+[OneDrive and SharePoint](connectors/graph.md). Two sources come with Topwater:
 
 - **`LocalFolderSource(root, writable=False, id=None)`** shows a host directory. Read-only unless `writable`. Only
   regular files and directories are listed: symbolic links, FIFOs, sockets and devices are left out, never followed or

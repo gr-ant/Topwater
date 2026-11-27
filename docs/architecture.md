@@ -569,5 +569,5 @@ C# `Connectors/NotionSource.cs` and `Connectors/GraphSource.cs` (namespace `Topw
 (the HTTP client with backoff, front matter, names from titles) is `connectors/common.py` (C# `Connectors/ConnectorCommon.cs`,
 TS `connectors/common.ts`). One that needs a vendor SDK is a separate package, like the framework integrations. Python is
 the reference; each connector has a design note in `docs/connectors/` (with its fake server and the shared cases in
-`tests/connectors/<name>/`) that the other ports implement. The C# and TS
-files are listed as pending in `tools/layout.json` until they exist.
+`tests/connectors/<name>/`) that the other ports implement; [connectors/README.md](connectors/README.md) says how to
+write one. The C# and TS files are listed as pending in `tools/layout.json` until they exist.
