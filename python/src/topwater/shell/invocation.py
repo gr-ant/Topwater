@@ -164,12 +164,12 @@ class InvocationPart:
                 return 0
         mounts = self._mounts if self._mounts.items else None
         if mounts is not None:
-            await mounts.before(name, argv)
+            await mounts.before(name, argv, io_.err)
         try:
             return await self._run_handler(cmd, ctx, name, io_)
         finally:
             if mounts is not None and time.monotonic() < self._deadline:
-                await mounts.after(io_.err)
+                await mounts.after()
 
     async def _run_handler(self, cmd, ctx, name: str, io_: _Io) -> int:
         from ..commands import usage_error

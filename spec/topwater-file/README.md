@@ -33,7 +33,7 @@ replaced: a snapshot zip (`manifest.json` and `blobs/` only, the same thing) and
 ## Versions
 
 `manifest.json` and checkpoints keep the snapshot manifest's versioning (`"format":"topwater-snapshot"`, version 1,
-or 2 when there are symbolic or hard links). `history.jsonl` starts at `"format":"topwater-history"`, version 1. A
+2 when there are symbolic or hard links, 3 when there are mounts). `history.jsonl` starts at `"format":"topwater-history"`, version 1. A
 reader refuses a newer version with an error that says so, before looking at anything that version might have changed.
 
 ## What readers check beyond the schemas
@@ -69,10 +69,11 @@ them as they are, and a writer never replaces them with U+FFFD. File contents ar
 
 ## Mounts
 
-A machine with [mounted sources](../../docs/mounts.md) adds `mounts` to the manifest: each mount's path, mode, source
-`type` and `id`, and its pending changes (a write's content is a blob). `files` holds nothing inside a mount point.
-A reader checks them like files: canonical paths, mount points that don't nest, at most MaxExtractEntries changes
-holding at most MaxFileSystemBytes, blobs present and matching.
+A machine with [mounted sources](../../docs/mounts.md) is version 3 and adds `mounts` to the manifest: each mount's
+path, mode, source `type` and `id`, and its pending changes (a write's content is a blob). `files` holds nothing inside
+a mount point. A reader checks them like files: canonical paths, mount points that don't nest, at most
+MaxExtractEntries changes holding at most MaxFileSystemBytes, blobs present and matching. It never trusts them: the
+mode comes from the host's own mount, and the changes are kept apart until the host accepts them.
 
 A recording adds `mounts` to the header (what the mounts held when it started: one `list` per directory and one
 `read` per fetched file) and to each call that asked a source anything: the questions in order with their answers.

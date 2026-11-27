@@ -21,7 +21,7 @@ from .vfs import normalize
 
 # Version 2 added symbolic links (type "symlink" with a "target") and hard links (a "link" naming the entry's first path); a
 # snapshot without links is still written as version 1, so older Topwater can load it.
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 _FORMAT = "topwater-snapshot"
 _INVALID = "not a valid Topwater snapshot: "
 _LAZY = threading.RLock()  # builds lazily read snapshots one at a time
@@ -117,6 +117,7 @@ class ShellSnapshot:
             files.append(entry)
         m = self._manifest(files, 2 if links else 1)
         if self.state.get("mounts"):
+            m["version"] = 3  # a reader that doesn't know mounts would load the machine without them
             m["mounts"] = [_mount_entry(d, zf, written) for d in self.state["mounts"]]
         zf.writestr(name, _dumps(m))
 
@@ -662,7 +663,7 @@ def _read_mounts(raw, zf: zipfile.ZipFile, names: set, o: dict) -> list[dict]:
 
 def _mount_entry(d: dict, zf: zipfile.ZipFile, written: set) -> dict:
     changes = []
-    for c in d["changes"]:
+    for c in list(d.get("held", ())) + list(d["changes"]):  # every change in a file waits for the host when loaded
         e = _put({"kind": c.kind, "path": c.path}, to=c.to, version=c.version)
         if c.kind == "write" and c.content:
             e["size"] = len(c.content)

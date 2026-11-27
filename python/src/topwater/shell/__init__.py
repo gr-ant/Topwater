@@ -342,8 +342,21 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
         return await self._mounts.get(path).apply(changes)
 
     def discard_changes(self, path: str) -> None:
-        """Drops a mount's pending changes: its files are the source's again (fetched again when read)."""
+        """Drops a mount's pending changes, and the ones a loaded snapshot brought: its files are the source's again."""
         self._mounts.discard(path)
+
+    def snapshot_changes(self, path: str) -> list:
+        """The changes a snapshot loaded from a file brought for this mount (as untrusted as the file): not in the files,
+        never applied, until accept_snapshot_changes."""
+        return list(self._mounts.get(path).held)
+
+    def accept_snapshot_changes(self, path: str) -> None:
+        """Puts a loaded snapshot's changes into the mount's files, where they become pending changes like the agent's.
+        Synchronous wrapper for accept_snapshot_changes_async."""
+        asyncio.run(self.accept_snapshot_changes_async(path))
+
+    async def accept_snapshot_changes_async(self, path: str) -> None:
+        await self._mounts.accept(path)
 
     def refresh_mount(self, path: str) -> None:
         """Lists the source again, keeping the pending changes. Synchronous wrapper for refresh_mount_async."""
@@ -400,6 +413,8 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
                 # shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
                 if time.monotonic() < self._deadline:
                     await self._run_exit_trap(io_)
+                if self._mounts.items and time.monotonic() < self._deadline:
+                    await self._mounts.settle(io_.err)
         except ParseError as e:
             stop_err(f"bash: {e}\n")
             code = 2

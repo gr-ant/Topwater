@@ -39,7 +39,8 @@ class SessionPart:
                      max_extract_bytes=self.max_extract_bytes, max_extract_entries=self.max_extract_entries)
         fork.commands = {n: c for n, c in self.commands.items() if not isinstance(c.handler, HostCommand)}
         fork._builtin_names = None if self._builtin_names is None else set(self._builtin_names)
-        fork._mounts.sources = dict(self._mounts.sources)  # the fork's mounts use the same sources
+        fork._mounts.sources = dict(self._mounts.sources)  # the fork's mounts use the same sources (a replay's: its answers)
+        fork._mounts.replay = self._mounts.replay
         fork.restore(self.snapshot())
         fork.umask = self.umask  # shortcut: snapshots do not hold the umask yet, so only fork() keeps it
         return fork

@@ -240,7 +240,7 @@ class SnapshotTests(unittest.TestCase):
         zf = zipfile.ZipFile(io.BytesIO(save(sh)))
         m = json.loads(zf.read("manifest.json"))
         self.assertEqual(("topwater-snapshot", 1), (m["format"], m["version"]))  # no links: written as version 1, which older Topwater reads
-        self.assertEqual(2, FORMAT_VERSION)
+        self.assertEqual(3, FORMAT_VERSION)
         fs = {f["path"]: f for f in m["files"]}
         a = fs["/home/agent/a"]
         self.assertEqual(("0644", "agent"), (a["mode"], a["owner"]))
@@ -334,10 +334,10 @@ echo setup done
 
     def test_a_newer_format_version_is_refused_clearly(self):
         def edit(m):
-            m["version"], m["files"] = 3, "changed shape"
+            m["version"], m["files"] = 4, "changed shape"
         with self.assertRaises(SnapshotVersionError) as e:
             ShellSnapshot.load(self.tamper(Shell(), edit))
-        self.assertEqual("snapshot format version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it",
+        self.assertEqual("snapshot format version 4 is newer than this version of Topwater supports (3); upgrade Topwater to load it",
                          str(e.exception))
 
     def test_not_a_snapshot_is_refused(self):

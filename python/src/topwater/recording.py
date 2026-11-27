@@ -466,7 +466,9 @@ def _mount_exchange_entry(x: MountExchange, zf: zipfile.ZipFile, written: set) -
 
 
 def _mount_entry_json(y: MountEntry) -> dict:
-    e = {"name": y.name, "type": "dir" if y.is_dir else "file", "size": y.size}
+    e = {"name": y.name, "type": "dir" if y.is_dir else "file"}
+    if y.size is not None:
+        e["size"] = y.size
     _put(e, mtime=y.modified and format_time(y.modified))
     e["version"] = y.version
     return e
@@ -496,11 +498,12 @@ def _mount_exchanges(raw, where: str, blob) -> list[MountExchange]:
         return v
 
     def entry(y) -> MountEntry:
+        size = y.get("size") if isinstance(y, dict) else None
         if not (isinstance(y, dict) and isinstance(y.get("name"), str) and y.get("type") in ("dir", "file")
-                and _is_int(y.get("size", 0)) and y.get("size", 0) >= 0 and isinstance(y.get("version", ""), str)):
+                and (size is None or _is_int(size) and size >= 0) and isinstance(y.get("version", ""), str)):
             raise _bad(f"{where}: bad entry")
         mtime = y.get("mtime")
-        return MountEntry(y["name"], y["type"] == "dir", y.get("size", 0), None if mtime is None else parse_time(mtime, where + ": mtime"),
+        return MountEntry(y["name"], y["type"] == "dir", size, None if mtime is None else parse_time(mtime, where + ": mtime"),
                           version(y.get("version", ""), "version"))
 
     out = []

@@ -1,15 +1,17 @@
-"""mount: the sources the host mounted (docs/mounts.md), the changes waiting in them, and listing them again."""
+"""mount: the sources the host mounted (docs/mounts.md), the changes waiting in them, listing them again, dropping changes."""
 from __future__ import annotations
 
 from .._spec import COMMANDS
+from ..mounts import _SourceFailure
 from ..shell.types import _ControlFlow
 from ..vfs import normalize
 from . import Args, spec_message
 
 
-def _line(info) -> str:
-    opts = "ro" if info.mode == "read-only" else "rw," + info.mode
-    return f"{info.type}:{info.id} on {info.path} type {info.type} ({opts})" + (f" {info.error}" if info.error else "")
+def _line(m) -> str:
+    """`TYPE:ID on DIR type TYPE (OPTIONS)`, the options naming what a writable mount's source can't do."""
+    opts = ["ro"] if m.mode == "read-only" else ["rw", m.mode] + [f"no-{c}" for c in ("delete", "rename", "mkdir") if c not in m.capabilities()]
+    return f"{m.type}:{m.id} on {m.path} type {m.type} ({','.join(opts)})" + (f" {m.shown}" if m.shown else "")
 
 
 def _change(m, c) -> str:
@@ -36,16 +38,20 @@ async def _mount(ctx) -> int:
                 await mounts.refresh(m.path)
             except _ControlFlow:
                 raise
-            except Exception as e:  # the source's own error, for the agent
-                ctx.error(f"mount: {m.path}: {e}")
+            except _SourceFailure as e:
+                ctx.error(f"mount: {m.path}: {e.safe}")
                 code = 1
             for w in m.warnings:
                 ctx.error("mount: " + w)
+        elif a.has("d"):
+            mounts.discard(m.path, held=False)
         elif a.has("c"):
             for c in m.changes():
                 ctx.print(_change(m, c))
         else:
-            ctx.print(_line(m.info()))
+            ctx.print(_line(m))
+            for w in m.warnings + ([spec_message("mount", "held", count=str(len(m.held)))] if m.held else []):
+                ctx.print("  " + w)
     return code
 
 

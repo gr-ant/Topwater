@@ -120,6 +120,7 @@ class _Dir(_Node):
     modified: datetime = field(default_factory=utc_now)
     owner: str = "root"
     mode: int = DEFAULT_DIR_MODE
+    unlisted: object = None  # a mounted directory not listed yet (mounts.py): unlisted(node) notes it and returns why
 
     def __setattr__(self, name, value):
         if name == "children":
@@ -336,6 +337,8 @@ class VirtualFileSystem:
             d = chain[-1][1]
             if not self._permits(d, user, 1):
                 return fail(ERRNO["EACCES"])
+            if d.unlisted is not None and seg != "..":
+                return fail(d.unlisted(d))
             if seg == "..":
                 if len(chain) > 1:
                     chain.pop()
@@ -623,6 +626,8 @@ class VirtualFileSystem:
         n, why = self._find_why(path)
         if isinstance(n, _Dir):
             self._require(n, 4, path)
+            if n.unlisted is not None:
+                raise ShellError(f"{path}: {n.unlisted(n)}")
             return sorted(n.children)
         raise ShellError(f"{path}: {why if n is None else ERRNO['ENOTDIR']}")
 
@@ -635,6 +640,8 @@ class VirtualFileSystem:
         n, why = self._find_why(path, follow=False)
         if n is None:
             raise ShellError(f"{path}: {why}")
+        if isinstance(n, _Dir) and n.unlisted is not None:
+            raise ShellError(f"{path}: {n.unlisted(n)}")  # what is in it is not known yet
         if isinstance(n, _Dir) and n.children and not recursive:
             raise ShellError(f"{path}: {ERRNO['ENOTEMPTY']}")
         spot = self._place(path)
@@ -655,6 +662,8 @@ class VirtualFileSystem:
         self._require(d, 3, f"{path}/{first}")
         for name, child in d.children.items():
             self._require_not_sticky(d, child, f"{path}/{name}")
+            if isinstance(child, _Dir) and child.unlisted is not None:
+                raise ShellError(f"{path}/{name}: {child.unlisted(child)}")
             if isinstance(child, _Dir):
                 self._require_tree_removable(child, f"{path}/{name}")
 
@@ -725,6 +734,8 @@ class VirtualFileSystem:
                 if preserve:
                     f.modified = node.modified
                 return f
+            if node.unlisted is not None:
+                raise ShellError(f"{p}: {node.unlisted(node)}")
             c = _Dir(owner=owner, mode=mode(node))
             if preserve:
                 c.modified = node.modified

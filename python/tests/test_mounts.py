@@ -45,6 +45,9 @@ def run_case(case: dict) -> list:
             chosen = None if "apply" in step else [pending[i] for i in step["applySubset"]]
             r = sh.apply_changes("/mnt/src", chosen)
             out.append({"applied": [change_json(c)["path"] for c in r.applied], "failed": r.failed and r.failed.path, "conflict": r.conflict})
+        elif "reads" in step:
+            out.append([p for op, p in src.calls if op == "read"])
+            src.calls.clear()
         elif "source" in step:
             out.append({p: None if v is None else v.decode() for p, v in src.tree().items()})
         elif "sourceSet" in step:
@@ -75,7 +78,8 @@ class Hostile(MountSource):
     def __init__(self, count=5):
         self.count = count
 
-    def list(self, path):
+    def list(self, path, max_entries):
+        self.asked = max_entries
         bad = [MountEntry("", False), MountEntry(".", True), MountEntry("..", True), MountEntry("a/b", False),
                MountEntry("nul\0", False), MountEntry("x" * 256, False), MountEntry("ok", False, 3, version="1"),
                MountEntry("ok", False, 9, version="2"), MountEntry("neg", False, -1), "not an entry"]
@@ -90,10 +94,12 @@ class Hostile(MountSource):
 
 def test_hostile_names_are_skipped_and_listing_is_bounded():
     sh = Shell(max_extract_entries=4)
-    sh.mount("/mnt/h", Hostile())
+    h = Hostile()
+    sh.mount("/mnt/h", h)
     assert sh.run("ls /mnt/h").stdout == "ok\nz0\nz1\nz2\n"
-    assert [w.split(": ", 1)[1] for w in sh.mounts[0].warnings] == ["listing stopped at 4 entries",
-                                                                     "skipped 9 entries with names that can't be files"]
+    assert [w.split(": ", 1)[1] for w in sh.mounts[0].warnings] == ["skipped 9 entries with names that can't be files",
+                                                                     "listing stopped at 4 entries"]
+    assert h.asked == 4  # the source is told how many entries are wanted
     r = sh.run("cat /mnt/h/ok; cat /mnt/h/z0")
     assert r.stdout == "abc" and r.stderr == "cat: /mnt/h/z0: File too large\n"
     assert sh.run("mount -r /mnt/h").stderr.count("mount: /mnt/h:") == 2
@@ -143,15 +149,15 @@ def test_source_failures_are_reported_and_retried():
 
     def hook(op, path):
         if fail["on"] and op in ("read", "write"):
-            raise OSError("the service is down")
+            raise OSError("GET https://api/x?sig=SECRET 503")
     src.hook = hook
-    assert sh.run("cat /mnt/s/a.txt").stderr == "cat: /mnt/s/a.txt: the service is down\n"
+    assert sh.run("cat /mnt/s/a.txt").stderr == "cat: /mnt/s/a.txt: the source failed (run the command again to retry)\n"
     fail["on"] = False
     assert sh.run("cat /mnt/s/a.txt").stdout == "a\n"
     sh.run("echo b > /mnt/s/a.txt")
     fail["on"] = True
     r = sh.apply_changes("/mnt/s")
-    assert r.failed.path == "/a.txt" and r.error == "the service is down" and not r.conflict
+    assert r.failed.path == "/a.txt" and r.error == "GET https://api/x?sig=SECRET 503" and not r.conflict  # the host sees it all
     fail["on"] = False
     assert sh.apply_changes("/mnt/s").applied[0].path == "/a.txt" and src.tree()["/a.txt"] == b"b\n"
 
@@ -194,20 +200,31 @@ def test_snapshot_keeps_the_definition_and_the_changes_not_the_files():
     sh.save(buf)
     raw = buf.getvalue()
     assert b"secret" not in raw
+    assert json.loads(__import__("zipfile").ZipFile(io.BytesIO(raw)).read("manifest.json"))["version"] == 3
     loaded = Shell.load(raw)
     info = loaded.mounts[0]
-    assert (info.path, info.mode, info.type, info.id) == ("/mnt/s", "staged", "memory", "memory")
+    assert (info.path, info.mode, info.type, info.id, info.held) == ("/mnt/s", "staged", "memory", "memory", 2)
     assert info.error == "unavailable: no source for memory:memory"
-    assert [c.kind for c in loaded.pending_changes("/mnt/s")] == ["write", "delete"]
+    assert loaded.pending_changes("/mnt/s") == []
+    assert [c.kind for c in loaded.snapshot_changes("/mnt/s")] == ["write", "delete"]
     assert "Permission denied" in loaded.run("ls /mnt/s").stderr
     loaded.mount("/mnt/s", src, "staged")
+    # a file's changes wait for the host: not in the files, not pending, until it accepts them
+    assert loaded.run("ls /mnt/s; cat /mnt/s/b.txt").stdout == "a.txt\nb.txt\nb\n"
+    assert loaded.pending_changes("/mnt/s") == [] and "1 changes" not in loaded.run("mount").stdout
+    assert "2 changes from a saved session wait for the host" in loaded.run("mount").stdout
+    loaded.accept_snapshot_changes("/mnt/s")
     assert loaded.run("ls /mnt/s; cat /mnt/s/b.txt").stdout == "b.txt\nnew\n"
     assert loaded.pending_changes("/mnt/s") == sh.pending_changes("/mnt/s")
-    # restoring into a shell that has the source lists it again at the next call
+    # a snapshot taken in this process comes back as it was, with no source call
     other = Shell()
     other.mount("/mnt/other", src)
+    other.mount("/mnt/s", src, "staged")
+    other.unmount("/mnt/other")
+    before = len(src.calls)
     other.restore(sh.snapshot())
-    assert other.run("cat /mnt/s/b.txt").stdout == "new\n"
+    assert other.run("ls /mnt/s").stdout == "b.txt\n" and other.pending_changes("/mnt/s") == sh.pending_changes("/mnt/s")
+    assert [c for c in src.calls[before:] if c[0] == "list"] == []
     # the source changed meanwhile: applying conflicts, against the version the change was made on
     src.set("b.txt", "theirs\n")
     r = loaded.apply_changes("/mnt/s")
@@ -316,7 +333,7 @@ def test_a_recording_replays_without_the_source():
     assert src.calls == before
     replayed = loaded.create_shell()
     r = replayed.run("mount -r /mnt/s; cat /mnt/s/d/b.txt /mnt/s/c.txt")
-    assert r.stdout == "b\n" and r.stderr == "cat: /mnt/s/c.txt: read /c.txt is not in the Topwater recording\n"
+    assert r.stdout == "b\n" and r.stderr == "cat: /mnt/s/c.txt: read /c.txt is not in the Topwater recording (run the command again to retry)\n"
 
 
 def test_local_folder_source(tmp_path):
@@ -348,3 +365,308 @@ def test_local_folder_source(tmp_path):
     r = sh.apply_changes("/mnt/w")
     assert r.conflict and r.failed.path == "/top.md"
     assert (root / "top.md").read_text() == "edited on the host, longer\n"
+
+
+# ---------- review 046: regression tests ----------
+
+HOSTILE = Path(__file__).resolve().parents[2] / "tests" / "mounts" / "hostile.snap"
+
+
+def _host_folder(tmp_path):
+    root = tmp_path / "notes"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "keep.md").write_text("keep\n")
+    (root / "a.md").write_text("hello\n")
+    return root
+
+
+def _tree(d) -> list:
+    return sorted(os.path.relpath(os.path.join(b, f), d) for b, ds, fs in os.walk(d) for f in fs + ds)
+
+
+@pytest.mark.parametrize("mode,writable,unmount", [("staged", True, False), ("read-only", True, False), ("read-only", False, False),
+                                                   ("staged", True, True)])
+def test_a_hostile_snapshot_never_writes_to_a_real_source(tmp_path, mode, writable, unmount):
+    """hostile.snap (security review 046): mode live, a rename, a mkdir and a write into the host's folder."""
+    from topwater.snapshot import ShellSnapshot
+    root = _host_folder(tmp_path)
+    sh = Shell()
+    sh.mount("/mnt/notes", LocalFolderSource(root, writable=writable, id="notes"), mode)
+    if unmount:
+        sh.unmount("/mnt/notes")
+    sh.restore(ShellSnapshot.load(HOSTILE.read_bytes()))
+    for c in ("true", "echo hi > /mnt/notes/x.md; ls /mnt/notes", "mount"):
+        sh.run(c)
+    assert _tree(root) == ["a.md", "docs", "docs/keep.md"]
+    m = sh.mounts[0]
+    assert m.mode == (mode if not unmount else "live") and (m.error is not None) == unmount
+    if not unmount:
+        assert m.held == 3 and [c.path for c in sh.pending_changes("/mnt/notes")] in ([], ["/x.md"])  # only the agent's own
+        assert "keep.md" in sh.run("ls /mnt/notes/docs").stdout
+
+
+def test_a_fork_of_a_replay_shell_never_reaches_the_real_source():
+    src = MemorySource({"a.md": "one\n"}, id="m")
+    sh = Shell()
+    sh.mount("/mnt/m", src, "live")
+    rec = sh.start_recording()
+    sh.run("cat /mnt/m/a.md")
+    rec.stop()
+    buf = io.BytesIO()
+    rec.save(buf)
+    real = MemorySource({"a.md": "one\n"}, id="m")
+    replay_shell = Recording.load(buf.getvalue()).create_shell(lambda s: s.mount("/mnt/m", real, "live"))
+    n = len(real.calls)
+    replay_shell.run("echo replayed > /mnt/m/r.md")
+    replay_shell.fork().run("echo forked > /mnt/m/fork.md")
+    assert real.calls[n:] == [] and "/fork.md" not in real.tree()
+
+
+def test_unmount_forgets_the_source():
+    src = MemorySource({"a.md": "x\n"})
+    sh = Shell()
+    sh.mount("/mnt/s", src, "staged")
+    snap = sh.snapshot()
+    sh.unmount("/mnt/s")
+    sh.restore(snap)
+    assert sh.mounts[0].error == "unavailable: no source for memory:memory"
+
+
+def test_a_fifo_never_blocks_the_call(tmp_path):
+    root = tmp_path / "v"
+    root.mkdir()
+    (root / "a.md").write_text("a\n")
+    os.mkfifo(root / "fifo")
+    sh = Shell(max_call_duration=5)
+    sh.mount("/mnt/v", LocalFolderSource(root))
+    assert sh.run("ls /mnt/v").stdout == "a.md\n"  # not listed
+    os.remove(root / "a.md")
+    os.mkfifo(root / "a.md")  # a listed file replaced by a FIFO
+    import time as _time
+    t = _time.monotonic()
+    r = sh.run("cat /mnt/v/a.md")
+    assert _time.monotonic() - t < 2 and "not a regular file" in r.stderr
+
+
+def test_backslash_names_never_reach_a_folder(tmp_path):
+    root = _host_folder(tmp_path)
+    sh = Shell()
+    sh.mount("/mnt/n", LocalFolderSource(root, writable=True, id="n"), "live")
+    r = sh.run(r"echo evil > '/mnt/n/..\..\outside\win.txt'")
+    assert "not a name a file can have here" in r.stderr and str(root) not in r.stderr
+    assert _tree(root) == ["a.md", "docs", "docs/keep.md"]
+
+
+def test_source_errors_reach_the_agent_only_when_meant_for_it():
+    from topwater.mounts import MountSourceError
+    src = MemorySource({"a.md": "a\n", "b.md": "b\n"})
+
+    def hook(op, path):
+        if path == "/a.md":
+            raise MountSourceError("a.md: the page is locked")
+        if path == "/b.md":
+            raise RuntimeError("GET https://api/x?sig=SECRET 503")
+    sh = Shell()
+    sh.mount("/mnt/s", src)
+    src.hook = hook
+    r = sh.run("cat /mnt/s/a.md /mnt/s/b.md")
+    assert "the page is locked" in r.stderr and "SECRET" not in r.stderr and "the source failed" in r.stderr
+
+
+def test_local_folder_errors_show_no_host_path(tmp_path):
+    root = _host_folder(tmp_path)
+    src = LocalFolderSource(root, writable=True, id="n")
+    sh = Shell()
+    sh.mount("/mnt/n", src, "live")
+    os.chmod(root / "docs", 0o500)
+    try:
+        r = sh.run("echo x > /mnt/n/docs/new.md")
+    finally:
+        os.chmod(root / "docs", 0o755)
+    assert str(tmp_path) not in r.stdout + r.stderr and "mount: /mnt/n/docs/new.md" in r.stderr
+
+
+def test_long_names_write_and_leave_no_temporary_file(tmp_path):
+    root = _host_folder(tmp_path)
+    sh = Shell()
+    sh.mount("/mnt/n", LocalFolderSource(root, writable=True, id="n"), "live")
+    name = "y" * 250
+    assert sh.run(f"echo x > /mnt/n/{name}").stderr == ""
+    assert (root / name).read_text() == "x\n" and not [f for f in os.listdir(root) if f.endswith(".tmp")]
+
+
+def test_a_large_source_is_listed_in_parts(monkeypatch):
+    import topwater.mounts as mounts
+    monkeypatch.setattr(mounts, "LIST_BUDGET", 5)
+    src = MemorySource({f"d{i}/f{j}.txt": f"{i}{j}\n" for i in range(4) for j in range(3)})
+    sh = Shell()
+    sh.mount("/mnt/s", src)
+    assert sh.run("ls /mnt/s/d0").stdout == "f0.txt\nf1.txt\nf2.txt\n"  # named: listed before the command
+    assert sh.run("echo /mnt/s/*/f1.txt").stdout == "/mnt/s/d0/f1.txt\n"  # the glob looked into unlisted ones: listed after
+    assert sh.run("echo /mnt/s/*/f1.txt").stdout == "/mnt/s/d0/f1.txt /mnt/s/d1/f1.txt /mnt/s/d2/f1.txt /mnt/s/d3/f1.txt\n"
+    fresh = Shell()
+    fresh.mount("/mnt/s", src)
+    awk = "awk 'BEGIN { while ((getline l < \"/mnt/s/d3/f0.txt\") > 0) print l }'"  # a path inside a program: nothing named it
+    assert fresh.run(awk).stdout == ""  # d3 was not listed: listed after the command
+    assert fresh.run(awk).stdout == ""  # f0.txt was not fetched: fetched after the command
+    assert fresh.run(awk).stdout == "30\n"
+    assert sh.run("cat /mnt/s/d3/f2.txt; find /mnt/s -type f | wc -l").stdout == "32\n12\n"
+
+
+def test_a_restore_from_a_file_does_not_list_everything_in_one_call(monkeypatch):
+    import topwater.mounts as mounts
+    monkeypatch.setattr(mounts, "LIST_BUDGET", 3)
+    src = MemorySource({f"d{i}/f.txt": "x" for i in range(10)})
+    sh = Shell()
+    sh.mount("/mnt/s", src)
+    buf = io.BytesIO()
+    sh.save(buf)
+    loaded = Shell.load(buf.getvalue())
+    loaded.mount("/mnt/s", src)  # adopts the unavailable mount
+    before = len(src.calls)
+    loaded.run("true")
+    assert len([c for c in src.calls[before:] if c[0] == "list"]) == 0
+
+
+def test_unknown_sizes_show_after_fetching():
+    class Pages(MemorySource):
+        async def list(self, path, max_entries):
+            return [MountEntry(e.name, e.is_dir, None if not e.is_dir else 0, e.modified, e.version)
+                    for e in await super().list(path, max_entries)]
+    sh = Shell()
+    sh.mount("/mnt/p", Pages({"page.md": "twelve bytes"}))
+    assert sh.run("stat -c %s /mnt/p/page.md").stdout == "0\n"
+    assert sh.run("cat /mnt/p/page.md > /dev/null; stat -c %s /mnt/p/page.md").stdout == "12\n"
+
+
+def test_a_rename_takes_the_version_the_source_returns():
+    class Moves(MemorySource):
+        async def rename(self, path, to, expected_version):
+            await super().rename(path, to, expected_version)
+            data = self._items[to][0]
+            self._items[to] = (data, self._version())  # like Drive: a move changes the ETag
+            return self._items[to][1]
+    src = Moves({"a.md": "a\n"})
+    sh = Shell()
+    sh.mount("/mnt/s", src, "live")
+    sh.run("mv /mnt/s/a.md /mnt/s/b.md")
+    r = sh.run("echo more >> /mnt/s/b.md")
+    assert r.stderr == "" and src.tree()["/b.md"] == b"a\nmore\n"
+
+
+def test_mount_names_what_the_source_cannot_do():
+    src = MemorySource({"a.md": "a\n"})
+    src.capabilities = frozenset({"write"})
+    sh = Shell()
+    sh.mount("/mnt/s", src, "staged")
+    assert sh.run("mount").stdout == "memory:memory on /mnt/s type memory (rw,staged,no-delete,no-rename,no-mkdir)\n"
+
+
+def test_the_tool_description_names_the_mounts():
+    from topwater import tool_description
+    sh = Shell()
+    sh.mount("/mnt/vault", MemorySource(id="v"))
+    sh.mount("/mnt/notes", MemorySource(id="n"), "staged")
+    d = tool_description(sh)
+    assert "`/mnt/vault` is a folder from outside, read-only." in d and "`/mnt/notes` is a folder from outside; your changes" in d
+
+
+def test_random_change_sets_apply_to_what_the_mount_shows():
+    """Random mkdir, mv, rm and edits on a staged mount: applying the change set makes the source match the mount."""
+    import random
+    for seed in range(60):
+        rnd = random.Random(seed)
+        src = MemorySource({"a/x.md": "x\n", "a/y.md": "y\n", "b/z.md": "z\n", "c.md": "c\n", "d/e/f.md": "f\n"})
+        sh = Shell()
+        sh.mount("/mnt/s", src, "staged")
+        for _ in range(rnd.randint(1, 8)):
+            files = [p for p in sh.run("cd /mnt/s && find . -mindepth 1").stdout.split() if p]
+            dirs = [p for p in files if sh.run(f"test -d /mnt/s/{p} && echo y").stdout] + ["."]
+            pick = rnd.choice(files) if files else "."
+            op = rnd.choice(["mkdir", "mv", "mv", "rm", "edit", "new", "swap"])
+            if op == "mkdir":
+                sh.run(f"mkdir /mnt/s/{rnd.choice(dirs)}/n{rnd.randint(0, 9)}")
+            elif op == "mv" and files:
+                sh.run(f"mv /mnt/s/{pick} /mnt/s/{rnd.choice(dirs)}/m{rnd.randint(0, 9)} 2>/dev/null")
+            elif op == "rm" and files:
+                sh.run(f"rm -r /mnt/s/{pick}")
+            elif op == "edit" and files:
+                sh.run(f"test -f /mnt/s/{pick} && echo e >> /mnt/s/{pick}")
+            elif op == "new":
+                sh.run(f"echo n > /mnt/s/{rnd.choice(dirs)}/w{rnd.randint(0, 9)}.md 2>/dev/null")
+            elif op == "swap" and len(files) > 1:
+                a, b = rnd.sample(files, 2)
+                sh.run(f"mv /mnt/s/{a} /mnt/s/tmpx 2>/dev/null && mv /mnt/s/{b} /mnt/s/{a} 2>/dev/null && mv /mnt/s/tmpx /mnt/s/{b} 2>/dev/null")
+        r = sh.apply_changes("/mnt/s")
+        assert r.failed is None, (seed, r)
+        want = {}
+        for p in sh.run("cd /mnt/s && find . -mindepth 1 | sort").stdout.split():
+            full = "/mnt/s/" + p[2:]
+            want["/" + p[2:]] = sh.run(f"cat {full}").stdout.encode() if not sh.run(f"test -d {full} && echo d").stdout else None
+        assert src.tree() == want, seed
+
+
+# ---------- files from every port ----------
+
+MOUNTS_DIR = Path(__file__).resolve().parents[2] / "tests" / "mounts"
+FIXTURE_COMMANDS = ["cat /mnt/s/a.txt; echo more >> /mnt/s/a.txt; mv /mnt/s/d/b.txt /mnt/s/d/c.txt; rm /mnt/s/old.txt; mkdir /mnt/s/e",
+                    "echo y > /mnt/l/x.txt", "echo z > /mnt/l/x.txt"]
+
+
+def make_fixture() -> bytes:
+    """The scenario each port records into tests/mounts/mounts-from-<port>.topwater (TOPWATER_WRITE_FIXTURES=1 rewrites it)."""
+    src = MemorySource({"a.txt": "a\n", "d/b.txt": "b\n", "old.txt": "o\n"})
+    live = MemorySource({"x.txt": "x\n"}, id="live")
+    sh = Shell()
+    sh.mount("/mnt/s", src, "staged")
+    sh.mount("/mnt/l", live, "live")
+    rec = sh.start_recording(metadata={"source": "python port"})
+    sh.run(FIXTURE_COMMANDS[0])
+    sh.run(FIXTURE_COMMANDS[1])
+    live.set("x.txt", "theirs\n")
+    sh.run(FIXTURE_COMMANDS[2])
+    rec.stop()
+    buf = io.BytesIO()
+    rec.save(buf)
+    return buf.getvalue()
+
+
+def test_this_ports_mount_fixture_is_current():
+    path = MOUNTS_DIR / "mounts-from-python.topwater"
+    if os.environ.get("TOPWATER_WRITE_FIXTURES") == "1" or not path.exists():
+        path.write_bytes(make_fixture())
+    check_fixture(path.read_bytes())
+
+
+@pytest.mark.parametrize("port", ["csharp", "typescript"])
+def test_mount_files_from_other_ports(port):
+    path = MOUNTS_DIR / f"mounts-from-{port}.topwater"
+    if not path.exists():
+        pytest.skip(f"written by the {port} tests")
+    check_fixture(path.read_bytes())
+
+
+def check_fixture(raw: bytes) -> None:
+    sh = Shell.load(raw)
+    assert [(m.path, m.mode, m.type, m.id, m.held) for m in sorted(sh.mounts, key=lambda m: m.path)] == \
+        [("/mnt/l", "live", "memory", "live", 1), ("/mnt/s", "staged", "memory", "memory", 4)]
+    assert [(c.kind, c.path, c.to) for c in sh.snapshot_changes("/mnt/s")] == \
+        [("rename", "/d/b.txt", "/d/c.txt"), ("mkdir", "/e", None), ("write", "/a.txt", None), ("delete", "/old.txt", None)]
+    assert sh.snapshot_changes("/mnt/l")[0].content == b"z\n"
+    rec = Recording.load(raw)
+    assert [c.command for c in rec.calls] == FIXTURE_COMMANDS
+    assert any(x.op == "list" for x in rec.mount_start) and any(x.op == "read" for x in rec.calls[0].mounts)
+    assert any(x.op == "write" for x in rec.calls[1].mounts) and "changed in the source" in rec.calls[2].stderr
+    report = rec.replay()
+    assert report.matches, report.differences
+
+
+def test_the_documented_source_runs(capsys):
+    """docs/mounts.md's complete Python source, as written there."""
+    import re
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "mounts.md").read_text()
+    code = re.search(r"```python\n(.*?)```", doc, re.S).group(1)
+    scope: dict = {}
+    exec(compile(code, "docs/mounts.md", "exec"), scope)
+    out = capsys.readouterr().out
+    assert "failed=None" in out and scope["wiki"]._pages["plan.md"] == b"# Plan\nFinal\n" and scope["wiki"]._pages["notes.md"] == b"# Notes\n"

@@ -99,8 +99,8 @@
         "entry": { "oneOf": [{ "$ref": "#/$defs/mountEntry" }, { "type": "null" }], "description": "What a stat answered; null: missing." },
         "body": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blobs/<sha256> holding what a read answered; absent when empty." },
         "size": { "type": "integer", "minimum": 0, "description": "A read's length." },
-        "version": { "type": "string", "maxLength": 1024, "description": "The version a write returned." },
-        "error": { "type": "string", "description": "The source's error instead of an answer." },
+        "version": { "type": "string", "maxLength": 1024, "description": "The version a write, rename or mkdir returned." },
+        "error": { "type": "string", "description": "The source's error instead of an answer, as the agent saw it (\"the source failed\" unless the source meant its text for the agent)." },
         "conflict": { "type": "boolean", "description": "The error was a version conflict." }
       }
     },
@@ -109,7 +109,7 @@
       "properties": {
         "name": { "type": "string", "description": "As the source gave it; a reader skips names no file can have." },
         "type": { "enum": ["dir", "file"] },
-        "size": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0, "description": "Absent: not known until read." },
         "mtime": { "$ref": "manifest.schema.json#/$defs/time" },
         "version": { "type": "string", "maxLength": 1024 }
       }

@@ -8,8 +8,8 @@
   "properties": {
     "format": { "const": "topwater-snapshot" },
     "version": {
-      "type": "integer", "minimum": 1, "maximum": 2,
-      "description": "1, or 2 when a file entry is a symbolic link or has a link. A writer uses 1 when it can, so older readers load it. A reader refuses a newer version than it knows."
+      "type": "integer", "minimum": 1, "maximum": 3,
+      "description": "1, 2 when a file entry is a symbolic link or has a link, 3 when there are mounts. A writer uses the lowest it can, so older readers load it. A reader refuses a newer version than it knows."
     },
     "created": { "$ref": "#/$defs/time" },
     "user": { "$ref": "#/$defs/userName" },
@@ -54,7 +54,7 @@
     "random": { "type": "string", "pattern": "^[0-9]{1,20}$", "description": "The seeded random generator's state (an unsigned 64-bit number), for a shell made with a seed." },
     "mounts": {
       "type": "array", "items": { "$ref": "#/$defs/mount" },
-      "description": "Sources mounted into the machine (docs/mounts.md): the definition and the pending changes, never the source's files, which files leaves out. Left out when none."
+      "description": "Version 3: sources mounted into the machine (docs/mounts.md): the definition and the pending changes, never the source's files, which files leaves out. Left out when none. A reader keeps these changes apart until the host accepts them, and takes each mount's mode from the host, never from here."
     }
   },
   "$defs": {
@@ -62,7 +62,7 @@
       "type": "object", "required": ["path", "mode", "type", "id"],
       "properties": {
         "path": { "$ref": "#/$defs/path", "description": "The mount point; never /, and no two mounts nest." },
-        "mode": { "enum": ["read-only", "staged", "live"] },
+        "mode": { "enum": ["read-only", "staged", "live"], "description": "The mode when saved; informational: a loading shell uses the mode its host mounted with." },
         "type": { "type": "string", "maxLength": 256, "description": "The source's kind (local-folder, memory, ...); with id, what a loading shell matches a source by." },
         "id": { "type": "string", "maxLength": 256, "description": "The host's name for this source; never a secret." },
         "changes": {

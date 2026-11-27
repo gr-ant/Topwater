@@ -333,6 +333,8 @@ class ExecutionPart:
                 except ShellError as e:
                     io_.err.write(f"{self.err_prefix}{e}\n")
                     code = 1
+            if self._mounts.items and time.monotonic() < self._deadline:
+                await self._mounts.settle(io_.err)  # live mode: what the command and its redirections wrote
         return code
 
     async def _exec_subshell(self, body: Script, io_: _Io) -> int:

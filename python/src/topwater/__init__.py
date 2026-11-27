@@ -25,13 +25,25 @@ _NO_NETWORK_SENTENCE = "Python, network access and package installation are not.
 
 
 def tool_description(shell: Shell | None) -> str:
-    """TOOL_DESCRIPTION for this shell: with a web policy (Shell.allow_web) it names the sites curl and wget reach."""
+    """TOOL_DESCRIPTION for this shell: with a web policy (Shell.allow_web) it names the sites curl and wget reach, and it
+    names each mounted folder (Shell.mount)."""
+    text = TOOL_DESCRIPTION
     web = shell._web if shell is not None else None
-    if web is None or web._replay is not None:
-        return TOOL_DESCRIPTION
-    p = web.policy
-    return TOOL_DESCRIPTION.replace(_NO_NETWORK_SENTENCE, "Python and package installation are not; `curl` and `wget` reach only these "
-                                    f"sites (methods: {', '.join(m.upper() for m in p.methods)}): {some(list(p.domains), 20)}. ")
+    if web is not None and web._replay is None:
+        p = web.policy
+        text = text.replace(_NO_NETWORK_SENTENCE, "Python and package installation are not; `curl` and `wget` reach only these "
+                            f"sites (methods: {', '.join(m.upper() for m in p.methods)}): {some(list(p.domains), 20)}. ")
+    return text + _mount_sentences(shell)
+
+
+def _mount_sentences(shell: Shell | None) -> str:
+    """One sentence per mount (docs/mounts.md), so the model knows the folders from outside are there."""
+    out = ""
+    for m in sorted(shell.mounts if shell is not None else [], key=lambda m: m.path):
+        out += (f" `{m.path}` is a folder from outside, read-only." if m.mode == "read-only" else
+                f" `{m.path}` is a folder from outside; your changes there are reviewed before they are saved (`mount --changes`)."
+                if m.mode == "staged" else f" `{m.path}` is a folder from outside; your changes there are saved to it after each command.")
+    return out
 
 
 TOOL_INPUT_SCHEMA = {

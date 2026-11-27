@@ -53,6 +53,9 @@ What is not captured, on purpose:
 
 - **Per-call state.** Function locals, open file descriptors (`exec 3>file`), the time and loop budgets, and anything
   else that exists only while a call runs. Take snapshots between calls, not from inside a running command.
+- **Mounted sources' files.** A [mount](mounts.md#snapshots-and-recordings) is saved as its definition and pending
+  changes; a snapshot loaded from a file can't change a mount's mode, and its changes wait for your
+  `AcceptSnapshotChangesAsync`.
 - **Your registrations.** Commands from `Register`, `RegisterTools`, `RegisterApi`, MCP mounts and host programs are
   code, not data. `Restore` keeps the shell's own registrations and puts the `/usr/bin` entries back in line with
   them. `Fork` shares the registered handlers with the parent, so a stateful handler is used by both (an MCP mount's
@@ -275,9 +278,10 @@ The machine itself is two kinds of entry:
 
 Version 2 added `symlink` entries and `link`. A machine without any link is written as version 1, but a default
 machine has four (`/etc/os-release` among them), so in practice every machine saved by this version is version 2 and
-`0.1.0-preview.2` cannot load it. A newer `version` than this Topwater knows fails with `NotSupportedException`:
-`snapshot format version 3 is newer than this version of Topwater supports (2); upgrade Topwater to load it`. Later
-versions of Topwater are meant to keep reading versions 1 and 2.
+`0.1.0-preview.2` cannot load it. Version 3 added `mounts` ([mounted sources](mounts.md#snapshots-and-recordings)):
+only a machine with a mount is written as version 3. A newer `version` than this Topwater knows fails with
+`NotSupportedException`: `snapshot format version 4 is newer than this version of Topwater supports (3); upgrade
+Topwater to load it`. Later versions of Topwater are meant to keep reading versions 1 to 3.
 
 ### The history
 

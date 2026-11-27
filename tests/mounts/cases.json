@@ -234,7 +234,7 @@
      "run": "echo mine > /mnt/src/notes/b.md; echo done",
      "expect": {
       "stdout": "done\n",
-      "stderr": "mount: /mnt/src/notes/b.md: changed in the source since it was read; the change stays pending\nmount: /mnt/src/notes/b.md: changed in the source since it was read; the change stays pending\n",
+      "stderr": "mount: /mnt/src/notes/b.md: changed in the source since it was read; the change stays pending (mount --discard /mnt/src drops your changes)\n",
       "exitCode": 0
      }
     },
@@ -570,6 +570,281 @@
       "stderr": "mount: /tmp: not a mount point\nmount: /nope: not a mount point\nmount: unrecognized option '--bogus'\nTry 'mount --help' for more information.\n",
       "exitCode": 1
      }
+    }
+   ]
+  },
+  {
+   "name": "a new folder, then files moved into it",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "mkdir /mnt/src/sorted; mv /mnt/src/top.txt /mnt/src/notes/a.md /mnt/src/sorted/",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "mkdir",
+       "path": "/sorted"
+      },
+      {
+       "kind": "rename",
+       "path": "/notes/a.md",
+       "to": "/sorted/a.md",
+       "version": "4"
+      },
+      {
+       "kind": "rename",
+       "path": "/top.txt",
+       "to": "/sorted/top.txt",
+       "version": "6"
+      }
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/sorted",
+       "/notes/a.md",
+       "/top.txt"
+      ],
+      "failed": null,
+      "conflict": false
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/notes": null,
+      "/notes/b.md": "bee\n",
+      "/sorted": null,
+      "/sorted/a.md": "hello\nworld\n",
+      "/sorted/top.txt": "top\n"
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
+    }
+   ]
+  },
+  {
+   "name": "renames inside a renamed folder, and a swap",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "mv /mnt/src/notes /mnt/src/kept; mv /mnt/src/kept/a.md /mnt/src/kept/z.md; cd /mnt/src/kept; mv z.md t; mv b.md z.md; mv t b.md",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "rename",
+       "path": "/notes",
+       "to": "/kept",
+       "version": "3"
+      },
+      {
+       "kind": "rename",
+       "path": "/kept/b.md",
+       "to": "/kept/b.md.topwater-swap-1",
+       "version": "5"
+      },
+      {
+       "kind": "rename",
+       "path": "/kept/a.md",
+       "to": "/kept/b.md",
+       "version": "4"
+      },
+      {
+       "kind": "rename",
+       "path": "/kept/b.md.topwater-swap-1",
+       "to": "/kept/z.md",
+       "version": "5"
+      }
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/notes",
+       "/kept/b.md",
+       "/kept/a.md",
+       "/kept/b.md.topwater-swap-1"
+      ],
+      "failed": null,
+      "conflict": false
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/kept": null,
+      "/kept/b.md": "hello\nworld\n",
+      "/kept/z.md": "bee\n",
+      "/top.txt": "top\n"
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
+    }
+   ]
+  },
+  {
+   "name": "moving a file out of the mount keeps its content",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "mv /mnt/src/notes/a.md /tmp/a.md; cat /tmp/a.md",
+     "expect": {
+      "stdout": "hello\nworld\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/notes": null,
+      "/notes/b.md": "bee\n",
+      "/top.txt": "top\n"
+     }
+    },
+    {
+     "reads": true,
+     "expect": [
+      "/notes/a.md"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "live mode writes a heredoc in the same call",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "cat > /mnt/src/new.md <<'EOF'\nline one\nline two\nEOF",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/new.md": "line one\nline two\n",
+      "/notes": null,
+      "/notes/a.md": "hello\nworld\n",
+      "/notes/b.md": "bee\n",
+      "/top.txt": "top\n"
+     }
+    },
+    {
+     "run": "echo more >> /mnt/src/new.md",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/new.md": "line one\nline two\nmore\n",
+      "/notes": null,
+      "/notes/a.md": "hello\nworld\n",
+      "/notes/b.md": "bee\n",
+      "/top.txt": "top\n"
+     }
+    }
+   ]
+  },
+  {
+   "name": "only named files are fetched",
+   "mode": "read-only",
+   "steps": [
+    {
+     "run": "cd /mnt/src/notes; date > /dev/null; true; ls | head -1; ls | grep b; find . -name '*.md' | wc -l",
+     "expect": {
+      "stdout": "a.md\nb.md\n2\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "reads": true,
+     "expect": []
+    },
+    {
+     "run": "cat a.md; grep -r again /mnt/src/docs",
+     "expect": {
+      "stdout": "hello\nworld\n/mnt/src/docs/guide.txt:hello again\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "reads": true,
+     "expect": [
+      "/notes/a.md",
+      "/docs/guide.txt"
+     ]
+    },
+    {
+     "run": "grep -r bee",
+     "expect": {
+      "stdout": "b.md:bee\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "reads": true,
+     "expect": [
+      "/notes/b.md"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "mount shows what the source can't do and drops changes",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "echo x >> /mnt/src/top.txt; mount; mount -c; mount --discard /mnt/src; mount -c; cat /mnt/src/top.txt",
+     "expect": {
+      "stdout": "memory:memory on /mnt/src type memory (rw,staged)\nwrite /mnt/src/top.txt\ntop\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
     }
    ]
   }

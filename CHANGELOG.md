@@ -12,11 +12,13 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   `MemorySource` (for tests) come with it. In `read-only` mode nothing can change; in `staged` mode the agent's edits
   stay in the machine and `PendingChanges` returns them as a change set (write, delete, rename, mkdir, each with the
   version it was made on) to apply in full or in part (`ApplyChangesAsync` stops at a conflict) or discard; in `live`
-  mode they are applied after every command. Listings are read when mounting and on `mount -r`, file contents when a
-  command names them, within the disk cap. A new command, `mount`, lists the mounts, shows pending changes (`-c`) and
-  lists a source again (`-r`). Snapshots keep each mount's definition and pending changes, not the source's files, and
-  bring the mount back when the shell has the source; recordings keep the sources' answers, so a replay never calls
-  them. See [Mounted sources](docs/mounts.md).
+  mode they are applied after every command and when the call ends. File contents are fetched when a command names
+  them, within the disk cap. A new command, `mount`, lists the mounts, shows pending changes (`-c`), lists a source
+  again (`-r`) and drops the agent's changes (`--discard`). Large sources are listed 2,000 entries at a
+  time, the rest when a command names it. Snapshots keep each mount's definition and pending changes, not the source's
+  files (format version 3 when there is a mount); a snapshot never sets a mode or applies anything, and the changes in
+  one loaded from a file wait for `AcceptSnapshotChangesAsync`. Recordings keep the sources' answers, so a replay never
+  calls them. See [Mounted sources](docs/mounts.md).
 - **Container image.** From 0.1.0-preview.5 each release pushes `ghcr.io/gr-ant/topwater` for linux/amd64 and
   linux/arm64 (tags: the version, `preview`, and `latest` for releases without a preview suffix):
   `docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp`. It is the standalone Linux binary on Ubuntu's chiseled .NET

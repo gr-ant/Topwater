@@ -5,10 +5,11 @@
   "summary": "List the sources mounted into the machine, show their pending changes, or list them again",
   "version": "mount (Topwater)",
   "help": [
-    "Usage: mount [-r|-c] [DIR]...",
-    "List the sources the host has mounted into the machine, one per line with its mode.",
+    "Usage: mount [-r|-c|-d] [DIR]...",
+    "List the sources the host has mounted into the machine, one per line with its mode and what it can't do.",
     "  -r, --refresh   list each DIR's source again (every mount without DIR)",
     "  -c, --changes   show the changes waiting in each staged or live DIR (every mount without DIR)",
+    "  -d, --discard   drop your changes in each DIR: its files are the source's again",
     "",
     "The host application decides what happens to the changes: nothing (ro), applied when it reviews them",
     "(staged), or applied after every command (live)."
@@ -16,15 +17,26 @@
   "parser": "args",
   "options": [
     {"short": "r", "long": ["refresh"], "description": "list the source of each DIR again"},
-    {"short": "c", "long": ["changes"], "description": "show the changes waiting in each DIR"}
+    {"short": "c", "long": ["changes"], "description": "show the changes waiting in each DIR"},
+    {"short": "d", "long": ["discard"], "description": "drop your changes in each DIR"}
   ],
   "messages": {
     "notMounted": "{dir}: not a mount point",
     "unavailable": "unavailable: no source for {source}",
     "notFetched": "not fetched from the mounted source yet (run the command again)",
+    "notListed": "not listed from the mounted source yet (run the command again)",
+    "retry": " (run the command again to retry)",
+    "progress": "fetched {count} of {total} files under {dir} before the time limit; run the command again to continue",
+    "removed": "its mount was removed before it was fetched",
+    "sourceFailed": "the source failed",
+    "notBytes": "the source returned something other than bytes",
+    "cannot": "the source cannot {kind}",
+    "readOnly": "the mount is read-only",
+    "notListedYet": "the mount is not listed yet",
+    "held": "{count} changes from a saved session wait for the host",
     "tooLarge": "File too large",
-    "conflict": "{path}: changed in the source since it was read; the change stays pending",
-    "failed": "{path}: {reason}; the change stays pending",
+    "conflict": "{path}: changed in the source since it was read; the change stays pending (mount --discard {dir} drops your changes)",
+    "failed": "{path}: {reason}; the change stays pending (mount --discard {dir} drops your changes)",
     "timedOut": "the source did not answer in time",
     "truncated": "{dir}: listing stopped at {limit} entries",
     "skipped": "{dir}: skipped {count} entries with names that can't be files",
