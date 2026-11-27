@@ -545,3 +545,17 @@ together, but a phase isn't ticked until all three have it.
 | Missing usings | C# | The compiler catches them; `ImplicitUsings` is on |
 | Rebasing open branches across a split | all | The freeze above. Use `git log --follow` and `git blame -C -C -M` for history |
 | Python packaging misses `topwater.shell`, or a stale `shell.py` sits next to `shell/` | Python | `packages.find` picks up any directory with `__init__.py`; check the built wheel once; the checker fails on an unlisted `shell.py` once `legacy` is gone |
+
+## 10. Mounted sources
+
+[Mounted sources](mounts.md) add two files per port, listed in `tools/layout.json`:
+
+| Role | C# | Python | TS |
+|---|---|---|---|
+| Sources, change sets, the mount manager (sections `sources`, `changes`, `mounts`) | `Mounts.cs` | `mounts.py` | `mounts.ts` |
+| The `mount` command (registered last, after git) | `Builtins/MountCommands.cs` | `commands/mount.py` | `commands/mount.ts` |
+
+The rest is hooks where each port already does the same job: a `loader` on the filesystem's file nodes (read, append,
+copy), fetching around the handler call in `Invoke` and for `<` / `>>` redirections, listing restored mounts at the
+start of `Run`, the host API in the shell's registration section, and the `mounts` entries in the snapshot and
+recording formats.

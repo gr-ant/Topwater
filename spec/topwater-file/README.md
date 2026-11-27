@@ -67,6 +67,18 @@ lone surrogates U+DC80..U+DCFF, one per byte, as Python's "surrogateescape" does
 an alias, a function, `lastArg`, a path, a link target) carries them as the escapes `\udc80`..`\udcff`; a reader keeps
 them as they are, and a writer never replaces them with U+FFFD. File contents are blobs and hold the bytes themselves.
 
+## Mounts
+
+A machine with [mounted sources](../../docs/mounts.md) adds `mounts` to the manifest: each mount's path, mode, source
+`type` and `id`, and its pending changes (a write's content is a blob). `files` holds nothing inside a mount point.
+A reader checks them like files: canonical paths, mount points that don't nest, at most MaxExtractEntries changes
+holding at most MaxFileSystemBytes, blobs present and matching.
+
+A recording adds `mounts` to the header (what the mounts held when it started: one `list` per directory and one
+`read` per fetched file) and to each call that asked a source anything: the questions in order with their answers.
+A read's bytes are a blob, counted with the web bodies against MaxFileSystemBytes. A replay answers from these, in
+order per question (the last answer repeats), and never calls a source.
+
 ## Web exchanges
 
 A shell with web access (`AllowWeb`) adds `web` to the header: its policy without the credentials' values

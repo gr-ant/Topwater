@@ -5,6 +5,18 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 
 ## Unreleased
 
+- **Mounted sources.** A host can show an outside store of files as a directory in the machine:
+  `shell.MountAsync("/mnt/notes", source, MountMode.Staged)` (Python `shell.mount`, TypeScript `shell.mount`). A source
+  is a small class with `list`, `stat`, `read` and, if it can, `write`, `delete`, `rename` and `mkdir`; its credentials
+  never reach the agent. `LocalFolderSource` (a host directory, read-only unless `writable`; Obsidian vaults work) and
+  `MemorySource` (for tests) come with it. In `read-only` mode nothing can change; in `staged` mode the agent's edits
+  stay in the machine and `PendingChanges` returns them as a change set (write, delete, rename, mkdir, each with the
+  version it was made on) to apply in full or in part (`ApplyChangesAsync` stops at a conflict) or discard; in `live`
+  mode they are applied after every command. Listings are read when mounting and on `mount -r`, file contents when a
+  command names them, within the disk cap. A new command, `mount`, lists the mounts, shows pending changes (`-c`) and
+  lists a source again (`-r`). Snapshots keep each mount's definition and pending changes, not the source's files, and
+  bring the mount back when the shell has the source; recordings keep the sources' answers, so a replay never calls
+  them. See [Mounted sources](docs/mounts.md).
 - **Container image.** From 0.1.0-preview.5 each release pushes `ghcr.io/gr-ant/topwater` for linux/amd64 and
   linux/arm64 (tags: the version, `preview`, and `latest` for releases without a preview suffix):
   `docker run -i --rm ghcr.io/gr-ant/topwater:preview mcp`. It is the standalone Linux binary on Ubuntu's chiseled .NET

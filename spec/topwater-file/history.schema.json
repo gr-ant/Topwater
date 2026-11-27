@@ -43,6 +43,10 @@
             "explainBlocked": { "type": "boolean" },
             "credentials": { "type": "array", "items": { "type": "string" }, "description": "Hosts that had a credential; never the value." }
           }
+        },
+        "mounts": {
+          "type": "array", "items": { "$ref": "#/$defs/mountExchange" },
+          "description": "What the mounts held when recording started, as the listings and reads a replay's first listing and fetches answer from."
         }
       }
     },
@@ -64,6 +68,10 @@
         "web": {
           "type": "array", "items": { "$ref": "#/$defs/exchange" },
           "description": "The requests the call made, in order, and what came back; a replay serves these instead of the network."
+        },
+        "mounts": {
+          "type": "array", "items": { "$ref": "#/$defs/mountExchange" },
+          "description": "What the call asked mounted sources, in order, and what they answered; a replay answers from these instead of the source."
         }
       }
     },
@@ -78,6 +86,32 @@
         "body": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blobs/<sha256> holding the body, after credentials were scrubbed; absent when empty." },
         "size": { "type": "integer", "minimum": 0 },
         "error": { "enum": ["resolve", "blocked", "connect", "timeout", "tls", "recv", "partial", "reset", "weird", "empty"], "description": "How the request failed instead of getting an answer; partial or reset with a status: the body ended early, and is what came." }
+      }
+    },
+    "mountExchange": {
+      "type": "object", "required": ["mount", "op", "path"],
+      "properties": {
+        "mount": { "$ref": "manifest.schema.json#/$defs/path", "description": "The mount point." },
+        "op": { "enum": ["list", "stat", "read", "write", "delete", "rename", "mkdir"] },
+        "path": { "$ref": "manifest.schema.json#/$defs/path", "description": "Within the source." },
+        "to": { "$ref": "manifest.schema.json#/$defs/path", "description": "A rename's new path." },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/mountEntry" }, "description": "What a list answered." },
+        "entry": { "oneOf": [{ "$ref": "#/$defs/mountEntry" }, { "type": "null" }], "description": "What a stat answered; null: missing." },
+        "body": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blobs/<sha256> holding what a read answered; absent when empty." },
+        "size": { "type": "integer", "minimum": 0, "description": "A read's length." },
+        "version": { "type": "string", "maxLength": 1024, "description": "The version a write returned." },
+        "error": { "type": "string", "description": "The source's error instead of an answer." },
+        "conflict": { "type": "boolean", "description": "The error was a version conflict." }
+      }
+    },
+    "mountEntry": {
+      "type": "object", "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "description": "As the source gave it; a reader skips names no file can have." },
+        "type": { "enum": ["dir", "file"] },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime": { "$ref": "manifest.schema.json#/$defs/time" },
+        "version": { "type": "string", "maxLength": 1024 }
       }
     }
   }

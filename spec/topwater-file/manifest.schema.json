@@ -51,9 +51,36 @@
     "lastBackgroundPid": { "type": "integer" },
     "nextPid": { "type": "integer" },
     "clock": { "$ref": "#/$defs/time", "description": "The virtual clock, for a shell made with a start time." },
-    "random": { "type": "string", "pattern": "^[0-9]{1,20}$", "description": "The seeded random generator's state (an unsigned 64-bit number), for a shell made with a seed." }
+    "random": { "type": "string", "pattern": "^[0-9]{1,20}$", "description": "The seeded random generator's state (an unsigned 64-bit number), for a shell made with a seed." },
+    "mounts": {
+      "type": "array", "items": { "$ref": "#/$defs/mount" },
+      "description": "Sources mounted into the machine (docs/mounts.md): the definition and the pending changes, never the source's files, which files leaves out. Left out when none."
+    }
   },
   "$defs": {
+    "mount": {
+      "type": "object", "required": ["path", "mode", "type", "id"],
+      "properties": {
+        "path": { "$ref": "#/$defs/path", "description": "The mount point; never /, and no two mounts nest." },
+        "mode": { "enum": ["read-only", "staged", "live"] },
+        "type": { "type": "string", "maxLength": 256, "description": "The source's kind (local-folder, memory, ...); with id, what a loading shell matches a source by." },
+        "id": { "type": "string", "maxLength": 256, "description": "The host's name for this source; never a secret." },
+        "changes": {
+          "type": "array", "description": "The pending changes, in the order they apply.",
+          "items": {
+            "type": "object", "required": ["kind", "path"],
+            "properties": {
+              "kind": { "enum": ["write", "delete", "rename", "mkdir"] },
+              "path": { "$ref": "#/$defs/path", "description": "Within the source: / is the mount point." },
+              "to": { "$ref": "#/$defs/path", "description": "A rename's new path." },
+              "version": { "type": "string", "maxLength": 1024, "description": "The version the entry had when read; absent: it must not exist yet." },
+              "size": { "type": "integer", "minimum": 0, "description": "A write's content length (absent when 0)." },
+              "blob": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blobs/<sha256> holding a write's content." }
+            }
+          }
+        }
+      }
+    },
     "time": {
       "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,7})?)?(Z|[+-][0-9]{2}:?[0-9]{2})?$",
       "description": "ISO 8601. Writers use UTC with seven fraction digits: 2026-11-25T09:00:00.0000000Z. No zone means UTC."
