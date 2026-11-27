@@ -110,6 +110,8 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
         self._param_words: dict = {}
         self._recorder = None
         self._web = None  # allow_web(): the web access curl and wget get; None: no network
+        from ..mounts import Mounts
+        self._mounts = Mounts(self)  # mount(): outside sources shown as directories
         home = f"/home/{user}"
         for d in (home, "/tmp", "/var/tmp", "/usr/bin", "/bin", "/usr/local/bin", "/opt", "/etc", "/dev/fd", "/var/log"):
             self.fs.mkdir(d, parents=True)
@@ -310,6 +312,46 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
         self._web = WebSession(policy)
         return self
 
+    def mount(self, path: str, source, mode: str = "read-only") -> None:
+        """Shows `source` (a MountSource) as the directory `path`: mode "read-only", "staged" or "live" (docs/mounts.md).
+        Lists the source before it returns. Synchronous wrapper for mount_async."""
+        asyncio.run(self.mount_async(path, source, mode))
+
+    async def mount_async(self, path: str, source, mode: str = "read-only") -> None:
+        await self._mounts.mount(path, source, mode)
+
+    def unmount(self, path: str) -> None:
+        """Removes a mount and its pending changes; the mount point stays as an empty directory."""
+        self._mounts.unmount(path)
+
+    @property
+    def mounts(self) -> list:
+        """Every mount as a MountInfo (path, mode, source type and id, why it is unavailable)."""
+        return [m.info() for m in self._mounts.items.values()]
+
+    def pending_changes(self, path: str) -> list:
+        """The changes (MountChange) that would make a staged or live mount's source match its files, in order."""
+        return self._mounts.get(path).changes()
+
+    def apply_changes(self, path: str, changes: list | None = None):
+        """Applies the pending changes, or the ones given (from pending_changes), in order, stopping at the first conflict
+        or failure; returns a MountApplyResult. Synchronous wrapper for apply_changes_async."""
+        return asyncio.run(self.apply_changes_async(path, changes))
+
+    async def apply_changes_async(self, path: str, changes: list | None = None):
+        return await self._mounts.get(path).apply(changes)
+
+    def discard_changes(self, path: str) -> None:
+        """Drops a mount's pending changes: its files are the source's again (fetched again when read)."""
+        self._mounts.discard(path)
+
+    def refresh_mount(self, path: str) -> None:
+        """Lists the source again, keeping the pending changes. Synchronous wrapper for refresh_mount_async."""
+        asyncio.run(self.refresh_mount_async(path))
+
+    async def refresh_mount_async(self, path: str) -> None:
+        await self._mounts.refresh(path)
+
     def unregister(self, name: str) -> bool:
         with self.fs.as_root():
             for d in ("/usr/bin/", "/bin/"):
@@ -328,7 +370,7 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
         result = await self._run_call(command_line)
         if self._recorder is not None:
             self._recorder._add(command_line, result, (time.perf_counter() - clock) * 1000, started,
-                                self._web.take_log() if self._web is not None else None)
+                                self._web.take_log() if self._web is not None else None, self._mounts.take_log())
         return result
 
     async def _run_call(self, command_line: str) -> ShellResult:
@@ -351,6 +393,8 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
         running = _RUNNING.set(self)
         try:
             try:
+                if self._mounts.items:
+                    await self._mounts.prepare()
                 code = await self._exec_script(Parser.parse(command_line), io_, top=True)
             finally:
                 # shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout

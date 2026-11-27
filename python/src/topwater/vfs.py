@@ -139,6 +139,7 @@ class _File(_Node):
     appended: list[str] = field(default_factory=list)  # `>>` chunks not yet joined, so append loops stay linear
     size: int = 0  # real bytes held, as counted against the filesystem's capacity
     reported_size: int | None = None  # what `ls -l` and `stat` show for a program stub, whose real content is a few bytes
+    loader: object = None  # a mounted file not fetched yet (mounts.py): loader(node, path) fills it in or raises ShellError
 
     def text(self) -> str:
         if self.appended:
@@ -150,6 +151,8 @@ class _File(_Node):
 
     def store(self, content: str | bytes, append: bool, reserve=None) -> None:
         """reserve(delta) is called with the change in size before anything changes; it raises to refuse the write."""
+        if self.loader is not None:  # replaced (the caller loaded it first if appending)
+            self.loader = self.reported_size = None
         if isinstance(content, str) and bytetext.has_escapes(content):
             content = bytetext.encode(content)  # binary that came through a pipe
         if isinstance(content, bytes) or (append and self.data is not None):
@@ -509,6 +512,8 @@ class VirtualFileSystem:
         n = self._find(path)
         if isinstance(n, _File):
             self._require(n, 4, path)
+            if n.loader is not None:
+                n.loader(n, path)
             return n
         if isinstance(n, _Dir):
             raise ShellError(f"{path}: {ERRNO['EISDIR']}")
@@ -549,6 +554,8 @@ class VirtualFileSystem:
             if not isinstance(existing, _File):
                 raise ShellError(f"{path}: {ERRNO['EISDIR']}")
             self._require(existing, 2, path)
+            if append and existing.loader is not None:
+                existing.loader(existing, path)
             existing.store(content, append, lambda delta: self._reserve(delta, path))
             existing.modified = utc_now()
         else:
@@ -707,6 +714,8 @@ class VirtualFileSystem:
                 denied(p, isinstance(node, _Dir))
                 return None
             if isinstance(node, _File):
+                if node.loader is not None:
+                    node.loader(node, p)
                 # the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
                 nonlocal cloned
                 cloned += node.size

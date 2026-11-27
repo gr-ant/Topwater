@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import time
 
 from .._spec import COMMANDS, ERRNO, diagnostic
 from ..parser import CommandSub, Parser, SimpleCommand, try_assignment
@@ -161,6 +162,16 @@ class InvocationPart:
 
             if standard_option(ctx, cmd, argv[1]):
                 return 0
+        mounts = self._mounts if self._mounts.items else None
+        if mounts is not None:
+            await mounts.before(name, argv)
+        try:
+            return await self._run_handler(cmd, ctx, name, io_)
+        finally:
+            if mounts is not None and time.monotonic() < self._deadline:
+                await mounts.after(io_.err)
+
+    async def _run_handler(self, cmd, ctx, name: str, io_: _Io) -> int:
         from ..commands import usage_error
         from ..commands.scripting import is_shell_builtin
 

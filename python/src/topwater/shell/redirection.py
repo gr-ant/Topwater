@@ -121,6 +121,8 @@ class RedirectionPart:
         if r.op == "<<<":
             return StdinBuffer(await self._expand_single(r.target, io_) + "\n")
         target = await self._expand_single(r.target, io_)
+        if self._mounts.items:
+            await self._mounts.before("<", [], target)
         try:
             return StdinBuffer(self.fs.read_pipe_text(self.resolve(target)))
         except ShellError as e:
@@ -142,6 +144,8 @@ class RedirectionPart:
             raise ShellError(f"{target}: Is a directory")
         if self.noclobber and r.op in (">", "&>") and self.fs.is_file(path):
             raise ShellError(diagnostic("noclobber", target=target))
+        if r.op.endswith(">>") and self._mounts.items:
+            await self._mounts.before(">>", [], target)
         try:
             if not r.op.endswith(">>") or not self.fs.exists(path):
                 self.fs.write_text(path, "")  # truncate on open, like bash

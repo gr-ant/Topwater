@@ -23,7 +23,8 @@ from .shell import Shell, ShellResult
 from .snapshot import (_HOST, _USER, ShellSnapshot, SnapshotError, SnapshotVersionError, _check_entry_count, _dumps,
                        _check_header, _is_int, _manifest_bytes, _manifest_json, _max_archive, _open, _open_zip, _put, _read, _read_capped, _read_manifest, _BLOB,
                        _read_outline, _save_zip, format_time, parse_time)
-from .vfs import utc_now
+from .vfs import normalize, utc_now
+from .mounts import MAX_VERSION, MountEntry, MountExchange
 from .webaccess import ERROR_KINDS, WebExchange, WebPolicy, WebSession
 
 HISTORY_VERSION = 1
@@ -64,6 +65,7 @@ class RecordedCall:
     files: list[str] = field(default_factory=list)
     snapshot: ShellSnapshot | None = None
     web: list[WebExchange] | None = None  # the web requests the call made and what came back, in order
+    mounts: list[MountExchange] | None = None  # what the call asked mounted sources and what they answered, in order
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,8 @@ class Recording:
         # the web access the shell had (Shell.allow_web), with the credentials' values and transport left out; a replay
         # serves the recorded responses under it and never touches the network
         self.web: WebPolicy | None = None
+        # what the mounts held when recording started, as answers to the listing and reads a replay starts with
+        self.mount_start: list[MountExchange] = []
 
     def create_shell(self, configure=None, start: ShellSnapshot | None = None, first_call: int = 0) -> Shell:
         """A fresh shell with the recording's options, then configure(shell) (register your commands), then the start (or
@@ -115,6 +119,8 @@ class Recording:
             w.domains, w.methods, w.allow_http, w.max_response_bytes, w.max_requests_per_call, w.max_requests,
             w.timeout, w.max_redirects, {h: (lambda: "") for h in w.credentials}, w.explain_blocked)
         shell._web = WebSession(policy, [x for c in self.calls[first_call:] for x in (c.web or [])])
+        # the recorded answers, never a real source (even if configure mounted one)
+        shell._mounts.replay = list(self.mount_start) + [x for c in self.calls[first_call:] for x in (c.mounts or [])]
         shell.restore(start or self.start)
         return shell
 
@@ -173,6 +179,8 @@ class Recording:
                 "maxRequestsPerCall": p.max_requests_per_call, "maxRequests": p.max_requests, "timeoutMs": int(p.timeout * 1000),
                 "maxRedirects": p.max_redirects, "explainBlocked": p.explain_blocked, "credentials": sorted(p.credentials),
             }
+        if self.mount_start:
+            header["mounts"] = [_mount_exchange_entry(x, zf, written) for x in self.mount_start]
         yield header
         for c in self.calls:
             line = {"index": c.index, "command": c.command, "stdout": c.stdout, "stderr": c.stderr, "exitCode": c.exit_code}
@@ -181,6 +189,8 @@ class Recording:
             _put(line, time=c.time and format_time(c.time), files=c.files or None)
             if c.web:
                 line["web"] = [_exchange_entry(x, zf, written) for x in c.web]
+            if c.mounts:
+                line["mounts"] = [_mount_exchange_entry(x, zf, written) for x in c.mounts]
             yield line
 
     @staticmethod
@@ -224,8 +234,11 @@ class ShellRecorder:
         self.recording.metadata = dict(metadata or {})
         builtins = shell._builtin_names or set()
         self.recording.app_commands = sorted(n for n in shell.commands if n not in builtins)
+        self.recording.mount_start = shell._mounts.start_exchanges()
+        shell._mounts.take_log()
 
-    def _add(self, command: str, result: ShellResult, elapsed_ms: float, started: datetime, web: list | None = None) -> None:
+    def _add(self, command: str, result: ShellResult, elapsed_ms: float, started: datetime, web: list | None = None,
+             mounts: list | None = None) -> None:
         calls = self.recording.calls
         if self.recording.web is None and self._shell._web is not None:
             self.recording.web = self._shell._web.policy
@@ -240,7 +253,7 @@ class ShellRecorder:
         keep = self._every > 0 and (len(calls) + 1) % self._every == 0
         snap = sh.snapshot() if keep else ShellSnapshot._lazy(sh.snapshot, sh.user, sh.hostname, utc_now())
         calls.append(RecordedCall(len(calls), command, result.stdout, result.stderr, result.exit_code, result.trailer,
-                                  elapsed_ms, started, self._changes.changes(), snap, web or None))
+                                  elapsed_ms, started, self._changes.changes(), snap, web or None, mounts or None))
 
     def snapshot_now(self) -> None:
         """Keeps a checkpoint of the machine now: after the last call (or as the start, before any)."""
@@ -432,6 +445,88 @@ def _exchange_entry(x: WebExchange, zf: zipfile.ZipFile, written: set) -> dict:
     return entry
 
 
+_MOUNT_OPS = ("list", "stat", "read", "write", "delete", "rename", "mkdir")
+
+
+def _mount_exchange_entry(x: MountExchange, zf: zipfile.ZipFile, written: set) -> dict:
+    """One question a mount asked its source and the answer; a read's bytes are a blob."""
+    e = _put({"mount": x.mount, "op": x.op, "path": x.path}, to=x.to)
+    if x.entries is not None:
+        e["entries"] = [_mount_entry_json(y) for y in x.entries]
+    if x.op == "stat" and x.error is None:
+        e["entry"] = None if x.entry is None else _mount_entry_json(x.entry)
+    if x.body is not None:
+        e["size"] = len(x.body)
+        if x.body:
+            blob = e["body"] = hashlib.sha256(x.body).hexdigest()
+            if blob not in written:
+                written.add(blob)
+                zf.writestr("blobs/" + blob, x.body)
+    return _put(e, version=x.version, error=x.error, conflict=x.conflict)
+
+
+def _mount_entry_json(y: MountEntry) -> dict:
+    e = {"name": y.name, "type": "dir" if y.is_dir else "file", "size": y.size}
+    _put(e, mtime=y.modified and format_time(y.modified))
+    e["version"] = y.version
+    return e
+
+
+def _with_mounts(c: RecordedCall, raw, number: int, blob) -> RecordedCall:
+    if raw is not None:
+        c.mounts = _mount_exchanges(raw, f"line {number} mounts", blob)
+    return c
+
+
+def _mount_exchanges(raw, where: str, blob) -> list[MountExchange]:
+    """Recorded source exchanges, checked: canonical paths, known operations, entries of the right shape, bodies as blobs."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise _bad(f"{where}: not a list")
+
+    def path(p, what: str) -> str:
+        if not (isinstance(p, str) and 0 < len(p) <= 4096 and p[0] == "/" and "\0" not in p and normalize("/", p) == p):
+            raise _bad(f"{where}: bad {what} {json.dumps(p)}")
+        return p
+
+    def version(v, what: str):
+        if v is not None and not (isinstance(v, str) and len(v) <= MAX_VERSION):
+            raise _bad(f"{where}: bad {what}")
+        return v
+
+    def entry(y) -> MountEntry:
+        if not (isinstance(y, dict) and isinstance(y.get("name"), str) and y.get("type") in ("dir", "file")
+                and _is_int(y.get("size", 0)) and y.get("size", 0) >= 0 and isinstance(y.get("version", ""), str)):
+            raise _bad(f"{where}: bad entry")
+        mtime = y.get("mtime")
+        return MountEntry(y["name"], y["type"] == "dir", y.get("size", 0), None if mtime is None else parse_time(mtime, where + ": mtime"),
+                          version(y.get("version", ""), "version"))
+
+    out = []
+    for i, x in enumerate(raw):
+        w = f"{where} {i}"
+        if not isinstance(x, dict) or x.get("op") not in _MOUNT_OPS:
+            raise _bad(f"{w}: not a mount exchange")
+        error, conflict = x.get("error"), x.get("conflict", False)
+        if not (error is None or isinstance(error, str)) or not isinstance(conflict, bool):
+            raise _bad(f"{w}: bad error")
+        entries = x.get("entries")
+        if entries is not None and not isinstance(entries, list):
+            raise _bad(f"{w}: entries is not a list")
+        size = x.get("size")
+        if size is not None and not (_is_int(size) and size >= 0):
+            raise _bad(f"{w}: bad size")
+        out.append(MountExchange(
+            path(x.get("mount"), "mount"), x["op"], path(x.get("path"), "path"),
+            path(x.get("to"), "target") if x["op"] == "rename" else None,
+            None if entries is None else tuple(entry(y) for y in entries),
+            None if x.get("entry") is None else entry(x["entry"]),
+            None if size is None else blob(x.get("body"), size, w),
+            version(x.get("version"), "version"), error, conflict))
+    return out
+
+
 def _lines(f, max_bytes: int, o: dict, what: str):
     """(line number, text) for each line of a binary stream that isn't blank, read one line at a time: a deflated file
     can expand a thousandfold, so nothing is read past max_bytes or past the last line a recording may have."""
@@ -478,7 +573,7 @@ def _read_topwater(src, o: dict) -> Recording:
             calls = []
             for n, line in lines:
                 c, e = _call(line, n, len(calls))
-                calls.append((n, c, e.get("web")))  # only what is still needed: a capped history can hold 100000 calls
+                calls.append((n, c, e.get("web"), e.get("mounts")))  # only what is still needed: a capped history can hold 100000 calls
         web_bytes = 0
 
         def blob(name, size: int, where: str) -> bytes:
@@ -498,7 +593,8 @@ def _read_topwater(src, o: dict) -> Recording:
                 raise _bad(f"{where}: blob {name} doesn't hold the {size} bytes it should")
             return b
 
-        calls = [_with_web(c, web, n, blob) for n, c, web in calls]
+        calls = [_with_mounts(_with_web(c, web, n, blob), mounts, n, blob) for n, c, web, mounts in calls]
+        mount_start = _mount_exchanges(h.get("mounts"), "header mounts", blob)
         found = {}
         for name in names:
             if name.startswith("checkpoints/"):
@@ -551,6 +647,7 @@ def _read_topwater(src, o: dict) -> Recording:
                 snaps[n], size = _read_outline(raw, found[n], o, count_files, load, kept)
                 charge(size)
         rec = _new_recording(h, snaps[0], o)
+        rec.mount_start = mount_start
         for i, c in enumerate(calls):
             c.snapshot = snaps.get(i + 1)
         rec.calls = calls

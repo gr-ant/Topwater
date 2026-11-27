@@ -115,7 +115,10 @@ class ShellSnapshot:
                         written.add(blob)
                         zf.writestr("blobs/" + blob, data)
             files.append(entry)
-        zf.writestr(name, _dumps(self._manifest(files, 2 if links else 1)))
+        m = self._manifest(files, 2 if links else 1)
+        if self.state.get("mounts"):
+            m["mounts"] = [_mount_entry(d, zf, written) for d in self.state["mounts"]]
+        zf.writestr(name, _dumps(m))
 
     def _manifest(self, files: list, version: int) -> dict:
         st = self.state
@@ -346,6 +349,7 @@ def _read_manifest(zf: zipfile.ZipFile, names: set, name: str, o: dict, cache: d
         count_files(len(files))
     entries, total = _read_files(zf, names, files, o, {} if cache is None else cache)
     state = _read_state(m, o)
+    state["mounts"] = _read_mounts(m.get("mounts"), zf, names, o)
     return ShellSnapshot(entries, state, user, hostname, created), total
 
 
@@ -597,6 +601,77 @@ def _read_state(m: dict, o: dict) -> dict:
         "getopts": tuple(g) if g else (0, 1), "jobs": jobs,
         "last_bg": _int(m.get("lastBackgroundPid"), "lastBackgroundPid"), "next_pid": _int(m.get("nextPid"), "nextPid"),
     }
+
+
+def _read_mounts(raw, zf: zipfile.ZipFile, names: set, o: dict) -> list[dict]:
+    """The mounts' definitions and pending changes (docs/mounts.md), checked like files: canonical paths, sizes within
+    MaxFileSystemBytes, at most MaxExtractEntries changes, blobs present and matching."""
+    from .mounts import MAX_VERSION, MODES, MountChange
+    out, total, count = [], 0, 0
+
+    def canonical(p, what: str) -> str:
+        if not isinstance(p, str) or not 0 < len(p) <= 4096 or p[0] != "/" or "\0" in p or normalize("/", p) != p or p == "/":
+            raise SnapshotError(f"bad {what} {json.dumps(p)}")
+        return p
+
+    for d in _list(raw, "mounts"):
+        if not isinstance(d, dict):
+            raise SnapshotError("a mount is not an object")
+        path = canonical(d.get("path"), "mount path")
+        if any(path == x["path"] or path.startswith(x["path"] + "/") or x["path"].startswith(path + "/") for x in out):
+            raise SnapshotError(f"{path}: mounts overlap")
+        mode = d.get("mode")
+        if mode not in MODES:
+            raise SnapshotError(f"{path}: bad mount mode {json.dumps(mode)}")
+        type_, id_ = d.get("type"), d.get("id")
+        for v, what in ((type_, "type"), (id_, "id")):
+            if not isinstance(v, str) or len(v) > 256 or any(ord(c) < 32 for c in v):
+                raise SnapshotError(f"{path}: bad source {what}")
+        changes = []
+        for c in _list(d.get("changes"), "changes"):
+            count += 1
+            if count > o["max_extract_entries"]:
+                raise SnapshotError(f"more than {o['max_extract_entries']} mount changes (MaxExtractEntries)")
+            if not isinstance(c, dict) or c.get("kind") not in ("write", "delete", "rename", "mkdir"):
+                raise SnapshotError(f"{path}: bad mount change")
+            kind = c["kind"]
+            cp = canonical(c.get("path"), "change path")
+            to = canonical(c.get("to"), "change target") if kind == "rename" else None
+            version = c.get("version")
+            if version is not None and not (isinstance(version, str) and len(version) <= MAX_VERSION):
+                raise SnapshotError(f"{cp}: bad version")
+            content = None
+            if kind == "write":
+                size = _int(c.get("size", 0), cp + ": size")
+                total += size
+                if size < 0 or total > o["max_file_system_bytes"]:
+                    raise SnapshotError(f"mount changes hold more than {o['max_file_system_bytes']} bytes (MaxFileSystemBytes)")
+                content = b""
+                if size:
+                    blob = _check(c.get("blob"), _BLOB, cp + ": blob")
+                    if "blobs/" + blob not in names:
+                        raise SnapshotError(f"{cp}: blob {blob} is missing")
+                    with zf.open("blobs/" + blob) as f:
+                        content = _read_capped(f, size, "blob " + blob)
+                    if len(content) != size or hashlib.sha256(content).hexdigest() != blob:
+                        raise SnapshotError(f"{cp}: blob {blob} doesn't match its size and hash")
+            changes.append(MountChange(kind, cp, to, version if kind != "mkdir" else None, content))
+        out.append({"path": path, "mode": mode, "type": type_, "id": id_, "changes": changes})
+    return out
+
+
+def _mount_entry(d: dict, zf: zipfile.ZipFile, written: set) -> dict:
+    changes = []
+    for c in d["changes"]:
+        e = _put({"kind": c.kind, "path": c.path}, to=c.to, version=c.version)
+        if c.kind == "write" and c.content:
+            e["size"] = len(c.content)
+            blob = e["blob"] = hashlib.sha256(c.content).hexdigest()
+            if blob not in written:
+                written.add(blob)
+                zf.writestr("blobs/" + blob, c.content)
+        changes.append(e)
+    return {"path": d["path"], "mode": d["mode"], "type": d["type"], "id": d["id"], "changes": changes}
 
 
 # ---------- helpers ----------

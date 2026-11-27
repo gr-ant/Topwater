@@ -19,12 +19,13 @@ class SessionPart:
     def snapshot(self) -> "ShellSnapshot":
         """Captures the machine (files and session) as an immutable ShellSnapshot. Call it between calls."""
         from ..snapshot import ShellSnapshot
-        return ShellSnapshot(list(self.fs.entries()), self._capture_state(), self.user, self.hostname, utc_now())
+        return ShellSnapshot(self._mounts.outside(self.fs.entries()), self._capture_state(), self.user, self.hostname, utc_now())
 
     def restore(self, snapshot: "ShellSnapshot") -> None:
         """Puts the machine back as `snapshot` captured it. This shell keeps its own registered commands (and their
         /usr/bin entries); the snapshot is unchanged and can be restored again."""
         self.fs.replace_all(snapshot.entries)
+        self._mounts.restore(snapshot.state.get("mounts", []))
         self._apply_state(snapshot.state)
         self.hashed = {}  # the restored machine's programs may be elsewhere
 
@@ -38,6 +39,7 @@ class SessionPart:
                      max_extract_bytes=self.max_extract_bytes, max_extract_entries=self.max_extract_entries)
         fork.commands = {n: c for n, c in self.commands.items() if not isinstance(c.handler, HostCommand)}
         fork._builtin_names = None if self._builtin_names is None else set(self._builtin_names)
+        fork._mounts.sources = dict(self._mounts.sources)  # the fork's mounts use the same sources
         fork.restore(self.snapshot())
         fork.umask = self.umask  # shortcut: snapshots do not hold the umask yet, so only fork() keeps it
         return fork
@@ -81,7 +83,7 @@ class SessionPart:
             "positional": list(self.positional), "dir_stack": list(self.dir_stack), "history": list(self.history),
             "last_exit_code": self.last_exit_code, "seconds_base": self._seconds_base, "last_arg": self._last_arg,
             "pipe_status": list(self._pipe_status), "getopts": tuple(self.getopts_state), "jobs": dict(self._jobs),
-            "last_bg": self._last_bg, "next_pid": self._next_pid,
+            "last_bg": self._last_bg, "next_pid": self._next_pid, "mounts": self._mounts.capture(),
         }
 
     def _apply_state(self, s: dict) -> None:
