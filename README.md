@@ -11,6 +11,8 @@
 
 <p align="center">
   <a href="https://www.nuget.org/packages/Topwater"><img alt="NuGet" src="https://img.shields.io/nuget/vpre/Topwater?label=NuGet"></a>
+  <a href="https://pypi.org/project/topwater/"><img alt="PyPI" src="https://img.shields.io/pypi/v/topwater?include_prereleases&label=PyPI"></a>
+  <a href="https://www.npmjs.com/package/topwater"><img alt="npm" src="https://img.shields.io/npm/v/topwater?label=npm"></a>
   <a href="https://github.com/gr-ant/Topwater/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/gr-ant/Topwater/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
