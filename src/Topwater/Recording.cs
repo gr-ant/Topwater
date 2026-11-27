@@ -757,23 +757,6 @@ public sealed class ShellRecorder : IDisposable
     public void Save(string path) => Recording.Save(path);
 }
 
-public sealed partial class Shell
-{
-    /// <summary>
-    /// Starts recording this shell's calls: the machine now becomes the recording's start and every <see cref="RunAsync"/> call
-    /// until <see cref="ShellRecorder.Stop"/> is added. For a recording that replays exactly, create the shell with
-    /// <see cref="ShellOptions.StartTime"/> and <see cref="ShellOptions.RandomSeed"/>. Stop it before your own checks, which also go through RunAsync.
-    /// </summary>
-    public ShellRecorder StartRecording(RecordingOptions? options = null)
-    {
-        if (Recorder != null) throw new InvalidOperationException("this shell is already recording; stop that recording first");
-        return Recorder = new ShellRecorder(this, options ?? new RecordingOptions());
-    }
-
-    /// <summary>The registered commands that aren't built-ins: what a replay target must register again.</summary>
-    internal IEnumerable<string> AppCommandNames() => _commands.Keys.Where(k => _builtinNames?.Contains(k) != true).Order(StringComparer.Ordinal);
-}
-
 /// <summary>Something a recording can be replayed against: a Topwater shell (<see cref="ShellTarget"/>), a real container, ...</summary>
 public interface IReplayTarget : IAsyncDisposable
 {

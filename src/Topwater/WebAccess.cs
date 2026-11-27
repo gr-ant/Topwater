@@ -54,25 +54,6 @@ public sealed record WebExchange(string Method, string Url, int Status, string R
     public string? Error { get; init; }
 }
 
-public sealed partial class Shell
-{
-    /// <summary>The web access in force (<see cref="AllowWeb(WebPolicy)"/>), or null: no network.</summary>
-    internal WebSession? Web { get; private set; }
-
-    /// <summary>
-    /// Lets the agent's <c>curl</c> and <c>wget</c> reach the hosts in <paramref name="policy"/>, over https unless it allows http.
-    /// Every URL and redirect is checked against it; names are resolved once, private, loopback, link-local and other
-    /// internal addresses are refused, and the connection goes to the address that was checked. A fork does not inherit it.
-    /// </summary>
-    public Shell AllowWeb(WebPolicy policy)
-    {
-        Web = new WebSession(policy);
-        return this;
-    }
-
-    internal void AllowWeb(WebSession session) => Web = session;
-}
-
 /// <summary>Why a request failed; each command turns it into its own message and exit status.</summary>
 internal enum WebError { BadUrl, BadHostname, Protocol, Resolve, Connect, Timeout, Tls, Recv, Partial, Reset, Weird, Empty, TooLarge, Redirects, Policy, Replay, BadHeader }
 

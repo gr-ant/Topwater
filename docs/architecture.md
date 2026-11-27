@@ -11,7 +11,7 @@ ticked when all three ports have it; the C# column says where C# is).
 | Phase | What | Done |
 |---|---|---|
 | 0 | `tools/layout.json` (the target layout, frozen) and `tools/check_layout.py`; tag `pre-layout` (df9444e, the last commit before any move) | yes |
-| 1 | Shell split, C# (the pilot: §3.2 is corrected from what it finds before phases 2 and 3 start) | |
+| 1 | Shell split, C# (the pilot: §3.2 is corrected from what it finds before phases 2 and 3 start) | C# |
 | 2 | Shell split, Python | |
 | 3 | Shell split, TypeScript | |
 | 4 | git split, Python and TypeScript (to match C#) | |
@@ -138,13 +138,23 @@ A port with nothing for a section keeps the marker and one comment line saying s
 markers. In Python and TS, the module-level functions and helper classes of a part follow the part class under a
 last marker `helpers` (C# has none: its static helpers sit in their section).
 
-The C# column was written from the method names the other ports share and misses about 20 members of `Shell`
-(found by comparing it with `Shell.cs`). They go: `BecomeNewProcess`, `CheckIterations`, `DefineFunction`
-(Execution); `ReportNotFound`, `PathCandidates`, `ScriptInterpreter` (Invocation); `CheckWritable`, `Converted`,
-`ShellVariable`, `LookUp`, `IsSet` (Variables); `Fatal`, `IndirectTarget`, `ParamWord`, `ParamWordAsync`, `CheckSet`,
-`TildeValue`, `TildePrefix`, `BadSubstitutionStop` (Expansion); `WriteProgramFile`, `SyncProgramFiles`
-(registration); `NextEpoch` (state: a field initialiser calls it). Phase 1 completes the column in this file, and
-phases 2 and 3 start only after that.
+The C# column is final: phase 1 placed every member of `Shell` and the compiler, the line check and an all-member
+reflection dump confirmed it. It lists every member in file order. Members the first draft missed: `BecomeNewProcess`,
+`CheckIterations`, `DefineFunction`, `IsJob` (Execution); `ReadRedirectAsync`, `Descriptor` (Redirection);
+`ReportNotFound`, `BadNumber`, `PathCandidates`, `ScriptInterpreter`, `InFunction` (Invocation); `OptionFlags`,
+`CheckWritable`, `Converted`, `BashVersInfo`, `ShellVariable`, `LookUp`, `Ifs`, `IfsJoiner`, `IsSet`, `ScratchVariable`
+(Variables); `BadSubstitutionStop`, `Fatal`, `ParamRe`/`IndirectRe`/`PrefixRe`, `IndirectTarget`, `ParamWord`,
+`ParamWordAsync`, `CheckSet`, `AssignmentTilde`, `TildeValue`, `TildePrefix` (Expansion); `SyncProgramFiles`
+(registration); `RegexTimeout`, `Timed` (limits); `NextEpoch` (state). Where C# and Python orders differed, C# took
+Python's: `SyncHashed` after `HashLookup`, `TraceQuote`/`QuoteValue` at the end of `functions`, `ArrayRef`/`Unquote` at
+the end of `arrays`, `InputFd` before `WithFd`.
+
+**All instance state stays in `Shell/Shell.cs`, not only the fields at the top.** Today's `Shell.cs` declares about a
+dozen fields next to their first user (`Recorder`, `_variableChars`, `_inErrTrap`/`_inDebugTrap`, `LoopDepth`,
+`_totalIterations`, `_scriptDepth`, `_callDeadline`, `_unexported`, `_arithDepth`, `_paramWords`, and `Shopts`/`Traps`
+after `NextRandom`). They all move to the state section. Static constants (`RegexTimeout`, `BadNumber`, `BashVersInfo`,
+`ScratchVariable`, `ParamRe`…, `AssignmentTilde`, `SnapshotSetOptions`) go with their user: none reads another static.
+Python and TS need no such move (their state is assigned in `__init__` / declared in the class).
 
 **Shell (core): `Shell/Shell.cs` · `shell/__init__.py` · `shell.ts`.** The class declaration and all state stay
 here in every port: TS fields and accessors can't move (§3.3), and C# field initialisers in different files of a
@@ -154,18 +164,18 @@ TS has it today), not in Session.
 
 | Section | C# | Python | TS |
 |---|---|---|---|
-| state and constructor | fields and properties (with `Web`), `Shell(...)`, `SeedSystemFiles`, `SystemDirs`, `OsRelease`…`DotBashrc`, `InstalledAt`, `_builtinNames`, `Oct`, `Cwd`, `ResolvePath`, `ErrPrefix` | `_DEFAULT_SHOPTS`, `SYSTEM_DIRS`, `OS_RELEASE`…`DOT_BASHRC`, `Shell.__init__`, `installed_at`, `_seed_system_files`, `cwd`, `resolve`, `err_prefix` | `SYSTEM_DIRS`, `OS_RELEASE`…`DOT_BASHRC`, fields, `constructor`, `seedSystemFiles`, `cwd`, `resolvePath`, `errPrefix`, plus every accessor: `ifs`, `ifsJoiner`, `optionList`, `optionFlags`, `virtualNow`, `randomState` |
+| state and constructor | the fields `_commands`…`_condDepth` (with `s_epochs`, `NextEpoch`), `Shell(...)` ×2, `SeedSystemFiles`, `SystemDirs`, `OsRelease`…`DotBashrc`, `InstalledAt`, `_builtinNames`, `Oct`, `_procSubCount`, the properties `Options`…`_random` (with `ErrPrefix`), `Shopts`, `Traps`; then every other instance field, from where it sat next to its first user: `Recorder`, `Web` (from `WebAccess.cs`), `_variableChars`, `_inErrTrap`/`_inDebugTrap`, `LoopDepth`, `_totalIterations`, `_scriptDepth`, `_callDeadline`, `_unexported`, `_arithDepth`, `_paramWords`; `Cwd`, `ResolvePath` | `_DEFAULT_SHOPTS`, `SYSTEM_DIRS`, `OS_RELEASE`…`DOT_BASHRC`, `Shell.__init__`, `installed_at`, `_seed_system_files`, `cwd`, `resolve`, `err_prefix` | `SYSTEM_DIRS`, `OS_RELEASE`…`DOT_BASHRC`, fields, `constructor`, `seedSystemFiles`, `cwd`, `resolvePath`, `errPrefix`, plus every accessor: `ifs`, `ifsJoiner`, `optionList`, `optionFlags`, `virtualNow`, `randomState` |
 | clock and random | `Now`, `NowUtc`, `SleepAsync`, `WithVirtualTimeoutAsync`, `VirtualTimeout`, `StartTimer`, `NextRandom` | - (Python has no virtual clock yet) | `now`, `sleepVirtual`, `withVirtualTimeout`, `nextRandom` |
-| registration | `Register` ×3, `WriteProgramFile`, `RegisterReplacing`, `AllowWeb` ×2 (from `WebAccess.cs`), `Unregister` | `register_command`, `_write_program_file`, `register`, `_register_replacing`, `allow_web`, `unregister` | `register`, `writeProgramFile`, `registerTools`, `mountMcp`, `registerApi`, `allowWeb`, `unregister` |
+| registration | `Register`, `WriteProgramFile`, `SyncProgramFiles`, `Register`, `Register`, `RegisterReplacing`, `AllowWeb`, `AllowWeb`, `Unregister` (`AllowWeb` ×2 from `WebAccess.cs`) | `register_command`, `_write_program_file`, `register`, `_register_replacing`, `allow_web`, `unregister` | `register`, `writeProgramFile`, `registerTools`, `mountMcp`, `registerApi`, `allowWeb`, `unregister` |
 | run | `RunAsync`, `RunRecordedAsync`, `RunCallAsync` | `run`, `run_async`, `_run_call` | `run` |
-| limits | `Size`, `TooLarge` ×2, `ChargeVariable`, `Stopped`, `Seconds` | `size_text`, `_seconds`, `_stopped`, `too_large`, `charge_variable`, `check_deadline` | `chargeVariable`, `checkTime`, `remainingMs`, `stopped`, `seconds` |
-| re-exports | - | every name imported from `topwater.shell` today: `CommandContext`, `RegisteredCommand`, `Shell`, `ShellResult`, `ShellArray`, `StdinBuffer`, `CallTimeout`, `LimitExceeded`, `ExitSignal`, `ReturnSignal`, `LoopControl`, `_NewProcess`, `size_text`, `quote_value`, `split_fields`, `SNAPSHOT_SET_OPTIONS`, `glob_to_regex`, `TimedPattern`, and every other module-level name `shell.py` has today (`Handler`, `ShellError`, …: a host may import any of them) | `export * from './shell/types.js'`, plus `splitFields`, `arrayRef`, `BufferWriter` |
+| limits | `Size`, `TooLarge`, `TooLarge`, `ChargeVariable`, `Stopped`, `Seconds`, `RegexTimeout`, `Timed` | `size_text`, `_seconds`, `_stopped`, `too_large`, `charge_variable`, `check_deadline` | `chargeVariable`, `checkTime`, `remainingMs`, `stopped`, `seconds` |
+| re-exports | the marker and `// nothing: C# has no module paths to keep working` | every name imported from `topwater.shell` today: `CommandContext`, `RegisteredCommand`, `Shell`, `ShellResult`, `ShellArray`, `StdinBuffer`, `CallTimeout`, `LimitExceeded`, `ExitSignal`, `ReturnSignal`, `LoopControl`, `_NewProcess`, `size_text`, `quote_value`, `split_fields`, `SNAPSHOT_SET_OPTIONS`, `glob_to_regex`, `TimedPattern`, and every other module-level name `shell.py` has today (`Handler`, `ShellError`, …: a host may import any of them) | `export * from './shell/types.js'`, plus `splitFields`, `arrayRef`, `BufferWriter` |
 
 **Types: `Shell/Types.cs` · `shell/types.py` · `shell/types.ts`**
 
 | C# | Python | TS |
 |---|---|---|
-| `ShellOptions`, `ShellResult`, `CommandHandler`, `RegisteredCommand`, `StdinBuffer`, `CommandContext`, `ShellArray`, `ControlFlow`, `LoopControl`, `ReturnSignal`, `ExitSignal`, `LineAbort`, `FatalError`, `LimitExceeded`; and in a `partial class Shell` block: `Io`, `NewProcess`, `ExecutableStub` | `EXECUTABLE_STUB`, `ShellResult`, `RegisteredCommand`, `_Null`, `StdinBuffer`, `_Io`, `_BadSubstitution`, `_ControlFlow`, `_LineAbort`, `LoopControl`, `ReturnSignal`, `ExitSignal`, `LimitExceeded`, `CallTimeout`, `CommandContext`, `ShellArray`, `_NewProcess` | `ShellOptions`, `DEFAULTS`, `ShellResult`, `Io`, `ShellArray`, `BadSubstitution`, `ControlFlow`, `LineAbort`, `LoopControl`, `ReturnSignal`, `ExitSignal`, `FunctionDef`, `NewProcess`, `EXECUTABLE_STUB`, each exported (`SavedState` goes to `execution.ts`, its only user, like C# `State`; TS keeps `StdinBuffer`, `CommandContext` and `LimitExceeded` in `command.ts`) |
+| the top of today's `Shell.cs` unchanged: `ShellOptions`, `ShellResult`, `CommandHandler`, `RegisteredCommand`, `StdinBuffer`, `CommandContext`, `ShellArray`, `ControlFlow`, `LoopControl`, `ReturnSignal`, `ExitSignal`, `LineAbort`, `FatalError`, `LimitExceeded`; then a `partial class Shell` block: `Io`, `ExecutableStub`, `NewProcess` | `EXECUTABLE_STUB`, `ShellResult`, `RegisteredCommand`, `_Null`, `StdinBuffer`, `_Io`, `_BadSubstitution`, `_ControlFlow`, `_LineAbort`, `LoopControl`, `ReturnSignal`, `ExitSignal`, `LimitExceeded`, `CallTimeout`, `CommandContext`, `ShellArray`, `_NewProcess` | `ShellOptions`, `DEFAULTS`, `ShellResult`, `Io`, `ShellArray`, `BadSubstitution`, `ControlFlow`, `LineAbort`, `LoopControl`, `ReturnSignal`, `ExitSignal`, `FunctionDef`, `NewProcess`, `EXECUTABLE_STUB`, each exported (`SavedState` goes to `execution.ts`, its only user, like C# `State`; TS keeps `StdinBuffer`, `CommandContext` and `LimitExceeded` in `command.ts`) |
 
 **Execution: `Shell/Execution.cs` · `shell/execution.py` · `shell/execution.ts`.** Sections: `scripts` (run script
 text … restore state), `lists` (top level, script, list pipeline), `jobs` (background, wait, forget), `pipelines`,
@@ -173,14 +183,14 @@ text … restore state), `lists` (top level, script, list pipeline), `jobs` (bac
 
 | C# | Python | TS |
 |---|---|---|
-| `RunScriptTextAsync`, `SourceLoginFilesAsync`, `RunExitTrapAsync`, `State`, `SaveState`, `RestoreState`, `ExecTopLevelAsync`, `ExecScriptAsync`, `ExecListPipelineAsync`, `ExecBackgroundAsync`, `WaitFor`, `WaitNext`, `IsJob`, `ForgetJobs`, `ExecPipelineAsync`, `RunPipelineAsync`, `ExecCommandAsync`, `ExecSubshellAsync`, `ConditionAsync`, `ExecIfAsync`, `LoopBodyAsync`, `ExecLoopAsync`, `ExecForAsync`, `ExecSelectAsync`, `ExecArithForAsync`, `ExecCaseAsync`; class `CondEvaluator` | `_run_script_text`, `_source_login_files`, `_become_new_process`, `_run_exit_trap`, `_save_state`, `_restore_state`, `_exec_script`, `_exec_list_pipeline`, `_exec_background`, `wait_for`, `wait_next`, `forget_jobs`, `_exec_pipeline`, `_run_pipeline`, `_exec_command`, `_exec_subshell`, `_condition`, `_exec_if`, `_loop_body`, `_check_iterations`, `_exec_loop`, `_exec_for`, `_exec_select`, `_exec_arith_for`, `_exec_case`; class `_CondEvaluator` | `runScriptText`, `sourceLoginFiles`, `becomeNewProcess`, `runExitTrap`, `saveState`, `restoreState`, `execTopLevel`, `execScript`, `execListPipeline`, `execBackground`, `waitFor`, `waitNext`, `execPipeline`, `runPipeline`, `execCommand`, `execSubshell`, `condition`, `execIf`, `loopBody`, `loopControl`, `checkIterations`, `execLoop`, `execFor`, `execSelect`, `execArithFor`, `execCase`; class `CondEvaluator` |
+| scripts: `RunScriptTextAsync`, `SourceLoginFilesAsync`, `BecomeNewProcess`, `RunExitTrapAsync`, `State`, `SaveState`, `RestoreState`; lists: `ExecTopLevelAsync`, `ExecScriptAsync`, `ExecListPipelineAsync`; jobs: `ExecBackgroundAsync`, `WaitFor`, `WaitNext`, `IsJob`, `ForgetJobs`; pipelines: `ExecPipelineAsync`, `RunPipelineAsync`; compound commands: `ExecCommandAsync`, `DefineFunction`, `ExecSubshellAsync`, `ConditionAsync`, `ExecIfAsync`, `LoopBodyAsync`, `CheckIterations`, `ExecLoopAsync`, `ExecForAsync`, `ExecSelectAsync`, `ExecArithForAsync`, `ExecCaseAsync`; then, after the class, the `conditional expressions` marker and class `CondEvaluator` | `_run_script_text`, `_source_login_files`, `_become_new_process`, `_run_exit_trap`, `_save_state`, `_restore_state`, `_exec_script`, `_exec_list_pipeline`, `_exec_background`, `wait_for`, `wait_next`, `forget_jobs`, `_exec_pipeline`, `_run_pipeline`, `_exec_command`, `_exec_subshell`, `_condition`, `_exec_if`, `_loop_body`, `_check_iterations`, `_exec_loop`, `_exec_for`, `_exec_select`, `_exec_arith_for`, `_exec_case`; class `_CondEvaluator` | `runScriptText`, `sourceLoginFiles`, `becomeNewProcess`, `runExitTrap`, `saveState`, `restoreState`, `execTopLevel`, `execScript`, `execListPipeline`, `execBackground`, `waitFor`, `waitNext`, `execPipeline`, `runPipeline`, `execCommand`, `execSubshell`, `condition`, `execIf`, `loopBody`, `loopControl`, `checkIterations`, `execLoop`, `execFor`, `execSelect`, `execArithFor`, `execCase`; class `CondEvaluator` |
 
 **Redirection: `Shell/Redirection.cs` · `shell/redirection.py` · `shell/redirection.ts`.** Sections: `writers`,
 `redirections`.
 
 | C# | Python | TS |
 |---|---|---|
-| `CappedWriter`, `FileSink`, `FileAppender`, `SwitchWriter`, `ApplyRedirectsAsync`, `OpenInputAsync`, `ReadRedirectAsync`, `OpenOutputAsync`, `WithFd`, `ExecRedirectsAsync`, `InputFd` | `CappedWriter`, `FileSink`, `FileAppender`, `SwitchWriter`, `_apply_redirects`, `_open_input`, `_open_output`, `_descriptor`, `_exec_redirects`, `input_fd`, `_with_fd` | `BufferWriter`, `FileSink`, `FileAppender`, `SwitchWriter`, `applyRedirects`, `openInput`, `openOutput`, `descriptor`, `execRedirects`, `inputFd`, `withFd` |
+| writers: `CappedWriter`, `FileSink`, `FileAppender`, `SwitchWriter`; redirections: `ApplyRedirectsAsync`, `OpenInputAsync`, `ReadRedirectAsync`, `OpenOutputAsync`, `Descriptor`, `ExecRedirectsAsync`, `InputFd`, `WithFd` | `CappedWriter`, `FileSink`, `FileAppender`, `SwitchWriter`, `_apply_redirects`, `_open_input`, `_open_output`, `_descriptor`, `_exec_redirects`, `input_fd`, `_with_fd` | `BufferWriter`, `FileSink`, `FileAppender`, `SwitchWriter`, `applyRedirects`, `openInput`, `openOutput`, `descriptor`, `execRedirects`, `inputFd`, `withFd` |
 
 **Invocation: `Shell/Invocation.cs` · `shell/invocation.py` · `shell/invocation.ts`.** Sections: `simple commands`
 (exec simple, expand declaration, report not found), `invoke` (invoke, make context), `script files` (run script
@@ -189,16 +199,16 @@ C# has `lookup` before `script files` and `SyncHashed` last today: it reorders t
 
 | C# | Python | TS |
 |---|---|---|
-| `IsDeclaration`, `ExecSimpleAsync`, `TraceQuote`, `QuoteValue`, `ExpandDeclarationAsync`, `InvokeAsync`, `IsUnfiled`, `StubCommand`, `SearchPath`, `SearchPathAll`, `HashLookup`, `Locate`, `LocateAll`, `IsAppOnly`, `SyncHashed`, `RunScriptFileAsync`, `RunInterpreterAsync`, `CallFunctionAsync`, `IsBuiltin` | `_exec_simple`, `_expand_declaration`, `_report_not_found`, `_invoke`, `_run_script_file`, `_interpreter_chain_too_long`, `_run_interpreter`, `is_unfiled`, `stub_command`, `_path_candidates`, `search_path`, `search_path_all`, `hash_lookup`, `sync_hashed`, `locate`, `locate_all`, `_is_app_only`, `_call_function`, `in_function`, `is_builtin`, `trace_quote`, `quote_value` | `execSimple`, `expandDeclaration`, `reportNotFound`, `invoke`, `makeContext`, `runScriptFile`, `runInterpreter`, `isUnfiled`, `stubCommand`, `pathCandidates`, `searchPath`, `searchPathAll`, `hashLookup`, `syncHashed`, `locate`, `locateAll`, `isAppOnly`, `callFunction`, `isBuiltin`, `traceQuote`, `standardOption` |
+| simple commands: `IsDeclaration`, `ExecSimpleAsync`, `ExpandDeclarationAsync`, `ReportNotFound`; invoke: `InvokeAsync`, `BadNumber`; script files: `RunScriptFileAsync`, `ScriptInterpreter`, `RunInterpreterAsync`; lookup: `IsUnfiled`, `StubCommand`, `PathCandidates`, `SearchPath`, `SearchPathAll`, `HashLookup`, `SyncHashed`, `Locate`, `LocateAll`, `IsAppOnly`; functions: `CallFunctionAsync`, `InFunction`, `IsBuiltin`, `TraceQuote`, `QuoteValue` | `_exec_simple`, `_expand_declaration`, `_report_not_found`, `_invoke`, `_run_script_file`, `_interpreter_chain_too_long`, `_run_interpreter`, `is_unfiled`, `stub_command`, `_path_candidates`, `search_path`, `search_path_all`, `hash_lookup`, `sync_hashed`, `locate`, `locate_all`, `_is_app_only`, `_call_function`, `in_function`, `is_builtin`, `trace_quote`, `quote_value` | `execSimple`, `expandDeclaration`, `reportNotFound`, `invoke`, `makeContext`, `runScriptFile`, `runInterpreter`, `isUnfiled`, `stubCommand`, `pathCandidates`, `searchPath`, `searchPathAll`, `hashLookup`, `syncHashed`, `locate`, `locateAll`, `isAppOnly`, `callFunction`, `isBuiltin`, `traceQuote`, `standardOption` |
 
 **Variables: `Shell/Variables.cs` · `shell/variables.py` · `shell/variables.ts`.** Sections: options, scalars, arrays.
 `GetVariable` and its helpers move here from the top of today's expansion section, because they read variables.
 
 | Section | C# | Python | TS |
 |---|---|---|---|
-| options | `IsVariableSet`, `OptionList`, `SetOption`, `DeclareLocal` | `is_variable_set`, `option_list`, `set_option`, `declare_local`, `_option_flags` | `isVariableSet`, `setOption`, `declareLocal` |
-| scalars | `HasAttr`, `IsExported`, `MarkShellVariable`, `Unexport`, `SetAttrs`, `Resolve`, `SetVar`, `GetArray`, `GetVariable` | `has_attr`, `is_exported`, `mark_shell_variable`, `unexport`, `set_attrs`, `resolve_name`, `set_var`, `_converted`, `_check_writable`, `get_array`, `_shell_variable`, `get_variable`, `_look_up`, `ifs`, `_ifs_joiner`, `_is_set`, `_BASH_VERSINFO`, `_SCRATCH` | `hasAttr`, `isExported`, `markShellVariable`, `unexport`, `setAttrs`, `resolve`, `setVar`, `converted`, `checkWritable`, `getArray`, `shellVariable`, `getVariable`, `lookUp`, `isSet`, `BASH_VERSINFO`, `SCRATCH` |
-| arrays | `Writable`, `DeclareArray`, `ArrayKey`, `GetElement`, `SetElement`, `Unset`, `Unquote`, `ArrayRef`, `ArrayElementsAsync`, `ElementOpAsync`, `ExpandSubscriptAsync`, `SubscriptAsync`, `AssignArrayAsync`, `DeclareArraysAsync` | `writable`, `declare_array`, `array_key`, `get_element`, `set_element`, `unset`, `_array_elements`, `_element_op`, `expand_subscript`, `_subscript`, `_assign_array`, `_declare_arrays`, `array_ref`, `_unquote` | `writable`, `declareArray`, `arrayKey`, `getElement`, `setElement`, `unset`, `arrayElements`, `elementOp`, `expandSubscript`, `subscript`, `assignArray`, `declareArrays`, `arrayRef`, `unquote`, `splitOnce`, `splitSubscript` |
+| options | `IsVariableSet`, `OptionList`, `SetOption`, `DeclareLocal`, `OptionFlags` | `is_variable_set`, `option_list`, `set_option`, `declare_local`, `_option_flags` | `isVariableSet`, `setOption`, `declareLocal` |
+| scalars | `HasAttr`, `IsExported`, `MarkShellVariable`, `Unexport`, `SetAttrs`, `Resolve`, `SetVar`, `Converted`, `CheckWritable`, `BashVersInfo`, `GetArray`, `ShellVariable`, `GetVariable`, `LookUp`, `Ifs`, `IfsJoiner`, `IsSet` | `has_attr`, `is_exported`, `mark_shell_variable`, `unexport`, `set_attrs`, `resolve_name`, `set_var`, `_converted`, `_check_writable`, `get_array`, `_shell_variable`, `get_variable`, `_look_up`, `ifs`, `_ifs_joiner`, `_is_set`, `_BASH_VERSINFO`, `_SCRATCH` | `hasAttr`, `isExported`, `markShellVariable`, `unexport`, `setAttrs`, `resolve`, `setVar`, `converted`, `checkWritable`, `getArray`, `shellVariable`, `getVariable`, `lookUp`, `isSet`, `BASH_VERSINFO`, `SCRATCH` |
+| arrays | `Writable`, `DeclareArray`, `ArrayKey`, `GetElement`, `SetElement`, `Unset`, `ArrayElementsAsync`, `ScratchVariable`, `ElementOpAsync`, `ExpandSubscriptAsync`, `SubscriptAsync`, `AssignArrayAsync`, `DeclareArraysAsync`, `ArrayRef`, `Unquote` | `writable`, `declare_array`, `array_key`, `get_element`, `set_element`, `unset`, `_array_elements`, `_element_op`, `expand_subscript`, `_subscript`, `_assign_array`, `_declare_arrays`, `array_ref`, `_unquote` | `writable`, `declareArray`, `arrayKey`, `getElement`, `setElement`, `unset`, `arrayElements`, `elementOp`, `expandSubscript`, `subscript`, `assignArray`, `declareArrays`, `arrayRef`, `unquote`, `splitOnce`, `splitSubscript` |
 
 **Expansion: `Shell/Expansion.cs` · `shell/expansion.py` · `shell/expansion.ts`.** Sections: `parts and arithmetic`
 (expand part, arith), `parameters` (bad substitution … check set), `substitution` (run, process, capture, read
@@ -206,7 +216,7 @@ file word), `words` (expand single, assignment, pattern, tilde, alternative word
 
 | C# | Python | TS |
 |---|---|---|
-| `ExpandPartAsync`, `EvalArithAsync`, `ArithExpansionAsync`, `BadSubstitution`, `ExpandPartInAsync`, `DefaultOp`, `ReplacementAsync`, `ExpandParameterAsync`, `RunSubstitutionAsync`, `ProcessSubstitutionAsync`, `CaptureAsync`, `ReadFileWord`, `ExpandSingleAsync`, `ExpandAssignmentAsync`, `PatternAsync`, `SplitFields`, `Field`, `AlternativeWordAsync`, `ExpandWordsAsync` | `_expand_part`, `_arith`, `_arith_expansion`, `_bad_substitution_text`, `_fatal`, `_indirect_target`, `_param_word`, `_param_word_expand`, `_replacement`, `_expand_parameter`, `_check_set`, `_run_substitution`, `_process_substitution`, `_capture`, `_expand_single`, `_expand_assignment`, `_pattern`, `_tilde_value`, `_tilde_prefix`, `_alternative_word`, `_expand_words`; module: `_PARAM`, `_INDIRECT`, `_PREFIX`, `_ASSIGNMENT_TILDE`, `default_op`, `_arith_nesting`, `split_fields`, `_read_file_word`, `_Field` | `expandPart`, `evalArithExpr`, `arithExpansion`, `fatal`, `indirectTarget`, `paramWord`, `paramWordValue`, `replacement`, `expandParameter`, `checkSet`, `runSubstitution`, `processSubstitution`, `capture`, `expandSingle`, `expandAssignment`, `pattern`, `tildeValue`, `tildePrefix`, `alternativeWord`, `expandWords`; module: `PARAM_RE`, `INDIRECT_RE`, `PREFIX_RE`, `defaultOp`, `splitFields`, `readFileWord` |
+| parts and arithmetic: `ExpandPartAsync`, `EvalArithAsync`, `ArithExpansionAsync`; parameters: `BadSubstitution`, `BadSubstitutionStop`, `ExpandPartInAsync`, `Fatal`, `ParamRe`, `IndirectRe`, `PrefixRe`, `DefaultOp`, `IndirectTarget`, `ParamWord`, `ParamWordAsync`, `ReplacementAsync`, `ExpandParameterAsync`, `CheckSet`; substitution: `RunSubstitutionAsync`, `ProcessSubstitutionAsync`, `CaptureAsync`, `ReadFileWord`; words: `ExpandSingleAsync`, `AssignmentTilde`, `ExpandAssignmentAsync`, `PatternAsync`, `TildeValue`, `TildePrefix`, `SplitFields`, `Field`, `AlternativeWordAsync`, `ExpandWordsAsync` | `_expand_part`, `_arith`, `_arith_expansion`, `_bad_substitution_text`, `_fatal`, `_indirect_target`, `_param_word`, `_param_word_expand`, `_replacement`, `_expand_parameter`, `_check_set`, `_run_substitution`, `_process_substitution`, `_capture`, `_expand_single`, `_expand_assignment`, `_pattern`, `_tilde_value`, `_tilde_prefix`, `_alternative_word`, `_expand_words`; module: `_PARAM`, `_INDIRECT`, `_PREFIX`, `_ASSIGNMENT_TILDE`, `default_op`, `_arith_nesting`, `split_fields`, `_read_file_word`, `_Field` | `expandPart`, `evalArithExpr`, `arithExpansion`, `fatal`, `indirectTarget`, `paramWord`, `paramWordValue`, `replacement`, `expandParameter`, `checkSet`, `runSubstitution`, `processSubstitution`, `capture`, `expandSingle`, `expandAssignment`, `pattern`, `tildeValue`, `tildePrefix`, `alternativeWord`, `expandWords`; module: `PARAM_RE`, `INDIRECT_RE`, `PREFIX_RE`, `defaultOp`, `splitFields`, `readFileWord` |
 
 **Session: `Shell/Session.cs` · `shell/session.py` · `shell/session.ts`.** No markers. Order: snapshot, restore,
 fork, save, load, start recording, capture state, apply state. The format files (`ShellSnapshot.cs`, `Recording.cs`,
@@ -215,13 +225,13 @@ is in Python and TS.
 
 | C# | Python | TS |
 |---|---|---|
-| the `partial class Shell` blocks now at the end of `ShellSnapshot.cs` (`Snapshot`, `Restore`, `Fork`, `Save`, `Load`, `CaptureState`, `ApplyState`, `SnapshotSetOptions`), `Recording.cs` (`StartRecording`, `AppCommandNames`) | `SNAPSHOT_SET_OPTIONS`, `snapshot`, `restore`, `fork`, `save`, `load`, `start_recording`, `_capture_state`, `_apply_state` | `captureState`, `applyState` (TS snapshots through `ShellSnapshot.capture` and records through `startRecording(shell)`; `SNAPSHOT_SET_OPTIONS` stays in `snapshot.ts`) |
+| the `partial class Shell` blocks from the end of `ShellSnapshot.cs` and `Recording.cs`, in this order: `Snapshot`, `Restore`, `Fork`, `Save`, `Load`, `StartRecording`, `AppCommandNames`, `CaptureState`, `SnapshotSetOptions`, `ApplyState` | `SNAPSHOT_SET_OPTIONS`, `snapshot`, `restore`, `fork`, `save`, `load`, `start_recording`, `_capture_state`, `_apply_state` | `captureState`, `applyState` (TS snapshots through `ShellSnapshot.capture` and records through `startRecording(shell)`; `SNAPSHOT_SET_OPTIONS` stays in `snapshot.ts`) |
 
 **Glob: `Glob.cs` · `glob.py` · `glob.ts`**
 
 | C# | Python | TS |
 |---|---|---|
-| classes `Brace`, `Glob` (from the end of `Shell.cs`) | brace section (`_MAX_BRACE`, `_PLACEHOLDER`, `brace_expand`, `_rebuild`, `_brace_text`, `_brace_close`, `_brace_alternatives`), then globbing section (`has_wildcard`, `glob_escape`, `_has_unescaped_wildcard`, `_RUNNING`, `TimedPattern`, `_cached`, `glob_to_regex_body`, `_glob_body`, `_group_end`, `_bracket_end`, `_bracket`, `glob_to_regex`, `_join`, `glob_expand`) | add the brace section from `shell.ts` (`MAX_BRACE_ITEMS`, `PLACEHOLDER`, `braceExpand`, `expandBraceText`, `findClose`, `alternatives`) above the existing glob code |
+| the `brace expansion` marker and class `Brace`, then the `globbing` marker and class `Glob` (both from the end of `Shell.cs`, unchanged) | brace section (`_MAX_BRACE`, `_PLACEHOLDER`, `brace_expand`, `_rebuild`, `_brace_text`, `_brace_close`, `_brace_alternatives`), then globbing section (`has_wildcard`, `glob_escape`, `_has_unescaped_wildcard`, `_RUNNING`, `TimedPattern`, `_cached`, `glob_to_regex_body`, `_glob_body`, `_group_end`, `_bracket_end`, `_bracket`, `glob_to_regex`, `_join`, `glob_expand`) | add the brace section from `shell.ts` (`MAX_BRACE_ITEMS`, `PLACEHOLDER`, `braceExpand`, `expandBraceText`, `findClose`, `alternatives`) above the existing glob code |
 
 ### 3.3 How the parts reach each other
 
@@ -257,6 +267,13 @@ TypeScript constraints:
 - What package users see: `dist/shell.d.ts` gains typed `@internal` members where it has `private name;` lines
   today, and `dist/shell/*.d.ts` appear. The public members must not change: compare before and after (§9).
 
+C# constraints (what the pilot found):
+- Each file has the usings it needs and no others; `dotnet build -p:EnforceCodeStyleInBuild=true` with IDE0005 raised to
+  a warning (a temporary `.editorconfig`) lists the unused ones. `ImplicitUsings` covers the rest.
+- The class's `<summary>` stays on the declaration in `Shell/Shell.cs`; the other parts have none.
+- A part's top-level types follow the class, under their own marker (`CondEvaluator` under `conditional expressions`).
+- Nothing else is needed: no access modifier changes, and the public and internal surface is identical (§9).
+
 Python constraints:
 - A module the parts import (`glob.py`) must not import `topwater.shell` or `topwater.shell.types` at module level:
   importing a submodule runs `shell/__init__.py` first, which imports the parts, which import the half-loaded
@@ -288,7 +305,7 @@ Python constraints:
 | Thing | C# | Python | TS |
 |---|---|---|---|
 | Shell part file | `Shell/Execution.cs` | `shell/execution.py` | `shell/execution.ts` |
-| Part container | `partial class Shell` | `class ExecutionPart` (mixin) | `const ExecutionPart` (method object) |
+| Part container | `partial class Shell` | `class ExecutionPart` (mixin) | `class ExecutionPart` (class part, §3.3) |
 | Command domain file | `Builtins/XxxCommands.cs` | `commands/xxx.py` | `commands/xxx.ts` |
 | Single-program file | `Builtins/Sed.cs` | `commands/sed.py` | `commands/sed.ts` |
 | Method | `ExecSimpleAsync` | `_exec_simple` (`_` = private) | `execSimple` |
@@ -306,7 +323,6 @@ These get their own rename-only commits after the moves:
 | `ResolvePath` | `resolve` | `resolvePath` | public in Python: leave it |
 | `EvalArithAsync` | `_arith` | `evalArithExpr` | `_eval_arith`, `evalArith`… |
 | `ExecTopLevelAsync` | `_exec_script(top=True)` | `execTopLevel` | add `_exec_top_level` in Python |
-| `WithFd` + `Fds` | `_descriptor` | `descriptor` | pick one |
 | `Register` | `register_command` | `register` | public API: leave it |
 
 ## 5. Command grab-bags by domain
@@ -456,8 +472,9 @@ together, but a phase isn't ticked until all three have it.
   `diff <(git show HEAD~:python/src/topwater/shell.py | sort) <(cat python/src/topwater/shell/*.py | sort)`.
 - The surface is the same before and after. Python: `sorted(dir(Shell))` equal, and every name in the old
   `dir(topwater.shell)` still there. TS: `Object.getOwnPropertyNames(Shell.prototype).sort()` equal, nothing
-  enumerable on the prototype, and the non-`@internal` members of `dist/shell.d.ts` equal. C#: the build (the
-  public API can't change in a partial-class move that keeps the namespace).
+  enumerable on the prototype, and the non-`@internal` members of `dist/shell.d.ts` equal. C#: a reflection dump of
+  every type and member of `Topwater.dll`, all visibilities, compiler-generated names left out, is identical before
+  and after, and so are the `<member>` entries of `Topwater.xml` (sorted).
 - Each new module imports alone, as the first import of a fresh process (this is what finds import cycles):
   `python -c "import topwater.glob"`, `… topwater.shell.expansion`, `… topwater.commands.gitmore` and so on;
   `node -e "await import('./dist/shell/execution.js')"` and so on after `npm run build`.
