@@ -130,16 +130,46 @@ public class PythonTests
     [Fact]
     public async Task CompileCacheDir()
     {
-        var dir = Directory.CreateTempSubdirectory("topwater-python-cache").FullName;
+        var root = Directory.CreateTempSubdirectory("topwater-python-cache").FullName;
+        var dir = Path.Combine(root, "cache");
         try
         {
             Wasi.GetRuntime(null, dir);
-            Assert.Single(Directory.GetFiles(dir, "*.cwasm"));
+            var cwasm = Assert.Single(Directory.GetFiles(dir));
+            Assert.EndsWith(".cwasm", cwasm); // no temporary file left
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(dir));
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(cwasm));
+            }
             Wasi.ForgetRuntimes();
             var sh = new Shell().AllowPython(new PythonOptions { CacheDir = dir }); // deserialized, not compiled
             Assert.Equal("3\n", (await sh.RunAsync("python3 -c 'print(3)'")).Stdout);
+            // a file that is not the one this module and Wasmtime wrote is never loaded: it is compiled again and replaced
+            var good = File.ReadAllBytes(cwasm);
+            var bad = (byte[])good.Clone();
+            bad[32] ^= 1;
+            File.WriteAllBytes(cwasm, bad);
+            Wasi.ForgetRuntimes();
+            Wasi.GetRuntime(null, dir);
+            Assert.NotEqual(bad, File.ReadAllBytes(cwasm));
+            if (!OperatingSystem.IsWindows()) // nor one others may write, nor a cache folder others may write
+            {
+                var engine = Wasi.GetRuntime(null, dir).Engine;
+                var key = Encoding.UTF8.GetBytes($"{Wasi.ModuleSha256} {typeof(Wasmtime.Engine).Assembly.GetName().Version}");
+                Assert.NotNull(Wasi.LoadCached(engine, cwasm, key));
+                File.SetUnixFileMode(cwasm, File.GetUnixFileMode(cwasm) | UnixFileMode.OtherWrite);
+                Assert.Null(Wasi.LoadCached(engine, cwasm, key));
+                File.SetUnixFileMode(cwasm, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                File.SetUnixFileMode(dir, File.GetUnixFileMode(dir) | UnixFileMode.GroupWrite);
+                Assert.Null(Wasi.LoadCached(engine, cwasm, key));
+            }
         }
-        finally { Directory.Delete(dir, true); }
+        finally
+        {
+            Wasi.ForgetRuntimes();
+            Directory.Delete(root, true);
+        }
     }
 
     /// <summary>The add-on's gzipped module is the vendored xz's module (tools/python_wasm_gz.py writes it; --check in CI
@@ -159,6 +189,75 @@ public class PythonTests
         gz.CopyTo(wasm);
         Assert.Equal(Wasi.ModuleSha256, Sha(wasm.ToArray()));
     }
+
+    [Fact]
+    public async Task OpenFilesAreOneFile()
+    {
+        // what the program wrote and flushed is the file's, by any name, before it is closed (as one inode's contents are)
+        var sh = PyShell();
+        const string prog = """
+
+            import os, shutil, tempfile
+            f = open('a', 'w'); f.write('hello'); f.flush()
+            print(repr(open('a').read()), os.stat('a').st_size, os.path.getsize('a'))
+            shutil.copy('a', 'b'); print(repr(open('b').read()))
+            t = open('t.tmp', 'w'); t.write('new'); t.flush(); os.replace('t.tmp', 'c'); t.write('er'); t.close()
+            print(repr(open('c').read()), os.path.exists('t.tmp'))
+            g = open('d', 'w'); g.write('AAAA'); g.flush(); h = open('d', 'a'); h.write('bb'); h.close(); g.close()
+            print(repr(open('d').read()))
+            with tempfile.TemporaryFile(dir='.') as tf:
+                tf.write(b'x' * 10); tf.flush()
+            u = open('u', 'w'); u.write('gone'); os.unlink('u'); u.write('!'); u.close()
+            os.mkdir('dir'); v = open('dir/v', 'w'); v.write('moved'); os.rename('dir', 'dir2'); v.close()
+            print(repr(open('dir2/v').read()), os.path.exists('dir'))
+
+            """;
+        await sh.RunAsync("mkdir -p /tmp/o && cd /tmp/o");
+        var r = await sh.RunAsync($"python3 -c {Quote(prog)}; ls");
+        Assert.True(r.Stdout == "'hello' 5 5\n'hello'\n'newer' False\n'AAAAbb'\n'moved' False\na\nb\nc\nd\ndir2\n", r.Stdout + r.Stderr);
+    }
+
+    [Fact]
+    public async Task OutputKeepsItsOrder()
+    {
+        var prog = Quote("import sys\nfor i in (1, 2):\n    print('e%d' % i, file=sys.stderr, flush=True)\n    print('o%d' % i, flush=True)");
+        Assert.Equal("e1\no1\ne2\no2\n", (await Run($"python3 -c {prog} 2>&1")).Stdout);
+        Assert.Equal("e1\no1\ne2\no2\n", (await Run($"x=$(python3 -c {prog} 2>&1); echo \"$x\"")).Stdout);
+    }
+
+    [Fact]
+    public async Task RenamesAndLinksAnswerAsLinux()
+    {
+        const string prog = """
+
+            import errno, os
+            def t(f, *a):
+                try:
+                    f(*a); print('ok')
+                except OSError as e:
+                    print(type(e).__name__, errno.errorcode[e.errno])
+            open('f1', 'w').write('1')
+            t(os.rename, 'f1', 'f1'); print(open('f1').read())
+            os.makedirs('full/e')
+            t(os.rename, 'full', 'full/e'); print(os.path.isdir('full/e'))
+            t(os.rename, 'full', 'full/e/x')
+            t(os.link, 'full', 'l')
+
+            """;
+        var r = await Run($"cd /tmp && python3 -c {Quote(prog)}");
+        Assert.Equal("ok\n1\nOSError EINVAL\nTrue\nOSError EINVAL\nPermissionError EPERM\n", r.Stdout);
+        Assert.Equal("", r.Stderr);
+    }
+
+    [Fact]
+    public async Task Abort()
+    {
+        var r = await Run("python3 -c 'import os; os.abort()'");
+        Assert.Equal(134, r.ExitCode);
+        Assert.Equal("python3: fatal error: the program called abort()\n", r.Stderr);
+    }
+
+    static string Quote(string s) => "'" + s.Replace("'", "'\\''") + "'";
 
     // ---------- mounts ----------
 
@@ -186,6 +285,17 @@ public class PythonTests
         var changes = sh.PendingChanges("/mnt/st").Select(c => (c.Kind, c.Path, Encoding.UTF8.GetString(c.Content ?? []))).OrderBy(c => c.Path).ToList();
         Assert.Equal([(MountChangeKind.Write, "/a.txt", "old\nmore\n"), (MountChangeKind.Write, "/b.txt", "b\n")], changes);
         Assert.DoesNotContain(src.Calls, c => c.Op == "write"); // nothing reached the source
+    }
+
+    [Fact]
+    public async Task ASlowMountSourceEndsAtTheTimeLimit()
+    {
+        var sh = PyShell();
+        var src = new MemorySource(new Dictionary<string, object?> { ["a.txt"] = "source\n" });
+        await sh.MountAsync("/mnt/m", src);
+        src.Hook = async (op, _) => { if (op == "read") await Task.Delay(3000); };
+        var r = await sh.RunAsync("timeout 1 python3 -c 'print(open(\"/mnt/\" + \"m/a.txt\").read())'; echo $?");
+        Assert.EndsWith("124\n", r.Stdout);
     }
 
     [Fact]
@@ -280,6 +390,16 @@ public class PythonTests
     }
 
     [Fact]
+    public async Task TimeLimitsHoldHoweverCallsFollowEachOther()
+    {
+        // one ticker however close the calls are: three timeouts in a row all reach their limit
+        Assert.Equal("124\n124\n124\n", (await Run("for i in 1 2 3; do timeout 1 python3 -c 'while True: pass'; echo $?; done")).Stdout);
+        // many quick calls first do not make a later program's limit come early
+        Assert.Equal("0\n", (await Run("for i in $(seq 40); do python3 -c pass; done; " +
+            "timeout 5 python3 -c 'import time\nt = time.monotonic()\nwhile time.monotonic() - t < 2: pass'; echo $?")).Stdout);
+    }
+
+    [Fact]
     public async Task MemoryIsCapped()
     {
         var sh = new Shell().AllowPython(new PythonOptions { MaxMemory = 96L << 20 });
@@ -324,7 +444,7 @@ public class PythonTests
         for (int i = 0; i < 1000; i++) { memory.WriteInt32(i * 8, 0); memory.WriteInt32(i * 8 + 4, 64 << 20); }
         var g = new Wasi.Guest(new Shell().Fs, [], [], [], 1 << 20, 256L << 20, [], DateTime.MaxValue, CancellationToken.None,
             (_, _, _, _, _) => (0, [])) { Memory = memory };
-        g.Fds.Add(new Wasi.WasiFile("/tmp/f", new MemoryStream(), false, true, false, 0, 0));
+        g.Fds.Add(new Wasi.WasiFile(new Wasi.WasiNode("/tmp/f", new MemoryStream(), 0, 0), false, true, false));
         Wasi.t_guest = g;
         try
         {

@@ -40,6 +40,7 @@ internal static class Wasi
         public readonly Linker Linker;
         public readonly byte[] Stdlib;
         int _calls;
+        bool _ticking;
         readonly object _lock = new();
 
         public Runtime(string? folder, string? cacheDir)
@@ -52,7 +53,12 @@ internal static class Wasi
             {
                 using var unzip = new GZipStream(new MemoryStream(gz), CompressionMode.Decompress);
                 using var raw = new MemoryStream();
-                unzip.CopyTo(raw);
+                var chunk = new byte[1 << 16];
+                for (int n; (n = unzip.Read(chunk)) > 0;)
+                {
+                    if (raw.Length + n > MaxModule) throw new InvalidDataException(); // a bomb is refused before it fills memory
+                    raw.Write(chunk, 0, n);
+                }
                 wasm = raw.ToArray();
             }
             catch (InvalidDataException) { wasm = []; }
@@ -61,33 +67,32 @@ internal static class Wasi
             Engine = new Engine(new Config().WithEpochInterruption(true).WithMaximumStackSize(MaxWasmStack));
             var version = typeof(Engine).Assembly.GetName().Version?.ToString() ?? "unknown";
             var cached = cacheDir is null ? null : Path.Combine(cacheDir, $"python-{ModuleSha256[..16]}-wasmtime-{version}.cwasm");
-            Module? module = null;
-            if (cached is not null && File.Exists(cached))
-            {
-                try { module = Module.DeserializeFile(Engine, "python", cached); } // the host's own cache directory: as trusted as the host's code
-                catch (WasmtimeException) { module = null; }
-            }
+            // the cache holds machine code: tied to this module and wasmtime, and refused unless only this user can write it
+            var key = System.Text.Encoding.UTF8.GetBytes($"{ModuleSha256} {version}");
+            var module = cached is null ? null : LoadCached(Engine, cached, key);
             if (module is null)
             {
                 module = Module.FromBytes(Engine, "python", wasm);
-                if (cached is not null)
-                {
-                    Directory.CreateDirectory(cacheDir!);
-                    var tmp = $"{cached}.{Environment.ProcessId}.tmp";
-                    File.WriteAllBytes(tmp, module.Serialize());
-                    File.Move(tmp, cached, overwrite: true);
-                }
+                if (cached is not null) StoreCached(cached, key, module.Serialize());
             }
             Module = module;
             Linker = new Linker(Engine);
             Define(Linker);
         }
 
-        /// <summary>Keeps the epoch ticking while a call runs; stops when none does. Shared by every call, so never per call.</summary>
+        /// <summary>Keeps the epoch ticking while a call runs; stops when none does. One ticker at most, however calls start and end:
+        /// each tick only makes the running guests look at the clock (the store's deadline callback), so a second would only waste.</summary>
         public IDisposable Ticking()
         {
             lock (_lock)
-                if (++_calls == 1) new Thread(Tick) { IsBackground = true, Name = "topwater-python-epoch" }.Start();
+            {
+                _calls++;
+                if (!_ticking)
+                {
+                    _ticking = true;
+                    new Thread(Tick) { IsBackground = true, Name = "topwater-python-epoch" }.Start();
+                }
+            }
             return new Done(() => { lock (_lock) _calls--; });
         }
 
@@ -96,7 +101,12 @@ internal static class Wasi
             while (true)
             {
                 Thread.Sleep(EpochTick);
-                lock (_lock) if (_calls == 0) return;
+                lock (_lock)
+                    if (_calls == 0)
+                    {
+                        _ticking = false;
+                        return;
+                    }
                 Engine.IncrementEpoch();
             }
         }
@@ -135,6 +145,58 @@ internal static class Wasi
     }
 
     static string Sha256(byte[] data) => Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+
+    const int MaxModule = 64 << 20; // python.wasm is 19 MB; more from the gzip is not the module
+    const UnixFileMode OthersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+
+    /// <summary>Unix: writable by nobody but its owner. Elsewhere the folder's own permissions decide.</summary>
+    static bool Private(string path) => OperatingSystem.IsWindows() || (File.GetUnixFileMode(path) & OthersWrite) == 0;
+
+    /// <summary>The compiled module in the host's cache, or null when it is missing, stale, foreign or tampered with: its first 32
+    /// bytes are an HMAC of the rest keyed to the pinned module and the Wasmtime version. A same-user attacker could forge one,
+    /// but such a user can change the host's code too.</summary>
+    internal static Module? LoadCached(Engine engine, string path, byte[] key)
+    {
+        try
+        {
+            if (!File.Exists(path) || new FileInfo(path).LinkTarget is not null || !Private(Path.GetDirectoryName(path)!) || !Private(path)) return null;
+            // only the owner may change a file's mode: this refuses one another user planted
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            var blob = File.ReadAllBytes(path);
+            if (blob.Length < 32 || !CryptographicOperations.FixedTimeEquals(blob.AsSpan(0, 32), HMACSHA256.HashData(key, blob.AsSpan(32)))) return null;
+            return Module.Deserialize(engine, "python", blob[32..]);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or WasmtimeException) { return null; }
+    }
+
+    /// <summary>Writes the compiled module for later processes: the folder only this user may enter, the file only this user may read,
+    /// through an unpredictable temporary name. A cache that can't be written is skipped.</summary>
+    static void StoreCached(string path, byte[] key, byte[] body)
+    {
+        var dir = Path.GetDirectoryName(path)!;
+        string? tmp = null;
+        try
+        {
+            if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
+            else Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (!Private(dir)) return;
+            tmp = Path.Combine(dir, $".python-{Path.GetRandomFileName()}.tmp");
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+            if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            using (var f = new FileStream(tmp, options))
+            {
+                f.Write(HMACSHA256.HashData(key, body));
+                f.Write(body);
+            }
+            File.Move(tmp, path, overwrite: true);
+            tmp = null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        finally
+        {
+            if (tmp is not null) try { File.Delete(tmp); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+    }
 
     // ---------- guest state ----------
 
@@ -177,18 +239,22 @@ internal static class Wasi
     internal sealed class OutputFull() : Exception("output full");
 
     /// <summary>A filesystem call for the guest: its result, or WasiException with the errno. A mounted file or folder the source has
-    /// not been asked for yet is fetched (the host waits, within the call's time) and the call tried once more.</summary>
+    /// not been asked for yet is fetched (the host waits, within the call's time) and the call tried once more; a mount's failure is
+    /// kept for the command to print after the program (the agent may run it again).</summary>
     static T Fs<T>(Func<T> fn)
     {
         try { return fn(); }
         catch (ShellException e)
         {
             var g = Current;
-            if (!ByText.ContainsKey(Tail(e)) && g?.Fetch is { } fetch && fetch())
+            bool mounted = g?.Fetch is not null;
+            if (ErrnoOf(e) == EIO && mounted && g!.Fetch!())
             {
+                if (g.TimedOut) throw new Interrupted(); // cancelled or out of time while it waited: nothing more reaches the filesystem
                 try { return fn(); }
-                catch (ShellException again) { throw new WasiException(ErrnoOf(again)); }
+                catch (ShellException again) { e = again; }
             }
+            if (ErrnoOf(e) == EIO && mounted) g!.Notes.Add(e.Message);
             throw new WasiException(ErrnoOf(e));
         }
     }
@@ -197,25 +263,57 @@ internal static class Wasi
 
     static string Tail(ShellException e) => e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) is var i and >= 0 ? i + 2 : 0)..];
 
-    /// <summary>The WASI errno for a filesystem error, by its text ("path: Permission denied"). Anything else (a mounted file not
-    /// fetched yet) is EIO, and its text is kept for the command to print after the program.</summary>
-    internal static int ErrnoOf(ShellException e)
-    {
-        if (ByText.TryGetValue(Tail(e), out var errno)) return errno;
-        Current?.Notes.Add(e.Message);
-        return EIO;
-    }
+    /// <summary>The WASI errno for a filesystem error, by its text ("path: Permission denied"); EIO for anything else (a mounted file
+    /// not fetched yet).</summary>
+    internal static int ErrnoOf(ShellException e) => ByText.GetValueOrDefault(Tail(e), EIO);
 
     internal static string ErrnoText(int errno) => Text.GetValueOrDefault(errno, "Input/output error");
 
-    internal sealed class WasiFile(string path, MemoryStream data, bool read, bool write, bool append, long stored, long mtime, bool counted = true)
+    /// <summary>A file's contents while the program has it open, shared by every descriptor on it (as one inode's are): saved at close
+    /// and sync, and before a call names a path (stat, rename, link), so other names see what was written. Once the file was unlinked
+    /// or replaced (Gone), its descriptors keep the contents, which are never saved.</summary>
+    internal sealed class WasiNode(string path, MemoryStream data, long stored, long mtime, bool counted = true)
     {
-        public readonly string Path = path;
+        public string Path = path;
         public MemoryStream Data = data;
-        public long Pos;
-        public readonly bool Read = read, Write = write, Counted = counted; // Counted: in the buffer budget (the stdlib is not)
-        public bool Append = append, Dirty;
+        public bool Dirty, Gone;
         public long Stored = stored, Mtime = mtime;
+        public int Handles;
+        public readonly bool Counted = counted; // in the buffer budget (the stdlib is not)
+
+        /// <summary>The contents, writable (a file opened only for reading holds the filesystem's bytes as they are).</summary>
+        public MemoryStream Writable()
+        {
+            if (!Data.CanWrite)
+            {
+                var copy = new MemoryStream();
+                Data.Position = 0;
+                Data.CopyTo(copy);
+                Data = copy;
+            }
+            return Data;
+        }
+    }
+
+    /// <summary>A descriptor on a file: its own position and mode over the shared contents.</summary>
+    internal sealed class WasiFile
+    {
+        public readonly WasiNode Node;
+        public long Pos;
+        public readonly bool Read, Write;
+        public bool Append;
+
+        public WasiFile(WasiNode node, bool read, bool write, bool append)
+        {
+            (Node, Read, Write, Append) = (node, read, write, append);
+            node.Handles++;
+        }
+
+        public string Path => Node.Path;
+        public MemoryStream Data => Node.Data;
+        public bool Dirty { get => Node.Dirty; set => Node.Dirty = value; }
+        public long Stored => Node.Stored;
+        public long Mtime { get => Node.Mtime; set => Node.Mtime = value; }
     }
 
     internal sealed class WasiDir(string path)
@@ -234,7 +332,8 @@ internal static class Wasi
         public readonly List<byte[]> Args, Env;
         public readonly byte[] Stdin;
         public int StdinPos;
-        public readonly MemoryStream Stdout = new(), Stderr = new();
+        public readonly List<(int Fd, byte[] Data)> Output = []; // (1 or 2, bytes) in the order written, so 2>&1 keeps it
+        public long Written;
         public readonly long OutputCap, MaxMemory;
         public readonly byte[] Stdlib;
         public readonly DateTime Deadline; // UTC
@@ -242,6 +341,7 @@ internal static class Wasi
         public readonly System.Diagnostics.Stopwatch Started = System.Diagnostics.Stopwatch.StartNew();
         public readonly List<object?> Fds = [StdinFd, StdoutFd, StderrFd, RootFd];
         public long Buffered; // bytes held in open files' buffers, at most MaxMemory in all
+        public readonly Dictionary<string, WasiNode> Nodes = new(StringComparer.Ordinal); // open files by real path
         public readonly Func<string, string, List<KeyValuePair<string, string>>, byte[], TimeSpan, (int Code, byte[] Payload)> Http;
         public byte[]? Pending;
         public readonly Func<bool>? Fetch; // fetches what mounts were asked for and missed; null: no mounts
@@ -303,29 +403,89 @@ internal static class Wasi
         /// <summary>How large the file may grow: what the filesystem has free, plus what it holds of this file already.</summary>
         public long Room(WasiFile f) => FileSystem.RunAs is not null ? FileSystem.Capacity - FileSystem.UsedBytes + f.Stored : 1L << 62;
 
-        public void Save(WasiFile f)
+        /// <summary>The key of a path's open file: its real path (shortcut: hard links are separate keys, so two names of one file
+        /// opened at once are two buffers; upgrade if programs do that).</summary>
+        public string NodeKey(string path, bool follow = true)
         {
-            if (!f.Dirty) return;
-            Fs(() => FileSystem.WriteAllBytes(f.Path, f.Data.ToArray()));
-            f.Dirty = false;
-            f.Stored = f.Data.Length;
+            if (follow) return FileSystem.RealPath(path, out _, existing: false) ?? path;
+            var parent = VirtualFileSystem.GetParent(path);
+            return (FileSystem.RealPath(parent, out _) ?? parent).TrimEnd('/') + "/" + path[(path.LastIndexOf('/') + 1)..];
+        }
+
+        public WasiFile Opened(string key, MemoryStream data, long stored, long mtime, bool read, bool write, bool append)
+        {
+            if (!Nodes.TryGetValue(key, out var node))
+            {
+                Reserve(data.Length);
+                Nodes[key] = node = new WasiNode(key, data, stored, mtime);
+            }
+            return new WasiFile(node, read, write, append);
+        }
+
+        public void Release(WasiFile f)
+        {
+            var node = f.Node;
+            if (--node.Handles == 0 && node.Counted)
+            {
+                Buffered -= node.Data.Length;
+                if (Nodes.TryGetValue(node.Path, out var n) && n == node) Nodes.Remove(node.Path);
+            }
+        }
+
+        public void Save(WasiNode node)
+        {
+            if (!node.Dirty || node.Gone) return;
+            Fs(() => FileSystem.WriteAllBytes(node.Path, node.Data.ToArray()));
+            node.Dirty = false;
+            node.Stored = node.Data.Length;
+        }
+
+        /// <summary>Before a call names a path: open files' writes are saved, so its size, a rename or a link sees them. A save that
+        /// fails is left for close or exit to report.</summary>
+        public void Sync()
+        {
+            foreach (var node in Nodes.Values.ToList())
+            {
+                try { Save(node); }
+                catch (WasiException) { }
+            }
+        }
+
+        /// <summary>The file at key was unlinked or replaced: its open descriptors keep their contents, which are never saved.</summary>
+        public void Detach(string key)
+        {
+            if (Nodes.Remove(key, out var node)) node.Gone = true;
+        }
+
+        /// <summary>A rename: open files at src (or under it) are now at dst; one open at dst was replaced.</summary>
+        public void Moved(string src, string dst)
+        {
+            Detach(dst);
+            var under = src.TrimEnd('/') + "/";
+            foreach (var key in Nodes.Keys.Where(k => k == src || k.StartsWith(under, StringComparison.Ordinal)).ToList())
+            {
+                Nodes.Remove(key, out var node);
+                node!.Path = dst + key[src.Length..];
+                Nodes[node.Path] = node;
+            }
         }
 
         /// <summary>At exit: files the program wrote but never closed are saved, as a real process's are.</summary>
         public void FlushAll()
         {
-            foreach (var entry in Fds)
-                if (entry is WasiFile { Dirty: true } f)
+            foreach (var node in Nodes.Values.ToList())
+                if (node.Dirty)
                 {
-                    try { Save(f); }
-                    catch (WasiException e) { WriteBackErrors.Add((f.Path, e.Errno)); }
+                    try { Save(node); }
+                    catch (WasiException e) { WriteBackErrors.Add((node.Path, e.Errno)); }
                 }
         }
 
-        public void WriteOutput(MemoryStream which, byte[] data)
+        public void WriteOutput(int fd, byte[] data)
         {
-            if (Stdout.Length + Stderr.Length + data.Length > OutputCap) throw new OutputFull();
-            which.Write(data);
+            if (Written + data.Length > OutputCap) throw new OutputFull();
+            Written += data.Length;
+            Output.Add((fd, data));
         }
     }
 
@@ -424,6 +584,7 @@ internal static class Wasi
     static byte[] StatPath(Guest g, string path, bool follow)
     {
         if (path == StdlibPath) return Filestat(FILETYPE_REGULAR_FILE, g.Stdlib.Length, 0, Ino(path));
+        g.Sync();
         var st = Fs(() => g.FileSystem.Stat(path, follow));
         var kind = st.IsSymlink ? FILETYPE_SYMBOLIC_LINK : st.IsDirectory ? FILETYPE_DIRECTORY : FILETYPE_REGULAR_FILE;
         return Filestat(kind, st.Size, Ns(st.Modified), Ino(path), st.Links);
@@ -453,13 +614,12 @@ internal static class Wasi
         long now = clock switch
         {
             CLOCK_REALTIME => NowNs(G),
-            CLOCK_MONOTONIC => MonotonicNs(),
-            _ => G.Started.Elapsed.Ticks * 100, // process and thread CPU time: time since this call started
+            _ => MonotonicNs(G), // monotonic, process and thread CPU time: time since this call started
         };
         U64(@out, now);
     }
 
-    static long MonotonicNs() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1e9 / System.Diagnostics.Stopwatch.Frequency));
+    static long MonotonicNs(Guest g) => g.Started.Elapsed.Ticks * 100;
 
     static void RandomGet(int buf, int n)
     {
@@ -523,7 +683,7 @@ internal static class Wasi
         long current = f.Data.Length;
         g.Reserve(Math.Max(0, size - current));
         g.Buffered -= Math.Max(0, current - size);
-        f.Data.SetLength(size); // extending fills with zeros
+        f.Node.Writable().SetLength(size); // extending fills with zeros
         f.Dirty = true;
     }
 
@@ -578,23 +738,25 @@ internal static class Wasi
         if (e == StdoutFd || e == StderrFd)
         {
             if (offset is not null) throw new WasiException(ESPIPE);
-            if (g.Stdout.Length + g.Stderr.Length + total > g.OutputCap) throw new OutputFull();
+            if (g.Written + total > g.OutputCap) throw new OutputFull();
             var data = new MemoryStream((int)total);
             foreach (var (ptr, length) in iovs) data.Write(Read(ptr, length));
-            g.WriteOutput(e == StdoutFd ? g.Stdout : g.Stderr, data.ToArray());
+            g.WriteOutput(e == StdoutFd ? 1 : 2, data.ToArray());
             return (int)total;
         }
         if (e is not WasiFile f) throw new WasiException(e == RootFd || e is WasiDir ? EISDIR : EBADF);
         if (!f.Write) throw new WasiException(EBADF);
         long start = f.Append ? f.Data.Length : offset ?? f.Pos;
+        if (start > long.MaxValue - total) throw new WasiException(EFBIG);
         long end = start + total;
         if (end > f.Data.Length)
         {
             if (end > g.Room(f)) throw new WasiException(ENOSPC);
             g.Reserve(end - f.Data.Length);
         }
-        f.Data.Position = start; // past the end: the gap fills with zeros
-        foreach (var (ptr, length) in iovs) f.Data.Write(Read(ptr, length));
+        var stream = f.Node.Writable();
+        stream.Position = start; // past the end: the gap fills with zeros
+        foreach (var (ptr, length) in iovs) stream.Write(Read(ptr, length));
         f.Dirty = true;
         f.Mtime = NowNs(g);
         if (offset is null) f.Pos = end;
@@ -627,15 +789,15 @@ internal static class Wasi
         g.Fds[fd] = null;
         if (e is WasiFile f)
         {
-            if (f.Counted) g.Buffered -= f.Data.Length;
-            g.Save(f);
+            g.Release(f);
+            g.Save(f.Node);
         }
     }
 
     static void FdSync(int fd)
     {
         var g = G;
-        if (g.Fd(fd) is WasiFile f) g.Save(f);
+        if (g.Fd(fd) is WasiFile f) g.Save(f.Node);
     }
 
     static List<(byte[] Name, byte Kind, ulong Ino)> Entries(Guest g, object d)
@@ -706,7 +868,7 @@ internal static class Wasi
         {
             if (write || creat) throw new WasiException(EROFS);
             if (wantDir) throw new WasiException(ENOTDIR);
-            U32(@out, g.Alloc(new WasiFile(path, new MemoryStream(g.Stdlib, 0, g.Stdlib.Length, false, true), true, false, false, g.Stdlib.Length, 0, counted: false)));
+            U32(@out, g.Alloc(new WasiFile(new WasiNode(path, new MemoryStream(g.Stdlib, 0, g.Stdlib.Length, false, true), g.Stdlib.Length, 0, counted: false), true, false, false)));
             return;
         }
         FileStat? st = null;
@@ -725,13 +887,21 @@ internal static class Wasi
             if (wantDir) throw new WasiException(ENOTDIR);
             if (creat && excl) throw new WasiException(EEXIST);
             if (write && !fs.CanWrite(path) || read && !fs.CanRead(path)) throw new WasiException(EACCES);
+            var key = g.NodeKey(path);
+            g.Nodes.TryGetValue(key, out var node);
             MemoryStream data;
             long stored;
             if (trunc)
             {
-                if (s.Size > 0) Fs(() => fs.WriteAllBytes(path, [])); // O_TRUNC empties the file now, as open(2) does
+                if (s.Size > 0 || node is { Stored: > 0 }) Fs(() => fs.WriteAllBytes(path, [])); // O_TRUNC empties the file now, as open(2) does
+                if (node is not null) // and for the descriptors already open on it
+                {
+                    g.Buffered -= node.Data.Length;
+                    (node.Data, node.Stored, node.Dirty) = (new MemoryStream(), 0, false);
+                }
                 (data, stored) = (new MemoryStream(), 0);
             }
+            else if (node is not null) (data, stored) = (node.Data, node.Stored);
             else
             {
                 var raw = Fs(() => fs.ReadAllBytes(path));
@@ -739,13 +909,12 @@ internal static class Wasi
                 if (write) data.Write(raw);
                 stored = raw.Length;
             }
-            g.Reserve(data.Length);
-            U32(@out, g.Alloc(new WasiFile(path, data, read, write, append, stored, Ns(s.Modified))));
+            U32(@out, g.Alloc(g.Opened(key, data, stored, Ns(s.Modified), read, write, append)));
             return;
         }
         if (why != ENOENT || !creat || wantDir) throw new WasiException(why);
         Fs(() => fs.WriteAllBytes(path, [])); // the parent must exist and be writable: the filesystem checks it as for any command
-        U32(@out, g.Alloc(new WasiFile(path, new MemoryStream(), read, write, append, 0, NowNs(g))));
+        U32(@out, g.Alloc(g.Opened(g.NodeKey(path), new MemoryStream(), 0, NowNs(g), read, write, append)));
     }
 
     static void PathFilestatGet(int dirfd, int flags, int pathPtr, int pathLen, int buf)
@@ -762,6 +931,7 @@ internal static class Wasi
         if (path == StdlibPath) throw new WasiException(EROFS);
         DateTime? when = (fst & FSTFLAGS_MTIM_NOW) != 0 ? g.FileSystem.Clock()
             : (fst & FSTFLAGS_MTIM) != 0 ? DateTime.UnixEpoch.AddTicks(mtim / 100) : null;
+        g.Sync();
         Fs(() => g.FileSystem.Stat(path));
         if (when is { } w) Fs(() => g.FileSystem.SetModifiedTime(path, w, follow: (flags & LOOKUP_SYMLINK_FOLLOW) != 0));
     }
@@ -789,7 +959,9 @@ internal static class Wasi
         var path = g.Resolve(dirfd, PathArg(pathPtr, pathLen));
         if (path == StdlibPath) throw new WasiException(EROFS);
         if (Fs(() => g.FileSystem.Stat(path, follow: false)).IsDirectory) throw new WasiException(EISDIR);
+        var key = g.NodeKey(path, follow: false);
         Fs(() => g.FileSystem.Delete(path));
+        g.Detach(key);
     }
 
     static void PathRename(int fd1, int oldPtr, int oldLen, int fd2, int newPtr, int newLen)
@@ -799,22 +971,28 @@ internal static class Wasi
         var dst = g.Resolve(fd2, PathArg(newPtr, newLen));
         if (src == StdlibPath || dst == StdlibPath) throw new WasiException(EROFS);
         var fs = g.FileSystem;
+        g.Sync();
         var s = Fs(() => fs.Stat(src, follow: false));
         FileStat? d = fs.Exists(dst, follow: false) ? Fs(() => fs.Stat(dst, follow: false)) : null;
-        if (d is { IsDirectory: true }) // rename(2): a directory replaces an empty one; anything else can't
+        string srcKey = g.NodeKey(src, follow: false), dstKey = g.NodeKey(dst, follow: false);
+        if (srcKey == dstKey || d is not null && fs.SameFile(src, dst, follow: false)) return; // rename(2): one file under both names stays as it is
+        if (s.IsDirectory && dstKey.StartsWith(srcKey.TrimEnd('/') + "/", StringComparison.Ordinal)) throw new WasiException(EINVAL); // into itself
+        if (d is { IsDirectory: true }) // a directory replaces an empty one; anything else can't
         {
             if (!s.IsDirectory) throw new WasiException(EISDIR);
-            if (src == dst) return;
             Fs(() => fs.Delete(dst));
         }
         else if (d is not null && s.IsDirectory) throw new WasiException(ENOTDIR);
         Fs(() => fs.Move(src, dst));
+        g.Moved(srcKey, dstKey);
     }
 
     static void PathSymlink(int oldPtr, int oldLen, int dirfd, int newPtr, int newLen)
     {
         var g = G;
-        var target = ByteText.Decode(PathArg(oldPtr, oldLen));
+        var raw = PathArg(oldPtr, oldLen);
+        if (Array.IndexOf(raw, (byte)0) >= 0) throw new WasiException(EINVAL);
+        var target = ByteText.Decode(raw);
         var link = g.Resolve(dirfd, PathArg(newPtr, newLen));
         if (link == StdlibPath) throw new WasiException(EEXIST);
         Fs(() => g.FileSystem.CreateSymlink(link, target));
@@ -836,7 +1014,10 @@ internal static class Wasi
         var src = g.Resolve(fd1, PathArg(oldPtr, oldLen));
         var dst = g.Resolve(fd2, PathArg(newPtr, newLen));
         if (src == StdlibPath || dst == StdlibPath) throw new WasiException(EROFS);
-        Fs(() => g.FileSystem.CreateHardLink(src, dst, (flags & LOOKUP_SYMLINK_FOLLOW) != 0));
+        bool follow = (flags & LOOKUP_SYMLINK_FOLLOW) != 0;
+        g.Sync();
+        if (Fs(() => g.FileSystem.Stat(src, follow)).IsDirectory) throw new WasiException(EPERM); // link(2): no hard links to directories
+        Fs(() => g.FileSystem.CreateHardLink(src, dst, follow));
     }
 
     static void PollOneoff(int subs, int events, int n, int nevents)
@@ -856,7 +1037,7 @@ internal static class Wasi
                 int clock = BinaryPrimitives.ReadInt32LittleEndian(sub[16..]);
                 long timeout = (long)Math.Min(BinaryPrimitives.ReadUInt64LittleEndian(sub[24..]), long.MaxValue);
                 int flags = BinaryPrimitives.ReadUInt16LittleEndian(sub[40..]);
-                if ((flags & SUBCLOCKFLAGS_ABSTIME) != 0) timeout = Math.Max(0, timeout - (clock == CLOCK_REALTIME ? NowNs(g) : MonotonicNs()));
+                if ((flags & SUBCLOCKFLAGS_ABSTIME) != 0) timeout = Math.Max(0, timeout - (clock == CLOCK_REALTIME ? NowNs(g) : MonotonicNs(g)));
                 if (sleep is null || timeout < sleep.Value.Timeout) sleep = (timeout, userdata);
             }
             else if (kind is EVENTTYPE_FD_READ or EVENTTYPE_FD_WRITE)
@@ -1081,8 +1262,9 @@ internal static class Wasi
 
     // ---------- running a call ----------
 
-    /// <summary>How a call ended: Code (the exit status) unless TimedOut, StackOverflow, or Trap (another fatal error's text).</summary>
-    internal sealed record Outcome(int Code = 1, bool TimedOut = false, bool StackOverflow = false, string? Trap = null);
+    /// <summary>How a call ended: Code (the exit status) unless TimedOut, StackOverflow, Aborted (abort()), or Trap (another fatal
+    /// error's text).</summary>
+    internal sealed record Outcome(int Code = 1, bool TimedOut = false, bool StackOverflow = false, string? Trap = null, bool Aborted = false);
 
     /// <summary>Runs bashkit_run on a fresh instance, on this thread; saves the files the program left open. Throws OutputFull.</summary>
     internal static Outcome Run(Runtime rt, Guest guest)
@@ -1115,6 +1297,7 @@ internal static class Wasi
                 }
             if (e is TrapException { Type: TrapCode.Interrupt } || guest.TimedOut) return new Outcome(TimedOut: true);
             if (e is TrapException { Type: TrapCode.StackOverflow }) return new Outcome(StackOverflow: true);
+            if (e is TrapException { Type: TrapCode.Unreachable }) return new Outcome(Aborted: true); // abort(): the C library's last resort, SIGABRT for a real process
             var line = e.Message.Split('\n')[0];
             return new Outcome(Trap: line.Length > 200 ? line[..200] : line);
         }

@@ -8,6 +8,8 @@
     <PackageId>Topwater.Python</PackageId>
     <Description>python3 for a Topwater shell: CPython 3.14 compiled to WebAssembly, running over the shell's virtual files and web policy and nothing else.</Description>
     <PackageTags>agents;ai;llm;tool-use;python;webassembly;wasi;sandbox;bash;shell</PackageTags>
+    <!-- this package's code is MIT; the interpreter it carries is CPython and its bundled libraries (python-wasm/THIRD_PARTY_LICENSES.md) -->
+    <PackageLicenseExpression>MIT AND PSF-2.0 AND Zlib AND blessing AND BSD-2-Clause AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT)</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>

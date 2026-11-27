@@ -46,6 +46,24 @@ public static class PythonShellExtensions
         return done.Task;
     }
 
+    /// <summary>Consecutive writes to one stream joined, so a multi-byte character split across writes decodes whole.</summary>
+    static IEnumerable<(int Fd, byte[] Data)> Runs(List<(int Fd, byte[] Data)> output)
+    {
+        int fd = 0;
+        var chunk = new MemoryStream();
+        foreach (var (w, data) in output)
+        {
+            if (w != fd && chunk.Length > 0)
+            {
+                yield return (fd, chunk.ToArray());
+                chunk.SetLength(0);
+            }
+            fd = w;
+            chunk.Write(data);
+        }
+        if (chunk.Length > 0) yield return (fd, chunk.ToArray());
+    }
+
     static readonly WebSession NoNetwork = new(WebSession.NoNetwork);
 
     /// <summary>The HTTP bridge's sender: each request goes through the shell's web access (its policy, credentials, limits and
@@ -129,16 +147,16 @@ public static class PythonShellExtensions
         Wasi.Outcome outcome;
         try { outcome = await InThread(() => Wasi.Run(rt, guest)); }
         catch (Wasi.OutputFull) { throw sh.TooLarge("output", "write to a file in smaller pieces or filter earlier in the pipeline"); }
-        ctx.Stdout.Write(ByteText.Decode(guest.Stdout.ToArray()));
-        ctx.Stderr.Write(ByteText.Decode(guest.Stderr.ToArray()));
+        foreach (var (fd, data) in Runs(guest.Output)) // in the order written, so 2>&1 interleaves them as a real process's
+            (fd == 1 ? ctx.Stdout : ctx.Stderr).Write(ByteText.Decode(data));
         foreach (var note in guest.Notes.Distinct()) ctx.Stderr.WriteLine("python3: " + note); // a file a mount had not fetched yet
         foreach (var (path, errno) in guest.WriteBackErrors)
             ctx.Stderr.WriteLine("python3: " + Message("writeBack", ("file", path), ("errno", Wasi.ErrnoText(errno))));
+        // past the call's (or `timeout`'s) limit, whatever the program saw: ends it as for any command
+        ctx.CancellationToken.ThrowIfCancellationRequested();
+        sh.CheckDeadline();
         if (outcome.TimedOut)
         {
-            // the call's (or `timeout`'s) limit: ends it as for any command
-            ctx.CancellationToken.ThrowIfCancellationRequested();
-            sh.CheckDeadline();
             ctx.Stderr.WriteLine("python3: " + Message("stopped"));
             return 1;
         }
@@ -146,6 +164,11 @@ public static class PythonShellExtensions
         {
             ctx.Stderr.WriteLine("python3: " + Message("stackOverflow"));
             return 1;
+        }
+        if (outcome.Aborted)
+        {
+            ctx.Stderr.WriteLine("python3: " + Message("aborted"));
+            return 134;
         }
         if (outcome.Trap is { } trap)
         {
