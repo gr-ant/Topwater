@@ -1,0 +1,4 @@
+# Tables generated from spec/ by tools/spec-gen/gen.py: kept out of GitHub's language statistics and collapsed in diffs
+src/Topwater/Generated/** linguist-generated=true
+python/src/topwater/_spec.py linguist-generated=true
+typescript/src/spec.generated.ts linguist-generated=true
