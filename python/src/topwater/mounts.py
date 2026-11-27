@@ -478,7 +478,7 @@ class _Mount:
         self.misses: dict[int, object] = {}  # files and directories used before they were fetched or listed
         self.failed: dict[int, str] = {}  # why a file could not be fetched (safe to show)
         self.fetched: dict[int, _Base] = {}  # in fetch order, for eviction
-        self.stuck: list | None = None  # live mode: the changes left when applying last failed, not retried until they change
+        self.stuck: list[MountChange] = []  # live mode: changes that failed, not tried again until they change
         self.busy = False  # applying: a pipeline's other stage leaves it to the end of the call
         self.trusted = True  # held changes may be replayed at the next listing (a replay's), not only by the host
         self.last_safe: str | None = None  # what the agent may see of the last apply's error
@@ -1146,20 +1146,25 @@ class Mounts:
                 await m.fetch([n for n in nodes if isinstance(n, _File)])
 
     async def settle(self, err) -> None:
-        """Live mode: applies the changes made so far (after a command's redirections are written, and when the call ends)."""
+        """Live mode: applies the changes made so far (after a command's redirections are written, and when the call ends).
+        A change that fails is reported once and left pending; the changes after it are still tried, and it is tried again
+        only once it changes."""
         for m in list(self.items.values()):
             if m.mode != "live" or not m.available or m.busy:
                 continue
-            changes = m.changes()
-            if not changes or changes == m.stuck:
-                continue  # nothing new since the last attempt failed
-            r = await m.apply(None)
-            m.stuck = m.changes() if r.failed is not None else None
-            if r.failed is not None:
+            todo = [c for c in m.changes() if c not in m.stuck]
+            while todo:
+                r = await m.apply(todo)
+                if r.failed is None:
+                    break
+                m.stuck.append(r.failed)
                 where = m.machine(r.failed.path)
                 reason = m.last_safe or _msg("sourceFailed")
                 err.write("mount: " + (_msg("conflict", path=where, dir=m.path) if r.conflict else
                                        _msg("failed", path=where, reason=reason, dir=m.path)) + "\n")
+                todo = list(r.not_tried)
+            current = m.changes()
+            m.stuck = [c for c in m.stuck if c in current]  # applied, discarded or changed since: no longer stuck
 
     # ----- snapshots and recordings -----
 

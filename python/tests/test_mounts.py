@@ -455,6 +455,8 @@ def test_backslash_names_never_reach_a_folder(tmp_path):
     r = sh.run(r"echo evil > '/mnt/n/..\..\outside\win.txt'")
     assert "not a name a file can have here" in r.stderr and str(root) not in r.stderr
     assert _tree(root) == ["a.md", "docs", "docs/keep.md"]
+    r = sh.run("echo ok > /mnt/n/good.md")  # a change that failed doesn't hold up the next ones, and is reported once
+    assert r.stderr == "" and (root / "good.md").read_text() == "ok\n"
 
 
 def test_source_errors_reach_the_agent_only_when_meant_for_it():
