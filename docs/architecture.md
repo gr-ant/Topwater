@@ -6,7 +6,8 @@ responsibilities, the same order of sections in each file and, where the languag
 main functions. This page is the map. `tools/layout.json` will be its machine-readable copy, checked in CI (§8).
 
 **Status: in progress.** Work through §9 one phase at a time and tick off each phase here as it lands (a phase is
-ticked when all three ports have it; the C# column says where C# is).
+ticked when all three ports have it; the column says which ports have it). C# has done phases 1 and 4 to 6 and is
+strict in the checker (no `legacy` entry).
 
 | Phase | What | Done |
 |---|---|---|
@@ -16,7 +17,7 @@ ticked when all three ports have it; the C# column says where C# is).
 | 3 | Shell split, TypeScript | |
 | 4 | git split, Python and TypeScript (to match C#); C# section names aligned | C# |
 | 5 | Command grab-bags split by domain, all three ports | C# |
-| 6 | Engine extractions: `Sed`, `Find`, `Diff`, `Format`; TS `convert.ts` out of `commands/documents.ts` | |
+| 6 | Engine extractions: `Sed`, `Find`, `Diff`, `Format`; TS `convert.ts` out of `commands/documents.ts` | C# |
 | 7 | Optional: parser AST, jq | |
 
 ## 1. Rules for every move
@@ -115,19 +116,19 @@ A dash means the port has no such module; §8 records why.
 
 ### 3.1 Sizes
 
-Approximate line counts after the split:
+Approximate line counts after the split (C#: measured):
 
 | Part | C# | Python | TS |
 |---|---|---|---|
-| Shell (core) | 450 | 430 | 450 |
-| Types | 190 | 250 | 150 |
-| Execution (+ `CondEvaluator`) | 600 | 540 | 500 |
+| Shell (core) | 500 | 430 | 450 |
+| Types | 175 | 250 | 150 |
+| Execution (+ `CondEvaluator`) | 590 | 540 | 500 |
 | Redirection | 190 | 220 | 180 |
-| Invocation | 370 | 390 | 370 |
-| Variables (incl. arrays) | 430 | 470 | 380 |
-| Expansion | 540 | 650 | 500 |
-| Session | 140 | 120 | 70 |
-| Glob (brace + glob) | 310 | 370 | 300 |
+| Invocation | 390 | 390 | 370 |
+| Variables (incl. arrays) | 420 | 470 | 380 |
+| Expansion | 545 | 650 | 500 |
+| Session | 120 | 120 | 70 |
+| Glob (brace + glob) | 320 | 370 | 300 |
 
 ### 3.2 Section → symbol mapping
 
@@ -435,7 +436,7 @@ their branches don't conflict in it. Ports are explicit paths, never derived fro
 {
   "roots": { "cs": "src/Topwater", "py": "python/src/topwater", "ts": "typescript/src" },
   "ignore": { "cs": ["bin/", "obj/", "Generated/"], "py": ["_spec.py"], "ts": ["spec.generated.ts"] },
-  "legacy": { "cs": ["Shell.cs", "Builtins/MoreCommands.cs"], "py": ["shell.py", "commands/more.py", "commands/net.py"], "ts": ["commands/builtins.ts", "commands/xml.ts"] },
+  "legacy": { "py": ["shell.py", "commands/more.py", "commands/net.py"], "ts": ["commands/builtins.ts", "commands/xml.ts"] },
   "modules": [
     { "name": "shell.execution", "cs": "Shell/Execution.cs", "py": "shell/execution.py", "ts": "shell/execution.ts",
       "sections": ["scripts", "lists", "jobs", "pipelines", "compound commands", "conditional expressions"] },
