@@ -2,9 +2,10 @@
 // history.jsonl (a header, then one line per call) and checkpoints/<n>.json, the machine after n calls. All three ports
 // write and read it. The JSON Lines recordings this replaced (snapshots embedded or in side-car files) still load.
 import { DEFAULTS, Shell, type ShellOptions, type ShellResult } from './shell.js';
-import { HOST, ShellSnapshot, SnapshotError, USER, openTopwater, parseTime, sha256, writeTopwater } from './snapshot.js';
+import { HOST, ShellSnapshot, SnapshotError, USER, formatTime, openTopwater, parseTime, sha256, writeTopwater } from './snapshot.js';
+import { MAX_VERSION, MOUNT_OPS, type MountEntry, type MountExchange } from './mounts.js';
 import { KINDS, WebSession, type WebExchange, type WebPolicy } from './web.js';
-import { sameEntry, type VfsEntry } from './vfs.js';
+import { VirtualFileSystem, sameEntry, type VfsEntry } from './vfs.js';
 
 export const RECORDING_FORMAT_VERSION = 1;
 const FORMAT = 'topwater-recording', HISTORY = 'topwater-history', HISTORY_VERSION = 1;
@@ -34,6 +35,8 @@ export interface RecordedCall {
   snapshot?: ShellSnapshot;
   /** the web requests the call made and what came back, in order */
   web?: WebExchange[];
+  /** what the call asked mounted sources and what they answered, in order */
+  mounts?: MountExchange[];
 }
 
 export interface ReplayDifference { index: number; command: string; field: 'stdout' | 'stderr' | 'exitCode' | 'trailer'; expected: string; actual: string }
@@ -53,6 +56,8 @@ export class Recording {
   /** The web access the shell had (allowWeb), credentials as host names only (their values are ""), no transport. A shell
    * made from the recording serves the recorded responses under it and never touches the network. */
   web?: WebPolicy;
+  /** What the mounts held when recording started, as answers to the listing and reads a replay starts with. */
+  mountStart: MountExchange[] = [];
 
   constructor(public start: ShellSnapshot, public options: RecordedOptions) {}
 
@@ -71,6 +76,8 @@ export class Recording {
       ? new WebSession({ ...this.web, transport: undefined, credentials: Object.fromEntries(Object.keys(this.web.credentials ?? {}).map(h => [h, () => ''])) },
         this.calls.slice(firstCall).flatMap(c => c.web ?? []))
       : new WebSession({ explainBlocked: false }, []);
+    // the recorded answers, never a real source (even if configure mounted one)
+    shell.mountTable.replay = [...this.mountStart, ...this.calls.slice(firstCall).flatMap(c => c.mounts ?? [])];
     start.restore(shell);
     return shell;
   }
@@ -128,6 +135,17 @@ export class Recording {
       if (body) blobs.set(body, x.body);
       return { method: x.method, url: x.url, status: x.status, reason: x.reason, headers: x.headers, body, size: x.body.length, error: x.error };
     };
+    const mountExchange = async (x: MountExchange) => {
+      const e: Record<string, unknown> = { mount: x.mount, op: x.op, path: x.path, to: x.to ?? undefined };
+      if (x.entries) e.entries = x.entries.filter(y => typeof y?.name === 'string').map(mountEntryJson);
+      if (x.op === 'stat' && x.error === null) e.entry = x.entry ? mountEntryJson(x.entry) : null;
+      if (x.body) {
+        e.size = x.body.length;
+        if (x.body.length) { const h = await sha256(x.body); e.body = h; blobs.set(h, x.body); }
+      }
+      return dropUndefined({ ...e, version: x.version ?? undefined, error: x.error ?? undefined, conflict: x.conflict || undefined });
+    };
+    if (this.mountStart.length) (header as Record<string, unknown>).mounts = await Promise.all(this.mountStart.map(mountExchange));
     const lines = [JSON.stringify(header)];
     const checkpoints: [string, ShellSnapshot][] = [['checkpoints/0.json', this.start]];
     for (const [i, c] of this.calls.entries()) {
@@ -135,6 +153,7 @@ export class Recording {
         index: c.index, command: c.command, stdout: c.stdout, stderr: c.stderr, exitCode: c.exitCode, trailer: c.trailer,
         elapsedMs: Math.round(c.elapsedMs * 1000) / 1000, time: c.time === undefined ? undefined : iso(c.time), files: c.files?.length ? c.files : undefined,
         web: c.web?.length ? await Promise.all(c.web.map(exchange)) : undefined,
+        mounts: c.mounts?.length ? await Promise.all(c.mounts.map(mountExchange)) : undefined,
       })));
       if (c.snapshot) checkpoints.push([`checkpoints/${i + 1}.json`, c.snapshot]);
     }
@@ -327,8 +346,10 @@ async function fromLines(input: string | Uint8Array, format: string, version: nu
       files: e.files ?? undefined,
       snapshot: await after(e),
       web: e.web == null ? undefined : await exchanges(e.web, `line ${n}`, blob),
+      mounts: e.mounts == null ? undefined : await mountExchanges(e.mounts, `line ${n} mounts`, blob),
     });
   }
+  rec.mountStart = await mountExchanges(h.mounts, 'header mounts', blob);
   return rec;
 }
 
@@ -381,6 +402,48 @@ async function exchanges(list: unknown, where: string, blob: (hash: unknown, siz
   return out;
 }
 
+function mountEntryJson(y: MountEntry) {
+  const when = y.modified instanceof Date ? y.modified.getTime() : y.modified;
+  return dropUndefined({ name: y.name, type: y.isDir ? 'dir' : 'file', size: y.size ?? 0, mtime: when == null ? undefined : formatTime(when), version: y.version ?? '' });
+}
+
+/** Recorded source exchanges, checked: canonical paths, known operations, entries of the right shape, bodies as blobs. */
+async function mountExchanges(raw: unknown, where: string, blob: (hash: unknown, size: number, where: string) => Promise<Uint8Array>): Promise<MountExchange[]> {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw bad(`${where}: not a list`);
+  const path = (p: unknown, what: string) => {
+    if (!(typeof p === 'string' && p.length > 0 && p.length <= 4096 && p[0] === '/' && !p.includes('\0') && VirtualFileSystem.normalize('/', p) === p))
+      throw bad(`${where}: bad ${what} ${JSON.stringify(p ?? null)}`);
+    return p;
+  };
+  const version = (v: unknown, what: string) => {
+    if (v != null && !(typeof v === 'string' && v.length <= MAX_VERSION)) throw bad(`${where}: bad ${what}`);
+    return (v ?? null) as string | null;
+  };
+  const entry = (y: any): MountEntry => {
+    const size = y?.size ?? 0;
+    if (!(y && typeof y === 'object' && typeof y.name === 'string' && (y.type === 'dir' || y.type === 'file') && Number.isSafeInteger(size) && size >= 0
+      && typeof (y.version ?? '') === 'string')) throw bad(`${where}: bad entry`);
+    return { name: y.name, isDir: y.type === 'dir', size, modified: y.mtime == null ? null : time(y.mtime, where + ': mtime'), version: version(y.version ?? '', 'version')! };
+  };
+  const out: MountExchange[] = [];
+  for (const [i, x] of raw.entries()) {
+    const w = `${where} ${i}`;
+    if (!x || typeof x !== 'object' || !MOUNT_OPS.includes(x.op)) throw bad(`${w}: not a mount exchange`);
+    const error = x.error ?? null, conflict = x.conflict ?? false;
+    if (!(error === null || typeof error === 'string') || typeof conflict !== 'boolean') throw bad(`${w}: bad error`);
+    if (x.entries != null && !Array.isArray(x.entries)) throw bad(`${w}: entries is not a list`);
+    const size = x.size ?? null;
+    if (size !== null && !(Number.isSafeInteger(size) && size >= 0)) throw bad(`${w}: bad size`);
+    out.push({
+      mount: path(x.mount, 'mount'), op: x.op, path: path(x.path, 'path'), to: x.op === 'rename' ? path(x.to, 'target') : null,
+      entries: x.entries == null ? null : x.entries.map(entry), entry: x.entry == null ? null : entry(x.entry),
+      body: size === null ? null : await blob(x.body, size, w), version: version(x.version, 'version'), error, conflict,
+    });
+  }
+  return out;
+}
+
 /** The file's limits, never above the caller's (or the defaults). */
 function clamp(options: RecordedOptions, limits: RecordedOptions): RecordedOptions {
   const bound = { ...DEFAULTS, ...limits };
@@ -400,6 +463,9 @@ export function startRecording(shell: Shell, options: RecordingOptions = {}) {
   const recording = new Recording(ShellSnapshot.capture(shell), shellOptions);
   recording.metadata = { ...options.metadata };
   recording.appCommands = [...shell.commands.keys()].filter(n => !shell.isBuiltin(n)).sort();
+  recording.mountStart = shell.mountTable.startExchanges();
+  shell.mountTable.takeLog();
+  shell.mountTable.recording = true;
   const every = options.snapshotEvery ?? 0;
   const run = shell.run;
   const changes = shell.fs.trackChanges(); // the paths each call changed, without a snapshot per call
@@ -417,9 +483,10 @@ export function startRecording(shell: Shell, options: RecordingOptions = {}) {
     const files = changes();
     recording.web ??= shell.web?.policy;
     const web = shell.web?.takeLog();
+    const mounts = shell.mountTable.takeLog();
     recording.calls.push({
       index, command, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, trailer: r.trailer, elapsedMs: performance.now() - t0,
-      time, files: files.length ? files : undefined, snapshot, web: web?.length ? web : undefined,
+      time, files: files.length ? files : undefined, snapshot, web: web?.length ? web : undefined, mounts: mounts.length ? mounts : undefined,
     });
     return r;
   };
@@ -428,6 +495,7 @@ export function startRecording(shell: Shell, options: RecordingOptions = {}) {
     stop: () => {
       if (shell.run === run) return;
       shell.run = run;
+      shell.mountTable.recording = false;
       void recording.calls.at(-1)?.snapshot?.entries; // the end state, before the shell moves on
     },
   };

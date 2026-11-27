@@ -6,7 +6,8 @@ import { inflateRaw } from './inflate.js';
 import { deflate, inflateRawNative } from './compress.js';
 import { parse, ParseError, type Script } from './parser.js';
 import type { Shell, ShellOptions } from './shell.js';
-import type { VfsEntry } from './vfs.js';
+import { VirtualFileSystem, type VfsEntry } from './vfs.js';
+import { MAX_VERSION, MOUNT_MODES, mountChange, type MountChange, type MountState } from './mounts.js';
 
 /** The newest format version this writes and loads. Version 2 added symbolic links (type "symlink" with a "target") and hard
  * links (a "link" naming the entry's first path); a snapshot without links is still written as version 1. */
@@ -43,6 +44,8 @@ export interface ShellStateData {
   /** the virtual clock (ms) and the seeded generator's state, for a deterministic shell */
   clock?: number;
   random?: bigint;
+  /** the mounts' definitions and pending changes (docs/mounts.md) */
+  mounts?: MountState[];
 }
 
 /** The `set -o` options a snapshot may name. */
@@ -90,12 +93,13 @@ export class ShellSnapshot {
 
   /** Captures a shell's files and session. */
   static capture(shell: Shell): ShellSnapshot {
-    return new ShellSnapshot([...shell.fs.entries()].map(e => ({ ...e })), shell.captureState(), shell.options.user, shell.options.hostname, shell.now());
+    return new ShellSnapshot(shell.mountTable.outside(shell.fs.entries()).map(e => ({ ...e })), shell.captureState(), shell.options.user, shell.options.hostname, shell.now());
   }
 
   /** Puts the machine back as captured. The shell keeps its own registered commands (and /usr/bin entries for them). */
   restore(shell: Shell) {
     shell.fs.replaceAll(this.files);
+    shell.mountTable.restore(this.state.mounts ?? []);
     shell.applyState(this.state);
   }
 
@@ -177,6 +181,15 @@ async function manifestOf(snap: ShellSnapshot, content: (e: VfsEntry) => Promise
     files.push(entry);
   }
   const st = snap.state;
+  const mounts = [];
+  for (const d of st.mounts ?? []) {
+    const changes = [];
+    for (const c of d.changes) {
+      const [blob, size] = c.kind === 'write' && c.content?.length ? await content({ data: c.content } as VfsEntry) : [];
+      changes.push({ kind: c.kind, path: c.path, to: c.to ?? undefined, version: c.version ?? undefined, size, blob });
+    }
+    mounts.push({ path: d.path, mode: d.mode, type: d.type, id: d.id, changes });
+  }
   const names = [...new Set([...st.variables.keys(), ...st.arrays.keys(), ...st.attributes.keys()])].sort(ordinal);
   return dropEmpty({
     format: FORMAT, version: links ? SNAPSHOT_FORMAT_VERSION : 1, created: formatTime(snap.created), user: snap.user, hostname: snap.hostname, cwd: st.cwd, files,
@@ -190,6 +203,7 @@ async function manifestOf(snap: ShellSnapshot, content: (e: VfsEntry) => Promise
     secondsBase: formatTime(st.secondsBase), lastArg: st.lastArg || undefined, pipeStatus: st.pipeStatus, getopts: st.getopts, jobs: st.jobs,
     lastBackgroundPid: st.lastBackgroundPid || undefined, nextPid: st.nextPid || undefined,
     clock: st.clock === undefined ? undefined : formatTime(st.clock), random: st.random?.toString(),
+    mounts,
   });
 }
 
@@ -249,7 +263,7 @@ export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, s
     /** manifest.json or a checkpoint, checked like a snapshot; `budget.entries` (when given) is what all checkpoints may still hold */
     machine: (name: string, budget?: { entries: number }) => guardAsync(async () => {
       const m = parsed(name), h = head(m, name, o, budget);
-      await hashBlobs(h.files);
+      await hashBlobs([...h.files, ...mountBlobs(m)]);
       return build(m, name, h);
     }),
     /**
@@ -260,7 +274,7 @@ export function openTopwater(bytes: Uint8Array, limits: Partial<ShellOptions>, s
     outline: (name: string, budget: { entries: number }, kept: ShellSnapshot[], wrap: (e: unknown) => unknown) => guardAsync(async () => {
       const m = parsed(name, byName.has(name) ? await openFast(name, maxManifest) : undefined), h = head(m, name, o, budget);
       const created = parseTime(m.created, 'created');
-      await hashBlobs(h.files);
+      await hashBlobs([...h.files, ...mountBlobs(m)]);
       const load = () => { try { const m = parsed(name); return build(m, name, head(m, name, o)); } catch (e) { throw wrap(passThrough(e)); } };
       return { snapshot: ShellSnapshot.lazy(load, h.user, h.hostname, created, kept), held: h.held };
     }),
@@ -353,7 +367,9 @@ function readMachine(m: Record<string, any>, name: string, o: Limits, { user, ho
       linkTarget: f.type === 'symlink' ? f.target : null, hardLink: f.link ?? null,
     });
   }
-  return new (ShellSnapshot as any)(files, readState(m, o), user, hostname, parseTime(m.created, 'created'));
+  const state = readState(m, o);
+  state.mounts = readMounts(m.mounts, o, blobBytes, hashes);
+  return new (ShellSnapshot as any)(files, state, user, hostname, parseTime(m.created, 'created'));
 }
 
 function readState(m: Record<string, any>, o: { maxStringBytes: number }): ShellStateData {
@@ -444,6 +460,63 @@ function readState(m: Record<string, any>, o: { maxStringBytes: number }): Shell
     lastBackgroundPid: int(m.lastBackgroundPid, 'lastBackgroundPid'), nextPid: int(m.nextPid, 'nextPid'),
     clock: m.clock == null ? undefined : parseTime(m.clock, 'clock'), random,
   };
+}
+
+/** The writes in a manifest's mounts, shaped as file entries so their blobs are hashed with the files' (checked in readMounts). */
+function mountBlobs(m: Record<string, any>): unknown[] {
+  const out: unknown[] = [];
+  if (Array.isArray(m?.mounts))
+    for (const d of m.mounts) if (Array.isArray(d?.changes)) for (const c of d.changes) if (c?.kind === 'write') out.push({ type: 'file', size: c.size, blob: c.blob });
+  return out;
+}
+
+/** The mounts' definitions and pending changes (docs/mounts.md), checked like files: canonical paths, sizes within
+ * MaxFileSystemBytes, at most MaxExtractEntries changes, blobs present and matching. */
+function readMounts(raw: unknown, o: Limits, blobBytes: (entry: string, size: number) => Uint8Array | null, hashes: Map<string, string>): MountState[] {
+  const out: MountState[] = [];
+  let total = 0, count = 0;
+  const list = (v: unknown, what: string): any[] => v == null ? [] : Array.isArray(v) ? v : (() => { throw bad(`${what} is not a list`); })();
+  const path = (p: unknown, what: string): string => {
+    if (typeof p !== 'string' || p.length === 0 || p.length > 4096 || p[0] !== '/' || p.includes('\0') || VirtualFileSystem.normalize('/', p) !== p || p === '/')
+      throw bad(`bad ${what} ${JSON.stringify(p ?? null)}`);
+    return p;
+  };
+  for (const d of list(raw, 'mounts')) {
+    if (!d || typeof d !== 'object' || Array.isArray(d)) throw bad('a mount is not an object');
+    const at = path(d.path, 'mount path');
+    if (out.some(x => at === x.path || at.startsWith(x.path + '/') || x.path.startsWith(at + '/'))) throw bad(`${at}: mounts overlap`);
+    if (!MOUNT_MODES.includes(d.mode)) throw bad(`${at}: bad mount mode ${JSON.stringify(d.mode ?? null)}`);
+    for (const [v, what] of [[d.type, 'type'], [d.id, 'id']])
+      if (typeof v !== 'string' || v.length > 256 || /[\x00-\x1f]/.test(v)) throw bad(`${at}: bad source ${what}`);
+    const changes: MountChange[] = [];
+    for (const c of list(d.changes, 'changes')) {
+      if (++count > o.maxExtractEntries) throw bad(`more than ${o.maxExtractEntries} mount changes (MaxExtractEntries)`);
+      if (!c || typeof c !== 'object' || !['write', 'delete', 'rename', 'mkdir'].includes(c.kind)) throw bad(`${at}: bad mount change`);
+      const cp = path(c.path, 'change path');
+      const to = c.kind === 'rename' ? path(c.to, 'change target') : null;
+      const version = c.version ?? null;
+      if (version !== null && !(typeof version === 'string' && version.length <= MAX_VERSION)) throw bad(`${cp}: bad version`);
+      let content: Uint8Array | null = null;
+      if (c.kind === 'write') {
+        const size = c.size ?? 0;
+        if (!Number.isSafeInteger(size)) throw bad(`bad ${cp}: size ${JSON.stringify(size)}`);
+        total += size;
+        if (size < 0 || total > o.maxFileSystemBytes) throw bad(`mount changes hold more than ${o.maxFileSystemBytes} bytes (MaxFileSystemBytes)`);
+        content = new Uint8Array(0);
+        if (size) {
+          const blob = check(c.blob, BLOB, `${cp}: blob`);
+          let bytes: Uint8Array | null;
+          try { bytes = blobBytes('blobs/' + blob, size); } catch { throw bad(`${cp}: blob ${blob} doesn't match its size and hash`); }
+          if (!bytes) throw bad(`${cp}: blob ${blob} is missing`);
+          if (bytes.length !== size || hashes.get(`${blob}:${size}`) !== blob) throw bad(`${cp}: blob ${blob} doesn't match its size and hash`);
+          content = bytes.slice();
+        }
+      }
+      changes.push(mountChange(c.kind, cp, { to, version: c.kind !== 'mkdir' ? version : null, content }));
+    }
+    out.push({ path: at, mode: d.mode, type: d.type, id: d.id, changes });
+  }
+  return out;
 }
 
 function isOneFunction(script: Script, name: string): boolean {

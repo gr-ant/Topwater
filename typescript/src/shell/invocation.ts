@@ -137,6 +137,17 @@ export class InvocationPart {
     }
     const ctx = this.makeContext(name, argv.slice(1), io);
     if (argv.length === 2 && this.builtinNames?.has(name) && standardOption(ctx, cmd, argv[1])) return 0;
+    const mounts = this.mountTable.items.size ? this.mountTable : null;
+    if (mounts) await mounts.before(name, argv);
+    try {
+      return await this.runHandler(cmd, ctx, name, io);
+    } finally {
+      if (mounts && this.remainingMs() > 0) await mounts.after(io.err);
+    }
+  }
+
+  /** @internal */
+  async runHandler(this: Shell, cmd: RegisteredCommand, ctx: CommandContext, name: string, io: Io): Promise<number> {
     try {
       const r = await cmd.handler(ctx);
       return typeof r === 'number' ? r : 0;

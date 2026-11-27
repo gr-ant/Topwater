@@ -18,6 +18,7 @@ export class SessionPart {
       positional: [...this.positional], dirStack: [...this.dirStack], history: [...this.history], lastExitCode: this.lastExitCode,
       secondsBase: this.secondsBase, lastArg: this.lastArg, pipeStatus: [...this.pipeStatus], getopts: [this.getoptsState.optind, this.getoptsState.pos],
       jobs: [...this.jobs], lastBackgroundPid: this.lastBg, nextPid: this.nextPid, clock: this.virtualClock, random: this.random,
+      mounts: this.mountTable.capture(),
     };
   }
 
@@ -61,7 +62,7 @@ export class SessionPart {
     this.randomState = s.random;
     this.variableChars = [...this.environment].reduce((n, [k, v]) => n + k.length + v.length, 0)
       + [...this.arrays.values()].reduce((n, a) => n + [...a.items].reduce((m, [k, v]) => m + k.length + v.length, 0), 0);
-    this.cwdPath = this.fs.isDirectory(s.cwd) ? s.cwd : '/';
+    this.cwdPath = this.fs.isDirectory(s.cwd) || this.mountTable.find(s.cwd) ? s.cwd : '/'; // a mount is listed at the next call
     // program files for exactly this shell's commands: the snapshot may come from a shell (or port) with others
     for (const dir of ['/usr/bin/', '/bin/'])
       if (this.fs.isDirectory(dir))

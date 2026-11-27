@@ -97,6 +97,7 @@ export class Timelines {
     const src = this.recording, out = new Recording(src.start, src.options);
     out.topwater = src.topwater;
     out.appCommands = src.appCommands;
+    out.mountStart = src.mountStart;
     const at = this.branches[b].at;
     out.metadata = { ...src.metadata, forkedFrom: from, forkedAfterCall: String(at + 1) };
     for (let i = 0; i < this.length(b); i++) {

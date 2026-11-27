@@ -16,6 +16,7 @@ import { InvocationPart } from './shell/invocation.js';
 import { VariablesPart } from './shell/variables.js';
 import { ExpansionPart } from './shell/expansion.js';
 import { SessionPart } from './shell/session.js';
+import { Mounts, type MountSource, type MountMode, type MountInfo, type MountChange, type MountApplyResult } from './mounts.js';
 
 // A JS regex match can't be interrupted, so an agent's catastrophically backtracking pattern (grep -E '(a|aa)+$') could
 // hang the call. This V8 flag switches such a match to V8's linear-time engine (same results); patterns with
@@ -129,6 +130,8 @@ export class Shell implements ArithHost {
   /** @internal */ readonly paramWords = new Map<string, Word>();
   /** @internal The web access in force (allowWeb), or undefined: no network. */
   web?: WebSession;
+  /** @internal mount(): outside sources shown as directories */
+  readonly mountTable: Mounts = new Mounts(this);
 
   constructor(options: Partial<ShellOptions> = {}) {
     this.options = { ...DEFAULTS, ...options };
@@ -361,6 +364,27 @@ export class Shell implements ArithHost {
     return this;
   }
 
+  /** Shows `source` as the directory `path`: mode "read-only", "staged" or "live" (docs/mounts.md). Lists the source before it resolves. */
+  mount(path: string, source: MountSource, mode: MountMode = 'read-only'): Promise<void> { return this.mountTable.mount(path, source, mode); }
+
+  /** Removes a mount and its pending changes; the mount point stays as an empty directory. */
+  unmount(path: string): void { this.mountTable.unmount(path); }
+
+  /** Every mount (path, mode, source type and id, why it is unavailable). */
+  get mounts(): MountInfo[] { return [...this.mountTable.items.values()].map(m => m.info()); }
+
+  /** The changes that would make a staged or live mount's source match its files, in order. */
+  pendingChanges(path: string): MountChange[] { return this.mountTable.get(path).changes(); }
+
+  /** Applies the pending changes, or the ones given (from pendingChanges), in order, stopping at the first conflict or failure. */
+  applyChanges(path: string, changes?: MountChange[] | null): Promise<MountApplyResult> { return this.mountTable.get(path).apply(changes); }
+
+  /** Drops a mount's pending changes: its files are the source's again (fetched again when read). */
+  discardChanges(path: string): void { this.mountTable.discard(path); }
+
+  /** Lists the source again, keeping the pending changes. */
+  refreshMount(path: string): Promise<void> { return this.mountTable.refresh(path); }
+
   unregister(name: string): boolean {
     for (const dir of ['/usr/bin/', '/bin/']) if (this.fs.isFile(dir + name)) this.fs.delete(dir + name);
     return this.commands.delete(name);
@@ -387,7 +411,10 @@ export class Shell implements ArithHost {
     const raw = (s: string) => { (stderr as unknown as { chunks: string[] }).chunks.push(s); stderr.length += s.length; };
     try {
       // shortcut: EXIT traps fire when the tool call ends (like `set -e`, they last one call), not at logout
-      try { code = await this.execTopLevel(parse(commandLine), io); } finally { await this.runExitTrap(io); }
+      try {
+        if (this.mountTable.items.size) await this.mountTable.prepare();
+        code = await this.execTopLevel(parse(commandLine), io);
+      } finally { await this.runExitTrap(io); }
     } catch (e) {
       if (e instanceof ParseError) { raw(`bash: ${e.message}\n`); code = 2; }
       else if (e instanceof ExitSignal) code = e.code;

@@ -31,7 +31,8 @@ export interface FileStat {
 /** Counts changes to every filesystem's nodes, so a change tracker visits only what moved since it last looked. */
 let changeClock = 0;
 
-abstract class Node {
+/** @internal */
+export abstract class Node {
   private _modified = Date.now();
   private _owner = 'root';
   private _mode = 0;
@@ -55,7 +56,8 @@ class Names extends Map<string, Node> {
   override delete(name: string) { const had = super.delete(name); if (had) this.owner.listed = ++changeClock; return had; }
   override clear() { super.clear(); this.owner.listed = ++changeClock; }
 }
-class Dir extends Node {
+/** @internal */
+export class Dir extends Node {
   /** when a name was last added, removed or replaced */
   listed = ++changeClock;
   readonly children: Map<string, Node> = new Names(this);
@@ -65,7 +67,10 @@ class LinkNode extends Node {
   get target() { return this._target; }
   set target(v: string) { this._target = v; this.changed = ++changeClock; }
 }
-class FileNode extends Node {
+/** @internal */
+export class FileNode extends Node {
+  /** a mounted file not fetched yet (mounts.ts): loader(node, path) fills it in or throws ShellError */
+  loader: ((node: FileNode, path: string) => void) | null = null;
   /** Text content (null when `data` holds the bytes, or while `chunks` holds pending appends). */
   private text: string | null = '';
   private chunks: string[] | null = null; // `>>` writes accumulate here, so append loops stay linear
@@ -90,6 +95,7 @@ class FileNode extends Node {
   get raw(): Uint8Array { return this.data ?? encodeText(this.content); }
 
   store(text: string | null, bytes: Uint8Array | null, append: boolean, reserve: (delta: number) => void) {
+    if (this.loader) { this.loader = null; this.reportedSize = null; } // replaced (the caller loaded it first if appending)
     if (bytes === null && text !== null && hasEscapes(text)) bytes = encodeText(text); // binary that came through a pipe
     if (bytes !== null || (append && this.data !== null)) {
       bytes ??= encodeText(text!);
@@ -263,6 +269,9 @@ export class VirtualFileSystem {
   }
   private node(path: string, follow = true): Node | null { return this.walk(path, follow).node; }
 
+  /** @internal The node at `path` (mounts.ts), or null. */
+  nodeAt(path: string, follow = true): Node | null { return this.node(path, follow); }
+
   /** Why `path` can't be reached: "Permission denied", "Not a directory", "Too many levels of symbolic links" or "No such file or directory". */
   whyMissing(path: string, follow = true): string { const f = this.find(path, follow); return f.node === null ? f.why : NOT_FOUND; }
 
@@ -374,7 +383,7 @@ export class VirtualFileSystem {
 
   private readNode(path: string): FileNode {
     const { node, why } = this.find(path);
-    if (node instanceof FileNode) { this.require(node, 4, path); return node; }
+    if (node instanceof FileNode) { this.require(node, 4, path); node.loader?.(node, path); return node; }
     if (node instanceof Dir) throw new ShellError(`${path}: ${ERRNO.EISDIR}`);
     throw new ShellError(`${path}: ${why}`);
   }
@@ -393,6 +402,7 @@ export class VirtualFileSystem {
     if (existing) {
       if (!(existing instanceof FileNode)) throw new ShellError(`${path}: ${ERRNO.EISDIR}`);
       this.require(existing, 2, path);
+      if (append) existing.loader?.(existing, path);
       existing.store(content, data, append, d => this.reserve(d, path));
       existing.modified = this.store.clock();
     } else {
@@ -633,6 +643,7 @@ export class VirtualFileSystem {
       tick?.();
       if (!permits(n, user, n instanceof Dir ? 5 : 4)) { denied(path, n instanceof Dir); return null; }
       if (n instanceof FileNode) {
+        n.loader?.(n, path);
         // the copy is built before it is stored: links can make it far bigger than the tree, so charge it as it grows
         if (this.runAs !== null && this.usedBytes + (cloned += n.size) > this.capacity) throw new ShellError(`${dest}: ${NO_SPACE}`);
         // the agent's copy loses setuid/setgid and takes its umask (cp without -p); the host's keeps the mode

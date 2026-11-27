@@ -8,3 +8,4 @@ export type { WebPolicy, WebTransport, WebExchange, WebErrorKind } from './web.j
 export { toMarkdown, addDocument } from './commands/documents.js';
 export { ShellSnapshot, SnapshotError, SnapshotVersionError, SNAPSHOT_FORMAT_VERSION } from './snapshot.js';
 export { Recording, RecordingError, startRecording, RECORDING_FORMAT_VERSION, type RecordedCall, type RecordedOptions, type RecordingOptions, type ReplayDifference } from './recording.js';
+export { LocalFolderSource, MemorySource, MountConflictError, type MountSource, type MountEntry, type MountChange, type MountApplyResult, type MountInfo, type MountExchange, type MountMode, type MountCapability } from './mounts.js';
