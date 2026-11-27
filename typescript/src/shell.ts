@@ -17,6 +17,7 @@ import { VariablesPart } from './shell/variables.js';
 import { ExpansionPart } from './shell/expansion.js';
 import { SessionPart } from './shell/session.js';
 import { Mounts, type MountSource, type MountMode, type MountInfo, type MountChange, type MountApplyResult } from './mounts.js';
+import { registerPython, pythonRuntime, type PythonOptions } from './commands/python.js';
 
 // A JS regex match can't be interrupted, so an agent's catastrophically backtracking pattern (grep -E '(a|aa)+$') could
 // hang the call. This V8 flag switches such a match to V8's linear-time engine (same results); patterns with
@@ -362,6 +363,18 @@ export class Shell implements ArithHost {
     if (!policy.transport) defaultTransport(); // throws where the checked connection cannot be made
     this.web = new WebSession(policy);
     return this;
+  }
+
+  /**
+   * Gives the agent python3: CPython 3.14 compiled to WebAssembly, over this machine's files and nothing else
+   * (docs/python.md). Needs the add-on (npm install topwater-python) or `options.artifacts`. The command exists at once;
+   * the promise resolves once the interpreter is loaded and compiled (the first time in a process: about a second) and
+   * rejects with PythonUnavailable when it can't run here. HTTP from Python goes through allowWeb's policy, or nowhere.
+   */
+  allowPython(options: PythonOptions = {}): Promise<this> {
+    registerPython(this, options);
+    this.builtinNames?.add('python3'); // a built-in from spec/: its --help and --version are the spec's
+    return pythonRuntime(options).then(() => this);
   }
 
   /** Shows `source` as the directory `path`: mode "read-only", "staged" or "live" (docs/mounts.md). Lists the source before it resolves. */

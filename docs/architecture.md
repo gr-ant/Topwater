@@ -562,8 +562,7 @@ recording formats.
 
 ## 11. Python (opt-in)
 
-[`python3`](python.md) adds two files per port, listed in `tools/layout.json`. Python and C# have them; the TypeScript rows
-are `null` until that port follows ([python.md, "Porting"](python.md#porting)). C# keeps both in the `Topwater.Python`
+[`python3`](python.md) adds two files per port, listed in `tools/layout.json`. C# keeps both in the `Topwater.Python`
 add-on project, because they need Wasmtime, except the registrar the core's registry calls:
 
 | Role | C# | Python | TS |
@@ -573,4 +572,6 @@ add-on project, because they need Wasmtime, except the registrar the core's regi
 
 The registry calls the command's registrar like any other; it registers nothing until the host calls
 `AllowPython` / `allow_python` / `allowPython`, which registers it with the spec's summary and help. The interpreter
-itself (`assets/python-wasm`) ships in a separate add-on package per language, never in the core one.
+itself (`assets/python-wasm`) ships in a separate add-on package per language, never in the core one: `pip install
+'topwater[python]'`, `src/Topwater.Python` (which embeds it) and `typescript/addons/topwater-python` (which copies it
+in when packed).

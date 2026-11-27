@@ -57,7 +57,9 @@ jobs:
           cache-dependency-path: typescript/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test  # includes python3 (test/python.test.ts) over assets/python-wasm, and packing the add-on
+      - run: npm pack --dry-run  # the python3 add-on (topwater-python): copies the interpreter in and packs it
+        working-directory: typescript/addons/topwater-python
 
   # The container image (docker/Dockerfile) on linux/amd64 and linux/arm64, each built from a standalone binary as the
   # release does and smoke-tested on its own architecture: a run, an MCP session over stdio, --state, a non-root user.

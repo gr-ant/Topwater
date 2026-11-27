@@ -14,6 +14,7 @@ import { registerDocuments } from './documents.js';
 import { registerWeb } from './web.js';
 import { registerGit } from './gitrevisions.js';
 import { registerMount } from './mount.js';
+import { registerPython } from './python.js';
 
 /** Every built-in program, registered on a new shell. */
 export function registerAll(shell: Shell) {
@@ -32,4 +33,5 @@ export function registerAll(shell: Shell) {
   registerWeb(shell);
   registerGit(shell);
   registerMount(shell);
+  registerPython(shell);
 }

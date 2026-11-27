@@ -1,0 +1,33 @@
+{
+  "name": "topwater-python",
+  "version": "0.1.0",
+  "description": "The interpreter behind Topwater's opt-in python3 command: CPython 3.14 compiled to WebAssembly.",
+  "license": "MIT AND PSF-2.0 AND Zlib AND blessing AND BSD-2-Clause AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gr-ant/Topwater.git",
+    "directory": "typescript/addons/topwater-python"
+  },
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./interpreter/*": "./interpreter/*"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "interpreter",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepack": "node prepack.mjs"
+  },
+  "peerDependencies": {
+    "topwater": ">=0.1.0"
+  }
+}

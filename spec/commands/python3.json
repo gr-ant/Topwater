@@ -3,7 +3,7 @@
   "name": "python3",
   "category": "language",
   "summary": "Run Python 3 programs in a WebAssembly sandbox",
-  "ports": ["cs", "py"],
+  "ports": ["cs", "py", "ts"],
   "enabledBy": "allow_python",
   "version": "Python 3.14.8",
   "help": [

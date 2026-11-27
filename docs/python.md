@@ -19,7 +19,7 @@ add-on package, so the core packages stay small and dependency-free.
 |---|---|---|---|
 | Install | `dotnet add package Topwater.Python` | `pip install 'topwater[python]'` | `npm install topwater-python` |
 | Enable | `shell.AllowPython(new PythonOptions { ... })` | `shell.allow_python(PythonOptions(...))` | `await shell.allowPython({ ... })` |
-| Status | available | available | to come |
+| Status | available | available | available |
 
 ```python
 from topwater import Shell
@@ -44,10 +44,28 @@ var shell = new Shell().AllowPython();               // or AllowPython(new Pytho
 depends on [`wasmtime`](https://pypi.org/project/wasmtime/). The core `topwater` package imports neither until
 `allow_python` is called. The .NET add-on is the `Topwater.Python` package: it carries the interpreter inside its
 assembly and depends on the [`Wasmtime`](https://www.nuget.org/packages/Wasmtime) NuGet package; the core `Topwater`
-package references neither. .NET has no xz decoder, so the add-on carries the same module gzipped (`python.wasm.gz`,
-written reproducibly from the vendored file by `tools/python-wasm/gzip_module.py`) and checks the decompressed module's
-SHA-256. The npm add-on will be a separate package that needs no runtime dependency, since Node and browsers have
-WebAssembly.
+package references neither.
+
+```ts
+import { Shell } from 'topwater';
+
+const shell = await new Shell().allowPython();          // or allowPython({ maxMemory: 128 << 20 })
+console.log((await shell.run("python3 -c 'print(sum(range(10)))'")).stdout);   // 45
+```
+
+The npm add-on, `topwater-python`, has no dependencies: Node and browsers run WebAssembly themselves. `allowPython`
+registers the command at once and returns a promise that resolves when the interpreter is loaded and compiled (under a
+second) or rejects with `PythonUnavailable`. Node needs version 22.3 or later. A browser page must be cross-origin
+isolated, since the program runs in a Web Worker that shares memory with the page's thread: serve it with
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless`).
+Without them `allowPython` rejects with that explanation and `python3` prints it; nothing ever runs on the page's own
+thread, where a busy loop could not be stopped. A Content-Security-Policy must allow `worker-src blob:`. In a browser,
+give `artifacts` the URL of a folder you serve the two files from (same origin, or with CORS and
+`Cross-Origin-Resource-Policy`).
+
+.NET and JavaScript have no xz decoder, so their add-ons carry the same module recompressed with gzip
+(`python.wasm.gz`, written reproducibly from `python.wasm.xz` by `tools/python_wasm_gz.py`) and check the SHA-256 of
+the decompressed module.
 
 `allow_python` compiles the interpreter the first time a process uses it (2 to 3 seconds) and keeps it for every
 shell after that; each call then costs a few milliseconds. It raises `PythonUnavailable` (.NET:
@@ -59,6 +77,9 @@ expects, rather than failing in front of the agent.
 | `max_memory` (`MaxMemory`) | 256 MB | WebAssembly memory for one call. The interpreter starts at about 40 MB; past the limit a program gets `MemoryError` |
 | `artifacts` (`Artifacts`) | the add-on's | A folder holding `python.wasm.xz` and `python314.zip` (the repository's `assets/python-wasm`); for .NET, `python.wasm.gz` and `python314.zip` |
 | `cache_dir` (`CacheDir`) | none | A folder of yours where the compiled interpreter is kept between processes, so only the first process compiles it. It holds machine code: give it the same trust as your own program files |
+
+TypeScript takes `maxMemory` and `artifacts` (a path or URL of a folder holding `python.wasm.gz` and `python314.zip`);
+it compiles once per process and memory limit, and has no `cache_dir`.
 
 Until `allow_python` is called, `python3` is `command not found`, as on a fresh Ubuntu image. There is no `python`
 alias (Ubuntu has none without the `python-is-python3` package), no `pip` and no interactive prompt.
@@ -101,9 +122,9 @@ behaviour the two share. Beyond the version:
 
 | Limit | Default | What happens |
 |---|---|---|
-| Time | the call's limit (`max_call_duration`, 120 s), or `timeout N` | the program is stopped: exit 124 under `timeout`, or the call ends with the usual time-limit note. A busy loop is interrupted by WebAssembly epochs (every 10 ms), a `time.sleep` wakes at the deadline |
+| Time | the call's limit (`max_call_duration`, 120 s), or `timeout N` | the program is stopped: exit 124 under `timeout`, or the call ends with the usual time-limit note. A busy loop is interrupted by WebAssembly epochs (every 10 ms; TypeScript terminates the program's worker), a `time.sleep` wakes at the deadline |
 | Memory | 256 MB (`max_memory`) | `MemoryError` inside Python; the next call starts fresh |
-| Recursion | Python's own limit (1,000) | `RecursionError`. C-level recursion past the 2 MB WebAssembly stack ends the program with `python3: fatal error: the interpreter ran out of stack` (exit 1) |
+| Recursion | Python's own limit (1,000) | `RecursionError`. C-level recursion past the 2 MB WebAssembly stack (TypeScript: the worker's 32 MB stack in Node, the browser's own in a page) ends the program with `python3: fatal error: the interpreter ran out of stack` (exit 1) |
 | Files | the disk cap (`max_file_system_bytes`, 128 MB) | `OSError: [Errno 51] No space left on device` at the write that would pass it |
 | Open-file buffers | `max_memory` in all | `No space left on device` |
 | Output | `max_string_bytes` (32 MB), stdout and stderr together | the call ends with the usual "output too large" note |
@@ -127,7 +148,8 @@ or thread.
 - **The interpreter** is checked against pinned SHA-256 hashes every time it is loaded.
 - **Hostile programs** (a busy loop, a huge allocation, deep recursion, a file that fills the disk, symbolic link
   loops, `..` paths, closing or exhausting descriptors) fail inside Python or end the program; the tests in
-  `python/tests/test_python.py` and `tests/Topwater.Tests/PythonTests.cs` cover each.
+  `python/tests/test_python.py`, `tests/Topwater.Tests/PythonTests.cs` and `typescript/test/python.test.ts` cover
+  each.
 
 ## Mounts, web access, snapshots and recordings
 
@@ -137,14 +159,15 @@ fetched while the program waits, within the call's time; other commands say "run
 
 `python3` keeps nothing between calls, so snapshots and forks need nothing new: a fork keeps the command. A recording
 holds the program's HTTP exchanges with the others, and replays them; to replay calls that ran `python3`, enable it in
-the recording's `configure` callback (`recording.shell_at(n, configure=lambda s: s.allow_python())`).
+the recording's `configure` callback (`recording.shell_at(n, configure=lambda s: s.allow_python())`; TypeScript
+`recording.shellAt(n, s => void s.allowPython())`, after an `allowPython` with the same options has resolved once).
 
 ## Porting
 
 The Python port is the reference (`python/src/topwater/wasi.py`, `python/src/topwater/commands/python.py`). The C# port
 follows it in the add-on (`src/Topwater.Python/Wasi.cs` and `PythonCommand.cs`; the core keeps only the registrar,
-`Builtins/PythonCommand.cs`, so it never references Wasmtime), and TypeScript will (`wasi.ts`, `commands/python.ts`),
-mirrored in `tools/layout.json`. The contract:
+`Builtins/PythonCommand.cs`, so it never references Wasmtime), and TypeScript in `typescript/src/wasi.ts` and
+`typescript/src/commands/python.ts`, mirrored in `tools/layout.json`. The contract:
 
 - **Guest contract** (bashkit's): instantiate the module with only `wasi_snapshot_preview1` and `bashkit` imports,
   call `_initialize` if exported, then `bashkit_run() -> i32` (the exit status, unless `proc_exit` ends it first). argv
@@ -159,10 +182,14 @@ mirrored in `tools/layout.json`. The contract:
 - **Limits**: epoch interruption (10 ms ticks) for time, the store's memory limit, a 2 MB WebAssembly stack, the
   shell's output and disk limits. .NET checks the deadline and the call's cancellation (`timeout N`) at every tick
   through the store's epoch callback, since `timeout` ends a call by cancelling it.
-- **TypeScript** runs the guest synchronously, so a time limit on the main thread needs a worker: the guest runs in a
-  Worker, and its WASI calls reach the filesystem on the main thread through a `SharedArrayBuffer` and `Atomics.wait`;
-  the main thread can terminate the worker at the deadline. Browsers need cross-origin isolation (COOP/COEP headers)
-  for `SharedArrayBuffer`.
+- **TypeScript** can't interrupt WebAssembly on the thread running it, so each call's guest runs in a fresh Worker
+  (Node `worker_threads`, a Web Worker in browsers; plain JavaScript started from a string, so there is no file to
+  locate). Before compiling, `wasi.ts` rewrites the module's memory to be shared and to have `maxMemory` as its maximum
+  (JavaScript has no store limiter; a failed `memory.grow` is `MemoryError`). Every WASI import in the worker posts its
+  arguments to the shell's thread and waits with `Atomics.wait`; the shell's thread runs the same functions as
+  `wasi.py` on the shared memory, awaiting mount sources and the web session when it needs to, then wakes the worker.
+  Open files stay on the shell's thread, so they are saved even when the program is stopped. The shell's thread never
+  waits on the guest: at the deadline it terminates the worker.
 
 ## Credits
 
