@@ -291,6 +291,7 @@ async def _curl(ctx):
         output = outputs.pop(0) if outputs else ("", None)
         started = time.monotonic()
         tries = 0
+        waited = 0.0  # seconds slept between tries: a timer may wake a hair early, the waits still count in full
         while True:
             buffer = bytearray()
             code = redirects = 0
@@ -398,7 +399,7 @@ async def _curl(ctx):
                     why = "retryHttp"
                 elif retry_all and code:
                     why = "retryAll"
-            if why is None or retry_max_time > 0 and time.monotonic() - started >= retry_max_time:
+            if why is None or retry_max_time > 0 and max(time.monotonic() - started, waited) >= retry_max_time:
                 break
             wait = retry_delay if retry_delay > 0 else min(600, 1 << min(tries, 10))
             # an HTTP retry waits at least the Retry-After seconds (shortcut: the HTTP-date form is not read)
@@ -411,6 +412,7 @@ async def _curl(ctx):
             # the call's deadline cuts the wait short
             await asyncio.sleep(max(0.0, min(wait, sh._deadline - time.monotonic())))
             sh.check_deadline()
+            waited += wait
             tries += 1
         exit_code = code  # without --fail-early, the last URL's status
         fmt = last("w")

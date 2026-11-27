@@ -216,6 +216,7 @@ async function curl(ctx: CommandContext): Promise<number> {
   for (const raw of urls) {
     const output = outputs.shift() ?? { key: '', value: null };
     const started = ctx.shell.now();
+    let waited = 0; // seconds slept between tries: a timer may wake a hair early, the waits still count in full
     let code = 0, redirects = 0;
     let lastResponse: WebResponse | null = null;
     let vars: Record<string, string> = {};
@@ -318,7 +319,7 @@ async function curl(ctx: CommandContext): Promise<number> {
         : code === 7 && retryRefused ? 'retryRefused'
         : (code === 0 || code === 22) && [408, 429, 500, 502, 503, 504].includes(status) ? 'retryHttp'
         : retryAll && code !== 0 ? 'retryAll' : null;
-      if (why === null || retryMaxTime > 0 && (ctx.shell.now() - started) / 1000 >= retryMaxTime) break;
+      if (why === null || retryMaxTime > 0 && Math.max((ctx.shell.now() - started) / 1000, waited) >= retryMaxTime) break;
       let wait = retryDelay > 0 ? retryDelay : Math.min(600, 2 ** Math.min(tries, 10));
       // an HTTP retry waits at least the Retry-After seconds (shortcut: the HTTP-date form is not read)
       const after = why === 'retryHttp' && lr ? header(lr, 'Retry-After')?.trim() : undefined;
@@ -326,6 +327,7 @@ async function curl(ctx: CommandContext): Promise<number> {
       if (!has('s')) // -S brings back errors, not warnings
         ctx.stderr.write(curlWarning(M('retrying', { why: M(why), seconds: String(wait), left: String(retries - tries) })));
       await sleepFor(ctx, Math.min(wait, 86400) * 1000); // a longer wait never ends before the call does
+      waited += Math.min(wait, 86400);
     }
     exit = code; // without --fail-early, the last URL's status
     if (format !== null) ctx.stdout.write(writeOut(ctx, format, lastResponse, redirects, code, method, forced, vars));

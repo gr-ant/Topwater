@@ -234,6 +234,7 @@ internal static partial class Builtins
         {
             var output = outputs.Count > 0 ? outputs.Dequeue() : ('\0', null);
             var sinceFirst = ctx.Shell.StartTimer();
+            double waited = 0; // seconds slept between tries: a timer may wake a hair early, the waits still count in full
             int code = 0, redirects = 0;
             WebResponse? last = null;
             Dictionary<string, string> vars = [];
@@ -339,7 +340,7 @@ internal static partial class Builtins
                     : code == 7 && retryRefused ? "retryRefused"
                     : code is 0 or 22 && last?.Status is 408 or 429 or 500 or 502 or 503 or 504 ? "retryHttp"
                     : retryAll && code != 0 ? "retryAll" : null;
-                if (why == null || retryMaxTime > 0 && sinceFirst().TotalSeconds >= retryMaxTime) break;
+                if (why == null || retryMaxTime > 0 && Math.Max(sinceFirst().TotalSeconds, waited) >= retryMaxTime) break;
                 long wait = retryDelay > 0 ? retryDelay : Math.Min(600, 1L << (int)Math.Min(tries, 10));
                 // an HTTP retry waits at least the Retry-After seconds (shortcut: the HTTP-date form is not read)
                 if (why == "retryHttp" && long.TryParse(last?.Header("Retry-After"), NumberStyles.None, CultureInfo.InvariantCulture, out var after) && after > wait) wait = after;
@@ -347,6 +348,7 @@ internal static partial class Builtins
                     ctx.Stderr.Write(CurlWarning(CommandSpec.Message("curl", "retrying", ("why", CommandSpec.Message("curl", why)), ("seconds", wait.ToString(CultureInfo.InvariantCulture)),
                         ("left", (retries - tries).ToString(CultureInfo.InvariantCulture)))));
                 await ctx.Shell.SleepAsync(TimeSpan.FromSeconds(Math.Min(wait, 86400)), ctx.CancellationToken); // a longer wait never ends before the call does
+                waited += Math.Min(wait, 86400);
             }
             exit = code; // without --fail-early, the last URL's status
             if (Last('w') is { } format) ctx.Stdout.Write(WriteOut(ctx, format, last, redirects, code, method, forced, vars));
