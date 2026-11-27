@@ -1,0 +1,34 @@
+{
+  "$schema": "../command.schema.json",
+  "name": "mount",
+  "category": "file",
+  "summary": "List the sources mounted into the machine, show their pending changes, or list them again",
+  "version": "mount (Topwater)",
+  "help": [
+    "Usage: mount [-r|-c] [DIR]...",
+    "List the sources the host has mounted into the machine, one per line with its mode.",
+    "  -r, --refresh   list each DIR's source again (every mount without DIR)",
+    "  -c, --changes   show the changes waiting in each staged or live DIR (every mount without DIR)",
+    "",
+    "The host application decides what happens to the changes: nothing (ro), applied when it reviews them",
+    "(staged), or applied after every command (live)."
+  ],
+  "parser": "args",
+  "options": [
+    {"short": "r", "long": ["refresh"], "description": "list the source of each DIR again"},
+    {"short": "c", "long": ["changes"], "description": "show the changes waiting in each DIR"}
+  ],
+  "messages": {
+    "notMounted": "{dir}: not a mount point",
+    "unavailable": "unavailable: no source for {source}",
+    "notFetched": "not fetched from the mounted source yet (run the command again)",
+    "tooLarge": "File too large",
+    "conflict": "{path}: changed in the source since it was read; the change stays pending",
+    "failed": "{path}: {reason}; the change stays pending",
+    "timedOut": "the source did not answer in time",
+    "truncated": "{dir}: listing stopped at {limit} entries",
+    "skipped": "{dir}: skipped {count} entries with names that can't be files",
+    "replay": "{op} {path} is not in the Topwater recording"
+  },
+  "notes": "Topwater's own command: real mount lists kernel filesystems. The listing uses the same 'SOURCE on DIR type TYPE (OPTIONS)' shape."
+}

@@ -1,0 +1,526 @@
+{
+ "about": "Mounted sources, run by all three ports (python/tests/test_mounts.py, MountTests.cs, mounts.test.ts): a MemorySource holding `files` is mounted at /mnt/src in `mode`, then each step runs. run: a call's stdout, stderr and exit code. changes: the pending change set. apply / applySubset (indexes into the change set): the paths applied, the one it stopped at, and whether that was a conflict. source: the source's files afterwards. sourceSet / sourceRemove change the source from outside; discard drops the changes.",
+ "files": {
+  "notes/a.md": "hello\nworld\n",
+  "notes/b.md": "bee\n",
+  "docs/": null,
+  "docs/guide.txt": "read me\nhello again\n",
+  "top.txt": "top\n"
+ },
+ "cases": [
+  {
+   "name": "staged edits become a change set",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "mount",
+     "expect": {
+      "stdout": "memory:memory on /mnt/src type memory (rw,staged)\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "ls -l /mnt/src/notes; ls /mnt/src",
+     "expect": {
+      "stdout": "total 8\n-rw-r--r-- 1 agent agent 12 Jan  1  2026 a.md\n-rw-r--r-- 1 agent agent  4 Jan  1  2026 b.md\ndocs\nnotes\ntop.txt\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "cat /mnt/src/notes/a.md; grep -rn hello /mnt/src | sort",
+     "expect": {
+      "stdout": "hello\nworld\n/mnt/src/docs/guide.txt:2:hello again\n/mnt/src/notes/a.md:1:hello\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "sed -i 's/world/there/' /mnt/src/notes/a.md && echo more >> /mnt/src/top.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "mv /mnt/src/notes/b.md /mnt/src/docs/b.md; rm /mnt/src/docs/guide.txt; mkdir /mnt/src/new; printf 'n\\n' > /mnt/src/new/n.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "cp /mnt/src/top.txt /mnt/src/new/copy.txt; mount -c; cat /mnt/src/docs/b.md",
+     "expect": {
+      "stdout": "rename /mnt/src/notes/b.md -> /mnt/src/docs/b.md\nmkdir /mnt/src/new\nwrite /mnt/src/new/copy.txt\nwrite /mnt/src/new/n.txt\nwrite /mnt/src/notes/a.md\nwrite /mnt/src/top.txt\ndelete /mnt/src/docs/guide.txt\nbee\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "rename",
+       "path": "/notes/b.md",
+       "to": "/docs/b.md",
+       "version": "5"
+      },
+      {
+       "kind": "mkdir",
+       "path": "/new"
+      },
+      {
+       "kind": "write",
+       "path": "/new/copy.txt",
+       "content": "top\nmore\n"
+      },
+      {
+       "kind": "write",
+       "path": "/new/n.txt",
+       "content": "n\n"
+      },
+      {
+       "kind": "write",
+       "path": "/notes/a.md",
+       "version": "4",
+       "content": "hello\nthere\n"
+      },
+      {
+       "kind": "write",
+       "path": "/top.txt",
+       "version": "6",
+       "content": "top\nmore\n"
+      },
+      {
+       "kind": "delete",
+       "path": "/docs/guide.txt",
+       "version": "2"
+      }
+     ]
+    },
+    {
+     "sourceSet": [
+      "top.txt",
+      "changed elsewhere\n"
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/notes/b.md",
+       "/new",
+       "/new/copy.txt",
+       "/new/n.txt",
+       "/notes/a.md"
+      ],
+      "failed": "/top.txt",
+      "conflict": true
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "write",
+       "path": "/top.txt",
+       "version": "6",
+       "content": "top\nmore\n"
+      },
+      {
+       "kind": "delete",
+       "path": "/docs/guide.txt",
+       "version": "2"
+      }
+     ]
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/b.md": "bee\n",
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/new": null,
+      "/new/copy.txt": "top\nmore\n",
+      "/new/n.txt": "n\n",
+      "/notes": null,
+      "/notes/a.md": "hello\nthere\n",
+      "/top.txt": "changed elsewhere\n"
+     }
+    },
+    {
+     "run": "mount --changes /mnt/src",
+     "expect": {
+      "stdout": "write /mnt/src/top.txt\ndelete /mnt/src/docs/guide.txt\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "read-only refuses writes",
+   "mode": "read-only",
+   "steps": [
+    {
+     "run": "mount; ls -ld /mnt/src/docs /mnt/src/top.txt",
+     "expect": {
+      "stdout": "memory:memory on /mnt/src type memory (ro)\ndr-xr-xr-x 2 root root 4096 Jan  1  2026 /mnt/src/docs\n-r--r--r-- 1 root root    4 Jan  1  2026 /mnt/src/top.txt\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "echo x > /mnt/src/top.txt; echo $?; rm /mnt/src/top.txt; touch /mnt/src/new; mkdir /mnt/src/d",
+     "expect": {
+      "stdout": "1\n",
+      "stderr": "bash: line 1: /mnt/src/top.txt: Permission denied\nrm: cannot remove '/mnt/src/top.txt': Permission denied\ntouch: cannot touch '/mnt/src/new': Permission denied\nmkdir: cannot create directory ‘/mnt/src/d’: Permission denied\n",
+      "exitCode": 1
+     }
+    },
+    {
+     "run": "cat /mnt/src/top.txt; mount -c",
+     "expect": {
+      "stdout": "top\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
+    }
+   ]
+  },
+  {
+   "name": "live writes go through after each command",
+   "mode": "live",
+   "steps": [
+    {
+     "run": "echo new > /mnt/src/new.txt; cat /mnt/src/notes/b.md",
+     "expect": {
+      "stdout": "bee\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/new.txt": "new\n",
+      "/notes": null,
+      "/notes/a.md": "hello\nworld\n",
+      "/notes/b.md": "bee\n",
+      "/top.txt": "top\n"
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
+    },
+    {
+     "sourceSet": [
+      "notes/b.md",
+      "theirs\n"
+     ]
+    },
+    {
+     "run": "echo mine > /mnt/src/notes/b.md; echo done",
+     "expect": {
+      "stdout": "done\n",
+      "stderr": "mount: /mnt/src/notes/b.md: changed in the source since it was read; the change stays pending\nmount: /mnt/src/notes/b.md: changed in the source since it was read; the change stays pending\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "write",
+       "path": "/notes/b.md",
+       "version": "5",
+       "content": "mine\n"
+      }
+     ]
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/new.txt": "new\n",
+      "/notes": null,
+      "/notes/a.md": "hello\nworld\n",
+      "/notes/b.md": "theirs\n",
+      "/top.txt": "top\n"
+     }
+    }
+   ]
+  },
+  {
+   "name": "refresh keeps local changes",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "echo local >> /mnt/src/notes/a.md; cat /mnt/src/top.txt",
+     "expect": {
+      "stdout": "top\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "sourceSet": [
+      "fresh.txt",
+      "fresh\n"
+     ]
+    },
+    {
+     "sourceSet": [
+      "top.txt",
+      "top v2\n"
+     ]
+    },
+    {
+     "sourceRemove": "docs/guide.txt"
+    },
+    {
+     "run": "ls /mnt/src /mnt/src/docs; mount -r /mnt/src; ls /mnt/src /mnt/src/docs; cat /mnt/src/top.txt /mnt/src/notes/a.md",
+     "expect": {
+      "stdout": "/mnt/src:\ndocs\nnotes\ntop.txt\n\n/mnt/src/docs:\nguide.txt\n/mnt/src:\ndocs\nfresh.txt\nnotes\ntop.txt\n\n/mnt/src/docs:\ntop v2\nhello\nworld\nlocal\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "write",
+       "path": "/notes/a.md",
+       "version": "4",
+       "content": "hello\nworld\nlocal\n"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "discard shows the source again",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "rm -r /mnt/src/notes; echo x > /mnt/src/top.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "write",
+       "path": "/top.txt",
+       "version": "6",
+       "content": "x\n"
+      },
+      {
+       "kind": "delete",
+       "path": "/notes/b.md",
+       "version": "5"
+      },
+      {
+       "kind": "delete",
+       "path": "/notes/a.md",
+       "version": "4"
+      },
+      {
+       "kind": "delete",
+       "path": "/notes",
+       "version": "3"
+      }
+     ]
+    },
+    {
+     "discard": true
+    },
+    {
+     "run": "ls /mnt/src/notes; cat /mnt/src/top.txt; mount -c",
+     "expect": {
+      "stdout": "a.md\nb.md\ntop\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
+    }
+   ]
+  },
+  {
+   "name": "a read nothing foresaw is fetched after the command",
+   "mode": "read-only",
+   "steps": [
+    {
+     "run": "ln -s /mnt/src ~/m; grep -R hello ~ | sort; echo status ${PIPESTATUS[0]}",
+     "expect": {
+      "stdout": "status 2\n",
+      "stderr": "grep: /home/agent/m/docs/guide.txt: not fetched from the mounted source yet (run the command again)\ngrep: /home/agent/m/notes/a.md: not fetched from the mounted source yet (run the command again)\ngrep: /home/agent/m/notes/b.md: not fetched from the mounted source yet (run the command again)\ngrep: /home/agent/m/top.txt: not fetched from the mounted source yet (run the command again)\n",
+      "exitCode": 0
+     }
+    },
+    {
+     "run": "grep -R hello ~ | sort",
+     "expect": {
+      "stdout": "/home/agent/m/docs/guide.txt:hello again\n/home/agent/m/notes/a.md:hello\n",
+      "stderr": "",
+      "exitCode": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "replacing and renaming onto existing names",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "mv /mnt/src/notes/b.md /mnt/src/top.txt; echo fresh > /mnt/src/notes/b.md; rm -r /mnt/src/docs; mkdir /mnt/src/docs",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "delete",
+       "path": "/top.txt",
+       "version": "6"
+      },
+      {
+       "kind": "rename",
+       "path": "/notes/b.md",
+       "to": "/top.txt",
+       "version": "5"
+      },
+      {
+       "kind": "write",
+       "path": "/notes/b.md",
+       "content": "fresh\n"
+      },
+      {
+       "kind": "delete",
+       "path": "/docs/guide.txt",
+       "version": "2"
+      }
+     ]
+    },
+    {
+     "apply": true,
+     "expect": {
+      "applied": [
+       "/top.txt",
+       "/notes/b.md",
+       "/notes/b.md",
+       "/docs/guide.txt"
+      ],
+      "failed": null,
+      "conflict": false
+     }
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/notes": null,
+      "/notes/a.md": "hello\nworld\n",
+      "/notes/b.md": "fresh\n",
+      "/top.txt": "bee\n"
+     }
+    },
+    {
+     "changes": true,
+     "expect": []
+    }
+   ]
+  },
+  {
+   "name": "applying a subset",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "echo 1 > /mnt/src/one.txt; echo 2 > /mnt/src/two.txt; rm /mnt/src/top.txt",
+     "expect": {
+      "stdout": "",
+      "stderr": "",
+      "exitCode": 0
+     }
+    },
+    {
+     "applySubset": [
+      1
+     ],
+     "expect": {
+      "applied": [
+       "/two.txt"
+      ],
+      "failed": null,
+      "conflict": false
+     }
+    },
+    {
+     "changes": true,
+     "expect": [
+      {
+       "kind": "write",
+       "path": "/one.txt",
+       "content": "1\n"
+      },
+      {
+       "kind": "delete",
+       "path": "/top.txt",
+       "version": "6"
+      }
+     ]
+    },
+    {
+     "source": true,
+     "expect": {
+      "/docs": null,
+      "/docs/guide.txt": "read me\nhello again\n",
+      "/notes": null,
+      "/notes/a.md": "hello\nworld\n",
+      "/notes/b.md": "bee\n",
+      "/top.txt": "top\n",
+      "/two.txt": "2\n"
+     }
+    }
+   ]
+  },
+  {
+   "name": "mount errors",
+   "mode": "staged",
+   "steps": [
+    {
+     "run": "mount /tmp; echo $?; mount -c /mnt/src /nope; mount --bogus",
+     "expect": {
+      "stdout": "1\n",
+      "stderr": "mount: /tmp: not a mount point\nmount: /nope: not a mount point\nmount: unrecognized option '--bogus'\nTry 'mount --help' for more information.\n",
+      "exitCode": 1
+     }
+    }
+   ]
+  }
+ ]
+}

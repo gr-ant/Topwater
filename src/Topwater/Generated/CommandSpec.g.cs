@@ -833,6 +833,19 @@ internal static partial class CommandSpec
             ["tooFewX"] = "too few X's in template '{template}'",
         }),
         ["more"] = new("more", "View files (non-interactive: prints them)", null, "more from util-linux 2.39.3", true, false, true, "more", 1, "Try 'more --help' for more information.\n", null, Empty),
+        ["mount"] = new("mount", "List the sources mounted into the machine, show their pending changes, or list them again", "Usage: mount [-r|-c] [DIR]...\nList the sources the host has mounted into the machine, one per line with its mode.\n  -r, --refresh   list each DIR's source again (every mount without DIR)\n  -c, --changes   show the changes waiting in each staged or live DIR (every mount without DIR)\n\nThe host application decides what happens to the changes: nothing (ro), applied when it reviews them\n(staged), or applied after every command (live).\n", "mount (Topwater)", true, false, true, "mount", 1, "Try 'mount --help' for more information.\n", ("rc", "", "refresh=r,changes=c"), new Dictionary<string, string>
+        {
+            ["notMounted"] = "{dir}: not a mount point",
+            ["unavailable"] = "unavailable: no source for {source}",
+            ["notFetched"] = "not fetched from the mounted source yet (run the command again)",
+            ["tooLarge"] = "File too large",
+            ["conflict"] = "{path}: changed in the source since it was read; the change stays pending",
+            ["failed"] = "{path}: {reason}; the change stays pending",
+            ["timedOut"] = "the source did not answer in time",
+            ["truncated"] = "{dir}: listing stopped at {limit} entries",
+            ["skipped"] = "{dir}: skipped {count} entries with names that can't be files",
+            ["replay"] = "{op} {path} is not in the Topwater recording",
+        }),
         ["mv"] = new("mv", "Move or rename files", null, "mv (GNU coreutils) 9.4", true, false, true, "mv", 1, "Try 'mv --help' for more information.\n", ("finvZ", "", "force=f,dereference=L,no-dereference=P,recursive=r"), new Dictionary<string, string>
         {
             ["missingDestination"] = "missing destination file operand after {file:shell-always}",
