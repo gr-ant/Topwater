@@ -899,6 +899,7 @@ internal static partial class CommandSpec
             ["unavailable"] = "the Python add-on is not available: {reason}",
             ["fatal"] = "fatal error: {reason}",
             ["stackOverflow"] = "fatal error: the interpreter ran out of stack",
+            ["aborted"] = "fatal error: the program called abort()",
             ["stopped"] = "fatal error: the program was stopped at the time limit",
             ["writeBack"] = "could not save {file}, which the program left open: {errno}",
             ["httpFailed"] = "{method} {url}: {reason}",
