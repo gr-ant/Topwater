@@ -473,7 +473,6 @@ export class ExpansionPart {
 
 // ---------- helpers ----------
 
-// bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
 /** ${p-w} ${p:-w} ${p=w} ${p:=w} ${p+w} ${p:+w} ${p?w} ${p:?w}: the operator and the word; null for any other operator. */
 export function defaultOp(rest: string): [op: string, word: string] | null {
   const n = rest[0] === ':' ? 2 : 1;

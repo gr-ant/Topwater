@@ -1,3 +1,4 @@
+// Binary and checksums: cmp, xxd, hexdump, od, strings, base64, md5sum, sha1sum, sha256sum, sha512sum. They read true bytes. See docs/architecture.md.
 using System.Security.Cryptography;
 using System.Text;
 

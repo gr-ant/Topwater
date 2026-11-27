@@ -1,3 +1,4 @@
+// Text: grep, head, tail, wc, sort, uniq, cut, tr, tee, xargs, sed, nl, rev, tac, paste, comm, join, column, seq, diff. See docs/architecture.md.
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;

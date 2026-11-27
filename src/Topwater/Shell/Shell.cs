@@ -382,6 +382,7 @@ public sealed partial class Shell
     }
 
     internal void AllowWeb(WebSession session) => Web = session;
+
     public bool Unregister(string name)
     {
         using (Fs.AsRoot())

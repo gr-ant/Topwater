@@ -1,3 +1,4 @@
+// Binary and checksums: cmp, xxd, hexdump, od, strings, base64, md5sum, sha1sum, sha256sum, sha512sum. They read true bytes. See docs/architecture.md.
 import type { Shell } from '../shell.js';
 import { Args, specOf, specMessage, ShellError, UsageException, inputBytes, type CommandContext } from '../command.js';
 import { decodeBytes, fromBase64, toBase64, toHex } from '../bytes.js';

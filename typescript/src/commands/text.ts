@@ -1,3 +1,4 @@
+// Text: grep, head, tail, wc, sort, uniq, cut, tr, tee, xargs, sed, nl, rev, tac, paste, comm, join, column, seq, diff. See docs/architecture.md.
 import type { Shell } from '../shell.js';
 import { Args, specFormat, specOf, specMessage, ShellError, UsageException, quoteL, inputBytes, inputs, reason, splitLines, type CommandContext, type CommandHandler } from '../command.js';
 import { GETOPT } from '../spec.generated.js';

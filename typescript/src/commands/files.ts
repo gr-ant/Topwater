@@ -1,4 +1,4 @@
-// File commands: ls cat mkdir touch rm rmdir cp mv find tree stat du df chmod chown file mktemp realpath ...
+// Files: ls, cat, mkdir, touch, rm, rmdir, cp, mv, ln, find, tree, stat, du, df, chmod, chown, chgrp, less, more, file. See docs/architecture.md.
 import { Args, specOf, specMessage, ShellError, UsageException, inputs, splitLines, quote, quoteAlways, quoteL, reason, line, type CommandContext, type CommandHandler } from '../command.js';
 import { VirtualFileSystem, NO_SPACE, type FileStat } from '../vfs.js';
 import { ERRNO } from '../spec.generated.js';

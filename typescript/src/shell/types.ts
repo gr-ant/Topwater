@@ -32,6 +32,7 @@ export const DEFAULTS: ShellOptions = {
   maxCallDurationMs: 120_000, maxFileSystemBytes: 128 << 20, maxStringBytes: 32 << 20,
 };
 
+/** What one call returned. */
 export class ShellResult {
   constructor(
     public readonly stdout: string,

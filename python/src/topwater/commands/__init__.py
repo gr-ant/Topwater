@@ -190,6 +190,16 @@ def quote_l(s: str) -> str:
     return f"‘{s}’"
 
 
+class _Errors:
+    """An `on_error` callback for `inputs` that remembers whether any input failed."""
+
+    def __init__(self):
+        self.hit = False
+
+    def __call__(self):
+        self.hit = True
+
+
 def inputs(ctx, files, on_error, raw: bool = False, quiet: bool = False):
     """Yields (name, text) for each file argument (or stdin when there are none / "-"), reporting missing files
     (unless quiet). With raw, yields the bytes instead (exact for binary files)."""

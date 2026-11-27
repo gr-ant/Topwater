@@ -1,4 +1,4 @@
-"""Processes and time: ps, wait, jobs, kill, ulimit, umask, sleep, timeout, time. See docs/architecture.md."""
+"""Processes and time: ps, wait, jobs, disown, kill, ulimit, times, umask, sleep, timeout, time. See docs/architecture.md."""
 from __future__ import annotations
 
 import asyncio

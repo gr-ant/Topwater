@@ -38,7 +38,6 @@ public sealed partial class Shell
 
     // ---------- parameters ----------
 
-    /// <summary>An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1).</summary>
     /// <summary>${x@}: the text bash names is the whole word, or the whole double-quoted string the expansion is in.</summary>
     /// <param name="ends">A bad @ operator on a set variable ends the script (127); any other drops the rest of the line.</param>
     internal sealed class BadSubstitution(string text, bool ends = false) : FatalError(CommandSpec.Format(CommandSpec.Diagnostics.BadSubstitution, ("text", text)), 127)
@@ -73,6 +72,7 @@ public sealed partial class Shell
         }
     }
 
+    /// <summary>An expansion error that ends a non-interactive bash: the shell exits (a subshell with status 1).</summary>
     ExitSignal Fatal(Io io, string message, int code)
     {
         io.Err.WriteLine($"{ErrPrefix}{message}");

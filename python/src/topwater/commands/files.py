@@ -1,4 +1,4 @@
-"""Filesystem commands: ls cd-free file ops, find, tree."""
+"""Files: ls, cat, mkdir, touch, rm, rmdir, cp, mv, ln, find, tree, stat, du, df, chmod, chown, chgrp, less, more, file. See docs/architecture.md."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,7 @@ from .._spec import COMMANDS, ERRNO
 from ..convert import file_type
 from ..format import strftime
 from ..vfs import NO_SPACE, ShellError, UsageException, format_mode, get_name, get_parent, normalize, utc_now
-from . import Args, inputs, quote_always, spec_message, split_lines
+from . import Args, _Errors, inputs, quote_always, spec_message, split_lines
 from .find import _find
 from .system import parse_date
 
@@ -653,14 +653,6 @@ def _tree(ctx):
     out.append(f"\n{dirs} director{'y' if dirs == 1 else 'ies'}")
     out.append("\n" if a.has("d") else f", {files} file{'' if files == 1 else 's'}\n")
     ctx.stdout.write("".join(out))
-
-
-class _Errors:
-    def __init__(self):
-        self.hit = False
-
-    def __call__(self):
-        self.hit = True
 
 
 def chmod_parse(spec: str, mode: int, is_dir: bool, umask: int = 0) -> int:

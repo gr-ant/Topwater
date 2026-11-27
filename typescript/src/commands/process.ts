@@ -1,4 +1,4 @@
-// Processes and time: ps, wait, jobs, kill, ulimit, times, umask, sleep, timeout, time. See docs/architecture.md.
+// Processes and time: ps, wait, jobs, disown, kill, ulimit, times, umask, sleep, timeout, time. See docs/architecture.md.
 import type { Shell } from '../shell.js';
 import { specMessage, ShellError, UsageException, DeadlineExceeded, ioOf, line, cannotRun, type CommandContext, type CommandHandler, type Deadline } from '../command.js';
 import { ExitSignal } from '../shell/types.js';

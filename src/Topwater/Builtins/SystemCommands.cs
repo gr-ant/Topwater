@@ -21,6 +21,12 @@ internal static partial class Builtins
         ["mst"] = -7, ["mdt"] = -6, ["pst"] = -8, ["pdt"] = -7,
     };
 
+    /// <summary>
+    /// date -d, from GNU date's documented input formats: items in any order, each optional. Calendar dates
+    /// (2026-11-20, 11/20/2026, 20 Nov 2026, Nov 20, 2026, 20261120), times (13:30[:00[.5]], 1pm), zones
+    /// (UTC, Z, EST..., +0100, +01:00), a day of the week, today/now/yesterday/tomorrow, @EPOCH, and relative items
+    /// ("3 days ago", "next week", "+2 hours") applied last. Results are UTC, the simulated machine's zone.
+    /// </summary>
     internal static DateTime ParseDate(string text, DateTime now)
     {
         // a date past what DateTime holds (year 9999; GNU goes much further) is refused like any other bad date

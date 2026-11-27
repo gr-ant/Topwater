@@ -1,4 +1,4 @@
-"""Binary inspection: xxd, hexdump, od, strings. All of them read true bytes (text files: their UTF-8)."""
+"""Binary and checksums: cmp, xxd, hexdump, od, strings, base64, md5sum, sha1sum, sha256sum, sha512sum. They read true bytes. See docs/architecture.md."""
 from __future__ import annotations
 
 import base64

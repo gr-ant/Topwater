@@ -1,4 +1,4 @@
-"""Text tools: grep head tail wc sort uniq cut tr tee xargs sed."""
+"""Text: grep, head, tail, wc, sort, uniq, cut, tr, tee, xargs, sed, nl, rev, tac, paste, comm, join, column, seq, diff. See docs/architecture.md."""
 from __future__ import annotations
 
 import re
@@ -8,7 +8,7 @@ from .._spec import COMMANDS, GETOPT
 from ..format import printf_format, unescape
 from ..shell import CommandContext, TimedPattern, glob_to_regex
 from ..vfs import ShellError, UsageException, normalize
-from . import Args, inputs, spec_format, spec_message, split_lines, write_lines
+from . import Args, _Errors, inputs, spec_format, spec_message, split_lines, write_lines
 from .diff import _diff
 
 
@@ -312,14 +312,6 @@ def _parse_list(spec: str) -> tuple[set[int], float]:
         else:
             result.update(range(int(a) if a else 1, int(b) + 1))
     return result, open_from
-
-
-class _Errors:
-    def __init__(self):
-        self.hit = False
-
-    def __call__(self):
-        self.hit = True
 
 
 def _grep(ctx):

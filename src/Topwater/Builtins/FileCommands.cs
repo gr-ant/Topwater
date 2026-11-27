@@ -1,3 +1,4 @@
+// Files: ls, cat, mkdir, touch, rm, rmdir, cp, mv, ln, find, tree, stat, du, df, chmod, chown, chgrp, less, more, file. See docs/architecture.md.
 using System.Globalization;
 using System.Text;
 using System.Text.Json;

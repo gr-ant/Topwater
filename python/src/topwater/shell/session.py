@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from ..snapshot import ShellSnapshot
 
 
-# bash builtins that have no program file on a real system: listing them in /bin makes a model suspicious
 SNAPSHOT_SET_OPTIONS = ("errexit", "pipefail", "nounset", "noglob", "xtrace", "noclobber")  # the set -o options a shell can change
 
 

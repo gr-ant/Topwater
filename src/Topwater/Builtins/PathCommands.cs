@@ -1,4 +1,4 @@
-// Directories and path names: cd, pwd, pushd, popd, dirs, basename, dirname, realpath, mktemp. See docs/architecture.md.
+// Directories and path names: cd, pwd, pushd, popd, dirs, basename, dirname, realpath, readlink, mktemp. See docs/architecture.md.
 
 namespace Topwater;
 

@@ -25,7 +25,6 @@ import { SessionPart } from './shell/session.js';
 (globalThis as { process?: { getBuiltinModule?: (id: string) => { setFlagsFromString(f: string): void } | undefined } })
   .process?.getBuiltinModule?.('node:v8')?.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
 
-/** What one call returned. */
 const SYSTEM_DIRS = [
   '/boot', '/lib', '/lib64', '/media', '/mnt', '/proc/4242', '/proc/tty/driver', '/run/lock', '/sbin', '/srv', '/sys',
   '/etc/profile.d', '/etc/skel', '/usr/games', '/usr/include', '/usr/lib64', '/usr/libexec', '/usr/sbin', '/usr/src',
