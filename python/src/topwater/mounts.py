@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from ._spec import COMMANDS
+from .shell.types import _ControlFlow
 from .vfs import ShellError, _Dir, _File, get_parent, normalize, utc_now
 
 MODES = ("read-only", "staged", "live")
@@ -395,7 +396,7 @@ class _Mount:
         except MountConflictError as e:
             self.mounts.log(MountExchange(**x, error=str(e) or "conflict", conflict=True))
             raise
-        except (asyncio.CancelledError, KeyboardInterrupt):
+        except (asyncio.CancelledError, KeyboardInterrupt, _ControlFlow):
             raise
         except Exception as e:
             self.mounts.log(MountExchange(**x, error=str(e) or type(e).__name__))
@@ -540,7 +541,7 @@ class _Mount:
                 data = bytes(data)
                 if len(data) > room:
                     raise ShellError(_msg("tooLarge"))
-            except (asyncio.CancelledError, KeyboardInterrupt):
+            except (asyncio.CancelledError, KeyboardInterrupt, _ControlFlow):
                 raise
             except Exception as e:
                 self.failed[id(node)] = str(e) or type(e).__name__
@@ -688,7 +689,7 @@ class _Mount:
                     await self.call("mkdir", c.path)
             except MountConflictError as e:
                 return MountApplyResult(applied, c, str(e) or "conflict", True)
-            except (asyncio.CancelledError, KeyboardInterrupt):
+            except (asyncio.CancelledError, KeyboardInterrupt, _ControlFlow):
                 raise
             except Exception as e:
                 return MountApplyResult(applied, c, str(e) or type(e).__name__, False)
@@ -762,8 +763,10 @@ class Mounts:
     async def mount(self, path: str, source, mode: str = "read-only") -> None:
         if mode not in MODES:
             raise ValueError(f"{mode}: the mode is one of {', '.join(MODES)}")
+        if not path.startswith("/"):
+            raise ValueError(f"{path}: a mount point is an absolute path other than /")
         path = normalize("/", path)
-        if path == "/" or not path.startswith("/"):
+        if path == "/":
             raise ValueError(f"{path}: a mount point is an absolute path other than /")
         if mode != "read-only" and "write" not in (getattr(source, "capabilities", ()) or ()):
             raise ValueError(f"{path}: the source can't write, so it can only be mounted read-only")
@@ -820,7 +823,7 @@ class Mounts:
                 changes = m.pending
                 try:
                     entries = await m.list_tree()
-                except (asyncio.CancelledError, KeyboardInterrupt):
+                except (asyncio.CancelledError, KeyboardInterrupt, _ControlFlow):
                     raise
                 except Exception as e:
                     m.error = str(e) or type(e).__name__
@@ -839,7 +842,7 @@ class Mounts:
                 if part:
                     p = shell.resolve(part)
                     paths.append(shell.fs.real_path(p)[0] or p)
-        found = [(m, p) for p in paths if (m := self.find(p)) is not None]
+        found = [(m, p) for p in paths if (m := self.find(p)) is not None and shell.fs.exists(p, follow=False)]
         if not found and redirect is None:
             cwd = shell.fs.real_path(shell._cwd)[0] or shell._cwd
             found = [(m, cwd)] if (m := self.find(cwd)) is not None else []

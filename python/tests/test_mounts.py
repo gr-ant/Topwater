@@ -214,6 +214,30 @@ def test_snapshot_keeps_the_definition_and_the_changes_not_the_files():
     assert r.conflict and r.failed.path == "/b.txt"
 
 
+def test_a_command_in_a_mount_directory_fetches_it():
+    src = MemorySource({"d/a.txt": "hello\n"})
+    sh = Shell()
+    sh.mount("/mnt/s", src)
+    assert sh.run("cd /mnt/s/d && grep -r hello").stdout == "a.txt:hello\n"
+
+
+def test_a_relative_mount_point_is_refused():
+    with pytest.raises(ValueError):
+        Shell().mount("mnt/s", MemorySource())
+
+
+def test_the_time_limit_still_ends_the_call_during_a_refresh():
+    src = MemorySource({"a": "a"})
+    sh = Shell(max_call_duration=0.3)
+    sh.mount("/mnt/s", src)
+
+    async def hook(op, path):
+        await asyncio.sleep(1)
+    src.hook = hook
+    r = sh.run("mount -r /mnt/s; echo after")
+    assert "after" not in r.stdout
+
+
 def test_a_working_directory_inside_a_mount_survives_a_restore():
     src = MemorySource({"d/a.txt": "a\n"})
     sh = Shell()
