@@ -312,6 +312,16 @@ class Shell(SessionPart, ExecutionPart, RedirectionPart, InvocationPart, Variabl
         self._web = WebSession(policy)
         return self
 
+    def allow_python(self, options=None) -> "Shell":
+        """Gives the agent python3: CPython 3.14 compiled to WebAssembly, over this machine's files and nothing else
+        (docs/python.md). Needs the add-on: pip install 'topwater[python]'. options: a PythonOptions (memory, artifacts
+        folder, compile cache). Compiles the interpreter on the first use in a process (seconds) and raises
+        PythonUnavailable here when it can't run. HTTP from Python goes through allow_web's policy, or nowhere."""
+        from ..commands import python
+        python.register(self, options or python.PythonOptions())
+        self._builtin_names.add("python3")  # a built-in from spec/: its --help and --version are the spec's
+        return self
+
     def mount(self, path: str, source, mode: str = "read-only") -> None:
         """Shows `source` (a MountSource) as the directory `path`: mode "read-only", "staged" or "live" (docs/mounts.md).
         Lists the source before it returns. Synchronous wrapper for mount_async."""

@@ -13,8 +13,10 @@ from topwater import Shell  # noqa: E402
 
 SPEC_DIR = Path(__file__).resolve().parents[2] / "spec"
 DEFAULTS = json.loads((SPEC_DIR / "shell.json").read_text(encoding="utf-8"))["defaults"]
-SPEC = {c["name"]: c for c in (json.loads(f.read_text(encoding="utf-8")) for f in sorted((SPEC_DIR / "commands").glob("*.json")))
-        if "py" in c.get("ports", ["py"])}
+ALL = {c["name"]: c for c in (json.loads(f.read_text(encoding="utf-8")) for f in sorted((SPEC_DIR / "commands").glob("*.json")))
+       if "py" in c.get("ports", ["py"])}
+SPEC = {n: c for n, c in ALL.items() if "enabledBy" not in c}  # what every shell has
+OPT_IN = sorted(n for n, c in ALL.items() if "enabledBy" in c)  # what the host turns on (python3: allow_python)
 NAMES = sorted(SPEC)
 
 
@@ -41,6 +43,18 @@ def test_builtins_are_exactly_the_spec_commands():
     registered = set(Shell().commands)
     assert sorted(set(SPEC) - registered) == []  # in the spec, not registered
     assert sorted(registered - set(SPEC)) == []  # registered, not in the spec (add it, or mark the port missing)
+
+
+def test_opt_in_commands_exist_only_once_enabled():
+    assert [n for n in OPT_IN if n in Shell().commands] == []
+    assert OPT_IN == ["python3"]  # a new one needs its enabling call here
+    pytest.importorskip("wasmtime")
+    from topwater.commands.python import PythonOptions
+    sh = Shell().allow_python(PythonOptions(artifacts=str(SPEC_DIR.parent / "assets" / "python-wasm")))
+    c = ALL["python3"]
+    assert sh.commands["python3"].description == c["summary"]
+    assert sh.run("python3 --help").stdout == sh.run("python3 -h").stdout == _lines(c["help"], "python3")
+    assert sh.run("python3 --version").stdout == sh.run("python3 -V").stdout == c["version"] + "\n"
 
 
 @pytest.mark.parametrize("name", NAMES)

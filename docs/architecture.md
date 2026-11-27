@@ -559,3 +559,17 @@ The rest is hooks where each port already does the same job: a `loader` on the f
 copy), fetching around the handler call in `Invoke` and for `<` / `>>` redirections, listing restored mounts at the
 start of `Run`, the host API in the shell's registration section, and the `mounts` entries in the snapshot and
 recording formats.
+
+## 11. Python (opt-in)
+
+[`python3`](python.md) adds two files per port, listed in `tools/layout.json`. Python has them; the C# and TypeScript rows
+are `null` until those ports follow it ([python.md, "Porting"](python.md#porting)):
+
+| Role | C# | Python | TS |
+|---|---|---|---|
+| WASI preview1 host over the virtual filesystem, the HTTP bridge, loading and checking the artifacts (sections `artifacts and runtime`, `guest state`, `wasi functions`, `http bridge`, `running a call`) | `Wasi.cs` | `wasi.py` | `wasi.ts` |
+| The `python3` command and the host's options (registered after `mount`, and only once the host enables it) | `Builtins/PythonCommand.cs` | `commands/python.py` | `commands/python.ts` |
+
+The registry calls the command's registrar like any other; it registers nothing until the host calls
+`AllowPython` / `allow_python` / `allowPython`, which registers it with the spec's summary and help. The interpreter
+itself (`assets/python-wasm`) ships in a separate add-on package per language, never in the core one.

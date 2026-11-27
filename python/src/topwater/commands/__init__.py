@@ -222,7 +222,7 @@ def inputs(ctx, files, on_error, raw: bool = False, quiet: bool = False):
 
 
 def register_all(shell) -> None:
-    from . import archive, awk, binary, documents, files, gitrevisions, jq, mount, paths, process, scripting, system, text, variables, web
+    from . import archive, awk, binary, documents, files, gitrevisions, jq, mount, paths, process, python, scripting, system, text, variables, web
 
     scripting.register(shell)
     variables.register(shell)
@@ -239,6 +239,7 @@ def register_all(shell) -> None:
     web.register(shell)
     gitrevisions.register(shell)
     mount.register(shell)
+    python.register(shell)
 
 
 def exec_failure(sh, name: str) -> tuple[str, int] | None:
