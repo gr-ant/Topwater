@@ -91,7 +91,8 @@ class Canaries:
             if s:
                 text = text.replace(s, "<redacted>")
         text = text.replace(str(RUNDIR), "<host>/.run").replace(os.path.expanduser("~"), "<host home>")
-        return re.sub(r"keys/[0-9a-f]{64}", "keys/<id>", text)  # OpenRouter's key-management id in its error bodies
+        text = re.sub(r"keys/[0-9a-f]{64}", "keys/<id>", text)  # OpenRouter's key-management id in its error bodies
+        return re.sub(r"user_[0-9A-Za-z]{20,}", "user_<id>", text)  # and the account's user id
 
     def close(self):
         self.http.shutdown()

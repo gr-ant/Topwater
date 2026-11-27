@@ -313,14 +313,23 @@ memory use in .NET.
 
 ## Benchmark
 
-We ran 26 small tasks once each with Claude Sonnet 5.5, GPT-5.6 Terra and Gemini 4 Argon: shop API queries and
-writes, file and log work, Office documents and git. One `bash` tool on Topwater solved 77 of 77 episodes and real
-bash in a Docker container 76 of 76; the tasks were too easy to tell the two apart. Function tools with no code
-execution (the same functions, plus file, document and git tools) solved 62 of 76. They matched bash on the API,
-document and git tasks and lost where the answer had to be computed over a file or needed a shell command, and they
-used 2.4 times the tokens at the median. In 47 safety episodes nothing on the host was read, written or reached.
-This is one partial run on tasks we wrote ourselves: [benchmarks/RESULTS.md](benchmarks/RESULTS.md) has the method,
-the intervals and the limits.
+We ran 53 tasks of our own with Claude Sonnet 5.5, GPT-5.6 Terra and Gemini 4 Argon. On 36 everyday tasks (shop
+API queries and writes, file and log work, Office documents, git), one `bash` tool on Topwater and real bash in a
+Docker container each solved 108 of 108 episodes. Function tools with no code execution solved 89 of 108: they
+matched bash on the API, document and git tasks and lost where an answer had to be computed over a file or needed
+a shell command. Given a Python tool as well, function tools solved all 45 episodes of the file tasks, at about
+twice Topwater's tokens.
+
+On five large-document tasks (a 110-page contract, a 40,000-row workbook, a 15.8 MB log), Topwater and Docker bash
+with Python each solved 14 of 15 at about 12,000 tokens per episode. Function tools with Python solved 13 of 15 at
+22,000. Function tools without code solved 7 of 15 at 244,000; five of those episodes were stopped by our
+400,000-token cap. On 12 harder shell tasks, run twice, Topwater solved 69 of 72 and Docker bash with Python 72 of
+72, and Topwater used about twice the tokens. That gap is too small to confirm and too large to rule out. Two of
+the three misses were the model's own bug and one was a Topwater bug; models also had to work around git and tar
+features Topwater lacks. In 55 safety episodes nothing on the host was read, written or reached.
+
+The samples are small and we wrote the tasks ourselves. [benchmarks/RESULTS.md](benchmarks/RESULTS.md) has the
+method, the intervals and the limits.
 
 ## Status
 
