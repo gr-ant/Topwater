@@ -69,6 +69,11 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 - **Other per-command caps.** `git diff`, `show` and `apply` refuse a file of more than 1,000,000 lines, `git fsck`
   keeps at most 1,000,000 links, `to-markdown` refuses XML nested more than 256 deep, and a snapshot holds at most
   1,000 mounts.
+- **Loaded files.** An old JSON Lines recording may be at most `MaxFileSystemBytes` bytes, refused from its length
+  before it is read. The checkpoints of a `.topwater` recording may hold at most 4 times what one manifest may
+  (about 900 MB at the defaults), which bounds a load to a few seconds. In a container import, a tar metadata entry
+  (PAX header, GNU long name or link) may hold at most 1 MiB. Details in
+  [Loading untrusted files](snapshots-and-recordings.md#loading-untrusted-files) and [Containers](containers.md#safety).
 - **Disk.** `df` shows the cap as the disk's size and what the files really hold as used. Sizes are UTF-8
   bytes, the same as `ls -l`. A write that would go past the cap fails whole (nothing is written) and the call
   goes on; `rm` frees the space again. Your app's own writes (`WriteAllText`, `AddDocument`, ... outside a call)
