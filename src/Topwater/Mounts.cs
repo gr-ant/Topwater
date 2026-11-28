@@ -1412,7 +1412,8 @@ sealed class MountManager(Shell shell)
                 m.Stuck.Add(r.Failed);
                 var where = m.Machine(r.Failed.Path);
                 var reason = m.LastSafe ?? CommandSpec.Message("mount", "sourceFailed");
-                err.WriteLine("mount: " + (r.Conflict ? CommandSpec.Message("mount", "conflict", ("path", where), ("dir", m.Path))
+                err.WriteLine("mount: " + (m.Source!.Volatile ? CommandSpec.Message("mount", "refused", ("path", where), ("reason", r.Conflict ? "conflict" : reason)) // dropped below, not pending
+                    : r.Conflict ? CommandSpec.Message("mount", "conflict", ("path", where), ("dir", m.Path))
                     : CommandSpec.Message("mount", "failed", ("path", where), ("reason", reason), ("dir", m.Path))));
                 todo = [.. r.NotTried];
             }

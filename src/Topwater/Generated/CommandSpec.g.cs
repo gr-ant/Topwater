@@ -851,6 +851,7 @@ internal static partial class CommandSpec
             ["tooLarge"] = "File too large",
             ["conflict"] = "{path}: changed in the source since it was read; the change stays pending (mount --discard {dir} drops your changes)",
             ["failed"] = "{path}: {reason}; the change stays pending (mount --discard {dir} drops your changes)",
+            ["refused"] = "{path}: {reason}",
             ["timedOut"] = "the source did not answer in time",
             ["truncated"] = "{dir}: listing stopped at {limit} entries",
             ["skipped"] = "{dir}: skipped {count} entries with names that can't be files",

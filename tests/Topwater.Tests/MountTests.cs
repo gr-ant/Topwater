@@ -989,7 +989,7 @@ public class MountTests
         // a refused write is reported, and the file shows the source's content again
         r = await sh.RunAsync("echo x > /dev0/state; cat /dev0/state");
         Assert.Equal("opened\n", r.Stdout);
-        Assert.StartsWith("mount: /dev0/state: /state: read-only", r.Stderr);
+        Assert.Equal("mount: /dev0/state: /state: read-only\n", r.Stderr); // not pending: the source was listed again
         Assert.Empty(sh.PendingChanges("/dev0"));
         // changed from outside between calls: the next call lists it again
         dev.Inner.Set("state", "closed\n");
