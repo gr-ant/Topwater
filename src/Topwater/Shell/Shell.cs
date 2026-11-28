@@ -224,8 +224,9 @@ public sealed partial class Shell
     readonly MountManager _mounts;
     internal MountManager MountTable => _mounts;
 
-    // an upper bound on the characters variables hold, recounted exactly whenever it passes the limit
+    // an upper bound on the characters variables, aliases and traps hold, recounted exactly whenever it passes the limit
     long _variableChars;
+    long _historyChars;
 
     bool _inErrTrap, _inDebugTrap;
 
@@ -446,7 +447,7 @@ public sealed partial class Shell
 
     async Task<ShellResult> RunCallAsync(string commandLine, CancellationToken cancellationToken)
     {
-        _history.Add(commandLine);
+        AddHistory(commandLine);
         var stdout = new CappedWriter(this);
         var stderr = new CappedWriter(this);
         int code;
@@ -520,9 +521,25 @@ public sealed partial class Shell
         long max = Options.MaxStringBytes;
         if (adding > max) throw TooLarge($"{name}: value", "write the data to a file instead");
         if ((_variableChars += adding) <= max) return;
-        _variableChars = Environment.Sum(e => (long)e.Key.Length + e.Value.Length)
-            + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length)) - replacing + adding;
+        _variableChars = StoredChars() - replacing + adding;
         if (_variableChars > max) throw TooLarge("variables in total", "keep big data in files and unset variables you no longer need");
+    }
+
+    /// <summary>What variables, aliases and traps hold: they last the whole session, so they share one limit.</summary>
+    long StoredChars() =>
+        Environment.Sum(e => (long)e.Key.Length + e.Value.Length)
+        + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length))
+        + Aliases.Sum(e => (long)e.Key.Length + e.Value.Length)
+        + Traps.Sum(e => (long)e.Key.Length + e.Value.Length);
+
+    /// <summary>History keeps the newest lines within the string limit, as HISTSIZE drops the oldest in bash.</summary>
+    void AddHistory(string line)
+    {
+        _history.Add(line);
+        _historyChars += line.Length;
+        int drop = 0;
+        while (_historyChars > Options.MaxStringBytes && drop < _history.Count) _historyChars -= _history[drop++].Length;
+        _history.RemoveRange(0, drop);
     }
 
     /// <summary>When the running call must end (DateTime.MaxValue between calls): what bounds a mounted source's answers.</summary>

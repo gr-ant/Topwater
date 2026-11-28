@@ -225,7 +225,12 @@ internal static partial class Builtins
             foreach (var a in ctx.Args)
             {
                 int eq = a.IndexOf('=');
-                if (eq > 0) ctx.Shell.Aliases[a[..eq]] = a[(eq + 1)..];
+                if (eq > 0)
+                {
+                    var (name, value) = (a[..eq], a[(eq + 1)..]);
+                    ctx.Shell.ChargeVariable($"alias {name}", name.Length + value.Length, ctx.Shell.Aliases.TryGetValue(name, out var old) ? name.Length + old.Length : 0);
+                    ctx.Shell.Aliases[name] = value;
+                }
                 else if (ctx.Shell.Aliases.TryGetValue(a, out var v)) ctx.Stdout.WriteLine($"alias {a}='{v}'");
                 else { ctx.Stderr.WriteLine($"{ctx.Shell.ErrPrefix}alias: " + CommandSpec.Message("alias", "notFound", ("name", a))); code = 1; }
             }

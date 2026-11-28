@@ -107,6 +107,7 @@ public sealed partial class Shell
         Positional = [.. s.Positional];
         DirStack.Clear(); DirStack.AddRange(s.DirStack);
         _history.Clear(); _history.AddRange(s.History);
+        _historyChars = _history.Sum(h => (long)h.Length);
         LastExitCode = s.LastExitCode;
         _secondsBase = s.SecondsBase;
         _lastArg = s.LastArg;
@@ -118,7 +119,7 @@ public sealed partial class Shell
         // a deterministic shell picks up the time and random state where the snapshot left them; another keeps its own
         if (_virtualNow != null && s.Clock is { } clock) _virtualNow = clock;
         if (_random != null && s.Random is { } random) _random = random;
-        _variableChars = Environment.Sum(e => (long)e.Key.Length + e.Value.Length) + Arrays.Values.Sum(a => a.Items.Sum(e => (long)e.Key.Length + e.Value.Length));
+        _variableChars = StoredChars();
         _cwd = Fs.IsDirectory(s.Cwd) || _mounts.Find(s.Cwd) != null ? s.Cwd : "/"; // a mount is listed at the next call
     }
 }

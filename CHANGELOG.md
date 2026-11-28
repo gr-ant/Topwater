@@ -34,6 +34,14 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   (about 900 MB at the defaults), so 1,000 padded checkpoints are refused in about 5 s instead of read for 196 s.
 - **Container import caps tar headers.** A PAX extended header, GNU long name or long link larger than 1 MiB is refused
   before it is read; the tar reader held one whole in memory (a 256 MB header took up to 1.3 GB).
+- **jq sorting on deep values.** `sort`, `unique`, `group_by`, `unique_by`, `sort_by`, `min`, `max` and `del` on values
+  nested deeper than the stack allows now stop with `maximum nesting level exceeded`, as the other jq helpers do,
+  instead of `Failed to compare two elements in the array`. A test runs every recursive jq helper on a deep value from
+  a host thread with a 256 KB stack.
+- **Aliases, traps and history are bounded.** Aliases and traps now count in `variables in total` against
+  `MaxStringBytes`; filling them ends the call with the string-limit message and the next call runs. The history
+  keeps the newest lines that fit in `MaxStringBytes` and drops the oldest. Before, all three grew without bound for
+  the life of the session.
 
 ## 0.1.0-preview.5 (2026-11-27)
 

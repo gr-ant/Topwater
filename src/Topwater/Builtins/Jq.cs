@@ -165,6 +165,13 @@ internal static class Jq
 
     static readonly IComparer<object?> Order = Comparer<object?>.Create(Compare);
 
+    /// <summary>Sorts in jq's order. The sort wraps an exception from the comparer, which hid the depth limit on deep values.</summary>
+    static List<T> SortedBy<T>(IEnumerable<T> items, Func<T, object?> key)
+    {
+        try { return items.OrderBy(key, Order).ToList(); }
+        catch (InvalidOperationException e) when (e.InnerException is LimitExceeded limit) { throw limit; }
+    }
+
     // ---------- JSON input ----------
 
     /// <summary>Parses whitespace-separated JSON values (jq accepts several documents in one input).</summary>
@@ -1143,7 +1150,7 @@ internal static class Jq
 
     static object? DelPaths(object? v, IEnumerable<object?> paths)
     {
-        foreach (var p in paths.OrderBy(x => x, Order).Reverse()) v = DelPath(v, (List<object?>)p!);
+        foreach (var p in SortedBy(paths, x => x).AsEnumerable().Reverse()) v = DelPath(v, (List<object?>)p!);
         return v;
     }
 
@@ -1257,7 +1264,7 @@ internal static class Jq
     };
 
     static List<object?> Sorted(object? v) =>
-        v is List<object?> l ? l.OrderBy(x => x, Order).ToList() : throw new JqError($"{ErrType(v)} cannot be sorted, as it is not an array");
+        v is List<object?> l ? SortedBy(l, x => x) : throw new JqError($"{ErrType(v)} cannot be sorted, as it is not an array");
 
     static List<object?> Unique(List<object?> sorted) => sorted.Where((x, i) => i == 0 || Compare(sorted[i - 1], x) != 0).ToList();
 
@@ -1831,7 +1838,7 @@ internal static class Jq
                 case "sort_by/1" or "group_by/1" or "unique_by/1" or "min_by/1" or "max_by/1":
                 {
                     if (v is not List<object?> list) throw new JqError($"Cannot index {TypeName(v)} with number");
-                    var keyed = list.Select(x => (Key: (object?)Ev(a[0], x, vs).ToList(), Value: x)).OrderBy(kx => kx.Key, Order).ToList();
+                    var keyed = SortedBy(list.Select(x => (Key: (object?)Ev(a[0], x, vs).ToList(), Value: x)), kx => kx.Key);
                     if (name == "sort_by") yield return keyed.Select(kx => kx.Value).ToList();
                     else if (name is "min_by" or "max_by") yield return keyed.Count == 0 ? null : name == "min_by" ? keyed[0].Value : keyed[^1].Value;
                     else

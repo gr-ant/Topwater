@@ -159,7 +159,22 @@ public class LimitTests
     [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f 2>/dev/null", "output too large (limit 1 MB)")]
     [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f | wc -c", "output too large (limit 1 MB)")]
     [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; x=$(cat f)", "output too large (limit 1 MB)")]
+    // aliases and traps live as long as the session, as variables do, and were not counted at all
+    [InlineData("v=$(printf '%010000d' 0); v=$v$v$v$v$v$v$v$v$v$v; v=$v$v$v; for i in 1 2 3 4; do alias a$i=$v; done", "variables in total too large (limit 1 MB)")]
+    [InlineData("v=$(printf '%010000d' 0); v=$v$v$v$v$v$v$v$v$v$v; v=$v$v$v; trap \"$v\" USR1 USR2 HUP INT", "variables in total too large (limit 1 MB)")]
     public async Task StringRecipesStopAtTheConfiguredLimit(string cmd, string message) => await HitsStringLimit(SmallStrings(), cmd, message);
+
+    [Fact]
+    public async Task HistoryKeepsTheNewestLinesWithinTheStringLimit()
+    {
+        // every call's line was kept for good: calls of 300 KB each grew it without bound
+        var sh = SmallStrings();
+        var line = "#" + new string('x', 300_000);
+        for (int i = 0; i < 10; i++) await sh.RunAsync(line + i);
+        Assert.InRange(sh.History.Sum(h => (long)h.Length), 1, 1L << 20);
+        Assert.Equal(line + 9, sh.History[^1]);
+        Assert.Equal("ok\n", (await sh.RunAsync("echo ok")).Stdout);
+    }
 
     [Fact]
     public async Task HugePrintfWidthIsBounded() =>
@@ -333,6 +348,64 @@ public class LimitTests
         var (r, took) = await TestHost.Timed(() => new Shell().RunAsync(cmd));
         Assert.Equal(expected, r.Stdout);
         Assert.True(took < TimeSpan.FromSeconds(10), $"took {took}");
+    }
+
+    [Theory]
+    // jq helpers on a deep value, run from a host thread with a small stack
+    [InlineData("[$v, $v] | unique | length")]
+    [InlineData("[$v, $v] | sort | length")]
+    [InlineData("[$v, $v] | group_by(.) | length")]
+    [InlineData("[$v, $v] | unique_by(.) | length")]
+    [InlineData("[$v, [$v]] | min | length")]
+    [InlineData("{a: $v, b: $v} | to_entries | sort_by(.value) | length")]
+    [InlineData("$v | getpath([range(30000) | 0]) | length")]
+    [InlineData("[$v | tostream] | length")]
+    [InlineData("$v | [paths] | length")]
+    [InlineData("$v | [leaf_paths] | length")]
+    [InlineData("$v | [..] | length")]
+    [InlineData("$v | flatten | length")]
+    [InlineData("$v | walk(.) | length")]
+    [InlineData("$v | tojson | length")]
+    [InlineData("$v | tostring | length")]
+    [InlineData("$v | @json | length")]
+    [InlineData("$v | @text | length")]
+    [InlineData("$v | @base64 | length")]
+    [InlineData("$v | contains($v)")]
+    [InlineData("$v | inside($v)")]
+    [InlineData("$v | index([$v])")]
+    [InlineData("[$v] - [$v] | length")]
+    [InlineData("[$v] | indices([$v])")]
+    [InlineData("$v | . < $v")]
+    [InlineData("$v | . == $v")]
+    [InlineData("$v | del(.[0][0]) | length")]
+    [InlineData("$v | delpaths([[range(30000) | 0]]) | length")]
+    [InlineData("$v | to_entries | length")]
+    [InlineData("[$v] | add | length")]
+    [InlineData("$v + $v | length")]
+    [InlineData("{a: $v} * {a: $v} | length")]
+    [InlineData("{a: (reduce range(30000) as $i (null; {a: .}))} * {a: (reduce range(30000) as $i (null; {a: .}))} | length")]
+    [InlineData("$v | any")]
+    [InlineData("[$v] | in([$v])? // 1")]
+    [InlineData("$v | [path(..)] | length")]
+    [InlineData("$v | [recurse(.[]?)] | length")]
+    [InlineData("$v | tojson | fromjson | length")]
+    [InlineData("$v | ltrimstr($v)? | length")]
+    public void JqHelpersOnDeepValuesEndTheCallOnASmallStack(string filter)
+    {
+        var sh = new Shell();
+        var cmd = $"jq -n 'reduce range(30000) as $i (null; [.]) as $v | {filter}'";
+        ShellResult? r = null, after = null;
+        Exception? failed = null;
+        var thread = new Thread(() =>
+        {
+            try { r = sh.RunAsync(cmd).GetAwaiter().GetResult(); after = sh.RunAsync("echo ok").GetAwaiter().GetResult(); }
+            catch (Exception e) { failed = e; }
+        }, maxStackSize: 256 * 1024);
+        thread.Start();
+        thread.Join();
+        Assert.Null(failed);
+        if (r!.ExitCode != 0) Assert.Matches("maximum nesting level exceeded|recursion too deep|not supported|too many steps", r.Stderr);
+        Assert.Equal("ok\n", after!.Stdout);
     }
 
     [Theory]
