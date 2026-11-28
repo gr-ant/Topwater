@@ -266,6 +266,8 @@ class Config:
             while line.rstrip().endswith("\\") and i + 1 < len(self.lines) and not _in_comment(line):
                 i += 1
                 line = line.rstrip()[:-1] + self.lines[i]
+                if len(line) > 16 * 1024:  # joining is quadratic in the pieces: a 350 KB config ran far past the time limit
+                    raise GitError(msg("badConfig", line=str(at + 1)))
             i += 1
             s = line.strip()
             if not s or s[0] in "#;":

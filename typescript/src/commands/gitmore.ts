@@ -1181,6 +1181,7 @@ export function gitFsck(g: Git, args: string[]): number {
   if (names.length > MAX_WALK) throw fatal('tooLarge', { what: 'objects' });
   const kinds = new Map<string, string>();
   const links = new Map<string, [string, string][]>(); // object -> [kind, id][] it points to
+  let linked = 0; // all kept until the end: as many as objects one walk may visit
   for (const [sha, path] of names) {
     check();
     if (present.has(sha)) continue;
@@ -1202,6 +1203,7 @@ export function gitFsck(g: Git, args: string[]): number {
       g.err(subMsg('fsck', 'corrupt', { object: sha, path }) + '\n');
       code |= 1;
     }
+    if ((linked += links.get(sha)?.length ?? 0) > MAX_WALK) throw fatal('tooLarge', { what: 'the object graph' });
   }
   const roots: [string, string][] = [];
   for (const e of repo.index()) if (e.mode !== '160000') roots.push(['blob', e.sha]);

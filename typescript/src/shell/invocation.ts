@@ -175,7 +175,7 @@ export class InvocationPart {
       shell, name, args, stdout: io.out, stderr: io.err, fs: this.agentFs, fds: io.fds, stdin: io.stdin,
       get stdinText() { return stdinText ??= io.stdin.readAll(); },
       readLine: d => io.stdin.readLine(d),
-      resolvePath: p => this.resolvePath(p),
+      resolvePath: p => { this.checkTime(); return this.resolvePath(p); }, // a command given many paths stops at the call's time limit
       checkTime: () => this.checkTime(),
       remainingMs: () => this.remainingMs(),
       invoke: (argv, stdin = '') => this.invoke(argv, { stdin: new StdinBuffer(stdin), out: io.out, err: io.err }),

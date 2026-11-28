@@ -49,6 +49,7 @@ class FileStat:
 
 
 NO_SPACE = ERRNO["ENOSPC"]
+MAX_PATH = 4095  # Linux's PATH_MAX
 
 
 def utc_now() -> datetime:
@@ -261,6 +262,7 @@ class VirtualFileSystem:
         self._root = _Dir()
         self.capacity = 1 << 62  # most bytes the files may hold; the agent's writes past it fail (the Shell sets it)
         self.used_bytes = 0  # bytes all files hold now (what `df` reports as used)
+        self._entries = 0  # names made since the last count: an over-estimate, recounted when it passes the limit
         # context-local, so your app's own calls stay unrestricted while an agent command is awaiting
         self._run_as: ContextVar[str | None] = ContextVar("run_as", default=None)
         self._umask: ContextVar[int] = ContextVar("umask", default=0o022)
@@ -291,6 +293,26 @@ class VirtualFileSystem:
         if delta > 0 and self.run_as is not None and self.used_bytes + delta > self.capacity:
             raise ShellError(f"{path}: {NO_SPACE}")
         self.used_bytes += delta
+
+    def _reserve_entry(self, path: str) -> None:
+        """Counts a new name for the agent, refusing it past one per KB of capacity (at least 10,000): an empty file or
+        directory holds no bytes but costs the host memory."""
+        if self.run_as is None:
+            return
+        self._entries += 1
+        limit = max(10_000, self.capacity // 1024)
+        if self._entries <= limit:
+            return
+        count, todo = 0, [self._root]
+        while todo:
+            for child in todo.pop().children.values():
+                count += 1
+                if isinstance(child, _Dir):
+                    todo.append(child)
+        self._entries = count + 1
+        if self._entries > limit:
+            self._entries = count
+            raise ShellError(f"{path}: {NO_SPACE}")
 
     @property
     def _restricted(self) -> bool:
@@ -477,6 +499,7 @@ class VirtualFileSystem:
         if spot.node is not None:
             raise ShellError(f"{path}: {ERRNO['EEXIST']}")
         self._require(spot.parent, 2, path)
+        self._reserve_entry(path)
         spot.parent.children[spot.name] = _Link(target, owner=self.run_as or spot.parent.owner)
         spot.parent.modified = utc_now()
 
@@ -494,6 +517,7 @@ class VirtualFileSystem:
         self._require(spot.parent, 2, path)
         if self._restricted and node.owner != self.run_as and not self._allowed(node, 6):
             raise ShellError(f"{path}: {ERRNO['EPERM']}")
+        self._reserve_entry(path)
         node.nlink += 1
         spot.parent.children[spot.name] = node
         spot.parent.modified = utc_now()
@@ -563,6 +587,7 @@ class VirtualFileSystem:
             existing.modified = utc_now()
         else:
             self._require(d, 2, path)
+            self._reserve_entry(path)
             f = _File(owner=self.run_as or d.owner, mode=self._new_mode(0o666, DEFAULT_FILE_MODE))
             f.store(content, False, lambda delta: self._reserve(delta, path))
             d.children[name] = f
@@ -607,6 +632,8 @@ class VirtualFileSystem:
 
     def mkdir(self, path: str, parents: bool = False) -> None:
         path = normalize("/", path)
+        if len(path) > MAX_PATH:  # before making parents: each one is a walk of the whole path
+            raise ShellError(f"{path}: {ERRNO['ENAMETOOLONG']}")
         if self._find(path, follow=False) is not None:  # a symbolic link counts, even a dangling one
             if parents and self.is_dir(path):
                 return
@@ -619,6 +646,7 @@ class VirtualFileSystem:
         spot = self._place(path)
         d = spot.parent
         self._require(d, 2, path)
+        self._reserve_entry(path)
         d.children[spot.name] = _Dir(owner=self.run_as or d.owner, mode=self._new_mode(0o777, DEFAULT_DIR_MODE))
         d.modified = utc_now()
 
@@ -717,6 +745,7 @@ class VirtualFileSystem:
                 return None
             if tick:
                 tick()
+            self._reserve_entry(dest)
             if not self._permits(node, user, 5 if isinstance(node, _Dir) else 4):
                 if denied is None:
                     raise ShellError(f"{p}: {ERRNO['EACCES']}")

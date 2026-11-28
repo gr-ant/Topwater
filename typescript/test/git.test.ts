@@ -429,4 +429,40 @@ describe('git', () => {
       "git bisect run sh -c 'n=$(cat f); [ $n = 3 ] && exit 125; [ $n -lt 5 ]' | tail -1; git log -1 --format=%s");
     expect(r.stdout, r.stderr).toBe('bisect found first bad commit\nc5\n');
   });
+
+  it('config continuations and many packed branches honour the time limit', async () => {
+    // joining continued lines was quadratic, and branch -vv parsed packed-refs once per branch: both ran minutes
+    const sh = await repo({ maxCallDurationMs: 20_000 });
+    sh.fs.appendText('/tmp/w/.git/config', '[core]\n' + 'a = b\\\n'.repeat(50_000) + 'a = c\n');
+    let start = Date.now();
+    const r = await sh.run('git config core.a');
+    expect(Date.now() - start).toBeLessThan(10_000);
+    expect(r.stderr.startsWith('fatal: bad config line')).toBe(true);
+    sh.fs.writeText('/tmp/w/.git/config', '[core]\n\tbare = false\n');
+    const head = (await sh.run('git rev-parse HEAD')).stdout.trim();
+    sh.fs.writeText('/tmp/w/.git/packed-refs', Array.from({ length: 5000 }, (_, i) => `${head} refs/heads/b${String(i).padStart(4, '0')}\n`).join(''));
+    start = Date.now();
+    expect((await sh.run('git branch -vv | wc -l')).stdout).toBe('5001\n');
+    expect(Date.now() - start).toBeLessThan(15_000);
+  }, 60_000);
+
+  it('a commit naming one big blob at many paths stops at the time limit', async () => {
+    // every file of the diff was split into lines before the first was written, with no look at the clock
+    const sh = await repo({ maxCallDurationMs: 2000 });
+    const sha = put(sh, 'blob', Buffer.from('x\n'.repeat(300_000)));
+    const commit = commitWithTree(sh, Buffer.concat(Array.from({ length: 200 }, (_, i) => Buffer.concat([Buffer.from(`100644 p${String(i).padStart(3, '0')}\0`), Buffer.from(sha, 'hex')]))));
+    const start = Date.now();
+    const r = await sh.run(`git show ${commit} | wc -l`);
+    expect(Date.now() - start).toBeLessThan(10_000);
+    expect([1, 124]).toContain(r.exitCode);
+  }, 60_000);
+
+  it('fsck bounds the links it keeps', async () => {
+    // every tree's entries were kept until fsck finished, and the object cap did not count them
+    const sh = await repo();
+    for (const prefix of ['a', 'b'])
+      put(sh, 'tree', Buffer.concat(Array.from({ length: 600_000 }, (_, i) => Buffer.concat([Buffer.from(`100644 ${prefix}${String(i).padStart(7, '0')}\0`), Buffer.alloc(20)]))));
+    const r = await sh.run('git fsck');
+    expect([r.exitCode, r.stderr]).toEqual([128, "fatal: the object graph is too large for this machine's limits\n"]);
+  }, 60_000);
 });

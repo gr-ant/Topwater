@@ -315,6 +315,24 @@ def test_bad_mounts_in_a_snapshot_are_refused():
             ShellSnapshot.load(out.getvalue())
 
 
+def test_a_snapshot_holds_at_most_1000_mounts():
+    # the overlap check is quadratic: 20,000 mounts in a small file took minutes to load
+    import zipfile
+    from topwater.snapshot import ShellSnapshot, SnapshotError
+    buf = io.BytesIO()
+    Shell().save(buf)
+    z = zipfile.ZipFile(io.BytesIO(buf.getvalue()))
+    m = json.loads(z.read("manifest.json"))
+    m["version"] = 3
+    m["mounts"] = [{"path": f"/mnt/m{i}", "mode": "read-only", "type": "memory", "id": "memory"} for i in range(1001)]
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as w:
+        for n in z.namelist():
+            w.writestr(n, json.dumps(m) if n == "manifest.json" else z.read(n))
+    with pytest.raises(SnapshotError, match="more than 1000 mounts"):
+        ShellSnapshot.load(out.getvalue())
+
+
 def test_a_recording_replays_without_the_source():
     src = MemorySource({"a.txt": "a\n", "d/b.txt": "b\n"})
     sh = Shell()

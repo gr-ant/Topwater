@@ -331,6 +331,8 @@ export class Config {
       while (line.trimEnd().endsWith('\\') && i + 1 < this.lines.length && !inComment(line)) {
         i++;
         line = line.trimEnd().slice(0, -1) + this.lines[i];
+        // joining is quadratic in the pieces: a 350 KB config ran far past the time limit
+        if (line.length > 16 * 1024) throw new GitError(msg('badConfig', { line: String(at + 1) }));
       }
       i++;
       let s = line.trim();

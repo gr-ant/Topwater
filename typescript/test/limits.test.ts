@@ -218,3 +218,28 @@ describe('runaway constructs', () => {
     }
   });
 });
+
+describe('names and paths', () => {
+  it('mkdir -p of a path longer than Linux allows fails quickly', async () => {
+    // each parent was a walk of the whole path: a 10,000-deep path ran far past the time limit
+    const start = Date.now();
+    const r = await new Shell({ maxCallDurationMs: 5000 }).run("mkdir -p $(printf 'd/%.0s' $(seq 10000)); echo $?");
+    expect(Date.now() - start).toBeLessThan(5000);
+    expect(r.stdout).toBe('1\n');
+    expect(r.stderr.endsWith('File name too long\n')).toBe(true);
+  });
+  it('empty files and directories count against the disk', async () => {
+    // they hold no bytes, but each costs the host memory, and calls add up
+    const sh = new Shell({ maxFileSystemBytes: 16 << 20 }); // 16,384 names
+    let r = await sh.run('mkdir d && cd d && seq 20000 | xargs touch; echo $?; ls | wc -l');
+    const [code, count] = r.stdout.split('\n');
+    expect(code).toBe('123');
+    expect(Number(count)).toBeGreaterThanOrEqual(15_000);
+    expect(Number(count)).toBeLessThanOrEqual(16_384);
+    expect(r.stderr).toContain('No space left on device');
+    r = await sh.run('mkdir x; ln -s a y; cp -r /home/agent/d /tmp/e; echo $?; cd; rm -rf d; mkdir z && echo made');
+    expect(r.stdout).toContain('1\nmade\n');
+  }, 30_000);
+  // one touch of 600,000 names took 18 s
+  it('a command given many paths stops at the time limit', () => hitsTimeLimit(quick(3), 'mkdir d && cd d && seq 600000 | xargs touch', 3), 30_000);
+});

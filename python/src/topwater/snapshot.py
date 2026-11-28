@@ -618,6 +618,8 @@ def _read_mounts(raw, zf: zipfile.ZipFile, names: set, o: dict) -> list[dict]:
     for d in _list(raw, "mounts"):
         if not isinstance(d, dict):
             raise SnapshotError("a mount is not an object")
+        if len(out) >= 1000:  # the overlap check is quadratic: 20,000 mounts in a small file took minutes to load
+            raise SnapshotError("more than 1000 mounts")
         path = canonical(d.get("path"), "mount path")
         if any(path == x["path"] or path.startswith(x["path"] + "/") or x["path"].startswith(path + "/") for x in out):
             raise SnapshotError(f"{path}: mounts overlap")

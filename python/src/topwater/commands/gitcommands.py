@@ -659,7 +659,15 @@ def commit_diff(g: Git, repo: Repo, c: Commit, o: Opts, specs, merges: bool = Fa
     a = tree_files(repo, c.parents[0]) if c.parents else {}
     b = repo.flatten(c.tree)
     buf: list[str] = []
-    write_diff(g, repo, a, b, o, specs, out=buf.append)
+    size = 0
+
+    def out(s: str) -> None:  # held whole before it is written: within what one output may hold, and the call's time
+        nonlocal size
+        size += len(s)
+        if size > g.ctx.shell.max_string_bytes:
+            raise g.ctx.shell.too_large("output", "limit the diff to some paths, or write it to a file")
+        buf.append(s)
+    write_diff(g, repo, a, b, o, specs, out=out)
     return "".join(buf)
 
 

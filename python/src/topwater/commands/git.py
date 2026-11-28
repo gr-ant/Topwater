@@ -134,6 +134,7 @@ class Repo:
         self._cache = ObjectCache()  # objects, commits and pack delta bases, under one byte budget
         self._packs: list[Pack] | None = None
         self._config = None
+        self._packed_refs = None
         self._ignores: dict[str, IgnoreRules | None] = {}
         self.prefix = ""  # the cwd below the top ("sub/dir/"), for relative paths
 
@@ -327,9 +328,13 @@ class Repo:
         return self.packed_refs().get(name)
 
     def packed_refs(self) -> dict[str, str]:
-        text = self.gtext("packed-refs") or ""
+        """Parsed again only when its bytes change: read_ref falls back to it for every ref (5,000 branches ran minutes)."""
+        raw = self.gread("packed-refs") or b""
+        if self._packed_refs is not None and self._packed_refs[0] == raw:
+            return self._packed_refs[1]
         out = {}
-        for line in text.split("\n"):
+        self._packed_refs = (raw, out)
+        for line in raw.decode("utf-8", "replace").split("\n"):
             parts = line.split(" ")
             if len(parts) == 2 and re.fullmatch(r"[0-9a-f]{40}", parts[0]) and packed_name_ok(parts[1]):
                 out[parts[1]] = parts[0]
