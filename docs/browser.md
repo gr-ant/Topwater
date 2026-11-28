@@ -172,10 +172,12 @@ What the source enforces, whatever the agent writes and whatever the page does:
   Playwright's first line when it is plain words, never a stack, a path or a URL from Playwright.
 - **Bounded.** Elements, `text.md`, `tree.txt`, the screenshot, values, names (1,000 characters), uploads,
   `fields.json` (1,000,000 bytes, 8 levels), the page HTML read for `text.md` (5,000,000 characters) and the lines of
-  the accessibility snapshot (50,000) all have limits. Every Playwright call has a timeout (`ActionTimeout`, or 2 s to
-  read a fact), the wait ends at the call's time limit, one browser operation runs at a time and the next waits
-  until the last really ended, and a navigation that doesn't answer is aborted after `ActionTimeout`, since
-  Playwright can't look into a page while its document loads. A page that never settles costs `SettleTimeout`.
+  the accessibility snapshot (50,000) all have limits, applied again to what the source's scripts return. Every
+  Playwright call has a timeout (`ActionTimeout`, or 2 s to read a fact), the wait ends at the call's time limit, one
+  browser operation runs at a time and the next waits until the last really ended (or fails at once when the last
+  outlived its own limit), the page keeps at most one window it opened, and a navigation that doesn't answer is
+  aborted after `ActionTimeout`, since Playwright can't look into a page while its document loads. A page that never
+  settles costs `SettleTimeout`.
 
 ## What it can't enforce
 
@@ -188,6 +190,12 @@ What the source enforces, whatever the agent writes and whatever the page does:
   Topwater doesn't cap, can send what the page holds to any allowed site, and could exploit a browser bug. Allow
   only sites you trust, keep Playwright (and so Chromium) up to date, and run the browser in a container if the sites
   are not yours.
+- **What the page holds reaches your process.** Playwright hands back the accessibility snapshot and what the source's
+  scripts read whole, before the limits above cut them, and the page's own scripts can replace what those scripts
+  call: a page holding hundreds of megabytes of text costs your process that much memory for a moment. Cap the
+  process's memory (a container) if the sites are not yours.
+- **A page whose script never yields** leaves the mount unavailable (`the page is not responding`) until it yields or
+  you dispose the source and mount a new one; the agent's other commands go on.
 - **The session is real.** The agent can't read cookies, but it acts with whatever session the context has: if your
   code signed in, the agent acts as that user.
 - **Read, then send.** As with `curl`, the agent can carry what it read on one allowed site to another that accepts
