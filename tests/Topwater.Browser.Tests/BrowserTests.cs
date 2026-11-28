@@ -328,6 +328,24 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
     }
 
     [ChromiumFact]
+    public async Task APageCannotLiftTheLimitsByReplacingBuiltIns()
+    {
+        // the source's scripts run beside the page's, which can replace what they call
+        var site = new Site().Page("https://app.test/", """
+            <title>Tamper</title><form aria-label="F"><textarea aria-label="Note"></textarea></form>
+            <script>
+            document.querySelector('textarea').value = 'x'.repeat(200000);
+            String.prototype.slice = function () { return String(this) };
+            </script>
+            """);
+        var options = Options(site);
+        options = new() { Policy = options.Policy, MaxValueLength = 1000, MaxTextBytes = 50_000 };
+        var (sh, _) = await Open(site, options: options);
+        Assert.Equal("1001\n", await Out(sh, "wc -c < /web/elements/textbox-note/value")); // and a newline
+        Assert.True(int.Parse(await Out(sh, "wc -c < /web/forms/f/fields.json")) < 1100);
+    }
+
+    [ChromiumFact]
     public async Task ANewWindowIsShownInThePageAndDownloadsAreBlocked()
     {
         var site = new Site()

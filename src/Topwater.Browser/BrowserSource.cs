@@ -300,8 +300,8 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         List<string> forms = [], files = [];
         try
         {
-            forms = [.. (await _page.Locator("form").EvaluateAllAsync<string[]>(FormNamesJs, MaxInputs)).Select(n => PageTree.Slug(n) is { Length: > 0 } s ? s : "form")];
-            files = [.. await _page.Locator("input[type=file]").EvaluateAllAsync<string[]>(FileNamesJs, MaxInputs)];
+            forms = [.. (await _page.Locator("form").EvaluateAllAsync<string[]>(FormNamesJs, MaxInputs)).Take(MaxInputs).Select(n => PageTree.Slug(n) is { Length: > 0 } s ? s : "form")];
+            files = [.. (await _page.Locator("input[type=file]").EvaluateAllAsync<string[]>(FileNamesJs, MaxInputs)).Take(MaxInputs).Select(l => Cut(l, 200))];
         }
         catch (PlaywrightException) { }
         var tree = new PageTree(PageTree.Parse(yaml), _options.MaxElements) { Forms = ConnectorCommon.Unique(forms) };
@@ -398,7 +398,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             if (parts[3] == "fields.json")
             {
                 var o = new JsonObject();
-                foreach (var f in await FieldsAsync(form)) o[f.Key] = f.Value.ValueKind == JsonValueKind.True ? true : f.Value.ValueKind == JsonValueKind.False ? false : f.Value.ToString();
+                foreach (var f in await FieldsAsync(form)) o[f.Key] = f.Value.ValueKind == JsonValueKind.True ? true : f.Value.ValueKind == JsonValueKind.False ? false : Cut(f.Value.ToString(), _options.MaxValueLength);
                 return Text(o.ToJsonString(new JsonSerializerOptions(PageTree.Json.Options) { WriteIndented = true }));
             }
         }
@@ -415,7 +415,8 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             case "disabled": return await Locate(e).IsDisabledAsync(new() { Timeout = ReadMs }) ? "1" : "0";
         }
         var info = await Locate(e).EvaluateAsync<JsonElement>(InfoJs, _options.MaxValueLength, new() { Timeout = ReadMs });
-        return file switch
+        // the limits are applied here again: the script runs beside the page's, which can replace what it calls (String.prototype.slice)
+        return Cut(file switch
         {
             "options" => string.Join("\n", info.GetProperty("options") is { ValueKind: JsonValueKind.Array } a
                 ? a.EnumerateArray().Select(x => x.GetString() ?? "") : _tree.OptionsOf(e.Node)),
@@ -424,7 +425,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             "value" => (e.Password && info.GetProperty("value").GetString() is { Length: > 0 }) ? "********" : info.GetProperty("value").GetString() ?? "",
             "href" => info.GetProperty("href").GetString() ?? "",
             _ => info.GetProperty("description").GetString() ?? "",
-        };
+        }, _options.MaxValueLength);
     }
 
     // what an element says about itself, in one call
@@ -471,6 +472,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     {
         var html = await _page.EvaluateAsync<string>("m => document.documentElement ? document.documentElement.outerHTML.slice(0, m) : ''", MaxHtmlChars)
             .WaitAsync(_options.ActionTimeout);
+        html = Cut(html, MaxHtmlChars);
         string md;
         try { md = MarkdownConverter.ToMarkdown(Encoding.UTF8.GetBytes(html), "page.html"); }
         catch (ShellException) { md = ""; }
@@ -486,8 +488,8 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     async Task<List<(string Key, int Index, string Type, JsonElement Value)>> FieldsAsync(int form)
     {
         var raw = await Form(form).EvaluateAsync<JsonElement>(FieldsJs, _options.MaxValueLength, new() { Timeout = ReadMs });
-        var items = raw.EnumerateArray().ToList();
-        var keys = ConnectorCommon.Unique(items.Select(i => i.GetProperty("label").GetString() is { Length: > 0 } l ? l : "field"));
+        var items = raw.EnumerateArray().Take(500).ToList();
+        var keys = ConnectorCommon.Unique(items.Select(i => i.GetProperty("label").GetString() is { Length: > 0 } l ? Cut(l, 200) : "field"));
         return [.. items.Select((i, k) => (keys[k], i.GetProperty("k").GetInt32(), i.GetProperty("type").GetString() ?? "", i.GetProperty("v")))];
     }
 
