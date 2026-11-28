@@ -216,6 +216,37 @@ public class BashCompatArchives
         Assert.False(sh.Fs.Exists("/tmp/w/x/z"));
     }
 
+    [Fact]
+    public async Task ZipEntryCountIsCheckedBeforeTheDirectoryIsRead()
+    {
+        // a zip of ~47-byte directory records fills the disk with millions of entries, each an object of the zip reader
+        var sh = await Fresh(new ShellOptions { MaxExtractEntries = 50 });
+        var many = new MemoryStream();
+        using (var z = new ZipArchive(many, ZipArchiveMode.Create, leaveOpen: true))
+            for (int i = 0; i < 60; i++) z.CreateEntry($"f{i}");
+        sh.Fs.WriteAllBytes("/tmp/w/many.zip", many.ToArray());
+        // one stored entry, and a zip64 end record that states a billion
+        var w = new BinaryWriter(new MemoryStream());
+        w.Write(0x04034b50); w.Write((short)20); w.Write(new byte[20]); w.Write((short)1); w.Write((short)0); w.Write((byte)'a');
+        long cd = w.BaseStream.Position;
+        w.Write(0x02014b50); w.Write((short)20); w.Write((short)20); w.Write(new byte[20]); w.Write((short)1); w.Write(new byte[12]); w.Write(0); w.Write((byte)'a');
+        long z64 = w.BaseStream.Position;
+        w.Write(0x06064b50); w.Write(44L); w.Write((short)45); w.Write((short)45); w.Write(0L); w.Write(1_000_000_000L); w.Write(1_000_000_000L); w.Write(z64 - cd); w.Write(cd);
+        w.Write(0x07064b50); w.Write(0); w.Write(z64); w.Write(1);
+        w.Write(0x06054b50); w.Write(0); w.Write((short)-1); w.Write((short)-1); w.Write(-1); w.Write(-1); w.Write((short)0);
+        sh.Fs.WriteAllBytes("/tmp/w/billion.zip", ((MemoryStream)w.BaseStream).ToArray());
+        var limit = "archive exceeds the 50-entry extraction limit; stopping\n";
+        foreach (var (cmd, code, message) in new[]
+        {
+            ("unzip -l billion.zip", 1, $"unzip: {limit}"),
+            ("echo x > new; zip -q many.zip new", 4, $"zip: {limit}"),
+        })
+        {
+            var r = await sh.RunAsync(cmd);
+            Assert.Equal((code, message), (r.ExitCode, r.Stderr));
+        }
+    }
+
     static byte[] Gzip(byte[] data)
     {
         var ms = new MemoryStream();

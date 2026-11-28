@@ -41,6 +41,15 @@ internal static partial class Builtins
             }
             return ms.ToArray();
         }
+
+        /// <summary>Refuses a zip that states or holds more entries than one extraction may have, before the zip
+        /// reader builds an object for every entry (a disk of 47-byte directory records holds millions).</summary>
+        public void ZipEntries(MemoryStream zip)
+        {
+            if (ShellSnapshot.ZipEntryCount(zip, o.MaxExtractEntries) <= o.MaxExtractEntries) return;
+            _entries = 0;
+            Entry();
+        }
     }
 
     static bool IsGzip(byte[] d) => d.Length >= 2 && d[0] == 0x1f && d[1] == 0x8b;
@@ -612,6 +621,8 @@ internal static partial class Builtins
         var ms = new MemoryStream();
         if (archivePath != null && fs.IsFile(archivePath)) ms.Write(fs.ReadAllBytes(archivePath));
         int added = 0;
+        ms.Position = 0;
+        new ExtractBudget(ctx.Shell.Options, 4).ZipEntries(ms);
         try
         {
             using var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true);
@@ -686,8 +697,11 @@ internal static partial class Builtins
             return 9;
         }
         bool quiet = a.Has('q'), pipe = a.Has('p');
+        var budget = new ExtractBudget(ctx.Shell.Options, 1);
+        var data = new MemoryStream(fs.ReadAllBytes(path));
+        budget.ZipEntries(data);
         ZipArchive zip;
-        try { zip = new ZipArchive(new MemoryStream(fs.ReadAllBytes(path)), ZipArchiveMode.Read); }
+        try { zip = new ZipArchive(data, ZipArchiveMode.Read); }
         catch (InvalidDataException)
         {
             if (!quiet) ctx.Stdout.WriteLine($"Archive:  {name}");
@@ -706,7 +720,6 @@ internal static partial class Builtins
             for (int i = 0; i < patterns.Count; i++) if (patterns[i].IsMatch(e.FullName)) any = found[i] = true;
             return any;
         }
-        var budget = new ExtractBudget(ctx.Shell.Options, 1);
         int code = 0;
         if (a.Has('l'))
         {
