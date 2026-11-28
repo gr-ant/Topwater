@@ -1229,6 +1229,7 @@ internal static partial class CommandSpec
         internal const string ENOSPC = "No space left on device";
         internal const string EBADF = "Bad file descriptor";
         internal const string ELOOP = "Too many levels of symbolic links";
+        internal const string ENAMETOOLONG = "File name too long";
     }
     internal static class Diagnostics
     {

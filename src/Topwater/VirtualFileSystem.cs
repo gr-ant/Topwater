@@ -143,6 +143,25 @@ public sealed class VirtualFileSystem
 
     internal const string NoSpace = CommandSpec.Errno.ENOSPC;
 
+    /// <summary>The longest real path a directory may have, as Linux's PATH_MAX. It bounds how deep a tree goes: rm -r, cp -r,
+    /// snapshots and the change tracker walk trees by recursion, and mv could otherwise nest one below any path.</summary>
+    internal const int MaxPath = 4095;
+
+    /// <summary>Refuses a directory (or <paramref name="tree"/> moved there) whose real path, or a path below it, would pass <see cref="MaxPath"/>.</summary>
+    static void RequireDepth(string real, Node? tree, string path)
+    {
+        long longest = real.Length;
+        var todo = new Stack<(Dir Dir, long Length)>();
+        if (tree is Dir top) todo.Push((top, longest));
+        while (todo.Count > 0 && longest <= MaxPath)
+        {
+            var (d, length) = todo.Pop();
+            foreach (var (name, child) in d.Children)
+                if (child is Dir sub) { longest = Math.Max(longest, length + 1 + name.Length); todo.Push((sub, length + 1 + name.Length)); }
+        }
+        if (longest > MaxPath) throw new ShellException($"{path}: {CommandSpec.Errno.ENAMETOOLONG}");
+    }
+
     static long TreeSize(Node n) => n switch { FileNode f => f.Size, Dir d => d.Children.Values.Sum(TreeSize), _ => 0 };
 
     /// <summary>Drops one name of each node in a tree being removed; returns the bytes freed (a file goes with its last name).</summary>
@@ -479,6 +498,7 @@ public sealed class VirtualFileSystem
     public void CreateDirectory(string path, bool parents = false)
     {
         path = Normalize("/", path);
+        RequireDepth(path, null, path); // before making parents: each one is a walk of the whole path
         if (Find(path, follow: false) != null) // a symbolic link counts, even a dangling one
         {
             if (parents && Find(path) is Dir) return;
@@ -491,6 +511,7 @@ public sealed class VirtualFileSystem
         }
         var spot = Place(path);
         Require(spot.Parent!, 2, path);
+        RequireDepth(spot.Real, null, path); // through a link the real path can be longer
         spot.Parent!.Children[spot.Name] = new Dir { Owner = RunAs ?? spot.Parent.Owner, Mode = Masked(0b111_111_111), Modified = Clock() };
         spot.Parent.Modified = Clock();
     }
@@ -570,7 +591,7 @@ public sealed class VirtualFileSystem
         var copying = new HashSet<Dir>(ReferenceEqualityComparer.Instance); // directories on the way down, so -L can't loop
         long cloned = 0;
         broken ??= (p, reason) => throw new ShellException($"{p}: {reason}");
-        Node? Clone(Node n, string path)
+        Node? Clone(Node n, string path, int at)
         {
             if (n is LinkNode l)
             {
@@ -595,14 +616,15 @@ public sealed class VirtualFileSystem
             }
             var dir = (Dir)n;
             if (dir.Unlisted is { } u) throw new ShellException($"{path}: {u(dir)}");
+            if (at > MaxPath) throw new ShellException($"{dest}: {CommandSpec.Errno.ENAMETOOLONG}");
             var copy = new Dir { Owner = RunAs ?? parent.Owner, Mode = preserve ? n.Mode : Masked(n.Mode), Modified = preserve ? n.Modified : Clock() };
             copying.Add(dir);
             foreach (var (k, v) in dir.Children)
-                if (Clone(v, path + "/" + k) is { } c) copy.Children[k] = c;
+                if (Clone(v, path + "/" + k, at + 1 + k.Length) is { } c) copy.Children[k] = c;
             copying.Remove(dir);
             return copy;
         }
-        if (Clone(node, source) is not { } clone) return;
+        if (Clone(node, source, place.Real.Length) is not { } clone) return;
         // copying onto an existing file writes into it, keeping its owner and mode, as cp does
         if (target is FileNode tf && clone is FileNode cf)
         {
@@ -633,6 +655,7 @@ public sealed class VirtualFileSystem
         var existing = to.Node;
         if (existing is Dir) throw new ShellException($"{dest}: {CommandSpec.Errno.EISDIR}");
         if (ReferenceEquals(existing, node)) return; // two hard links of one file: rename(2) leaves both
+        if (node is Dir) RequireDepth(to.Real, node, dest);
         var target = to.Parent!;
         Require(from.Parent!, 2, source);
         Require(target, 2, dest);

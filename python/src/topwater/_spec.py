@@ -264,6 +264,7 @@ ERRNO = {
     "ENOSPC": "No space left on device",
     "EBADF": "Bad file descriptor",
     "ELOOP": "Too many levels of symbolic links",
+    "ENAMETOOLONG": "File name too long",
 }
 DIAGNOSTICS = {
     "eofSingleQuote": "unexpected EOF while looking for matching `''",

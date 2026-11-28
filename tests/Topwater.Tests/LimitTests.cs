@@ -276,4 +276,24 @@ public class LimitTests
             Assert.True(r.ExitCode == 5 && r.Stderr.Contains("recursion too deep"), name);
         }
     }
+
+    [Fact]
+    public async Task DirectoriesStopAtTheLongestPathLinuxAllows()
+    {
+        // rm -r, cp -r, Clone and the change tracker walk a tree by recursion: a tree nested by mv beyond any path the agent
+        // could type crashed the host with a stack overflow
+        var sh = new Shell();
+        var r = await sh.RunAsync("""
+            n=$(printf 'x%.0s' {1..250}); d=a; for i in {1..16}; do d=$d/$n; done
+            mkdir -p $d && echo deep
+            mkdir $d/$n; echo "mkdir $?"
+            mkdir -p b/$n/$n; mv b $d; echo "mv $?"
+            mkdir -p c/$n/$n; cp -r c $d; echo "cp $?"
+            ln -s $PWD/$d l; mkdir -p l/$n/$n; echo "link $?"
+            mkdir -p $d/$n/$n/$n; echo "mkdir -p $?"
+            ls b c >/dev/null && echo kept
+            """);
+        Assert.Equal("deep\nmkdir 1\nmv 1\ncp 1\nlink 1\nmkdir -p 1\nkept\n", r.Stdout);
+        Assert.Equal(5, r.Stderr.Split('\n').Count(l => l.EndsWith("File name too long")));
+    }
 }

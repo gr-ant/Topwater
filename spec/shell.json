@@ -38,7 +38,8 @@
     "EINVAL": "Invalid argument",
     "ENOSPC": "No space left on device",
     "EBADF": "Bad file descriptor",
-    "ELOOP": "Too many levels of symbolic links"
+    "ELOOP": "Too many levels of symbolic links",
+    "ENAMETOOLONG": "File name too long"
   },
   "quoting": {
     "plain": "{x}: the text as given.",
