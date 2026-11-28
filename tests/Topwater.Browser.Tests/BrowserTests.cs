@@ -295,6 +295,23 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
     }
 
     [ChromiumFact]
+    public async Task APageWhoseScriptNeverYieldsCannotHoldEveryCall()
+    {
+        var site = new Site().Page("https://app.test/", "<title>Spin</title><script>setTimeout(() => { for (;;) {} }, 1000)</script>");
+        var options = Options(site);
+        options = new() { Policy = options.Policy, ActionTimeout = TimeSpan.FromSeconds(1), SettleTimeout = TimeSpan.FromSeconds(1) };
+        var (sh, _) = await Open(site, options: options, shell: new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(20) });
+        await Task.Delay(1500);
+        var clock = Stopwatch.StartNew();
+        for (int i = 0; i < 3; i++)
+        {
+            var r = await sh.RunAsync("echo hi");
+            Assert.True(r.ExitCode == 0 && r.Stdout == "hi\n", $"{r.ExitCode} {r.Stdout} {r.Stderr} after {clock.Elapsed}");
+        }
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), clock.Elapsed.ToString());
+    }
+
+    [ChromiumFact]
     public async Task ANewWindowIsShownInThePageAndDownloadsAreBlocked()
     {
         var site = new Site()

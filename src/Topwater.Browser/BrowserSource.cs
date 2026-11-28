@@ -116,6 +116,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         ["download"] = "a download was blocked: {name}",
         ["popup"] = "the page opened a new window ({url}); it is shown here instead",
         ["loading"] = "the page was still loading when the action ended",
+        ["busy"] = "the page is not responding",
     };
 
     static string Msg(string key, params (string, object)[] values) => ConnectorCommon.Fill(Messages[key], values);
@@ -140,6 +141,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     IPage? _popup;
     int _inflight, _epoch; // requests in flight that the current action started (or the page fetched since)
     long _activity = DateTime.UtcNow.Ticks;
+    long _heldUntil; // when the operation holding the gate is past its limit
     bool _navPending;
 
     /// <summary>Shows <paramref name="page"/>, a page of a browser you launched (pass <see cref="LaunchArgs"/>, and create its
@@ -266,7 +268,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     public async Task<IReadOnlyList<MountEntry>> ListAsync(string path, int maxEntries, CancellationToken cancellationToken)
     {
         await _ready.WaitAsync(cancellationToken);
-        if (path == "/") _tree = await GatedAsync(SnapshotAsync, cancellationToken); // a listing from the top is a new look at the page
+        if (path == "/") _tree = await GatedAsync(SnapshotAsync, 2 * _options.ActionTimeout, cancellationToken); // a listing from the top is a new look at the page
         var kids = Children(path, _tree) ?? throw new MountSourceException(Msg("noFile"));
         return [.. kids.Take(maxEntries).Select(k => new MountEntry(k.Name, k.Dir, k.Dir ? 0 : null))];
     }
@@ -584,7 +586,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             throw new MountSourceException(why);
         }
         return true;
-    }, cancellationToken);
+    }, 3 * _options.ActionTimeout + 2 * _options.SettleTimeout, cancellationToken); // the action, its settling and a window's page
 
     async Task SettleAsync()
     {
@@ -851,16 +853,21 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
 
     // ---------- helpers ----------
 
-    /// <summary>Runs one browser operation at a time. The caller stops waiting at its token; the gate stays closed until the
-    /// operation really ends (each has its own timeout), so the next one never overlaps it.</summary>
-    async Task<T> GatedAsync<T>(Func<Task<T>> run, CancellationToken cancellationToken)
+    /// <summary>Runs one browser operation at a time. The caller stops waiting at its token or at <paramref name="limit"/>; the
+    /// gate stays closed until the operation really ends (each has its own timeout), so the next one never overlaps it. Some
+    /// Playwright calls have no timeout and never end while the page's script never yields: past its limit an operation still
+    /// holds the gate, and the next fails at once instead of waiting out every call.</summary>
+    async Task<T> GatedAsync<T>(Func<Task<T>> run, TimeSpan limit, CancellationToken cancellationToken)
     {
-        await _gate.WaitAsync(cancellationToken);
+        var left = new DateTime(Interlocked.Read(ref _heldUntil), DateTimeKind.Utc) - DateTime.UtcNow;
+        if (!await _gate.WaitAsync(left > TimeSpan.Zero ? left : TimeSpan.Zero, cancellationToken)) throw new MountSourceException(Msg("busy"));
+        Interlocked.Exchange(ref _heldUntil, (DateTime.UtcNow + limit).Ticks);
         Task<T> task;
         try { task = run(); }
         catch { _gate.Release(); throw; }
         _ = task.ContinueWith(t => { _ = t.Exception; _gate.Release(); }, TaskScheduler.Default);
-        return await task.WaitAsync(cancellationToken);
+        try { return await task.WaitAsync(limit, cancellationToken); }
+        catch (System.TimeoutException) { throw new MountSourceException(Msg("timedOut")); }
     }
 
     static float Ms(TimeSpan t) => (float)Math.Max(1, t.TotalMilliseconds);
