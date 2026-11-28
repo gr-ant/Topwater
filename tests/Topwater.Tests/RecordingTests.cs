@@ -474,6 +474,18 @@ public class RecordingTests
     }
 
     [Fact]
+    public async Task Comparing_the_manifest_with_the_last_checkpoint_builds_no_tree_of_what_it_ignores()
+    {
+        // a JSON node per value is ~50 bytes: a 432 KB file of padded manifests once ran the host out of memory
+        var file = Bytes(await Record(snapshotEvery: 2));
+        var padded = JsonNode.Parse(Entry(file, "manifest.json"))!.AsObject().ToJsonString()[..^1] + ",\"x\":[" + string.Join(',', Enumerable.Repeat("0", 4_000_000)) + "]}";
+        var tampered = Tamper(file, z => Put(z, "manifest.json", padded));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Equal(4, LoadBytes(tampered).Calls.Count); // what no reader reads is no difference
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 150_000_000, $"{(GC.GetAllocatedBytesForCurrentThread() - before) >> 20} MB");
+    }
+
+    [Fact]
     public async Task Changed_files_come_from_the_filesystem_and_match_comparing_snapshots()
     {
         // the recorder tracks changed nodes; a rerecord compares whole snapshots: the lists must be the same

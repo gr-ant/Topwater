@@ -384,7 +384,8 @@ public sealed class Recording
         return rec;
     }
 
-    static bool SameJson(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b) || JsonNode.DeepEquals(JsonNode.Parse(a), JsonNode.Parse(b));
+    // as the readers see them: key order and spacing aside, and without a node per value of what they skip (a padded array)
+    static bool SameJson(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b) || ShellSnapshot.CanonicalManifest(a).AsSpan().SequenceEqual(ShellSnapshot.CanonicalManifest(b));
 
     /// <summary>The most bytes history.jsonl may inflate to: twice what the session's variables may hold.</summary>
     internal static long MaxHistoryBytes(ShellOptions o) => 2 * o.MaxStringBytes;

@@ -319,6 +319,9 @@ public sealed class ShellSnapshot
         return bytes;
     }
 
+    /// <summary>A manifest as its reader sees it, written again: the same machine gives the same bytes whatever the key order.</summary>
+    internal static byte[] CanonicalManifest(byte[] manifest) => JsonSerializer.SerializeToUtf8Bytes(JsonSerializer.Deserialize<Manifest>(manifest, Json), Json);
+
     static void CheckVersion(Probe? probe, string name)
     {
         if (probe?.Format != FormatName) throw Bad($"{name} is not a Topwater snapshot manifest");
