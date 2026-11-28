@@ -235,31 +235,6 @@ public class LimitTests
         Assert.Contains("patch does not apply", r.Stderr);
     }
 
-    [Fact]
-    public async Task JoinOnOneRepeatedKeyStreamsItsOutput()
-    {
-        var sh = Quick(1);
-        sh.Fs.CreateDirectory("/tmp/w", true);
-        sh.Fs.WriteAllBytes("/tmp/w/a", System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("k v\n", 10000))));
-        // the managed heap is sampled while join runs (other tests share the process, so the bound is loose): holding
-        // the product grew it by gigabytes
-        long peak = 0;
-        using var done = new CancellationTokenSource();
-        var sampler = Task.Run(async () =>
-        {
-            while (!done.IsCancellationRequested)
-            {
-                peak = Math.Max(peak, GC.GetTotalMemory(false));
-                await Task.Delay(10);
-            }
-        });
-        var r = await sh.RunAsync("cd /tmp/w && join a a > /dev/null");
-        done.Cancel();
-        await sampler;
-        Assert.NotEqual(0, r.ExitCode);  // the time limit ends 100 million rows
-        Assert.True(peak < 1L << 30, $"peak heap {peak >> 20} MB");
-    }
-
     // name lengths picked so the unbounded match takes about 10 s in Python
     [Theory]
     [InlineData("tar -cf t.tar --transform='s/\\(a*\\)*b/x/' $n", 26)]
@@ -433,5 +408,38 @@ public class LimitTests
         Assert.Contains("No space left on device", r.Stderr);
         r = await sh.RunAsync("mkdir x; ln -s a y; cp -r /home/agent/d /tmp/e; echo $?; cd; rm -rf d; mkdir z && echo made");
         Assert.Contains("1\nmade\n", r.Stdout);
+    }
+}
+
+/// <summary>Tests that sample the whole process's heap run with nothing beside them.</summary>
+[CollectionDefinition("Alone", DisableParallelization = true)]
+public class AloneCollection { }
+
+[Collection("Alone")]
+public class HeapTests
+{
+    [Fact]
+    public async Task JoinOnOneRepeatedKeyStreamsItsOutput()
+    {
+        var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(1) });
+        sh.Fs.CreateDirectory("/tmp/w", true);
+        sh.Fs.WriteAllBytes("/tmp/w/a", System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("k v\n", 10000))));
+        // the managed heap is sampled while join runs (alone: the heap is the whole process's): holding
+        // the product grew it by gigabytes
+        long peak = 0;
+        using var done = new CancellationTokenSource();
+        var sampler = Task.Run(async () =>
+        {
+            while (!done.IsCancellationRequested)
+            {
+                peak = Math.Max(peak, GC.GetTotalMemory(true)); // what is held, not garbage a server GC hasn't collected yet
+                await Task.Delay(50);
+            }
+        });
+        var r = await sh.RunAsync("cd /tmp/w && join a a > /dev/null");
+        done.Cancel();
+        await sampler;
+        Assert.NotEqual(0, r.ExitCode);  // the time limit ends 100 million rows
+        Assert.True(peak < 1L << 30, $"peak heap {peak >> 20} MB");
     }
 }

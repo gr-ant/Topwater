@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- many parallel tests allocate hundreds of MB; workstation GC pauses starved the timing tests -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
