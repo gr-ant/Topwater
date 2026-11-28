@@ -150,7 +150,9 @@ What the source enforces, whatever the agent writes and whatever the page does:
   only the hosts, ports and methods you list, https unless `AllowHttp`, no IP literal or name that resolves to a
   private, loopback, link-local (169.254.169.254, the metadata service) or otherwise internal address, the connection
   made to the address that was checked (so DNS rebinding can't swap it), bodies and request counts capped, your
-  `Credentials` added for their host only and scrubbed from what comes back. A refused request is aborted and listed
+  `Credentials` added for their host only and scrubbed from what comes back. A credential goes with a page the agent
+  opens on its host (`url`, `back`, `forward`, `reload`) and with what a page of that same origin asks for, never with
+  a request another site's page makes, so a script elsewhere can't read what it signs in to. A refused request is aborted and listed
   in `status`. See [what the policy guarantees](web.md#what-it-guarantees).
 - **The browser has no network of its own.** `LaunchArgs` make every host name fail to resolve inside Chromium and
   send anything that isn't routed to a proxy that isn't there, with WebRTC kept off UDP, so what Playwright can't

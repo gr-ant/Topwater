@@ -346,6 +346,35 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
     }
 
     [ChromiumFact]
+    public async Task AnotherSitesScriptCannotUseThePolicysCredential()
+    {
+        static Task<HttpResponseMessage> Api(HttpRequestMessage req)
+        {
+            var r = Site.Html(req.Headers.Authorization?.ToString() == "Bearer s3cret" ? "<title>API</title><p>signed in</p>" : "<title>API</title><p>anonymous</p>");
+            r.Headers.Add("Access-Control-Allow-Origin", "*");
+            return Task.FromResult(r);
+        }
+        var site = new Site()
+            .Page("https://app.test/", "<title>Other</title><p id=out>wait</p><script>fetch('https://cdn.test/api').then(r => r.text()).then(t => out.textContent = 'read: ' + t)</script>")
+            .On("https://cdn.test/api", Api)
+            .On("https://app.test/to-api", _ =>
+            {
+                var r = new HttpResponseMessage(HttpStatusCode.Found);
+                r.Headers.Location = new Uri("https://cdn.test/api");
+                return Task.FromResult(r);
+            })
+            .Page("https://cdn.test/", "<title>Own</title><p id=out>wait</p><script>fetch('/api').then(r => r.text()).then(t => out.textContent = 'read: ' + t)</script>");
+        var options = Options(site);
+        var policy = new WebPolicy { Domains = ["app.test", "cdn.test"], Methods = ["GET"], Handler = site, MaxRequestsPerCall = 100, Credentials = { ["cdn.test"] = () => "Bearer s3cret" } };
+        var (sh, _) = await Open(site, options: new() { Policy = policy, ActionTimeout = options.ActionTimeout });
+        Assert.Contains("read: <title>API</title><p>anonymous</p>", await Out(sh, "cat /web/text.md"));
+        Assert.Contains("anonymous", await Out(sh, "echo https://app.test/to-api > /web/url; cat /web/text.md")); // the page sends the browser on
+        Assert.Contains("signed in", await Out(sh, "echo https://cdn.test/api > /web/url; cat /web/text.md"));
+        Assert.Contains("signed in", await Out(sh, "echo https://app.test/ > /web/url; echo 1 > /web/back; cat /web/text.md"));
+        Assert.Contains("read: <title>API</title><p>signed in</p>", await Out(sh, "echo https://cdn.test/ > /web/url; cat /web/text.md"));
+    }
+
+    [ChromiumFact]
     public async Task ANewWindowIsShownInThePageAndDownloadsAreBlocked()
     {
         var site = new Site()

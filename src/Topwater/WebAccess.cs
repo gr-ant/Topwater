@@ -336,8 +336,9 @@ internal sealed class WebSession
         return Reason("reasonHost", ("host", url.HostForUrl + (url.DefaultPort ? "" : ":" + url.Port)), ("allowed", allowed));
     }
 
-    /// <summary>Checks the URL against the policy, then sends one request (no redirects). Throws <see cref="WebFailure"/>.</summary>
-    public async Task<WebResponse> SendAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, CancellationToken ct)
+    /// <summary>Checks the URL against the policy, then sends one request (no redirects), with the policy's credential for its host
+    /// unless <paramref name="withCredential"/> is false. Throws <see cref="WebFailure"/>.</summary>
+    public async Task<WebResponse> SendAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, CancellationToken ct, bool withCredential = true)
     {
         string Explain(string why) => Policy.ExplainBlocked ? why : null!;
         if (url.Ip is { } ip && WebAddresses.IsBlocked(ip)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain(Reason("reasonPrivate", ("host", url.Host))));
@@ -359,7 +360,7 @@ internal sealed class WebSession
 
         var sent = headers.Where(h => !DroppedHeaders.Contains(h.Key) && !h.Key.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase)).ToList();
         string[] secrets = [];
-        var auth = CredentialFor(url);
+        var auth = withCredential ? CredentialFor(url) : null;
         if (auth != null)
         {
             // the agent cannot replace it, nor ask for pieces of a page that shows it (two ranges that split it pass the scrub)
@@ -555,7 +556,7 @@ internal sealed class WebSession
     /// every response, the final one included. Throws <see cref="WebFailure"/>.
     /// </summary>
     public async Task<(WebResponse Response, int Redirects)> FetchAsync(WebUrl url, string method, string? forcedMethod, List<KeyValuePair<string, string>> headers, byte[]? body,
-        bool follow, int maxRedirects, TimeSpan timeout, Action<WebResponse>? onHop, CancellationToken ct)
+        bool follow, int maxRedirects, TimeSpan timeout, Action<WebResponse>? onHop, CancellationToken ct, bool credential = true)
     {
         int limit = maxRedirects < 0 ? Policy.MaxRedirects : Math.Min(maxRedirects, Policy.MaxRedirects);
         var origin = (url.Scheme, url.Host, url.Port);
@@ -564,7 +565,7 @@ internal sealed class WebSession
             // the agent's own Authorization and Cookie stay with the origin it gave them for, as curl does
             var hopHeaders = (url.Scheme, url.Host, url.Port) == origin ? headers
                 : headers.Where(h => !h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) && !h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).ToList();
-            var response = await SendAsync(url, forcedMethod ?? method, hopHeaders, body, timeout, ct);
+            var response = await SendAsync(url, forcedMethod ?? method, hopHeaders, body, timeout, ct, credential);
             onHop?.Invoke(response);
             if (!follow || response.Error != null || response.Status is not (301 or 302 or 303 or 307 or 308) || response.Header("Location") is not { Length: > 0 } location) return (response, redirects);
             if (redirects >= limit) throw new WebFailure(WebError.Redirects, url.Host, url.Port) { Detail = limit.ToString(System.Globalization.CultureInfo.InvariantCulture) };

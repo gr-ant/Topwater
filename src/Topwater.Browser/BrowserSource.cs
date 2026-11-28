@@ -139,6 +139,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     string? _lastError, _navRefused, _dialog, _answer;
     int? _status;
     IPage? _popup;
+    int _agentNav; // 1 while the agent's own navigation (url, back, forward, reload) has not been asked for yet
     int _inflight, _epoch; // requests in flight that the current action started (or the page fetched since)
     long _activity = DateTime.UtcNow.Ticks;
     long _heldUntil; // when the operation holding the gate is past its limit
@@ -529,9 +530,9 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             action = parts[1] switch
             {
                 "url" => () => GoAsync(line),
-                "back" => async () => { if (await _page.GoBackAsync(new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) }) == null) Note(Msg("noBack")); },
-                "forward" => async () => { if (await _page.GoForwardAsync(new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) }) == null) Note(Msg("noForward")); },
-                "reload" => () => _page.ReloadAsync(new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) }),
+                "back" => async () => { _agentNav = 1; if (await _page.GoBackAsync(new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) }) == null) Note(Msg("noBack")); },
+                "forward" => async () => { _agentNav = 1; if (await _page.GoForwardAsync(new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) }) == null) Note(Msg("noForward")); },
+                "reload" => () => { _agentNav = 1; return _page.ReloadAsync(new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) }); },
                 _ => null,
             };
             if (parts[1] == "dialog")
@@ -573,11 +574,12 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     /// the time limits, and a window it opened is shown here instead. Errors become text the agent may see.</summary>
     async Task ActAsync(Func<Task> action, CancellationToken cancellationToken) => await GatedAsync(async () =>
     {
-        lock (_lock) { _refused.Clear(); _notes.Clear(); _lastError = _navRefused = null; _epoch++; _inflight = 0; _navPending = false; }
+        lock (_lock) { _refused.Clear(); _notes.Clear(); _lastError = _navRefused = null; _epoch++; _inflight = 0; _navPending = false; _agentNav = 0; }
         _web.BeginCall(); // the policy's per-call request limit counts one action
         try
         {
             await action();
+            _agentNav = 0;
             await SettleAsync();
             await PopupAsync();
         }
@@ -615,15 +617,16 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         try { await popup.CloseAsync(); } catch (PlaywrightException) { }
         if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return;
         Note(Msg("popup", ("url", Cut(url, 300))));
-        await GoAsync(url);
+        await GoAsync(url, agent: false);
         await SettleAsync();
     }
 
-    async Task GoAsync(string url)
+    async Task GoAsync(string url, bool agent = true)
     {
         if (!url.Contains("://", StringComparison.Ordinal)) throw new MountSourceException(Msg("fullUrl"));
         try { WebUrl.Parse(url); }
         catch (WebFailure f) { throw new MountSourceException(Why(f)); }
+        _agentNav = agent ? 1 : 0;
         await _page.GotoAsync(url, new() { WaitUntil = WaitUntilState.Commit, Timeout = Ms(_options.ActionTimeout) });
     }
 
@@ -763,6 +766,10 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             var headers = new List<KeyValuePair<string, string>>();
             foreach (var (k, v) in await req.AllHeadersAsync())
                 if (!k.StartsWith(':') && !DroppedRequestHeaders.Contains(k)) headers.Add(new(k, v));
+            // the policy's credential goes only with a page the agent opened and with what a page of that same site asks for: a
+            // script of another allowed site can't read the API it signs in to.
+            // shortcut: a frame's first page is asked for from about:blank and goes without; look at the parent frame if a host needs it
+            bool credential = main && Interlocked.Exchange(ref _agentNav, 0) == 1 || SameOrigin(url, FrameUrl(req));
             WebResponse r;
             // while the page's own document is loading, Playwright can't look into the page at all: a navigation gets the
             // action's time and is then aborted, whoever started it
@@ -776,8 +783,8 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             try
             {
                 // a navigation's redirect goes back to the page (below); a subresource's is followed here, each hop checked
-                r = nav ? await _web.SendAsync(url, req.Method, headers, req.PostDataBuffer, _options.Policy.Timeout, stop.Token).WaitAsync(stop.Token)
-                    : (await _web.FetchAsync(url, req.Method, null, headers, req.PostDataBuffer, true, -1, _options.Policy.Timeout, null, stop.Token)).Response;
+                r = nav ? await _web.SendAsync(url, req.Method, headers, req.PostDataBuffer, _options.Policy.Timeout, stop.Token, credential).WaitAsync(stop.Token)
+                    : (await _web.FetchAsync(url, req.Method, null, headers, req.PostDataBuffer, true, -1, _options.Policy.Timeout, null, stop.Token, credential)).Response;
             }
             catch (WebFailure f) { await RefuseAsync(route, req.Url, Why(f), main, f.Kind switch { WebError.Resolve => "namenotresolved", WebError.Timeout => "timedout", WebError.Connect => "connectionrefused", WebError.Policy => "blockedbyclient", _ => "failed" }); return; }
             if (r.Truncated || r.Error != null) { await RefuseAsync(route, req.Url, Msg(r.Truncated ? "responseTooLarge" : "responseCut"), main, "failed"); return; }
@@ -815,6 +822,18 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             if (epoch == _epoch) Interlocked.Decrement(ref _inflight); // one an earlier action left behind no longer counts
             Interlocked.Exchange(ref _activity, DateTime.UtcNow.Ticks);
         }
+    }
+
+    static string? FrameUrl(IRequest req)
+    {
+        try { return req.Frame.Url; }
+        catch (PlaywrightException) { return null; } // a worker's request
+    }
+
+    static bool SameOrigin(WebUrl url, string? other)
+    {
+        try { return other != null && WebUrl.Parse(other) is var o && (o.Scheme, o.Host, o.Port) == (url.Scheme, url.Host, url.Port); }
+        catch (WebFailure) { return false; }
     }
 
     async Task RefuseAsync(IRoute route, string url, string why, bool main, string code)
