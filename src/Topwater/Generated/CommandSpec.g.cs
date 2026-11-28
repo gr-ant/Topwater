@@ -1067,6 +1067,7 @@ internal static partial class CommandSpec
             ["tooManyEntries"] = "more than {limit} entries in the archive",
             ["archiveTooLarge"] = "archive expands to more than {megabytes} MB",
             ["dtdNotAllowed"] = "{name}: DTDs are not allowed",
+            ["tooDeep"] = "{name}: elements nested more than {limit} deep",
             ["sheetTooLarge"] = "sheet '{name}' is too large",
             ["convertFailed"] = "{file}: {reason}",
         }),

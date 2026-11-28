@@ -22,6 +22,8 @@ public static class MarkdownConverter
     public static long MaxUncompressedBytes { get; set; } = 100L * 1024 * 1024;
     /// <summary>An OOXML package has a few hundred parts; <see cref="ZipArchive"/> builds an object for every entry.</summary>
     const int MaxZipEntries = 10_000;
+    /// <summary>Real documents nest a few dozen elements deep.</summary>
+    const int MaxXmlDepth = 256;
     const string Supported = ".docx, .xlsx, .pptx, .html, .htm, .csv, .tsv, .json, .md, .txt";
 
     static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -129,7 +131,15 @@ public static class MarkdownConverter
             var bytes = Read(name);
             if (bytes == null) return null;
             var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
-            try { using var reader = XmlReader.Create(new MemoryStream(bytes), settings); return XDocument.Load(reader).Root; }
+            try
+            {
+                // XDocument.Load is quadratic in nesting depth and can't be cancelled: a plain read checks the depth first
+                using (var probe = XmlReader.Create(new MemoryStream(bytes), settings))
+                    while (probe.Read())
+                        if (probe.Depth > MaxXmlDepth) throw new ShellException(CommandSpec.Message("to-markdown", "tooDeep", ("name", name), ("limit", MaxXmlDepth.ToString())));
+                using var reader = XmlReader.Create(new MemoryStream(bytes), settings);
+                return XDocument.Load(reader).Root;
+            }
             catch (XmlException e) when (e.Message.Contains("DTD")) { throw new ShellException(CommandSpec.Message("to-markdown", "dtdNotAllowed", ("name", name))); }
         }
 

@@ -172,6 +172,18 @@ public class DocumentTests
 
     static string Md(byte[] data, string name) => MarkdownConverter.ToMarkdown(data, name);
 
+    [Fact]
+    public void DeeplyNestedXmlIsRefusedBeforeItIsLoaded()
+    {
+        // loading XML into a tree is quadratic in its depth and can't be cancelled: a 2 KB .docx ran for minutes
+        var deep = string.Concat(Enumerable.Repeat("<w:x>", 50_000)) + string.Concat(Enumerable.Repeat("</w:x>", 50_000));
+        var docx = Zip(("[Content_Types].xml", "<Types/>"), ("word/document.xml", $"<w:document {W}><w:body>{deep}</w:body></w:document>"));
+        var started = DateTime.UtcNow;
+        var e = Assert.Throws<ShellException>(() => Md(docx, "deep.docx"));
+        Assert.Contains("word/document.xml: elements nested more than 256 deep", e.Message);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
+    }
+
     // ---------- binary files ----------
 
     [Fact]
