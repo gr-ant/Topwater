@@ -11,6 +11,7 @@ and say where each implementation differs.
 | [Web access](web.md) | `curl` and `wget` to the sites you allow: the policy, the guarantees, recordings |
 | [Mounted sources](mounts.md) | Outside files as a folder: modes, change sets, writing a source, safety |
 | [Connectors](connectors/README.md) | OneDrive and SharePoint through Microsoft Graph (.NET) |
+| [A web page as files](browser.md) | A live page in a real browser, mounted like a device under `/sys` (.NET): the tree, actions, safety |
 | [Connect to a model](integrations.md) | The tool definition, and the adapters for agent frameworks |
 | [Command line and MCP server](cli.md) | The `topwater` command: install, commands, options, MCP clients |
 | [Snapshots and recordings](snapshots-and-recordings.md) | Undo, fork, save and load; deterministic runs; record and replay; the `.topwater` file |

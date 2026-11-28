@@ -61,6 +61,8 @@ What else is in the box:
   credentials the model never sees.
 - **[Mounts](docs/mounts.md).** Show a host folder, an Obsidian vault or your own store as a directory: read-only,
   staged (the agent's edits become a change set you review and apply) or live.
+- **[A web page as files](docs/browser.md)** (.NET). A real browser loads the page, and the agent reads it with `cat`
+  and clicks, fills and submits with `echo`, every request under the web policy.
 - **[Snapshots, recordings and replay](docs/snapshots-and-recordings.md).** Undo, fork, save and load the machine;
   record a session, replay it as a regression test, or step through it in the
   [replay viewer](https://gr-ant.github.io/Topwater/replay.html).
@@ -376,7 +378,8 @@ The `bc` calculator is in .NET only, and the tables above show what Python and T
 ## Documentation
 
 - [docs/](docs/README.md): [the machine](docs/machine.md), [your programs](docs/programs.md),
-  [web access](docs/web.md), [mounted sources](docs/mounts.md), [connecting to a model](docs/integrations.md),
+  [web access](docs/web.md), [mounted sources](docs/mounts.md), [a web page as files](docs/browser.md),
+  [connecting to a model](docs/integrations.md),
   [command line and MCP server](docs/cli.md), [snapshots and recordings](docs/snapshots-and-recordings.md),
   [containers](docs/containers.md) and [limits and safety](docs/limits.md). Samples use the .NET API.
 - [Python](python/README.md) and [TypeScript](typescript/README.md): each package's API, its framework adapters and
@@ -402,6 +405,7 @@ Without `URL`, WebShell listens on all network interfaces.
 | `examples/OfficeAgent` | an agent that writes a Word document with the real OfficeCLI | a Gemini API key |
 | `examples/DuckDbAgent` | an agent that answers questions over CSV files with the real DuckDB | a Gemini API key |
 | `examples/AgentFrameworkAgent` | the shell in a Microsoft Agent Framework agent | `OPENAI_API_KEY` |
+| `examples/BrowserMount` | a live website mounted at `/web`, driven by a bash script or a model | Chromium (installed on first run); an OpenRouter API key for a model |
 | `examples/Harness` | six everyday tasks under different wordings of the tool description | a Gemini or OpenRouter API key |
 | `python/examples/` | Python agents and use cases | a Gemini API key |
 
