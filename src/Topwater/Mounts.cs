@@ -558,7 +558,7 @@ sealed class MountPoint(MountManager mounts, string path, IMountSource? source, 
             Mounts.Log(x with { Error = Msg("timedOut") });
             // the timer can fire a moment before the deadline the shell checks; the call's time limit ends it, as anywhere else
             var rest = shell.CallDeadline - DateTime.UtcNow;
-            if (bounded && rest > TimeSpan.Zero && rest < TimeSpan.FromSeconds(1)) await Task.Delay(rest);
+            if (bounded && rest >= TimeSpan.Zero && rest < TimeSpan.FromSeconds(1)) await Task.Delay(rest + TimeSpan.FromMilliseconds(2)); // a delay can end a moment early too
             if (bounded) shell.CheckDeadline();
             throw new SourceFailure(Msg("timedOut"), Msg("timedOut"));
         }

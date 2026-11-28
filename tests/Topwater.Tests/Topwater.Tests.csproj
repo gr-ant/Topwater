@@ -3,6 +3,8 @@
   <PropertyGroup>
     <!-- many parallel tests allocate hundreds of MB; workstation GC pauses starved the timing tests -->
     <ServerGarbageCollection>true</ServerGarbageCollection>
+    <!-- one framework at a time: half the load, and the LibreOffice tests share one profile lock -->
+    <TestTfmsInParallel>false</TestTfmsInParallel>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
