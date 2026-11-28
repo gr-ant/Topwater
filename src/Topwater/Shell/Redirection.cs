@@ -125,7 +125,7 @@ public sealed partial class Shell
         if (path.StartsWith("/dev/fd/") && int.TryParse(path[8..], out var fd) && Descriptor(fd, io) is TextWriter fw) return fw;
         if (Fs.IsDirectory(path)) throw new ShellException($"{target}: Is a directory");
         if (Noclobber && r.Op is ">" or "&>" && Fs.IsFile(path)) throw new ShellException(CommandSpec.Format(CommandSpec.Diagnostics.Noclobber, ("target", target)));
-        if (r.Op.EndsWith(">>") && _mounts.Items.Count > 0) await _mounts.BeforeAsync(">>", [], io.Err, target);
+        if (_mounts.Items.Count > 0) await _mounts.BeforeAsync(r.Op.EndsWith(">>") ? ">>" : ">", [], io.Err, target);
         try { if (!r.Op.EndsWith(">>") || !Fs.Exists(path)) Fs.WriteAllText(path, ""); } // truncate on open, like bash
         catch (ShellException e) { throw new ShellException($"{target}: {e.Message[(e.Message.LastIndexOf(": ", StringComparison.Ordinal) + 2)..]}"); }
         return open(path);
