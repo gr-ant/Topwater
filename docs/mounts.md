@@ -104,6 +104,15 @@ rename's target already exists, it stops with a conflict. A source error also st
 What was applied becomes the mount's new starting point, with the version the source returned for a write, rename or
 mkdir; the rest stays pending. `DiscardChanges` drops every pending change and shows the source's files again.
 
+In .NET each change from `PendingChanges` also carries the source's `Note` for you (null when it has none), such as
+"this move is a copy and a delete"; a source gives it by implementing `IMountSource.Note(change)`. The agent never
+sees it: `mount -c` doesn't show it and snapshots don't save it.
+
+In .NET, `MountAsync`, `ApplyChangesAsync`, `AcceptSnapshotChangesAsync` and `RefreshMountAsync` take an optional
+`CancellationToken` as their last parameter. It reaches every source call they make; `ApplyChangesAsync` also stops
+between changes (the ones already applied stay applied), and a cancelled refresh keeps the files and pending changes as
+they were.
+
 Symbolic links, permission changes and a second hard link inside a mount stay in the machine and are not part of a
 change set: `mount -c` shows nothing for them.
 
@@ -385,7 +394,9 @@ refuses it instead of loading the machine without them.
 
 **A snapshot can't write to a source.** Restoring one gives each mount the source and the mode you mounted with
 (`MountAsync`), never the file's; without a source of the same `type` and `id` (`Unmount` forgets it), the mount point
-is an empty directory the agent can't open and `mount` shows `(unavailable: no source for type:id)`. The pending
+is an empty directory the agent can't open and `mount` shows `(unavailable: no source for type:id)`. A source you
+mounted is attached only at the path you mounted it at: a snapshot that names it at any other path (or at a second
+one) is refused with an error naming your path, and the shell is left as it was. The pending
 changes in a snapshot loaded from a file are as untrusted as the file: they are kept apart (`SnapshotChanges`), not
 in the files, not in `PendingChanges`, never applied by live mode, and `mount` says they wait for you. Call
 `AcceptSnapshotChangesAsync` to put them in the files (they are then pending changes like the agent's, checked against

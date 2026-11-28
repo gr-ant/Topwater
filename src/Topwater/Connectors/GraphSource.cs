@@ -844,7 +844,7 @@ public sealed partial class GraphSource : IMountSource
     static string WebPath(string? url) => url is not null && Uri.TryCreate(url, UriKind.Absolute, out var u) ? Uri.UnescapeDataString(u.AbsolutePath) : "";
 
     /// <summary>The Graph URL of a site from its web URL (https://host/sites/x), host:/sites/x, or its id.</summary>
-    static string SiteUrl(string site)
+    internal static string SiteUrl(string site)
     {
         if (site.StartsWith("https://", StringComparison.Ordinal))
         {

@@ -13,6 +13,23 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   Graph requests checked with `If-Match`; names and values SharePoint would refuse are refused before anything is
   sent. Signing in stays with the host (a token function); no new package dependency. `examples/GraphMount` signs in
   with Azure.Identity and lets an agent restructure a site, staged. [docs/connectors/graph.md](docs/connectors/graph.md)
+- **Live write tests for Graph.** Files in a scratch folder and items in a scratch list run against a real SharePoint
+  site when `TOPWATER_LIVE_GRAPH=1`, `TOPWATER_GRAPH_TOKEN` and `TOPWATER_GRAPH_SITE` are set, and clean up after
+  themselves; without them they do nothing. They passed against a sandbox tenant on 2026-11-27.
+
+### Mounted sources (.NET)
+
+- **Breaking: a `CancellationToken` on the mount methods.** `MountAsync`, `ApplyChangesAsync`,
+  `AcceptSnapshotChangesAsync` and `RefreshMountAsync` take an optional `CancellationToken` as their last parameter.
+  It reaches every source call they make, and `ApplyChangesAsync` stops between changes. Source code that calls them
+  compiles as before; code compiled against preview.5 must be rebuilt.
+- **The source's note reaches the host.** A source may implement `IMountSource.Note(change)`, and each change from
+  `PendingChanges` carries it in `MountChange.Note` (for `GraphSource`: a move between libraries is a copy and a
+  delete). The agent never sees it, and snapshots don't save it.
+- **A snapshot can't move a host's source.** A snapshot that attaches a source you mounted at another path, or at a
+  second one, is refused with an error naming your path, before anything changes.
+- A refresh that fails or is cancelled keeps the files and the agent's pending changes as they were; before, `mount -r`
+  against a failing source dropped them.
 
 ## 0.1.0-preview.5 (2026-11-27)
 

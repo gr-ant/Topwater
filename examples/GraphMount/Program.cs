@@ -71,7 +71,7 @@ Console.WriteLine($"\n{changes.Count} changes:");
 foreach (var c in changes)
 {
     Console.WriteLine($"  {c.Kind.ToString().ToLowerInvariant(),-6} {c.Path}{(c.To != null ? " -> " + c.To : "")}");
-    if (source.Note(c) is { } note) Console.WriteLine($"         note: {note}");
+    if (c.Note is { } note) Console.WriteLine($"         note: {note}");
 }
 if (!apply)
 {

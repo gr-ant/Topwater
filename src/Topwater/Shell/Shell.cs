@@ -393,7 +393,8 @@ public sealed partial class Shell
     /// you apply) or live (changes applied after every command). The mount point must be missing or an empty directory, outside
     /// any other mount. Lists the source before it returns, so a bad credential fails here, in your code.
     /// </summary>
-    public Task MountAsync(string path, IMountSource source, MountMode mode = MountMode.ReadOnly) => OffContext.Run(() => _mounts.MountAsync(path, source, mode));
+    public Task MountAsync(string path, IMountSource source, MountMode mode = MountMode.ReadOnly, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => _mounts.MountAsync(path, source, mode, cancellationToken));
 
     /// <summary>Removes a mount and its pending changes; the mount point stays as an empty directory.</summary>
     public void Unmount(string path) => _mounts.Unmount(path);
@@ -401,12 +402,15 @@ public sealed partial class Shell
     /// <summary>Every mount: path, mode, source type and id, and why it is unavailable.</summary>
     public IReadOnlyList<MountInfo> Mounts => [.. _mounts.Items.Select(m => m.Info())];
 
-    /// <summary>The changes that would make a staged or live mount's source match its files, in an order that applies one after another.</summary>
-    public IReadOnlyList<MountChange> PendingChanges(string path) => _mounts.Get(path).Changes();
+    /// <summary>The changes that would make a staged or live mount's source match its files, in an order that applies one after
+    /// another, each with the source's <see cref="MountChange.Note"/> for you (never shown to the agent).</summary>
+    public IReadOnlyList<MountChange> PendingChanges(string path) => _mounts.Pending(path);
 
     /// <summary>Applies the pending changes, or the ones given (from <see cref="PendingChanges"/>), in order, stopping at the first
-    /// conflict or failure. Not bounded by the call time limit.</summary>
-    public Task<MountApplyResult> ApplyChangesAsync(string path, IEnumerable<MountChange>? changes = null) => OffContext.Run(() => _mounts.Get(path).ApplyAsync(changes));
+    /// conflict or failure. Not bounded by the call time limit; <paramref name="cancellationToken"/> stops it between changes and
+    /// cancels the source call in progress (the changes applied before stay applied).</summary>
+    public Task<MountApplyResult> ApplyChangesAsync(string path, IEnumerable<MountChange>? changes = null, CancellationToken cancellationToken = default) =>
+        OffContext.Run(() => _mounts.ApplyAsync(path, changes, cancellationToken));
 
     /// <summary>Drops a mount's pending changes, and the ones a loaded snapshot brought: its files are the source's again.</summary>
     public void DiscardChanges(string path) => _mounts.Discard(path);
@@ -416,10 +420,10 @@ public sealed partial class Shell
     public IReadOnlyList<MountChange> SnapshotChanges(string path) => [.. _mounts.Get(path).Held];
 
     /// <summary>Puts a loaded snapshot's changes into the mount's files, where they become pending changes like the agent's.</summary>
-    public Task AcceptSnapshotChangesAsync(string path) => OffContext.Run(() => _mounts.AcceptAsync(path));
+    public Task AcceptSnapshotChangesAsync(string path, CancellationToken cancellationToken = default) => OffContext.Run(() => _mounts.AcceptAsync(path, cancellationToken));
 
     /// <summary>Lists the source again, keeping the pending changes.</summary>
-    public Task RefreshMountAsync(string path) => OffContext.Run(() => _mounts.RefreshAsync(path));
+    public Task RefreshMountAsync(string path, CancellationToken cancellationToken = default) => OffContext.Run(() => _mounts.RefreshAsync(path, cancellationToken));
 
     public bool Unregister(string name)
     {

@@ -42,8 +42,9 @@ of `Site` (a web URL `https://host/sites/x`, `host:/sites/x`, or a Graph site id
 connect time, so a name that resolves to one is refused too. Cancellation: the call's token goes to every request,
 every token request and every backoff delay; each request also has its own `Timeout`.
 
-The source also has `Note(MountChange) -> string?`: what the host should know before applying a change. Today it says
-when a rename is a [copy and a delete](#moves-between-libraries-lists-and-sites).
+The source also implements `IMountSource.Note(MountChange) -> string?`: what the host should know before applying a
+change. `Shell.PendingChanges` puts it on each change (`MountChange.Note`); the agent never sees it. Today it says when
+a rename is a [copy and a delete](#moves-between-libraries-lists-and-sites).
 
 ## What Graph does
 
@@ -155,8 +156,8 @@ refused before anything more is copied. If the delete fails after the copy, the 
 item to another list: the editable columns the target list also has are written as a new item, then the original is
 deleted. A file can't move into a list or an item into a library.
 
-`Note(change)` returns the `crossMove` message for such a rename, so a host can show it in the change set before
-applying (`examples/GraphMount` prints it). It needs only what was listed, never a request.
+`Note(change)` returns the `crossMove` message for such a rename, and `PendingChanges` puts it on the change, so a
+host can show it in the change set before applying (`examples/GraphMount` prints it). It needs only what was listed, never a request.
 
 ## List items: front matter
 
@@ -261,11 +262,13 @@ transport) are tests in `GraphTests.cs`, ported from the Python suite.
 
 ## Live tests and the example
 
-`GraphTests.LiveSiteListsReadOnly` runs only with `TOPWATER_LIVE_GRAPH=1`, `TOPWATER_GRAPH_SITE` (a site URL) and
-`TOPWATER_GRAPH_TOKEN` (an access token got elsewhere); it mounts the site read-only and lists it. It never changes
-the tenant and never prints the token. The Python suite on the `parked/connectors` branch has write tests (a scratch
-folder `Documents/zz-topwater-test-<time>` removed with `permanentDelete`, scratch items titled `zz topwater ...`);
-they are not ported yet.
+The `GraphTests.Live*` tests run only with `TOPWATER_LIVE_GRAPH=1`, `TOPWATER_GRAPH_SITE` (a site URL) and
+`TOPWATER_GRAPH_TOKEN` (an access token got elsewhere) and never print the token. `LiveSiteListsReadOnly` lists the
+site. The write tests, ported from the Python suite on `parked/connectors`, work only in what they create: a scratch
+folder `Documents/zz-topwater-test-<time>` (removed with `permanentDelete`, or sent to the recycle bin if that is
+refused) and scratch items titled `zz topwater ...` in `Project Tracker`, deleted in a `finally`.
+`LiveAnswersHaveTheShapeTheFakeGives` sends the same requests to the fake and the real service and compares the
+fields the connector reads. Their last run is stated in [graph.md](graph.md#tests).
 
 `examples/GraphMount` signs in with Azure.Identity's `DeviceCodeCredential` (settings `GRAPH_TENANT_ID`,
 `GRAPH_CLIENT_ID`, `GRAPH_SITE_URL` from the environment or `~/.config/topwater/graph.env`), mounts the site staged,

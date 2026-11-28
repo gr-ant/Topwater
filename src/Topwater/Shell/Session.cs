@@ -9,9 +9,11 @@ public sealed partial class Shell
     public ShellSnapshot Snapshot() => new(_mounts.Outside(Fs.Clone()), CaptureState(), Options.User, Options.Hostname, Now);
 
     /// <summary>Puts the machine back as <paramref name="snapshot"/> captured it. This shell keeps its own registered commands
-    /// (and the /usr/bin entries that list them); the snapshot is unchanged and can be restored again.</summary>
+    /// (and the /usr/bin entries that list them); the snapshot is unchanged and can be restored again. A snapshot that attaches a
+    /// source you mounted at another path than yours is refused (InvalidDataException) and nothing changes.</summary>
     public void Restore(ShellSnapshot snapshot)
     {
+        _mounts.Check(snapshot.State.Mounts);
         Fs.ReplaceWith(snapshot.Fs);
         _mounts.Restore(snapshot.State.Mounts);
         ApplyState(snapshot.State);
@@ -31,7 +33,7 @@ public sealed partial class Shell
             if (command.Handler.Target is not HostCommand) fork._commands[name] = command;
         fork._builtinNames = _builtinNames == null ? null : new(_builtinNames);
         var state = CaptureState();
-        fork._mounts.Sources = new(_mounts.Sources); // the fork's mounts use the same sources (a replay's: its answers)
+        fork._mounts.Sources = _mounts.Sources.ToDictionary(kv => kv.Key, kv => (kv.Value.Source, kv.Value.Mode, new HashSet<string>(kv.Value.Paths))); // the fork's mounts use the same sources (a replay's: its answers)
         fork._mounts.ReplayAnswers = _mounts.ReplayAnswers;
         fork._mounts.Restore(state.Mounts);
         fork.ApplyState(state);
