@@ -559,3 +559,10 @@ The rest is hooks where each port already does the same job: a `loader` on the f
 copy), fetching around the handler call in `Invoke` and for `<` / `>>` redirections, listing restored mounts at the
 start of `Run`, the host API in the shell's registration section, and the `mounts` entries in the snapshot and
 recording formats.
+
+Connectors (mount sources for outside services, [connectors/README.md](connectors/README.md)) are C# only:
+
+| Role | C# | Python | TS |
+|---|---|---|---|
+| What connectors share: the HTTP client with backoff and bounds, front matter, safe names | `Connectors/ConnectorCommon.cs` | | |
+| Microsoft Graph: OneDrive, SharePoint libraries, lists and subsites | `Connectors/GraphSource.cs` | | |

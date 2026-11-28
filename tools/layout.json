@@ -29,6 +29,8 @@
     { "name": "recording", "cs": "Recording.cs", "py": "recording.py", "ts": "recording.ts" },
     { "name": "webaccess", "cs": "WebAccess.cs", "py": "webaccess.py", "ts": "web.ts" },
     { "name": "mounts", "cs": "Mounts.cs", "py": "mounts.py", "ts": "mounts.ts", "sections": ["sources", "changes", "mounts"] },
+    { "name": "connectors.common", "cs": "Connectors/ConnectorCommon.cs", "py": null, "ts": null, "note": "C# only: the connectors are C#-first (docs/connectors/README.md)" },
+    { "name": "connectors.graph", "cs": "Connectors/GraphSource.cs", "py": null, "ts": null, "note": "C# only: Microsoft Graph (docs/connectors/graph-design.md)" },
     { "name": "spec", "cs": "CommandSpec.cs", "py": null, "ts": null,
       "note": "the lookups over the generated table; Python and TS generate them with the table (_spec.py, spec.generated.ts)" },
     { "name": "bytetext", "cs": "ByteText.cs", "py": "bytetext.py", "ts": "bytes.ts" },

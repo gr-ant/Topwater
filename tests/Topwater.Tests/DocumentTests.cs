@@ -41,7 +41,7 @@ public class DocumentTests
         string.Concat(items.Select(i => $"<Relationship Id=\"{i.Id}\" Type=\"t\" Target=\"{i.Target}\"{(i.Target.StartsWith("http") ? " TargetMode=\"External\"" : "")}/>")) +
         "</Relationships>";
 
-    static byte[] MakeDocx()
+    internal static byte[] MakeDocx()
     {
         static string Para(string text, string? style = null, (string Id, string Level)? num = null) =>
             "<w:p><w:pPr>" + (style != null ? $"<w:pStyle w:val=\"{style}\"/>" : "") +
