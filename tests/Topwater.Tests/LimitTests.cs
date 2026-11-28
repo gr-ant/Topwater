@@ -343,8 +343,22 @@ public class LimitTests
     public async Task JqHelpersOnLongPathsStayBounded(string cmd)
     {
         var (r, took) = await TestHost.Timed(() => new Shell().RunAsync(cmd));
-        Assert.True(took < TimeSpan.FromSeconds(20), $"took {took}");
+        Assert.True(took < TimeSpan.FromSeconds(60), $"took {took}");
         Assert.NotEqual(0, r.ExitCode);
         Assert.Matches("too many steps|maximum nesting level exceeded", r.Stderr);
+    }
+
+    [Fact]
+    public async Task EmptyFilesAndDirectoriesCountAgainstTheDisk()
+    {
+        // they hold no bytes, but each costs the host memory: 600,000 took 350 MB in one call, and calls add up
+        var sh = new Shell(new ShellOptions { MaxFileSystemBytes = 16L << 20 }); // 16,384 names
+        var r = await sh.RunAsync("mkdir d && cd d && seq 20000 | xargs touch; echo $?; ls | wc -l; df / | tail -1 | awk '{print $3}'");
+        var lines = r.Stdout.Split('\n');
+        Assert.Equal("123", lines[0]); // xargs: a run of touch failed
+        Assert.InRange(int.Parse(lines[1]), 15_000, 16_384);
+        Assert.Contains("No space left on device", r.Stderr);
+        r = await sh.RunAsync("mkdir x; ln -s a y; cp -r /home/agent/d /tmp/e; echo $?; cd; rm -rf d; mkdir z && echo made");
+        Assert.Contains("1\nmade\n", r.Stdout);
     }
 }

@@ -143,6 +143,25 @@ public sealed class VirtualFileSystem
 
     internal const string NoSpace = CommandSpec.Errno.ENOSPC;
 
+    /// <summary>Names (files, directories, links) the agent may fill the disk with: one per KB of <see cref="Capacity"/>, at
+    /// least 10,000, four times what ext4 gives a disk that size. An empty file or directory holds no bytes but costs the host
+    /// some 500 bytes of memory, so without a count a session could fill memory with them.</summary>
+    long MaxEntries => Math.Max(10_000, Capacity / 1024);
+    long _entries; // names created since the last count: an over-estimate, recounted when it passes the limit
+
+    /// <summary>Counts <paramref name="n"/> new names for the agent (RunAs set), refusing them past <see cref="MaxEntries"/>.</summary>
+    void ReserveEntries(long n, string path)
+    {
+        if (RunAs == null || (_entries += n) <= MaxEntries) return;
+        long count = 0;
+        var todo = new Stack<Dir>();
+        todo.Push(_root);
+        while (todo.Count > 0)
+            foreach (var child in todo.Pop().Children.Values) { count++; if (child is Dir d) todo.Push(d); }
+        _entries = count + n;
+        if (_entries > MaxEntries) { _entries = count; throw new ShellException($"{path}: {NoSpace}"); }
+    }
+
     /// <summary>The longest real path a directory may have, as Linux's PATH_MAX. It bounds how deep a tree goes: rm -r, cp -r,
     /// snapshots and the change tracker walk trees by recursion, and mv could otherwise nest one below any path.</summary>
     internal const int MaxPath = 4095;
@@ -381,6 +400,7 @@ public sealed class VirtualFileSystem
         var spot = Place(path);
         if (spot.Node != null) throw new ShellException($"{path}: {CommandSpec.Errno.EEXIST}");
         Require(spot.Parent!, 2, path);
+        ReserveEntries(1, path);
         spot.Parent!.Children[spot.Name] = new LinkNode { Target = target, Owner = RunAs ?? spot.Parent.Owner, Mode = 0x1FF, Modified = Clock() };
         spot.Parent.Modified = Clock();
     }
@@ -396,6 +416,7 @@ public sealed class VirtualFileSystem
         if (spot.Node != null) throw new ShellException($"{path}: {CommandSpec.Errno.EEXIST}");
         Require(spot.Parent!, 2, path);
         if (Restricted && node.Owner != RunAs && !Allowed(node, 6)) throw new ShellException($"{path}: {CommandSpec.Errno.EPERM}");
+        ReserveEntries(1, path);
         node.Nlink++;
         spot.Parent!.Children[spot.Name] = node;
         spot.Parent.Modified = Clock();
@@ -452,6 +473,7 @@ public sealed class VirtualFileSystem
         else
         {
             Require(dir, 2, path);
+            ReserveEntries(1, path);
             var file = new FileNode { Owner = RunAs ?? dir.Owner, Mode = Masked(0b110_110_110), Modified = Clock() };
             file.Store(content, data, false, d => Reserve(d, path));
             dir.Children[spot.Name] = file;
@@ -512,6 +534,7 @@ public sealed class VirtualFileSystem
         var spot = Place(path);
         Require(spot.Parent!, 2, path);
         RequireDepth(spot.Real, null, path); // through a link the real path can be longer
+        ReserveEntries(1, path);
         spot.Parent!.Children[spot.Name] = new Dir { Owner = RunAs ?? spot.Parent.Owner, Mode = Masked(0b111_111_111), Modified = Clock() };
         spot.Parent.Modified = Clock();
     }
@@ -602,6 +625,7 @@ public sealed class VirtualFileSystem
             // a directory already being copied further up, reached through a link (even one higher up), as cp -L reports it
             if (n is Dir again && copying.Contains(again)) { broken(path, "cyclic"); return null; }
             tick?.Invoke();
+            ReserveEntries(1, dest);
             if (!Permits(n, user, n is Dir ? 5 : 4))
             {
                 denied(path, n is Dir);
