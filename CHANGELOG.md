@@ -14,6 +14,13 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   sent. Signing in stays with the host (a token function); no new package dependency. `examples/GraphMount` signs in
   with Azure.Identity and lets an agent restructure a site, staged. [docs/connectors/graph.md](docs/connectors/graph.md)
 
+### Safety (.NET)
+
+- **jq sorting on deep values.** `sort`, `unique`, `group_by`, `unique_by`, `sort_by`, `min`, `max` and `del` on values
+  nested deeper than the stack allows now stop with `maximum nesting level exceeded`, as the other jq helpers do,
+  instead of `Failed to compare two elements in the array`. A test runs every recursive jq helper on a deep value from
+  a host thread with a 256 KB stack.
+
 ## 0.1.0-preview.5 (2026-11-27)
 
 Everything since `0.1.0-preview.4`. With this preview Topwater is parked: it stays available and is maintained

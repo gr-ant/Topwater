@@ -336,6 +336,64 @@ public class LimitTests
     }
 
     [Theory]
+    // jq helpers on a deep value, run from a host thread with a small stack
+    [InlineData("[$v, $v] | unique | length")]
+    [InlineData("[$v, $v] | sort | length")]
+    [InlineData("[$v, $v] | group_by(.) | length")]
+    [InlineData("[$v, $v] | unique_by(.) | length")]
+    [InlineData("[$v, [$v]] | min | length")]
+    [InlineData("{a: $v, b: $v} | to_entries | sort_by(.value) | length")]
+    [InlineData("$v | getpath([range(30000) | 0]) | length")]
+    [InlineData("[$v | tostream] | length")]
+    [InlineData("$v | [paths] | length")]
+    [InlineData("$v | [leaf_paths] | length")]
+    [InlineData("$v | [..] | length")]
+    [InlineData("$v | flatten | length")]
+    [InlineData("$v | walk(.) | length")]
+    [InlineData("$v | tojson | length")]
+    [InlineData("$v | tostring | length")]
+    [InlineData("$v | @json | length")]
+    [InlineData("$v | @text | length")]
+    [InlineData("$v | @base64 | length")]
+    [InlineData("$v | contains($v)")]
+    [InlineData("$v | inside($v)")]
+    [InlineData("$v | index([$v])")]
+    [InlineData("[$v] - [$v] | length")]
+    [InlineData("[$v] | indices([$v])")]
+    [InlineData("$v | . < $v")]
+    [InlineData("$v | . == $v")]
+    [InlineData("$v | del(.[0][0]) | length")]
+    [InlineData("$v | delpaths([[range(30000) | 0]]) | length")]
+    [InlineData("$v | to_entries | length")]
+    [InlineData("[$v] | add | length")]
+    [InlineData("$v + $v | length")]
+    [InlineData("{a: $v} * {a: $v} | length")]
+    [InlineData("{a: (reduce range(30000) as $i (null; {a: .}))} * {a: (reduce range(30000) as $i (null; {a: .}))} | length")]
+    [InlineData("$v | any")]
+    [InlineData("[$v] | in([$v])? // 1")]
+    [InlineData("$v | [path(..)] | length")]
+    [InlineData("$v | [recurse(.[]?)] | length")]
+    [InlineData("$v | tojson | fromjson | length")]
+    [InlineData("$v | ltrimstr($v)? | length")]
+    public void JqHelpersOnDeepValuesEndTheCallOnASmallStack(string filter)
+    {
+        var sh = new Shell();
+        var cmd = $"jq -n 'reduce range(30000) as $i (null; [.]) as $v | {filter}'";
+        ShellResult? r = null, after = null;
+        Exception? failed = null;
+        var thread = new Thread(() =>
+        {
+            try { r = sh.RunAsync(cmd).GetAwaiter().GetResult(); after = sh.RunAsync("echo ok").GetAwaiter().GetResult(); }
+            catch (Exception e) { failed = e; }
+        }, maxStackSize: 256 * 1024);
+        thread.Start();
+        thread.Join();
+        Assert.Null(failed);
+        if (r!.ExitCode != 0) Assert.Matches("maximum nesting level exceeded|recursion too deep|not supported|too many steps", r.Stderr);
+        Assert.Equal("ok\n", after!.Stdout);
+    }
+
+    [Theory]
     // each copied the rest of the path, or every path's prefix, per level: 26 GB for setpath with a 100,000-long path
     [InlineData("jq -n 'null | setpath([range(30000) | 0]; 1) | length'")]
     [InlineData("jq -n 'reduce range(10000) as $i (null; [.]) | [paths] | length'")]
