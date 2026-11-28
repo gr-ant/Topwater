@@ -295,17 +295,28 @@ public sealed class Recording
     {
         limits ??= new ShellOptions();
         long maxFile = MaxSnapshotsFileSystems * ShellSnapshot.MaxArchiveBytes(limits);
+        bool zip;
         if (!stream.CanSeek)
         {
             var copy = new MemoryStream();
-            try { ShellSnapshot.ReadCapped(stream, copy, maxFile, "the file"); }
-            catch (InvalidDataException) { throw Bad($"the file is larger than {maxFile} bytes"); }
+            int b0 = stream.ReadByte(), b1 = b0 < 0 ? -1 : stream.ReadByte();
+            if (b0 >= 0) copy.WriteByte((byte)b0);
+            if (b1 >= 0) copy.WriteByte((byte)b1);
+            zip = b0 == 'P' && b1 == 'K';
+            long max = zip ? maxFile : MaxJsonLinesBytes(limits);
+            try { ShellSnapshot.ReadCapped(stream, copy, max - copy.Length, "the file"); }
+            catch (InvalidDataException) { throw Bad(zip ? $"the file is larger than {max} bytes" : JsonLinesTooLarge(max)); }
             copy.Position = 0;
             stream = copy;
         }
-        long at = stream.Position;
-        bool zip = stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
-        stream.Position = at;
+        else
+        {
+            long at = stream.Position;
+            zip = stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
+            stream.Position = at;
+            // an old recording is read line by line into strings: refuse a large one by its length, before reading it
+            if (!zip && stream.Length - at > MaxJsonLinesBytes(limits)) throw Bad(JsonLinesTooLarge(MaxJsonLinesBytes(limits)));
+        }
         return ShellSnapshot.Checked(() => zip ? LoadTopwater(stream, limits, maxFile) : LoadJsonLines(stream, openSnapshot, limits), Invalid);
     }
 
@@ -411,6 +422,10 @@ public sealed class Recording
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
     }
+
+    /// <summary>The largest old JSON Lines recording that loads: MaxFileSystemBytes (its side-car snapshots are capped on their own).</summary>
+    internal static long MaxJsonLinesBytes(ShellOptions o) => o.MaxFileSystemBytes;
+    static string JsonLinesTooLarge(long max) => $"a JSON Lines recording larger than {max} bytes (MaxFileSystemBytes)";
 
     static readonly System.Text.RegularExpressions.Regex CheckpointName = new(@"^checkpoints/(0|[1-9][0-9]{0,8})\.json\z");
 

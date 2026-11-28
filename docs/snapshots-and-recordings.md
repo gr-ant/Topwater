@@ -331,7 +331,8 @@ of calls, and no two zip entries may share a name.
 
 Older files still load: snapshot zips are `.topwater` files already, and the JSON Lines recordings that came before
 (header `"format":"topwater-recording"`, snapshots embedded as base64 zips or in side-car files) load with the same
-checks. A side-car name must be plain segments of letters, digits, `.`, `_` and `-` separated by `/`, none made only of
+checks. Such a file may be at most `MaxFileSystemBytes` bytes (128 MB at the defaults): a larger one is refused from
+its length before it is read, and a stream that can't seek is read only up to that size. A side-car name must be plain segments of letters, digits, `.`, `_` and `-` separated by `/`, none made only of
 dots; a custom `openSnapshot` must treat it as nothing else. `Save` always writes `.topwater`, so loading and saving
 converts an old recording.
 

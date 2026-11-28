@@ -400,6 +400,48 @@ public class RecordingTests
         Assert.Contains("more than 1000 calls", Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(text)), limits: few)).Message);
     }
 
+    /// <summary>A file of <paramref name="length"/> bytes, <paramref name="prefix"/> then 'x', made as it is read; counts what was read.</summary>
+    sealed class GeneratedFile(byte[] prefix, long length, bool seekable) : Stream
+    {
+        public long BytesRead { get; private set; }
+        long _pos;
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int n = (int)Math.Min(count, length - _pos);
+            for (int i = 0; i < n; i++, _pos++) buffer[offset + i] = _pos < prefix.Length ? prefix[_pos] : (byte)'x';
+            BytesRead += n;
+            return n;
+        }
+        public override bool CanRead => true;
+        public override bool CanSeek => seekable;
+        public override bool CanWrite => false;
+        public override long Length => seekable ? length : throw new NotSupportedException();
+        public override long Position { get => seekable ? _pos : throw new NotSupportedException(); set => _pos = seekable ? value : throw new NotSupportedException(); }
+        public override long Seek(long offset, SeekOrigin origin) => Position = origin switch { SeekOrigin.Begin => offset, SeekOrigin.Current => _pos + offset, _ => length + offset };
+        public override void Flush() { }
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void An_oversized_json_lines_recording_is_refused_before_it_is_read()
+    {
+        // the 300 MB file: one huge header line. Refused from its length, having read the two bytes that tell it from a zip
+        var header = Encoding.UTF8.GetBytes(File.ReadAllLines(Fixture("basics.jsonl"))[0][..^1] + ",\"pad\":\"");
+        var file = new GeneratedFile(header, 300L << 20, seekable: true);
+        var e = Assert.Throws<InvalidDataException>(() => Recording.Load(file));
+        Assert.Contains("larger than 134217728 bytes (MaxFileSystemBytes)", e.Message);
+        Assert.True(file.BytesRead < 4096, $"read {file.BytesRead} bytes");
+        // a stream that can't seek is read only up to the cap
+        var limits = new ShellOptions { MaxFileSystemBytes = 1 << 20 };
+        var pipe = new GeneratedFile(header, 300L << 20, seekable: false);
+        Assert.Contains("larger than 1048576 bytes", Assert.Throws<InvalidDataException>(() => Recording.Load(pipe, limits: limits)).Message);
+        Assert.InRange(pipe.BytesRead, 1 << 20, (1 << 20) + 100_000);
+        // under the cap still loads
+        var ok = File.ReadAllBytes(Fixture("basics.jsonl"));
+        Assert.NotEmpty(Recording.Load(new GeneratedFile(ok, ok.Length, seekable: false), limits: new ShellOptions { MaxFileSystemBytes = ok.Length }).Calls);
+    }
+
     [Fact]
     public async Task Checkpoints_share_a_budget_of_entries()
     {
