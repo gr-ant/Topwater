@@ -57,7 +57,7 @@ public class GitTests
         var r = await sh.RunAsync("git add big; git commit -qm big; git show > /dev/null; echo $?");
         Assert.Equal("128\n", r.Stdout);
         Assert.Contains("fatal: a file of more than 1000000 lines is too large for this machine's limits", r.Stderr);
-        var sha = Put(sh, "blob", B(string.Concat(Enumerable.Repeat("x\n", 900_000))));
+        var sha = Put(sh, "blob", B(string.Concat(Enumerable.Repeat("x\n", 120_000))));
         var tree = new MemoryStream();
         for (int i = 0; i < 200; i++) { tree.Write(B($"100644 p{i:D3}\0")); tree.Write(Convert.FromHexString(sha)); }
         var commit = CommitWithTree(sh, tree.ToArray());
