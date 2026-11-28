@@ -1,4 +1,5 @@
 using System.Formats.Tar;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -95,6 +96,7 @@ public static class ContainerImport
         {
             await Docker.RunAsync(["container", "cp", container + ":" + PathsPath, "-"], readStdout: async s =>
             {
+                s = new TarHeaderGuard(s);
                 using var tar = new TarReader(s);
                 if (await tar.GetNextEntryAsync(cancellationToken: ct) is { EntryType: TarEntryType.RegularFile or TarEntryType.V7RegularFile, DataStream: { } data } entry && entry.Length <= max)
                     lines.AddRange(PathsLines(await new StreamReader(data).ReadToEndAsync(ct)));
@@ -110,6 +112,109 @@ public static class ContainerImport
 
     static readonly Regex UserName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}\z");
     static readonly Regex VarName = new(@"^[A-Za-z_][A-Za-z0-9_]*\z");
+
+    /// <summary>The most bytes one tar metadata entry (a PAX extended header, or a GNU long name or long link) may hold.</summary>
+    public const int MaxTarHeaderBytes = 1 << 20;
+
+    /// <summary>
+    /// Passes a tar through, following its headers block by block as TarReader does (a PAX <c>size</c> included), and refuses a
+    /// metadata entry larger than <see cref="MaxTarHeaderBytes"/> before TarReader reads it: TarReader holds one whole in memory.
+    /// </summary>
+    sealed class TarHeaderGuard(Stream inner) : Stream
+    {
+        readonly byte[] _header = new byte[512];
+        readonly MemoryStream _pax = new();
+        long _pos, _next, _paxEnd, _paxSize = -1;
+        int _zeros;
+
+        public override int Read(byte[] buffer, int offset, int count) => Inspect(buffer.AsSpan(offset, inner.Read(buffer, offset, count)));
+        public override int Read(Span<byte> buffer) => Inspect(buffer[..inner.Read(buffer)]);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) => ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            int n = await inner.ReadAsync(buffer, ct);
+            return Inspect(buffer.Span[..n]);
+        }
+
+        int Inspect(ReadOnlySpan<byte> data)
+        {
+            int n = data.Length;
+            while (data.Length > 0 && _zeros < 2)
+            {
+                if (_pos < _next)
+                {
+                    int skip = (int)Math.Min(data.Length, _next - _pos);
+                    if (_pos < _paxEnd) _pax.Write(data[..(int)Math.Min(skip, _paxEnd - _pos)]);
+                    _pos += skip;
+                    data = data[skip..];
+                    continue;
+                }
+                int at = (int)(_pos - _next), take = Math.Min(512 - at, data.Length);
+                data[..take].CopyTo(_header.AsSpan(at));
+                _pos += take;
+                data = data[take..];
+                if (at + take == 512) Header();
+            }
+            return n;
+        }
+
+        void Header()
+        {
+            if (_header.All(b => b == 0)) { _zeros++; _next += 512; return; }
+            _zeros = 0;
+            if (_paxEnd > 0) { _paxSize = PaxSize(); _paxEnd = 0; _pax.SetLength(0); }
+            char type = (char)_header[156];
+            long size = Size();
+            if (type is 'x' or 'g' or 'L' or 'K')
+            {
+                if (size > MaxTarHeaderBytes) throw new InvalidDataException($"a tar {(type is 'x' or 'g' ? "extended header" : "long name")} of {size} bytes, larger than {MaxTarHeaderBytes} bytes");
+                if (type == 'x') _paxEnd = _next + 512 + size;
+            }
+            else
+            {
+                if (_paxSize >= 0) size = _paxSize; // a PAX size applies to the one entry after it
+                _paxSize = -1;
+            }
+            _next += 512 + (size + 511) / 512 * 512;
+        }
+
+        // the header's size field: octal digits between NULs and spaces, or base-256 when its first bit is set
+        long Size()
+        {
+            var f = _header.AsSpan(124, 12);
+            if ((f[0] & 0x80) != 0)
+            {
+                if (f[0] != 0x80 || f[1] != 0 || f[2] != 0 || f[3] != 0) throw new InvalidDataException("a tar entry size out of range");
+                long v = 0;
+                foreach (var b in f[4..]) v = v << 8 | b;
+                return v;
+            }
+            var digits = f.Trim((ReadOnlySpan<byte>)[0, (byte)' ']);
+            long size = 0;
+            foreach (var b in digits) size = b is >= (byte)'0' and <= (byte)'7' ? size * 8 + (b - '0') : throw new InvalidDataException("a tar entry size is not octal");
+            return size;
+        }
+
+        // a PAX header's "size" record, which TarReader takes as the next entry's length; -1 without one
+        long PaxSize()
+        {
+            long found = -1;
+            foreach (var record in Encoding.UTF8.GetString(_pax.GetBuffer(), 0, (int)_pax.Length).Split('\n'))
+                if (record.IndexOf(' ') is var sp and > 0 && record[(sp + 1)..].StartsWith("size=", StringComparison.Ordinal))
+                    found = long.TryParse(record[(sp + 6)..], NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : throw new InvalidDataException("a tar extended header holds a bad size");
+            return found;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     sealed class Item(bool isDirectory, int mode, int uid, DateTime mtime, byte[]? data)
     {
@@ -165,6 +270,8 @@ public static class ContainerImport
 
         public async Task ReadAsync(Stream stream, CancellationToken ct)
         {
+            // an empty seekable stream stays as it is: TarReader reads it as an empty archive only when it can see its length
+            if (!stream.CanSeek || stream.Length > stream.Position) stream = new TarHeaderGuard(stream);
             try
             {
                 using var tar = new TarReader(stream);

@@ -195,6 +195,10 @@ Container content is untrusted, like [a loaded file](snapshots-and-recordings.md
   count toward `MaxFileSystemBytes` too.
 - Anything else malformed (a time or owner no snapshot can hold, a broken header) fails with `InvalidDataException`
   (Python: `InvalidContainerData`).
+- A PAX extended header, GNU long name or GNU long link may hold at most 1 MiB (`ContainerImport.MaxTarHeaderBytes`).
+  .NET's tar reader holds such a header whole in memory (a 256 MB one took 0.5-1.3 GB), so a larger one is refused
+  from the size in its header block, before it is read. The headers are followed block by block, a PAX `size`
+  included, exactly as the tar reader finds them.
 - Each entry is read only up to the size its header declares. A session script, `/etc/passwd` or `.bash_history`
   larger than `MaxStringBytes` is not read.
 - The result goes through `ShellSnapshot.Load` with your limits, so all its checks apply: names, modes, variable names,

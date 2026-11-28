@@ -494,4 +494,44 @@ public class ContainerTests
         var run = await Restored(r).RunAsync("readlink /srv/a; cat /srv/a");
         Assert.Equal(("/srv/b\n", "cat: /srv/a: Too many levels of symbolic links\n"), (run.Stdout, run.Stderr));
     }
+
+    [Theory]
+    [InlineData('L')] // GNU long name
+    [InlineData('K')] // GNU long link
+    [InlineData('x')] // PAX extended header
+    public async Task A_huge_tar_header_is_refused_before_it_is_buffered(char type)
+    {
+        // TarReader reads such a header whole into memory: 256 MB of it took 0.5-1.3 GB. Refused from its size, unread
+        var stream = TarHeaders.Huge(type, 64L << 20, Tar(F("srv/f", "x")).ToArray());
+        var e = await Assert.ThrowsAsync<InvalidDataException>(() => ContainerImport.FromTarAsync(stream, new ContainerConfig("agent", "/home/agent"), ["A /srv/f"]));
+        Assert.Contains("larger than 1048576 bytes", e.Message);
+        Assert.True(stream.BytesRead < 1 << 20, $"read {stream.BytesRead} bytes");
+        // a long name in a header under the cap imports
+        var name = "srv/" + string.Join('/', Enumerable.Repeat(new string('d', 200), 15)) + "/f";
+        var ok = new MemoryStream();
+        using (var w = new TarWriter(ok, type == 'x' ? TarEntryFormat.Pax : TarEntryFormat.Gnu, leaveOpen: true))
+            w.WriteEntry(type == 'K' ? new GnuTarEntry(TarEntryType.SymbolicLink, "srv/l") { LinkName = "/" + name }
+                : type == 'x' ? new PaxTarEntry(TarEntryType.RegularFile, name) { DataStream = new MemoryStream("x"u8.ToArray()) }
+                : new GnuTarEntry(TarEntryType.RegularFile, name) { DataStream = new MemoryStream("x"u8.ToArray()) });
+        ok.Position = 0;
+        var r = await Import(ok, changes: [type == 'K' ? "A /srv/l" : "A /" + name]);
+        Assert.Equal(type == 'K' ? "/" + name : "x", type == 'K' ? r.Snapshot.Fs.Stat("/srv/l", follow: false).LinkTarget : r.Snapshot.Fs.ReadAllText("/" + name));
+    }
+
+    [Fact]
+    public async Task The_header_check_follows_a_pax_size()
+    {
+        // a PAX "size" gives the next entry's length in place of its header's (0 here): what it covers is data, even data
+        // that looks like a huge header, and the next header is found where TarReader finds it
+        var fake = TarHeaders.Header("././@LongLink", 'L', 64L << 20);
+        var data = fake.Concat(new byte[512]).ToArray();
+        var body = $" size={data.Length}\n";
+        var record = $"{body.Length + 2}{body}"; // the length counts its own two digits
+        Assert.Equal(record.Length, int.Parse(record.Split(' ')[0]));
+        var pax = TarHeaders.Header("PaxHeaders/f", 'x', record.Length).Concat(Encoding.ASCII.GetBytes(record)).Concat(new byte[512 - record.Length]);
+        var tar = pax.Concat(TarHeaders.Header("srv/f", '0', 0)).Concat(data).Concat(Tar(F("srv/g", "y")).ToArray()).ToArray();
+        var r = await Import(new MemoryStream(tar), changes: ["A /srv/f", "A /srv/g"]);
+        Assert.Equal(1024, r.Snapshot.Fs.ReadAllBytes("/srv/f").Length);
+        Assert.Equal("y", r.Snapshot.Fs.ReadAllText("/srv/g"));
+    }
 }
