@@ -313,6 +313,18 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
     }
 
     [ChromiumFact]
+    public async Task APageThatKeepsOpeningWindowsKeepsAtMostOne()
+    {
+        var site = new Site()
+            .Page("https://app.test/", "<title>Flood</title><button>Go</button><script>setInterval(() => { for (let i = 0; i < 20; i++) { const w = window.open(''); w && w.setInterval(() => w.open(''), 20) } }, 50)</script>");
+        var (sh, source) = await Open(site);
+        await Task.Delay(2000);
+        Assert.InRange(source.Page.Context.Pages.Count, 1, 3);
+        await sh.RunAsync("echo 1 > /web/elements/button-go/click");
+        Assert.InRange(source.Page.Context.Pages.Count, 1, 3);
+    }
+
+    [ChromiumFact]
     public async Task LaunchOpensAPageItOwns()
     {
         var site = Shop();

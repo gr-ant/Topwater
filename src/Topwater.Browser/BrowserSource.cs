@@ -160,9 +160,19 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             Note(Msg("download", ("name", Cut(d.SuggestedFilename, 200))));
             _ = d.CancelAsync().ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
         };
-        _page.Popup += (_, p) => { lock (_lock) _popup = p; };
+        _page.Popup += (_, p) => OnPopup(p);
         _page.Load += (_, _) => _navPending = false;
         _ready = InstallAsync();
+    }
+
+    /// <summary>Keeps only the newest window the page (or a window it opened) opened: a page that opens windows in a loop
+    /// would otherwise fill the host's memory with them.</summary>
+    void OnPopup(IPage p)
+    {
+        p.Popup += (_, q) => OnPopup(q);
+        IPage? old;
+        lock (_lock) { old = _popup; _popup = p; }
+        if (old != null) _ = old.CloseAsync().ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
     }
 
     async Task InstallAsync()
