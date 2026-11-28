@@ -183,6 +183,7 @@ class CommandContext:
         return self.shell.fs
 
     def resolve(self, path: str) -> str:
+        self.shell.check_deadline()  # a command given many paths (touch $(seq 600000)) stops at the call's time limit
         return self.shell.resolve(path)
 
     def print(self, *values: Any, end: str = "\n") -> None:

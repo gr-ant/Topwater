@@ -38,6 +38,14 @@ class _Budget:
         if self._entries < 0:
             raise ShellError(spec_message("tar", "entryLimit", limit=str(self.max_entries)), self.exit_code)
 
+    def zip_entries(self, buf) -> None:
+        """Refuses a zip that states or holds more entries than one extraction may have, before zipfile builds an object for
+        every one (a disk of 47-byte directory records holds millions)."""
+        from ..snapshot import _zip_entry_count
+        if _zip_entry_count(buf, self.max_entries) > self.max_entries:
+            self._entries = 0
+            self.entry()
+
     def charge(self, n: int) -> None:
         self._bytes -= n
         if self._bytes < 0:
@@ -783,8 +791,10 @@ def _zip(ctx):
     info = ctx.stderr if archive_path is None else ctx.stdout
     entries: dict[str, tuple[zipfile.ZipInfo, bytes]] = {}  # name -> (header, uncompressed data), in archive order
     if archive_path is not None and fs.is_file(archive_path):
+        buf = io.BytesIO(fs.read_bytes(archive_path))
+        _Budget(ctx.shell, 4).zip_entries(buf)
         try:
-            with zipfile.ZipFile(io.BytesIO(fs.read_bytes(archive_path))) as zf:
+            with zipfile.ZipFile(buf) as zf:
                 for zi in zf.infolist():
                     entries[zi.filename] = (zi, zf.read(zi))
         except (zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error):
@@ -859,8 +869,11 @@ def _unzip(ctx):
         ctx.stderr.write(spec_message("unzip", "cannotFind", name=name) + "\n")
         return 9
     quiet, pipe = a.has("q"), a.has("p")
+    budget = _Budget(ctx.shell, 1)
+    data = io.BytesIO(fs.read_bytes(path))
+    budget.zip_entries(data)
     try:
-        zf = zipfile.ZipFile(io.BytesIO(fs.read_bytes(path)))
+        zf = zipfile.ZipFile(data)
     except zipfile.BadZipFile:
         if not quiet:
             ctx.print(f"Archive:  {name}")
@@ -881,7 +894,6 @@ def _unzip(ctx):
                 hit = found[i] = True
         return hit
 
-    budget = _Budget(ctx.shell, 1)
     code = 0
 
     def inflate(zi: zipfile.ZipInfo) -> bytes:

@@ -327,3 +327,39 @@ def test_tar_transform_cannot_leave_the_target_directory():
     assert not sh.fs.exists("/tmp/w/esc1") and not sh.fs.exists("/esc") and not sh.fs.exists("/tmp/esc")
     assert sh.fs.read_bytes("/tmp/w/a/b/c/esc/ok.txt") == b"fine\n"
     assert sh.fs.read_bytes("/tmp/w/victim") == b"secret\n"
+
+
+def test_config_continuations_and_many_packed_branches_honour_the_time_limit():
+    # joining continued lines was quadratic, and branch -vv parsed packed-refs once per branch: both ran minutes
+    sh = repo(max_call_duration=20)
+    sh.fs.append_text("/tmp/w/.git/config", "[core]\n" + "a = b\\\n" * 50_000 + "a = c\n")
+    start = time.monotonic()
+    r = sh.run("git config core.a")
+    assert time.monotonic() - start < 10
+    assert r.stderr.startswith("fatal: bad config line")
+    sh.fs.write_text("/tmp/w/.git/config", "[core]\n\tbare = false\n")
+    head = sh.run("git rev-parse HEAD").stdout.strip()
+    sh.fs.write_text("/tmp/w/.git/packed-refs", "".join(f"{head} refs/heads/b{i:04d}\n" for i in range(5000)))
+    start = time.monotonic()
+    assert sh.run("git branch -vv | wc -l").stdout == "5001\n"
+    assert time.monotonic() - start < 15
+
+
+def test_a_commit_naming_one_big_blob_at_many_paths_stops_at_the_time_limit():
+    # every file of the diff was split into lines before the first was written, with no look at the clock
+    sh = repo(max_call_duration=2)
+    sha = put(sh, "blob", b"x\n" * 300_000)
+    commit = commit_with_tree(sh, b"".join(f"100644 p{i:03d}\0".encode() + bytes.fromhex(sha) for i in range(200)))
+    start = time.monotonic()
+    r = sh.run(f"git show {commit} | wc -l")
+    assert time.monotonic() - start < 10
+    assert r.exit_code in (1, 124)
+
+
+def test_fsck_bounds_the_links_it_keeps():
+    # every tree's entries were kept until fsck finished, and the object cap did not count them
+    sh = repo()
+    for prefix in "ab":
+        put(sh, "tree", b"".join(f"100644 {prefix}{i:07d}\0".encode() + bytes(20) for i in range(600_000)))
+    r = sh.run("git fsck")
+    assert (r.exit_code, r.stderr) == (128, "fatal: the object graph is too large for this machine's limits\n")

@@ -777,6 +777,7 @@ def write_diff(g: Git, repo: Repo, a: dict, b: dict, opts: Opts, specs=None, b_w
         return True
     stats = []
     for st, old, new in changes:
+        g.ctx.check_time()  # each file is split into lines: a commit can name one big blob at many paths
         x = blob_data(repo, a.get(old) if old else None, old or "", a_worktree)
         y = blob_data(repo, b.get(new) if new else None, new or "", b_worktree)
         if is_binary(x) or is_binary(y):
@@ -840,6 +841,7 @@ def write_stat(write, stats, short=False, summary=None) -> None:
 
 
 def write_patch(g, repo, write, st, old, new, x, y, context, a_worktree, b_worktree) -> None:
+    g.ctx.check_time()
     an, bn = old or new, new or old
     write(f"diff --git {c_quote('a/' + an)} {c_quote('b/' + bn)}\n")
     xd = blob_data(repo, x, old or "", a_worktree)

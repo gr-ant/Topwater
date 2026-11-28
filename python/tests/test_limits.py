@@ -263,3 +263,54 @@ def test_jq_depth_limit_is_the_same_for_every_kind_of_function():
         assert sh.run(f"jq -n '{src.format(99)}'").stdout == "99\n", name
         r = sh.run(f"jq -n '{src.format(100)}'")
         assert r.exit_code == 5 and "recursion too deep" in r.stderr, name
+
+
+def test_mkdir_p_of_a_path_longer_than_linux_allows_fails_quickly():
+    # each parent was a walk of the whole path: a 10,000-deep path ran far past the time limit
+    sh = Shell(max_call_duration=5)
+    start = time.monotonic()
+    r = sh.run("mkdir -p $(printf 'd/%.0s' $(seq 10000)); echo $?")
+    assert time.monotonic() - start < 5
+    assert r.stdout == "1\n" and r.stderr.endswith("File name too long\n")
+
+
+def test_empty_files_and_directories_count_against_the_disk():
+    # they hold no bytes, but each costs the host memory, and calls add up
+    sh = Shell(max_file_system_bytes=16 << 20)  # 16,384 names
+    r = sh.run("mkdir d && cd d && seq 20000 | xargs touch; echo $?; ls | wc -l")
+    code, count = r.stdout.split()
+    assert code == "123" and 15_000 <= int(count) <= 16_384
+    assert "No space left on device" in r.stderr
+    r = sh.run("mkdir x; ln -s a y; cp -r /home/agent/d /tmp/e; echo $?; cd; rm -rf d; mkdir z && echo made")
+    assert "1\nmade\n" in r.stdout
+
+
+def test_a_command_given_many_paths_stops_at_the_time_limit():
+    hits_time_limit(quick(3), "mkdir d && cd d && seq 300000 | xargs touch", 3)  # one touch of 300,000 names took 22 s
+
+
+def test_zip_entry_count_is_checked_before_the_directory_is_read():
+    # zipfile builds an object for every central directory record, and a disk holds millions of them
+    import io
+    import struct
+    import zipfile
+    sh = Shell(max_extract_entries=50)
+    sh.run("mkdir -p /tmp/w && cd /tmp/w")
+    many = io.BytesIO()
+    with zipfile.ZipFile(many, "w") as z:
+        for i in range(60):
+            z.writestr(f"f{i}", "")
+    sh.fs.write_bytes("/tmp/w/many.zip", many.getvalue())
+    w = io.BytesIO()  # one stored entry, and a zip64 end record that states a billion
+    w.write(struct.pack("<Ih20shh", 0x04034b50, 20, bytes(20), 1, 0) + b"a")
+    cd = w.tell()
+    w.write(struct.pack("<Ihh20sh12si", 0x02014b50, 20, 20, bytes(20), 1, bytes(12), 0) + b"a")
+    z64 = w.tell()
+    w.write(struct.pack("<Iqhhqqqqq", 0x06064b50, 44, 45, 45, 0, 10**9, 10**9, z64 - cd, cd))
+    w.write(struct.pack("<Iiqi", 0x07064b50, 0, z64, 1))
+    w.write(struct.pack("<Iihhiih", 0x06054b50, 0, -1, -1, -1, -1, 0))
+    sh.fs.write_bytes("/tmp/w/billion.zip", w.getvalue())
+    limit = "archive exceeds the 50-entry extraction limit; stopping\n"
+    for cmd, code, message in (("unzip -l billion.zip", 1, f"unzip: {limit}"), ("echo x > new; zip -q many.zip new", 4, f"zip: {limit}")):
+        r = sh.run(cmd)
+        assert (r.exit_code, r.stderr) == (code, message)

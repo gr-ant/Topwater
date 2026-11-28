@@ -1372,6 +1372,7 @@ def git_fsck(g: Git, args) -> int:
         raise fatal("tooLarge", what="objects")
     kinds: dict[str, str] = {}
     links: dict[str, list[tuple[str, str]]] = {}  # object -> [(kind, id)] it points to
+    linked = 0  # all kept until the end: as many as objects one walk may visit
     for sha, path in names:
         check()
         if sha in present:
@@ -1392,6 +1393,9 @@ def git_fsck(g: Git, args) -> int:
         except GitError:
             g.err(sub_msg("fsck", "corrupt", object=sha, path=path) + "\n")
             code |= 1
+        linked += len(links.get(sha, ()))
+        if linked > MAX_WALK:
+            raise fatal("tooLarge", what="the object graph")
     roots: list[tuple[str, str]] = []
     for e in repo.index():
         if e.mode != "160000":
