@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\*.cs" />
+    <ProjectReference Include="..\..\src\Topwater\Topwater.csproj" />
+    <!-- signing in is the host's job; the example uses Azure.Identity, the connector needs nothing but HttpClient -->
+    <PackageReference Include="Azure.Identity" Version="1.13.2" />
+  </ItemGroup>
+</Project>

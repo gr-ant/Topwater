@@ -3,6 +3,17 @@
 Topwater is in preview: APIs and file formats may change between previews. The packages are on NuGet, PyPI and npm
 (from 0.1.0-preview.4 for PyPI and npm).
 
+## Unreleased
+
+### Connectors (.NET)
+
+- **OneDrive and SharePoint.** `Topwater.Connectors.GraphSource` mounts a OneDrive, a document library or a whole
+  SharePoint site (its libraries, lists and subsites) through Microsoft Graph. Files are their real bytes; a list item
+  is a `Title.md` file of front matter, one column a line. Moves, renames, new folders, deletes and column edits become
+  Graph requests checked with `If-Match`; names and values SharePoint would refuse are refused before anything is
+  sent. Signing in stays with the host (a token function); no new package dependency. `examples/GraphMount` signs in
+  with Azure.Identity and lets an agent restructure a site, staged. [docs/connectors/graph.md](docs/connectors/graph.md)
+
 ## 0.1.0-preview.5 (2026-11-27)
 
 Everything since `0.1.0-preview.4`. With this preview Topwater is parked: it stays available and is maintained
