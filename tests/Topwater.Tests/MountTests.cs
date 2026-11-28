@@ -953,6 +953,68 @@ public class MountTests
         Assert.Null((await sh.ApplyChangesAsync("/mnt/s")).Failed);
         Assert.Equal("c\n", Encoding.UTF8.GetString(src.Tree()["/a.txt"]!));
     }
+
+    /// <summary>A device-like source: writing a command to /cmd changes /state (and makes /new appear); /state can't be written.</summary>
+    sealed class Device(bool isVolatile = true) : IMountSource
+    {
+        public readonly MemorySource Inner = new(new Dictionary<string, object?> { ["cmd"] = "", ["state"] = "idle\n", ["d/x"] = "" });
+        public string Type => "device";
+        public string Id => "dev";
+        public bool Volatile => isVolatile;
+        public MountCapabilities Capabilities => MountCapabilities.Write;
+        public Task<IReadOnlyList<MountEntry>> ListAsync(string path, int maxEntries, CancellationToken ct) => Inner.ListAsync(path, maxEntries, ct);
+        public Task<MountEntry?> StatAsync(string path, CancellationToken ct) => Inner.StatAsync(path, ct);
+        public Task<byte[]> ReadAsync(string path, long maxBytes, CancellationToken ct) => Inner.ReadAsync(path, maxBytes, ct);
+
+        public async Task<string> WriteAsync(string path, byte[] data, string? expectedVersion, CancellationToken ct)
+        {
+            if (path != "/cmd") throw new MountSourceException($"{path}: read-only");
+            Inner.Set("state", Encoding.UTF8.GetString(data).Trim() + "ed\n");
+            Inner.Set("new", "");
+            return (await Inner.StatAsync(path, ct))!.Version;
+        }
+    }
+
+    [Fact]
+    public async Task AVolatileSourceIsListedAgainAfterEveryWriteAndEveryCall()
+    {
+        var dev = new Device();
+        var sh = new Shell();
+        await sh.MountAsync("/dev0", dev, MountMode.Live);
+        Assert.Equal("idle\n", (await sh.RunAsync("cat /dev0/state")).Stdout);
+        // the second command already sees what the first one's write did
+        var r = await sh.RunAsync("echo open > /dev0/cmd && cat /dev0/state && ls /dev0");
+        Assert.Equal("opened\ncmd\nd\nnew\nstate\n", r.Stdout);
+        Assert.Equal("", r.Stderr);
+        // a refused write is reported, and the file shows the source's content again
+        r = await sh.RunAsync("echo x > /dev0/state; cat /dev0/state");
+        Assert.Equal("opened\n", r.Stdout);
+        Assert.Equal("mount: /dev0/state: /state: read-only\n", r.Stderr); // not pending: the source was listed again
+        Assert.Empty(sh.PendingChanges("/dev0"));
+        // changed from outside between calls: the next call lists it again
+        dev.Inner.Set("state", "closed\n");
+        Assert.Equal("closed\n", (await sh.RunAsync("cat /dev0/state")).Stdout);
+        // a source that isn't volatile keeps what it fetched
+        var still = new Device(isVolatile: false);
+        var other = new Shell();
+        await other.MountAsync("/dev1", still, MountMode.Live);
+        Assert.Equal("idle\n", (await other.RunAsync("cat /dev1/state")).Stdout);
+        still.Inner.Set("state", "closed\n");
+        Assert.Equal("idle\n", (await other.RunAsync("cat /dev1/state")).Stdout);
+    }
+
+    [Fact]
+    public Task WritingIntoADirectoryNotListedYetListsItFirst() => WithListBudget(1, async () =>
+    {
+        var src = Memory(("a/x.txt", "x\n"), ("b/y.txt", "y\n"));
+        var sh = new Shell();
+        await sh.MountAsync("/mnt/s", src, MountMode.Live);
+        var r = await sh.RunAsync("echo new > /mnt/s/b/z.txt; echo more > /mnt/s/a/x.txt");
+        Assert.Equal("", r.Stderr);
+        Assert.Equal("new\n", Encoding.UTF8.GetString(src.Tree()["/b/z.txt"]!));
+        Assert.Equal("more\n", Encoding.UTF8.GetString(src.Tree()["/a/x.txt"]!));
+        Assert.DoesNotContain(src.Calls, c => c.Op == "read"); // `>` replaces the file: nothing is fetched
+    });
 }
 
 sealed class WikiSource(string space, Dictionary<string, string> pages) : IMountSource

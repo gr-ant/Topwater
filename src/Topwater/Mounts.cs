@@ -61,6 +61,9 @@ public interface IMountSource
     /// <summary>What the host should know about a pending change before applying it ("this move is a copy and a delete"), or
     /// null. It comes with <see cref="Shell.PendingChanges"/> (<see cref="MountChange.Note"/>), never to the agent.</summary>
     string? Note(MountChange change) => null;
+    /// <summary>True for a source whose tree changes on its own and after any write (a live web page): the mount lists it again
+    /// at the start of every call and after every write it applies, dropping what it fetched. Default false.</summary>
+    bool Volatile => false;
 }
 
 /// <summary>
@@ -734,6 +737,26 @@ sealed class MountPoint(MountManager mounts, string path, IMountSource? source, 
         }
     }
 
+    /// <summary>Lists the source again from the top, with the agent's pending changes made again on it when
+    /// <paramref name="keep"/>; a failure leaves the mount unavailable until the next call lists it.</summary>
+    public async Task RelistAsync(bool keep)
+    {
+        var changes = keep ? Changes() : [];
+        try
+        {
+            var root = Build();
+            await GrowAsync([("/", root, 0)], MountManager.ListBudget);
+        }
+        catch (SourceFailure e)
+        {
+            Unavailable(e.Full, e.Safe);
+            Stale = true;
+            return;
+        }
+        await RevealForAsync(changes);
+        Replay(changes);
+    }
+
     /// <summary>Makes <paramref name="changes"/> again on the tree, remembering the versions they were made on.</summary>
     public void Replay(IReadOnlyList<MountChange> changes)
     {
@@ -1293,6 +1316,7 @@ sealed class MountManager(Shell shell)
     {
         foreach (var m in Items.ToList())
         {
+            if (m.Available && m.Source!.Volatile) { await m.RelistAsync(keep: true); continue; } // it may have changed since the last call
             if (!(m.Stale && m.Source != null)) continue;
             try
             {
@@ -1341,7 +1365,7 @@ sealed class MountManager(Shell shell)
             paths.Add(fs.RealPath(Shell.Cwd, out _) ?? Shell.Cwd);
         if (redirect == null && argv[0].Contains('/')) paths.AddRange(Named(argv[0])); // a script run by its path
         bool deep = Deep.Contains(name) || Recursive(argv);
-        bool content = redirect != null || !NoContent.Contains(name);
+        bool content = redirect != null ? name != ">" : !NoContent.Contains(name); // `>` replaces the file: only the way to it is listed
         var outOf = new HashSet<string>(StringComparer.Ordinal);
         if (name == "mv" && paths.Count >= 2)
         {
@@ -1380,6 +1404,7 @@ sealed class MountManager(Shell shell)
         {
             if (m.Mode != MountMode.Live || !m.Available || m.Busy) continue;
             var todo = m.Changes().Where(c => !m.Stuck.Contains(c)).ToList();
+            bool tried = todo.Count > 0;
             while (todo.Count > 0)
             {
                 var r = await m.ApplyAsync(todo);
@@ -1387,9 +1412,17 @@ sealed class MountManager(Shell shell)
                 m.Stuck.Add(r.Failed);
                 var where = m.Machine(r.Failed.Path);
                 var reason = m.LastSafe ?? CommandSpec.Message("mount", "sourceFailed");
-                err.WriteLine("mount: " + (r.Conflict ? CommandSpec.Message("mount", "conflict", ("path", where), ("dir", m.Path))
+                err.WriteLine("mount: " + (m.Source!.Volatile ? CommandSpec.Message("mount", "refused", ("path", where), ("reason", r.Conflict ? "conflict" : reason)) // dropped below, not pending
+                    : r.Conflict ? CommandSpec.Message("mount", "conflict", ("path", where), ("dir", m.Path))
                     : CommandSpec.Message("mount", "failed", ("path", where), ("reason", reason), ("dir", m.Path))));
                 todo = [.. r.NotTried];
+            }
+            if (tried && m.Source!.Volatile)
+            {
+                // what a write did is only known by listing again; a write that failed was reported above and is dropped
+                m.Stuck = [];
+                await m.RelistAsync(keep: false);
+                continue;
             }
             var current = m.Changes();
             m.Stuck = [.. m.Stuck.Where(current.Contains)]; // applied, discarded or changed since: no longer stuck

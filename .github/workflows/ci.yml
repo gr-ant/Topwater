@@ -28,8 +28,11 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+      - run: dotnet build --configuration Release
+      # the browser tests drive a real Chromium (docs/browser.md): Playwright installs it with the system libraries it needs
+      - run: pwsh tests/Topwater.Browser.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
       # the libraries and the tests target net8.0 and net10.0; one run tests both
-      - run: dotnet test --configuration Release
+      - run: dotnet test --configuration Release --no-build
 
   python:
     runs-on: ubuntu-latest

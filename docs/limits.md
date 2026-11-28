@@ -21,6 +21,8 @@ access allowed, nothing the agent types reaches the host.
 - **Mounted sources reach the stores you mount.** The agent reads what a source lists, and in staged and live mode
   your application (or, in live mode, the shell) writes its changes back. [Mounted sources](mounts.md#safety-and-limits)
   lists the guarantees.
+- **A mounted web page runs in a real browser.** Its requests go through your web policy, but the sites' own scripts
+  run in Chromium. [A web page as files](browser.md#what-it-cant-enforce) lists what that leaves open.
 - **Host programs run with your process's permissions.** Topwater does not sandbox them unless you ask. Read
   [Real host programs](programs.md#real-host-programs) before registering one.
 - **Files you load are untrusted.** Snapshots, recordings and container imports are checked and bounded

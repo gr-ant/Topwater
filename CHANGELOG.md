@@ -3,6 +3,28 @@
 Topwater is in preview: APIs and file formats may change between previews. The packages are on NuGet, PyPI and npm
 (from 0.1.0-preview.4 for PyPI and npm).
 
+## Unreleased
+
+### A web page as files (.NET)
+
+- **`Topwater.Browser`**, a new package. `BrowserSource` mounts a live web page, driven by Microsoft Playwright in a
+  Chromium the host launches (`BrowserSource.LaunchAsync`, or a page of your own), as a sysfs-like tree: `url`,
+  `title`, `status`, `text.md`, `tree.txt`, `screenshot.png`, `dialog`, `back`/`forward`/`reload`, a directory per
+  interactive element under `elements/` (`click`, `value`, `checked`, `options`, `press`, `href`, and `upload/` for
+  file fields) and `forms/<name>/fields.json` and `submit`. Writing a file is an action, applied right after the
+  command that wrote it, and the next command sees the new page. Every request the page makes is fetched by Topwater
+  under the host's `WebPolicy` (address pinning included); the browser is launched with no network of its own, and
+  downloads, WebSockets and non-http schemes are refused. Marked `[Experimental("TW002")]`. See
+  [docs/browser.md](docs/browser.md); `examples/BrowserMount` logs in to a public practice site.
+
+### Mounts
+
+- **Volatile sources.** `IMountSource.Volatile` (default false) marks a source whose tree changes after any write: the
+  mount lists it again at the start of every call and after every command whose writes it applied, and a write it
+  refuses is reported once (`mount: PATH: REASON`) instead of staying pending. Existing sources are unaffected.
+- **`>` into a directory not listed yet** lists the directories on the way first, instead of failing with "not listed
+  from the mounted source yet".
+
 ## 0.1.0-preview.6 (2026-11-28)
 
 Everything since `0.1.0-preview.5`. Topwater now leads with .NET and the Microsoft stack: new work is in the .NET

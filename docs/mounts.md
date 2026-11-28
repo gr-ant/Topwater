@@ -132,6 +132,7 @@ object, only the files it lists.
 | `delete(path, expectedVersion)` | with `delete` | |
 | `rename(path, to, expectedVersion)` | with `rename` | returns the new version, or null when it didn't change |
 | `mkdir(path)` | with `mkdir` | returns the new directory's version, or null |
+| `Volatile` | no (.NET) | true for a source whose tree changes on its own and after any write, such as a [web page](browser.md): the mount lists it again at the start of every call and, in live mode, after every command whose writes it applied, dropping what it fetched. A write such a source refuses is reported once and dropped, not left pending |
 
 Every method may be asynchronous (a `Task`, a coroutine or a `Promise`), and in .NET and TypeScript every method gets a
 cancellation token (`CancellationToken`, `{ signal }`) that fires at the call's time limit: pass it to your HTTP client,
@@ -350,8 +351,9 @@ wait for the source:
 - **Listing.** Mounting lists the source breadth first until 2,000 entries or 5 seconds; directories below that are
   listed when a command names them (one level, or everything below for a command that walks a directory: `find`,
   `grep -r`, `cp`, `du`, `tree`, `tar`, `rm`, ...). A directory looked into that nothing named (a path inside a script)
-  says `not listed from the mounted source yet (run the command again)` and is listed right after the command. A
-  vault of a few thousand notes is listed whole when mounted. `mount -r` lists the source again.
+  says `not listed from the mounted source yet (run the command again)` and is listed right after the command. In
+  .NET the directories on the way to a file a `>` redirection writes are listed first too. A vault of a few thousand
+  notes is listed whole when mounted. `mount -r` lists the source again.
 - **Content** is fetched lazily, four files at a time: before a command, the files it names (a directory meaning
   everything below), the file it redirects from or appends to, and for a recursive `grep` given no path, the
   working directory. Commands that never read content (`ls`, `find`, `stat`, `rm`, `date`, ...) fetch nothing. A read

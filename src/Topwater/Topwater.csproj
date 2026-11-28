@@ -13,6 +13,8 @@
   <ItemGroup>
     <!-- the web access tests reach a loopback server through the real connection path (WebAddresses' test hooks) -->
     <InternalsVisibleTo Include="Topwater.Tests" />
+    <!-- the browser source sends the page's requests through the same policy and pinned connections as curl -->
+    <InternalsVisibleTo Include="Topwater.Browser" />
   </ItemGroup>
 
 </Project>
