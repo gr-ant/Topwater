@@ -684,6 +684,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         foreach (var (key, value) in values)
         {
             var f = fields.FirstOrDefault(x => x.Key == key);
+            if (f.Key == null) f = fields.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase)); // "Password" for a field labelled "password"
             if (f.Key == null) throw new MountSourceException(Msg("noField", ("field", Cut(key, 100)), ("fields", Cut(string.Join(", ", fields.Select(x => x.Key)), 300))));
             if (f.Type == "file") throw new MountSourceException(Msg("useUpload", ("dir", "file-...")));
             todo.Add((f, value));
