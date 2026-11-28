@@ -1,7 +1,9 @@
 # Working on Topwater
 
 Rules for anyone changing this repository, human or AI agent. Topwater has three implementations, C# (`src/`),
-Python (`python/`) and TypeScript (`typescript/`), that must behave the same.
+Python (`python/`) and TypeScript (`typescript/`). C# leads: new features (connectors, integrations, limits) go into C#
+only. Python and TypeScript are frozen: they keep passing their suites and get fixes, but no new features, and where
+they already share a behaviour with C# they must keep matching it.
 
 ## Commands are specified in JSON first
 

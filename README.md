@@ -359,8 +359,9 @@ method, the intervals and the limits.
 
 ## Status
 
-Topwater is an experimental preview, maintained lightly. It works and is tested, but APIs and file formats may still
-change, and new features are parked rather than in progress. [CHANGELOG.md](CHANGELOG.md) lists what changed, and
+Topwater is an experimental preview. It works and is tested, but APIs and file formats may still change. New work is
+in the .NET packages, aimed at the Microsoft stack (Microsoft Graph, Agent Framework, MCP for Copilot); the Python and
+TypeScript packages are frozen at their current features and still get fixes. [CHANGELOG.md](CHANGELOG.md) lists what changed, and
 [ROADMAP.md](ROADMAP.md) what is parked on branches and what was never started.
 
 | | Where | State |

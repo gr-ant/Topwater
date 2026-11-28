@@ -1,7 +1,8 @@
 # Roadmap
 
-Topwater is parked after `0.1.0-preview.5`: `main` is what ships, it is maintained lightly, and the work below is
-either finished enough to resume on a branch or only an idea. Nothing on this page is in a release.
+After `0.1.0-preview.5` Topwater leads with C#, aimed at the Microsoft stack; Python and TypeScript are frozen at their
+current features. The Microsoft Graph connector is now on `main` in C# ([docs/connectors/graph.md](docs/connectors/graph.md)).
+The work below is either on a branch or only an idea. Nothing on this page is in a release.
 
 ## Parked on branches
 
@@ -17,11 +18,11 @@ either finished enough to resume on a branch or only an idea. Nothing on this pa
 - It forks from `main` before `0.1.0-preview.5`: rebase it first (`README.md` and `CHANGELOG.md` will conflict) and run
   all three suites again.
 
-Next steps:
+The Graph source is ported to C# on `main`, where the Python one is no longer needed. What is left on the branch is
+the Notion source, in Python only; a C# port would run against `tests/connectors/notion/cases.json` there.
 
-1. A JSON connector spec, `spec/connectors/*.json`, generated into each port the way `spec/commands` is, so the
-   mapping from a store to files is written once.
-2. The C# and TypeScript ports, run against the shared cases.
+Next steps for Graph in C#: the live write tests (scratch folders and list items) and the source's `Note()` shown to the
+host before a change set applies.
 
 ### `parked/python3`: an opt-in `python3`
 
