@@ -47,6 +47,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Topwater.Browser", "src\Top
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Topwater.Browser.Tests", "tests\Topwater.Browser.Tests\Topwater.Browser.Tests.csproj", "{1D819DEA-2AF5-43D2-82DF-047872D684B7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BrowserMount", "examples\BrowserMount\BrowserMount.csproj", "{6984F817-055A-475D-B4CF-D0B49E924235}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -273,6 +275,18 @@ Global
 		{1D819DEA-2AF5-43D2-82DF-047872D684B7}.Release|x64.Build.0 = Release|Any CPU
 		{1D819DEA-2AF5-43D2-82DF-047872D684B7}.Release|x86.ActiveCfg = Release|Any CPU
 		{1D819DEA-2AF5-43D2-82DF-047872D684B7}.Release|x86.Build.0 = Release|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Debug|x64.Build.0 = Debug|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Debug|x86.Build.0 = Debug|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Release|x64.ActiveCfg = Release|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Release|x64.Build.0 = Release|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Release|x86.ActiveCfg = Release|Any CPU
+		{6984F817-055A-475D-B4CF-D0B49E924235}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -296,5 +310,6 @@ Global
 		{F4D06B69-BA99-49D5-AB86-2976E574FDF4} = {5BFA5355-5D47-4992-99A5-1B17D49E0D49}
 		{BCCB6405-BB79-4C37-BC45-E0CEBAB5E6D2} = {C36603DF-CE35-412B-80ED-EF24F35BC339}
 		{1D819DEA-2AF5-43D2-82DF-047872D684B7} = {0DE51D68-D223-42B5-979B-7CF83AA8EFC0}
+		{6984F817-055A-475D-B4CF-D0B49E924235} = {5BFA5355-5D47-4992-99A5-1B17D49E0D49}
 	EndGlobalSection
 EndGlobal
