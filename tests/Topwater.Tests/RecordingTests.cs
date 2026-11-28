@@ -400,6 +400,48 @@ public class RecordingTests
         Assert.Contains("more than 1000 calls", Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(text)), limits: few)).Message);
     }
 
+    /// <summary>A file of <paramref name="length"/> bytes, <paramref name="prefix"/> then 'x', made as it is read; counts what was read.</summary>
+    sealed class GeneratedFile(byte[] prefix, long length, bool seekable) : Stream
+    {
+        public long BytesRead { get; private set; }
+        long _pos;
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int n = (int)Math.Min(count, length - _pos);
+            for (int i = 0; i < n; i++, _pos++) buffer[offset + i] = _pos < prefix.Length ? prefix[_pos] : (byte)'x';
+            BytesRead += n;
+            return n;
+        }
+        public override bool CanRead => true;
+        public override bool CanSeek => seekable;
+        public override bool CanWrite => false;
+        public override long Length => seekable ? length : throw new NotSupportedException();
+        public override long Position { get => seekable ? _pos : throw new NotSupportedException(); set => _pos = seekable ? value : throw new NotSupportedException(); }
+        public override long Seek(long offset, SeekOrigin origin) => Position = origin switch { SeekOrigin.Begin => offset, SeekOrigin.Current => _pos + offset, _ => length + offset };
+        public override void Flush() { }
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void An_oversized_json_lines_recording_is_refused_before_it_is_read()
+    {
+        // the 300 MB file: one huge header line. Refused from its length, having read the two bytes that tell it from a zip
+        var header = Encoding.UTF8.GetBytes(File.ReadAllLines(Fixture("basics.jsonl"))[0][..^1] + ",\"pad\":\"");
+        var file = new GeneratedFile(header, 300L << 20, seekable: true);
+        var e = Assert.Throws<InvalidDataException>(() => Recording.Load(file));
+        Assert.Contains("larger than 134217728 bytes (MaxFileSystemBytes)", e.Message);
+        Assert.True(file.BytesRead < 4096, $"read {file.BytesRead} bytes");
+        // a stream that can't seek is read only up to the cap
+        var limits = new ShellOptions { MaxFileSystemBytes = 1 << 20 };
+        var pipe = new GeneratedFile(header, 300L << 20, seekable: false);
+        Assert.Contains("larger than 1048576 bytes", Assert.Throws<InvalidDataException>(() => Recording.Load(pipe, limits: limits)).Message);
+        Assert.InRange(pipe.BytesRead, 1 << 20, (1 << 20) + 100_000);
+        // under the cap still loads
+        var ok = File.ReadAllBytes(Fixture("basics.jsonl"));
+        Assert.NotEmpty(Recording.Load(new GeneratedFile(ok, ok.Length, seekable: false), limits: new ShellOptions { MaxFileSystemBytes = ok.Length }).Calls);
+    }
+
     [Fact]
     public async Task Checkpoints_share_a_budget_of_entries()
     {
@@ -420,6 +462,30 @@ public class RecordingTests
         var big = new Recording(rec.Recording.Start, new ShellOptions());
         big.Calls.AddRange(calls);
         RefusedFast(Tamper(Bytes(big), z => { for (int i = 1; i < 1000; i++) Put(z, $"checkpoints/{i}.json", start); }), "files and directories together", limits);
+    }
+
+    [Fact]
+    public async Task Checkpoints_share_a_budget_of_manifest_bytes()
+    {
+        // 1,000 checkpoints that list no files but pad their manifests: each within its own cap, all of them inflated and
+        // read in turn took 196 s at the defaults. Together they may hold 4 x the cap of one manifest
+        var limits = new ShellOptions { MaxStringBytes = 1 << 20, MaxExtractEntries = 2000 }; // one manifest: 4 MB + 2 MB
+        var sh = new Shell();
+        var rec = sh.StartRecording();
+        for (int i = 0; i < Recording.MaxSnapshots; i++) await sh.RunAsync("true");
+        rec.Stop();
+        var file = Bytes(rec.Recording);
+        var padded = Entry(file, "checkpoints/0.json");
+        padded = System.Text.RegularExpressions.Regex.Replace(padded, "\"files\":\\[.*?\\](?=,\"[a-z]+\":)", "\"files\":[]");
+        padded = padded[..^1] + ",\"pad\":\"" + new string('x', 200_000) + "\"}";
+        var hostile = Tamper(file, z => { for (int i = 1; i < Recording.MaxSnapshots - 1; i++) Put(z, $"checkpoints/{i}.json", padded); });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var e = Assert.Throws<InvalidDataException>(() => LoadBytes(hostile, limits));
+        Assert.Contains("the manifests of the checkpoints hold more than 24969216 bytes together (4 x the most one manifest may hold)", e.Message);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed}");
+        // a few such checkpoints still load
+        var few = Tamper(file, z => { for (int i = 1; i < 50; i++) Put(z, $"checkpoints/{i}.json", padded); });
+        Assert.Equal(Recording.MaxSnapshots, LoadBytes(few, limits).Calls.Count);
     }
 
     [Fact]
@@ -851,5 +917,39 @@ public class RecordingTests
         await using var docker = await DockerTarget.StartAsync(sh.Snapshot(), new DockerTargetOptions { Packages = [] });
         var r = await docker.RunAsync("ls /tmp | grep -c pwned; cat /srv/f; grep -E 'CapEff|NoNewPrivs' /proc/self/status");
         Assert.Equal("0\nxCapEff:\t0000000000000000\nNoNewPrivs:\t1\n", r.Stdout);
+    }
+
+    [Fact]
+    public async Task Docker_target_stops_reading_output_at_the_cap()
+    {
+        // a stand-in docker CLI: `exec ... yes` floods stdout forever, everything else succeeds
+        if (OperatingSystem.IsWindows()) return;
+        var dir = Directory.CreateTempSubdirectory("tw-fakedocker").FullName;
+        var fake = Path.Combine(dir, "docker");
+        File.WriteAllText(fake, "#!/bin/sh\nfor a; do last=$a; done\ncase \" $* \" in *\" -i \"*) cat >/dev/null;; esac\n[ \"$last\" = yes ] && exec yes\nexit 0\n");
+        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            await using var target = await DockerTarget.StartAsync(new Shell().Snapshot(), new DockerTargetOptions { Docker = fake, Packages = [], MaxOutputBytes = 1 << 20 });
+            var e = await Assert.ThrowsAsync<InvalidOperationException>(() => target.RunAsync("yes"));
+            Assert.Contains("more than 1048576 bytes", e.Message);
+            Assert.InRange(watch.Elapsed.TotalSeconds, 0, 20);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task Replaying_yes_on_real_bash_ends_with_an_error()
+    {
+        if (!await DockerTarget.IsAvailableAsync()) return; // skipped without docker
+        var sh = new Shell();
+        var rec = sh.StartRecording();
+        await sh.RunAsync("yes | head -c 10");
+        await sh.RunAsync("yes");
+        rec.Stop();
+        await using var docker = await DockerTarget.StartAsync(rec.Recording.Start, new DockerTargetOptions { Packages = [], MaxOutputBytes = 4 << 20, CallTimeout = TimeSpan.FromSeconds(20) });
+        var e = await Assert.ThrowsAsync<InvalidOperationException>(() => rec.Recording.ReplayAsync(docker));
+        Assert.Contains("more than 4194304 bytes", e.Message);
     }
 }

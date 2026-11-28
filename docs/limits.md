@@ -51,6 +51,7 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 | One `bc` run | 5 s, and 100000 digits per number | none | `bc: computation stopped: exceeded the 5 s limit (lower scale or use smaller operands)`, `bc: number too large` | 1 | no |
 | Brace expansion, `seq`, `diff` | 10,000 items, 1M numbers, 25M table cells | none | `bash: brace expansion: too many items`, `seq: too many numbers`, `diff: files too large to compare` | 1 (2 for diff) | no |
 | Tool output | 30,000 characters of stdout, 5,000 of stderr | `ToToolOutput(maxChars)` | `... [output truncated, N more characters]` | | |
+| Replay on real bash (`DockerTarget`) | `CallTimeout` 30 s, 64 MiB each of stdout and stderr per docker command | `DockerTargetOptions.CallTimeout`, `MaxOutputBytes` | (host side) the call is killed and returns 124; past the output cap the docker command is killed and `RunAsync` throws `InvalidOperationException` | 124 | the replay |
 | Host programs | 120 s, 1 MB of output | `HostCommandOptions.Timeout`, `MaxOutputBytes` | `prog: timed out after 120s` (the program is killed; the call goes on) | 124 | no |
 
 ## How the limits behave
@@ -68,6 +69,11 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 - **Other per-command caps.** `git diff`, `show` and `apply` refuse a file of more than 1,000,000 lines, `git fsck`
   keeps at most 1,000,000 links, `to-markdown` refuses XML nested more than 256 deep, and a snapshot holds at most
   1,000 mounts.
+- **Loaded files.** An old JSON Lines recording may be at most `MaxFileSystemBytes` bytes, refused from its length
+  before it is read. The checkpoints of a `.topwater` recording may hold at most 4 times what one manifest may
+  (about 900 MB at the defaults), which bounds a load to a few seconds. In a container import, a tar metadata entry
+  (PAX header, GNU long name or link) may hold at most 1 MiB. Details in
+  [Loading untrusted files](snapshots-and-recordings.md#loading-untrusted-files) and [Containers](containers.md#safety).
 - **Disk.** `df` shows the cap as the disk's size and what the files really hold as used. Sizes are UTF-8
   bytes, the same as `ls -l`. A write that would go past the cap fails whole (nothing is written) and the call
   goes on; `rm` frees the space again. Your app's own writes (`WriteAllText`, `AddDocument`, ... outside a call)

@@ -295,17 +295,28 @@ public sealed class Recording
     {
         limits ??= new ShellOptions();
         long maxFile = MaxSnapshotsFileSystems * ShellSnapshot.MaxArchiveBytes(limits);
+        bool zip;
         if (!stream.CanSeek)
         {
             var copy = new MemoryStream();
-            try { ShellSnapshot.ReadCapped(stream, copy, maxFile, "the file"); }
-            catch (InvalidDataException) { throw Bad($"the file is larger than {maxFile} bytes"); }
+            int b0 = stream.ReadByte(), b1 = b0 < 0 ? -1 : stream.ReadByte();
+            if (b0 >= 0) copy.WriteByte((byte)b0);
+            if (b1 >= 0) copy.WriteByte((byte)b1);
+            zip = b0 == 'P' && b1 == 'K';
+            long max = zip ? maxFile : MaxJsonLinesBytes(limits);
+            try { ShellSnapshot.ReadCapped(stream, copy, max - copy.Length, "the file"); }
+            catch (InvalidDataException) { throw Bad(zip ? $"the file is larger than {max} bytes" : JsonLinesTooLarge(max)); }
             copy.Position = 0;
             stream = copy;
         }
-        long at = stream.Position;
-        bool zip = stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
-        stream.Position = at;
+        else
+        {
+            long at = stream.Position;
+            zip = stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
+            stream.Position = at;
+            // an old recording is read line by line into strings: refuse a large one by its length, before reading it
+            if (!zip && stream.Length - at > MaxJsonLinesBytes(limits)) throw Bad(JsonLinesTooLarge(MaxJsonLinesBytes(limits)));
+        }
         return ShellSnapshot.Checked(() => zip ? LoadTopwater(stream, limits, maxFile) : LoadJsonLines(stream, openSnapshot, limits), Invalid);
     }
 
@@ -338,7 +349,11 @@ public sealed class Recording
         }
         if (!checkpoints.ContainsKey(0)) throw Bad("checkpoints/0.json (the start) is missing");
         var budget = new SnapshotBudget(limits);
-        var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files)), limits);
+        // every manifest is inflated and read on load, so all of them together are capped too: 4 x what one may hold
+        long manifestBytes = 0, maxManifests = MaxSnapshotsFileSystems * ShellSnapshot.MaxManifestBytes(limits);
+        byte[] Charge(byte[] bytes) => (manifestBytes += bytes.Length) <= maxManifests ? bytes
+            : throw Bad($"the manifests of the checkpoints hold more than {maxManifests} bytes together ({MaxSnapshotsFileSystems} x the most one manifest may hold)");
+        var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files, Charge)), limits);
         long webBytes = 0;
         Func<string?, long, string, byte[]> readBlob = (blob, size, where) =>
         {
@@ -360,7 +375,7 @@ public sealed class Recording
         // the machine of the file is the one after the last checkpoint: a reader of either must see the same
         var (lastN, lastName) = checkpoints.Last();
         if (lastN > rec.Calls.Count) throw Bad($"{lastName} is past the last call ({rec.Calls.Count})");
-        var last = ShellSnapshot.ReadManifestBytes(zip, lastName, limits);
+        var last = Charge(ShellSnapshot.ReadManifestBytes(zip, lastName, limits));
         if (!SameJson(ShellSnapshot.ReadManifestBytes(zip, "manifest.json", limits), last)) throw Bad($"manifest.json is not the machine of {lastName}, the last checkpoint");
 
         // the other checkpoints are checked against the limits now and built when a replay needs one; the file stays in memory
@@ -373,7 +388,7 @@ public sealed class Recording
         ZipArchive? reread = null;
         foreach (var (n, name) in checkpoints.Skip(1))
         {
-            var snap = ShellSnapshot.ReadOutline(n == lastN ? last : ShellSnapshot.ReadManifestBytes(zip, name, limits, check: false), name, limits, budget.Files, budget.Bytes, () => ShellSnapshot.Checked(() =>
+            var snap = ShellSnapshot.ReadOutline(n == lastN ? last : Charge(ShellSnapshot.ReadManifestBytes(zip, name, limits, check: false)), name, limits, budget.Files, budget.Bytes, () => ShellSnapshot.Checked(() =>
             {
                 reread ??= new ZipArchive(new MemoryStream(file.GetBuffer(), 0, (int)file.Length, writable: false), ZipArchiveMode.Read);
                 return ShellSnapshot.ReadManifest(reread, name, limits);
@@ -411,6 +426,10 @@ public sealed class Recording
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
     }
+
+    /// <summary>The largest old JSON Lines recording that loads: MaxFileSystemBytes (its side-car snapshots are capped on their own).</summary>
+    internal static long MaxJsonLinesBytes(ShellOptions o) => o.MaxFileSystemBytes;
+    static string JsonLinesTooLarge(long max) => $"a JSON Lines recording larger than {max} bytes (MaxFileSystemBytes)";
 
     static readonly System.Text.RegularExpressions.Regex CheckpointName = new(@"^checkpoints/(0|[1-9][0-9]{0,8})\.json\z");
 

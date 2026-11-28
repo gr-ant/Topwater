@@ -23,6 +23,18 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   sent. Signing in stays with the host (a token function); no new package dependency. `examples/GraphMount` signs in
   with Azure.Identity and lets an agent restructure a site, staged. [docs/connectors/graph.md](docs/connectors/graph.md)
 
+### Security (.NET)
+
+- **Replay on real bash reads at most a set amount of output.** `DockerTarget` reads each docker command's stdout and
+  stderr up to `DockerTargetOptions.MaxOutputBytes` (64 MiB): past it the command is killed and the call throws, so a
+  recording of `yes` ends with an error and bounded memory.
+- **Old JSON Lines recordings have a size cap.** One larger than `MaxFileSystemBytes` (128 MB) is refused from its
+  length before it is read; a 300 MB file used to take 3.27 GB of memory.
+- **Loading a recording has a time bound.** The checkpoints' manifests together may hold at most 4 times what one may
+  (about 900 MB at the defaults), so 1,000 padded checkpoints are refused in about 5 s instead of read for 196 s.
+- **Container import caps tar headers.** A PAX extended header, GNU long name or long link larger than 1 MiB is refused
+  before it is read; the tar reader held one whole in memory (a 256 MB header took up to 1.3 GB).
+
 ## 0.1.0-preview.5 (2026-11-27)
 
 Everything since `0.1.0-preview.4`. With this preview Topwater is parked: it stays available and is maintained

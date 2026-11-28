@@ -201,7 +201,10 @@ var report = await recording.ReplayAsync(linux, new ReplayOptions { Normalize = 
 The container has no network unless `Network = true`, 1 GB of memory and no swap, one CPU, 512 processes, files of at
 most 1 GB, no capabilities but `CHOWN`, `DAC_OVERRIDE` and `FOWNER` (which the root setup step needs to write files
 with their owners), and `no-new-privileges`, so a setuid program gains nothing. The 1 GB limit is per file: nothing
-caps the container's total disk use, so a recording can still fill the docker host's disk. Commands run by number, uid
+caps the container's total disk use, so a recording can still fill the docker host's disk. Each docker command's
+stdout and stderr are read up to `MaxOutputBytes` each (64 MiB by default, twice what one Topwater call can print):
+past it the command is killed and the call throws `InvalidOperationException`, so replaying a recording of `yes` ends
+with that error instead of filling the host's memory. Commands run by number, uid
 and gid 1000 (the snapshot's `/etc/passwd` cannot turn that into root); only a snapshot whose user is `root` runs as
 root, and then with those three capabilities. The snapshot's symbolic links go in as links, never followed. It gets
 the snapshot's host name and user (uid 1000, in place of the image's `ubuntu`), the files a fresh Topwater machine
@@ -322,13 +325,17 @@ every manifest and checkpoint loads under the default limits or the `ShellOption
 file names) with every check described in [Loading untrusted files](#loading-untrusted-files). The replay shell's
 limits are the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000
 checkpoints load; together they may hold at most 4 x `MaxFileSystemBytes` of content and 4 x `MaxExtractEntries` files
-and directories. `history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and
+and directories, and their manifests (every one is inflated and read on load, though only checked in outline until a
+replay builds it) at most 4 x what one manifest may hold, about 900 MB at the defaults. That bounds the time a load
+takes: the worst case, checkpoints padded to that size, is refused in about 5 s (measured on .NET 8, Linux x64; it took
+196 s before the cap). `history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and
 `MaxExtractEntries` calls. Checkpoint names must be `0` or a number without leading zeros no greater than the number
 of calls, and no two zip entries may share a name.
 
 Older files still load: snapshot zips are `.topwater` files already, and the JSON Lines recordings that came before
 (header `"format":"topwater-recording"`, snapshots embedded as base64 zips or in side-car files) load with the same
-checks. A side-car name must be plain segments of letters, digits, `.`, `_` and `-` separated by `/`, none made only of
+checks. Such a file may be at most `MaxFileSystemBytes` bytes (128 MB at the defaults): a larger one is refused from
+its length before it is read, and a stream that can't seek is read only up to that size. A side-car name must be plain segments of letters, digits, `.`, `_` and `-` separated by `/`, none made only of
 dots; a custom `openSnapshot` must treat it as nothing else. `Save` always writes `.topwater`, so loading and saving
 converts an old recording.
 
