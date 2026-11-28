@@ -7,6 +7,15 @@ result as a [change set](../mounts.md#change-sets) to review and apply. How it w
 
 It is in the .NET package only (`Topwater.Connectors`); the Python and TypeScript packages don't have it.
 
+`GraphSource` and `GraphOptions` are experimental while Topwater is in preview: using them is compile error TW001
+until you suppress it, for example in your project file:
+
+```xml
+<PropertyGroup>
+  <NoWarn>$(NoWarn);TW001</NoWarn>
+</PropertyGroup>
+```
+
 ```csharp
 using Azure.Core;
 using Azure.Identity;

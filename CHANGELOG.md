@@ -49,6 +49,20 @@ fixes for both).
 
 ### Security (.NET)
 
+- **Deep nesting ends the call, not the host.** Nested `[[ ]]`, `test`, `find`, `awk`, `bc` and jq expressions, and
+  jq values, stop with `maximum nesting level exceeded` instead of overflowing the stack; jq input nested deeper than
+  10,000 is refused the same way on every host; `setpath`, `delpaths`, `paths` and `..` count against jq's step limit
+  and the call's time.
+- **Disk and paths.** A directory path longer than 4,095 characters (Linux's limit) is refused; empty files,
+  directories and links count against the disk, one name per KB.
+- **Archives and documents.** `zip` and `unzip` count an archive's entries before loading its directory; `to-markdown`
+  refuses XML nested deeper than 256.
+- **git.** `diff`, `show` and `apply` refuse files of more than a million lines and keep a commit's diff within the
+  output limit; `fsck` holds a bounded number of links; config and packed-refs are read once per command, and a
+  continued config line over 16 KB is refused.
+- **Snapshots and recordings.** A snapshot holds at most 1,000 mounts; old JSON Lines recordings with bad fields fail
+  with an error instead of a crash; loading a recording compares the manifest with the last checkpoint as typed
+  manifests, so padding can't inflate it.
 - **Replay on real bash reads at most a set amount of output.** `DockerTarget` reads each docker command's stdout and
   stderr up to `DockerTargetOptions.MaxOutputBytes` (64 MiB): past it the command is killed and the call throws, so a
   recording of `yes` ends with an error and bounded memory.
