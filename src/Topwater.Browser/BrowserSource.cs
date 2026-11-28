@@ -809,6 +809,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         catch (OperationCanceledException) { try { await route.AbortAsync("aborted"); } catch (PlaywrightException) { } }
         finally
         {
+            _web.TakeLog(); // the session keeps every exchange for a shell's recording, bodies and all; the source records none
             if (epoch == _epoch) Interlocked.Decrement(ref _inflight); // one an earlier action left behind no longer counts
             Interlocked.Exchange(ref _activity, DateTime.UtcNow.Ticks);
         }

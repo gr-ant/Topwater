@@ -312,6 +312,22 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
     }
 
     [ChromiumFact]
+    public async Task WhatThePageFetchedIsNotKept()
+    {
+        var images = string.Concat(Enumerable.Range(0, 60).Select(i => $"<img src=\"/i{i}.png\">"));
+        var site = new Site().Page("https://app.test/", "<title>Start</title>").Page("https://app.test/gallery", $"<title>Gallery</title>{images}");
+        for (int i = 0; i < 60; i++)
+            site.On($"https://app.test/i{i}.png", _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[2_000_000]) }));
+        var (sh, _) = await Open(site);
+        long before = GC.GetTotalMemory(forceFullCollection: true);
+        Assert.Equal("Gallery\n", await Out(sh, "echo https://app.test/gallery > /web/url; cat /web/title"));
+        Assert.Equal(61, site.Seen.Count(s => s.StartsWith("GET https://app.test/", StringComparison.Ordinal) && s != "GET https://app.test/"));
+        long kept = GC.GetTotalMemory(forceFullCollection: true) - before;
+        // 120 MB of images went by; what stays (about 50 MB, the same for 30 images) doesn't grow with them
+        Assert.True(kept < 100_000_000, $"{kept / 1_000_000} MB kept");
+    }
+
+    [ChromiumFact]
     public async Task ANewWindowIsShownInThePageAndDownloadsAreBlocked()
     {
         var site = new Site()
