@@ -3,7 +3,11 @@
 Topwater is in preview: APIs and file formats may change between previews. The packages are on NuGet, PyPI and npm
 (from 0.1.0-preview.4 for PyPI and npm).
 
-## Unreleased
+## 0.1.0-preview.6 (2026-11-28)
+
+Everything since `0.1.0-preview.5`. Topwater now leads with .NET and the Microsoft stack: new work is in the .NET
+packages, and the Python and TypeScript packages keep their features and get fixes (this release has hang and memory
+fixes for both).
 
 ### .NET 10
 
@@ -62,6 +66,14 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   `MaxStringBytes`; filling them ends the call with the string-limit message and the next call runs. The history
   keeps the newest lines that fit in `MaxStringBytes` and drops the oldest. Before, all three grew without bound for
   the life of the session.
+
+### Python and TypeScript
+
+- **The hostile inputs fixed in .NET end within the call's limits here too.** A path longer than 4,095 characters is
+  refused; empty files, directories and links count against the disk; commands given many files check the call's time
+  limit for each; git refuses a continued config line over 16 KB, reads packed-refs once, keeps a commit's diff within
+  the output limit and bounds what fsck holds; a snapshot holds at most 1,000 mounts; Python's zip and unzip count the
+  entries before reading the directory. The `mount` deadline race fixed in TypeScript after `0.1.0-preview.5` is in.
 
 ## 0.1.0-preview.5 (2026-11-27)
 

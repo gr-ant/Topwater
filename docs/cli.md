@@ -103,7 +103,7 @@ same `command` and `args`.
 ## Docker
 
 From `0.1.0-preview.5` on, each release is also a container image, `ghcr.io/gr-ant/topwater`, for linux/amd64 and
-linux/arm64. Tags: the version (`0.1.0-preview.5`), `preview` for the newest release, and `latest` for the newest
+linux/arm64. Tags: the version (`0.1.0-preview.6`), `preview` for the newest release, and `latest` for the newest
 release without a preview suffix (there is none yet, so use `preview`).
 
 ```bash
@@ -157,7 +157,7 @@ VS Code (`.vscode/mcp.json`):
 Leave out `-v` and `--state` for a fresh machine every time. The image is the release's standalone Linux binary on
 Ubuntu's chiseled .NET base (no shell, no package manager; about 50 MB), and the container sees no host files except
 the ones you mount. Each image has a signed build provenance attestation:
-`gh attestation verify oci://ghcr.io/gr-ant/topwater:0.1.0-preview.5 -R gr-ant/Topwater`. To build it yourself, see
+`gh attestation verify oci://ghcr.io/gr-ant/topwater:0.1.0-preview.6 -R gr-ant/Topwater`. To build it yourself, see
 [`docker/Dockerfile`](../docker/Dockerfile).
 
 ## What touches your computer

@@ -81,7 +81,7 @@ Requires .NET 8 or later (the package targets net8.0 and net10.0).
 dotnet add package Topwater --prerelease
 ```
 
-This installs `0.1.0-preview.5`; [CHANGELOG.md](CHANGELOG.md) says what changed.
+This installs `0.1.0-preview.6`; [CHANGELOG.md](CHANGELOG.md) says what changed.
 
 ```csharp
 using Topwater;
@@ -366,9 +366,9 @@ TypeScript packages are frozen at their current features and still get fixes. [C
 
 | | Where | State |
 |---|---|---|
-| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.5` |
-| **Python** | PyPI: [topwater](https://pypi.org/project/topwater/) | `0.1.0a5` (`pip install --pre topwater`) |
-| **TypeScript** | npm: [topwater](https://www.npmjs.com/package/topwater) | `0.1.0-preview.5` (`npm install topwater@next`) |
+| **.NET** | NuGet: [Topwater](https://www.nuget.org/packages/Topwater), [Topwater.Mcp](https://www.nuget.org/packages/Topwater.Mcp), [Topwater.AI](https://www.nuget.org/packages/Topwater.AI), [Topwater.Containers](https://www.nuget.org/packages/Topwater.Containers), [Topwater.Replay](https://www.nuget.org/packages/Topwater.Replay), [Topwater.Cli](https://www.nuget.org/packages/Topwater.Cli) | `0.1.0-preview.6` |
+| **Python** | PyPI: [topwater](https://pypi.org/project/topwater/) | `0.1.0a6` (`pip install --pre topwater`) |
+| **TypeScript** | npm: [topwater](https://www.npmjs.com/package/topwater) | `0.1.0-preview.6` (`npm install topwater@next`) |
 | **Browser** | [demo](https://gr-ant.github.io/Topwater/), [`typescript/`](typescript/README.md#in-the-browser) | the TypeScript build in a Web Worker |
 
 The `bc` calculator is in .NET only, and the tables above show what Python and TypeScript do not have yet.
