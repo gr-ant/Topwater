@@ -6,7 +6,7 @@ namespace Topwater.Browser.Tests;
 
 /// <summary>A test that needs Chromium. It installs it the first time (into the user's Playwright cache); where that fails it is
 /// skipped with the reason, except in CI, where it runs and fails.</summary>
-public sealed class ChromiumFactAttribute : FactAttribute
+public class ChromiumFactAttribute : FactAttribute
 {
     static readonly Lazy<string?> Missing = new(() =>
     {
@@ -48,7 +48,15 @@ public sealed class BrowserCollection : ICollectionFixture<BrowserFixture>;
 public sealed class Site : HttpMessageHandler
 {
     readonly Dictionary<string, Func<HttpRequestMessage, Task<HttpResponseMessage>>> _routes = new(StringComparer.Ordinal);
+    Func<HttpRequestMessage, Task<HttpResponseMessage>?>? _fallback;
     public List<string> Seen { get; } = [];
+
+    /// <summary>Answers what no route does, when it returns a task.</summary>
+    public Site Fallback(Func<HttpRequestMessage, Task<HttpResponseMessage>?> answer)
+    {
+        _fallback = answer;
+        return this;
+    }
 
     /// <summary>Serves <paramref name="html"/> at a URL without its query.</summary>
     public Site Page(string url, string html) => On(url, _ => Task.FromResult(Html(html)));
@@ -66,6 +74,7 @@ public sealed class Site : HttpMessageHandler
         lock (Seen) Seen.Add($"{request.Method} {request.RequestUri}");
         var key = request.RequestUri!.GetLeftPart(UriPartial.Path);
         return _routes.TryGetValue(key, out var answer) ? await answer(request)
+            : _fallback?.Invoke(request) is { } other ? await other
             : new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("<title>Not found</title>", Encoding.UTF8, "text/html") };
     }
 }
