@@ -48,6 +48,22 @@ public class GitTests
     }
 
     [Fact]
+    public async Task FsckBoundsTheLinksItKeeps()
+    {
+        // fsck kept every tree entry as a new string until the end: 8 trees of 800,000 entries (a 15 MB repo) took 2.1 GB
+        var sh = await Repo();
+        var blob = new byte[20];
+        foreach (var prefix in new[] { "a", "b" })
+        {
+            var tree = new MemoryStream();
+            for (int i = 0; i < 600_000; i++) { tree.Write(B($"100644 {prefix}{i:D7}\0")); tree.Write(blob); }
+            Put(sh, "tree", tree.ToArray());
+        }
+        var r = await sh.RunAsync("git fsck");
+        Assert.Equal((128, "fatal: the object graph is too large for this machine's limits\n"), (r.ExitCode, r.Stderr));
+    }
+
+    [Fact]
     public async Task ACommitWithoutAnIdentityFailsLikeRealGit()
     {
         var r = await new Shell().RunAsync("cd /tmp && git init -q r && cd r && git commit -q --allow-empty -m x");

@@ -1327,6 +1327,7 @@ internal static partial class Git
         if (names.Count > MaxWalk) throw Fatal("tooLarge", ("what", "objects"));
         var kinds = new Dictionary<string, string>(StringComparer.Ordinal);
         var links = new Dictionary<string, List<(string Kind, string Sha)>>(StringComparer.Ordinal);  // object -> [(kind, id)] it points to
+        long linked = 0;  // all kept until the end: as many as objects one walk may visit
         foreach (var (sha, path) in names)
         {
             g.Check();
@@ -1353,6 +1354,7 @@ internal static partial class Git
                 g.Err(SubMsg("fsck", "corrupt", ("object", sha), ("path", path)) + "\n");
                 code |= 1;
             }
+            if (links.TryGetValue(sha, out var made) && (linked += made.Count) > MaxWalk) throw Fatal("tooLarge", ("what", "the object graph"));
         }
         var roots = new List<(string Kind, string Sha)>();
         foreach (var e in repo.Index())
