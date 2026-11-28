@@ -325,7 +325,7 @@ internal sealed class WebSession
         && (d.Port is { } p ? p == url.Port : url.DefaultPort));
 
     /// <summary>The credential for this URL's host and port: "host:port", or "host" on the scheme's default port.</summary>
-    Func<string>? CredentialFor(WebUrl url) =>
+    public Func<string>? CredentialFor(WebUrl url) =>
         _credentials.TryGetValue($"{url.Host}:{url.Port}", out var a) ? a : url.DefaultPort && _credentials.TryGetValue(url.Host, out a) ? a : null;
 
     static string Reason(string key, params (string, string)[] values) => CommandSpec.Message("curl", key, values);
@@ -336,17 +336,25 @@ internal sealed class WebSession
         return Reason("reasonHost", ("host", url.HostForUrl + (url.DefaultPort ? "" : ":" + url.Port)), ("allowed", allowed));
     }
 
-    /// <summary>Checks the URL against the policy, then sends one request (no redirects), with the policy's credential for its host
-    /// unless <paramref name="withCredential"/> is false. Throws <see cref="WebFailure"/>.</summary>
-    public async Task<WebResponse> SendAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, CancellationToken ct, bool withCredential = true)
+    string Explain(string why) => Policy.ExplainBlocked ? why : null!;
+
+    /// <summary>Whether the policy lets <paramref name="method"/> go to this URL's host, port and scheme (nothing is sent, nothing
+    /// counted). Throws <see cref="WebFailure"/>.</summary>
+    public void Check(WebUrl url, string method)
     {
-        string Explain(string why) => Policy.ExplainBlocked ? why : null!;
         if (url.Ip is { } ip && WebAddresses.IsBlocked(ip)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain(Reason("reasonPrivate", ("host", url.Host))));
         if (url.Ip == null && !NameListed(url.Host)) throw new WebFailure(WebError.Resolve, url.Host, url.Port, Explain(NotAllowed(url)));
         if (!Allowed(url)) throw new WebFailure(WebError.Connect, url.Host, url.Port, Explain(NotAllowed(url))); // an IP, or a port not listed
         if (url.Scheme == "http" && !Policy.AllowHttp)
             throw new WebFailure(WebError.Protocol, "http") { Blocked = Policy.ExplainBlocked ? Reason("reasonHttps") : null };
         if (!_methods.Contains(method)) throw new WebFailure(WebError.Policy, blocked: Reason("reasonMethod", ("method", method)));
+    }
+
+    /// <summary>Checks the URL against the policy, then sends one request (no redirects), with the policy's credential for its host
+    /// unless <paramref name="withCredential"/> is false. Throws <see cref="WebFailure"/>.</summary>
+    public async Task<WebResponse> SendAsync(WebUrl url, string method, List<KeyValuePair<string, string>> headers, byte[]? body, TimeSpan timeout, CancellationToken ct, bool withCredential = true)
+    {
+        Check(url, method);
         if (body is { Length: > MaxRequestBytes }) throw new WebFailure(WebError.Policy, blocked: Reason("reasonBody", ("limit", MaxRequestBytes.ToString(CultureInfo.InvariantCulture))));
         if (headers.Any(h => h.Key.Length == 0 || !h.Key.All(c => c > ' ' && c < 127 && c != ':') || h.Value.Any(c => c is '\r' or '\n' or '\0'))
             || headers.Sum(h => h.Key.Length + h.Value.Length + 4) > 16 * 1024)

@@ -16,6 +16,14 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   under the host's `WebPolicy` (address pinning included); the browser is launched with no network of its own, and
   downloads, WebSockets and non-http schemes are refused. Marked `[Experimental("TW002")]`. See
   [docs/browser.md](docs/browser.md); `examples/BrowserMount` logs in to a public practice site.
+- **Faster pages.** Images, media and fonts are answered in the browser without a request (`SkippedResourceTypes`,
+  default `image`, `media`, `font`; an image gets a blank 1x1 GIF); scripts, style sheets, images and fonts the
+  site lets anyone keep are cached for the source's life, after the policy's check (`CacheBytes`, 20 MB; nothing
+  sent with a cookie or credential, or that sets a cookie); the start of a call keeps the last accessibility tree
+  when the page hasn't changed; `text.md` reads only the parts of the page's HTML the converter uses; responses are
+  asked for gzip. Four Wikipedia articles in a row went from 19.1-19.7 s to 13.8-14.6 s, the same articles served
+  from memory from 5.9 s to 4.9 s (`examples/BrowserMount --bench`, `TOPWATER_BENCH=1 dotnet test --filter
+  BrowserBench`).
 
 ### Mounts
 

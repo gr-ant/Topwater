@@ -39,6 +39,13 @@ public sealed class BrowserSourceOptions
     public int MaxValueLength { get; init; } = 100_000;
     /// <summary>Bytes of a file given to an upload field.</summary>
     public int MaxUploadBytes { get; init; } = 1_000_000;
+    /// <summary>Kinds of request (Playwright's resource types: "image", "media", "font", ...) answered in the browser without
+    /// going to the network: an image gets a blank 1x1 GIF, so the page's load handlers run and the sizes the page gives stay;
+    /// anything else fails as a request the browser blocked. Screenshots show blank images. Empty loads everything.</summary>
+    public IReadOnlyCollection<string> SkippedResourceTypes { get; init; } = ["image", "media", "font"];
+    /// <summary>Bytes of scripts, style sheets, images and fonts kept for the source's life, when the site lets anyone keep them;
+    /// 0 keeps none.</summary>
+    public long CacheBytes { get; init; } = 20_000_000;
 }
 
 /// <summary>
@@ -125,12 +132,14 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     readonly IBrowserContext _context;
     readonly BrowserSourceOptions _options;
     readonly WebSession _web;
+    readonly ResponseCache _cache;
     readonly Func<IRoute, Task> _route;
     readonly Task _ready;
     readonly SemaphoreSlim _gate = new(1, 1); // one action or snapshot at a time, until its browser call really ends
     readonly CancellationTokenSource _life = new();
     readonly object _lock = new();
     PageTree _tree = PageTree.Empty;
+    string? _treeVersion; // the page's version when _tree was read; null after an action
     IPlaywright? _playwright;
     IBrowser? _browser;
     // what happened since the last action, for status and dialog (under _lock)
@@ -156,6 +165,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         _context = page.Context;
         _options = options;
         _web = new WebSession(options.Policy); // checks the policy
+        _cache = new ResponseCache(options.CacheBytes);
         _route = RouteAsync;
         _page.Dialog += (_, d) => _ = AnswerAsync(d);
         _page.Download += (_, d) =>
@@ -180,6 +190,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
 
     async Task InstallAsync()
     {
+        await _context.AddInitScriptAsync(VersionJs);
         await _context.RouteAsync("**/*", _route);
         await _context.RouteWebSocketAsync("**", ws =>
         {
@@ -230,6 +241,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _life.Cancel();
+        _cache.Clear();
         try
         {
             if (_browser != null) await _browser.CloseAsync();
@@ -269,7 +281,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     public async Task<IReadOnlyList<MountEntry>> ListAsync(string path, int maxEntries, CancellationToken cancellationToken)
     {
         await _ready.WaitAsync(cancellationToken);
-        if (path == "/") _tree = await GatedAsync(SnapshotAsync, 2 * _options.ActionTimeout, cancellationToken); // a listing from the top is a new look at the page
+        if (path == "/") _tree = await GatedAsync(LookAsync, 2 * _options.ActionTimeout, cancellationToken); // a listing from the top is a new look at the page
         var kids = Children(path, _tree) ?? throw new MountSourceException(Msg("noFile"));
         return [.. kids.Take(maxEntries).Select(k => new MountEntry(k.Name, k.Dir, k.Dir ? 0 : null))];
     }
@@ -282,6 +294,42 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         var hit = Children(slash == 0 ? "/" : path[..slash], _tree)?.FirstOrDefault(k => k.Name == name);
         return Task.FromResult(hit is { Name: not null } k ? new MountEntry(name, k.Dir, k.Dir ? 0 : null) : null);
     }
+
+    /// <summary>The tree as it is now: the last one when the page hasn't changed since it was read (no action, the same
+    /// document, no change to its elements or its fields' values), else a new snapshot.</summary>
+    async Task<PageTree> LookAsync()
+    {
+        string? version;
+        try { version = await _page.EvaluateAsync<string?>("() => typeof __topwaterVersion === 'function' ? String(__topwaterVersion()).slice(0, 100) : null").WaitAsync(TimeSpan.FromMilliseconds(ReadMs)); }
+        catch (Exception e) when (e is PlaywrightException or System.TimeoutException) { version = null; }
+        if (version != null && version == _treeVersion) return _tree;
+        var tree = await SnapshotAsync();
+        _treeVersion = version; // read before the snapshot, so a change made meanwhile is seen next time
+        return tree;
+    }
+
+    // Counts the changes to the document (elements, attributes, text) and the events that change a field's value, and adds a
+    // digest of the fields' values for those a script sets without an event. Each document gets its own random id. The page
+    // can see it but not replace it; were it to fool it, the tree would only be as old as the last action.
+    const string VersionJs = """
+        (() => {
+          const id = Math.random().toString(36).slice(2);
+          let n = 0;
+          const bump = () => { n++; };
+          new MutationObserver(bump).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+          for (const t of ['input', 'change', 'focusin', 'focusout', 'toggle']) addEventListener(t, bump, true);
+          const fields = () => {
+            let h = 0;
+            const all = document.querySelectorAll('input,textarea,select');
+            for (let i = 0; i < all.length && i < 500; i++) {
+              const e = all[i], v = e.tagName === 'SELECT' ? String(e.selectedIndex) : String(e.value) + (e.checked ? '1' : '0');
+              for (let k = 0; k < v.length && k < 1000; k++) h = (h * 31 + v.charCodeAt(k)) | 0;
+            }
+            return h;
+          };
+          Object.defineProperty(window, '__topwaterVersion', { value: () => id + ':' + n + ':' + fields() });
+        })();
+        """;
 
     /// <summary>Reads the page as it is now: the accessibility snapshot, its elements, the file fields and the forms.</summary>
     async Task<PageTree> SnapshotAsync()
@@ -471,8 +519,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
 
     async Task<string> MarkdownAsync()
     {
-        var html = await _page.EvaluateAsync<string>("m => document.documentElement ? document.documentElement.outerHTML.slice(0, m) : ''", MaxHtmlChars)
-            .WaitAsync(_options.ActionTimeout);
+        var html = await _page.EvaluateAsync<string>(PageHtmlJs, MaxHtmlChars).WaitAsync(_options.ActionTimeout);
         html = Cut(html, MaxHtmlChars);
         string md;
         try { md = MarkdownConverter.ToMarkdown(Encoding.UTF8.GetBytes(html), "page.html"); }
@@ -483,6 +530,31 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
         while (n > 0 && (bytes[n] & 0xC0) == 0x80) n--;
         return Encoding.UTF8.GetString(bytes, 0, n) + "\n[the rest of the page is left out]\n";
     }
+
+    // the page as HTML for text.md with only what the converter reads: no script, style, svg, head or nav (it skips those), and
+    // of the attributes only href, src, alt and start. A big page's HTML is mostly what this leaves out.
+    const string PageHtmlJs = """
+        max => {
+          const skip = new Set(['script', 'style', 'noscript', 'template', 'head', 'nav', 'svg', 'iframe']), keep = ['href', 'src', 'alt', 'start'];
+          const empty = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+          const out = [], stack = document.documentElement ? [[document.documentElement, false]] : [];
+          let size = 0;
+          const put = s => { out.push(s); size += s.length; };
+          while (stack.length && size < max) {
+            const [node, close] = stack.pop();
+            if (close) { put('</' + node.localName + '>'); continue; }
+            if (node.nodeType === 3) { put(node.data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')); continue; }
+            if (node.nodeType !== 1 || skip.has(node.localName)) continue;
+            let tag = '<' + node.localName;
+            for (const a of keep) { const v = node.getAttribute(a); if (v !== null) tag += ' ' + a + '="' + v.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '"'; }
+            put(tag + '>');
+            if (empty.has(node.localName)) continue;
+            stack.push([node, true]);
+            for (let c = node.lastChild; c; c = c.previousSibling) stack.push([c, false]);
+          }
+          return out.join('').slice(0, max);
+        }
+        """;
 
     /// <summary>A form's fields as the page shows them: the label (made unique), the index among the form's inputs, the type, the
     /// value (a password's hidden).</summary>
@@ -575,6 +647,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     async Task ActAsync(Func<Task> action, CancellationToken cancellationToken) => await GatedAsync(async () =>
     {
         lock (_lock) { _refused.Clear(); _notes.Clear(); _lastError = _navRefused = null; _epoch++; _inflight = 0; _navPending = false; _agentNav = 0; }
+        _treeVersion = null; // the next look reads the page again, whatever its version says
         _web.BeginCall(); // the policy's per-call request limit counts one action
         try
         {
@@ -752,6 +825,17 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     async Task RouteAsync(IRoute route)
     {
         var req = route.Request;
+        if (!req.IsNavigationRequest && _options.SkippedResourceTypes.Contains(req.ResourceType))
+        {
+            // answered here, not refused: nothing is sent or counted, and status doesn't list it
+            try
+            {
+                if (req.ResourceType == "image") await route.FulfillAsync(new() { Status = 200, ContentType = "image/gif", BodyBytes = BlankGif });
+                else await route.AbortAsync("blockedbyclient");
+            }
+            catch (PlaywrightException) { }
+            return;
+        }
         bool nav = req.IsNavigationRequest, main = false;
         try { main = nav && req.Frame == _page.MainFrame; } catch (PlaywrightException) { }
         int epoch = _epoch;
@@ -766,6 +850,18 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             var headers = new List<KeyValuePair<string, string>>();
             foreach (var (k, v) in await req.AllHeadersAsync())
                 if (!k.StartsWith(':') && !DroppedRequestHeaders.Contains(k)) headers.Add(new(k, v));
+            headers.Add(new("accept-encoding", "gzip, deflate")); // the encodings decoded below, within the policy's size limit
+            // a script, style or image anyone may keep is served from the cache, after the policy's check, without a request;
+            // nothing that a cookie or the policy's credential could have made personal is kept
+            string? cacheKey = !nav && req.Method == "GET" && ResponseCache.Types.Contains(req.ResourceType) && _web.CredentialFor(url) == null
+                && !headers.Any(h => h.Key.Equals("cookie", StringComparison.OrdinalIgnoreCase) || h.Key.Equals("authorization", StringComparison.OrdinalIgnoreCase))
+                ? url.ToString() : null;
+            if (cacheKey != null)
+            {
+                try { _web.Check(url, req.Method); }
+                catch (WebFailure f) { await RefuseAsync(route, req.Url, Why(f), main, Code(f)); return; }
+                if (_cache.Get(cacheKey) is { } hit) { await route.FulfillAsync(new() { Status = hit.Status, Headers = hit.Headers, BodyBytes = hit.Body }); return; }
+            }
             // the policy's credential goes only with a page the agent opened and with what a page of that same site asks for: a
             // script of another allowed site can't read the API it signs in to.
             // shortcut: a frame's first page is asked for from about:blank and goes without; look at the parent frame if a host needs it
@@ -786,7 +882,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
                 r = nav ? await _web.SendAsync(url, req.Method, headers, req.PostDataBuffer, _options.Policy.Timeout, stop.Token, credential).WaitAsync(stop.Token)
                     : (await _web.FetchAsync(url, req.Method, null, headers, req.PostDataBuffer, true, -1, _options.Policy.Timeout, null, stop.Token, credential)).Response;
             }
-            catch (WebFailure f) { await RefuseAsync(route, req.Url, Why(f), main, f.Kind switch { WebError.Resolve => "namenotresolved", WebError.Timeout => "timedout", WebError.Connect => "connectionrefused", WebError.Policy => "blockedbyclient", _ => "failed" }); return; }
+            catch (WebFailure f) { await RefuseAsync(route, req.Url, Why(f), main, Code(f)); return; }
             if (r.Truncated || r.Error != null) { await RefuseAsync(route, req.Url, Msg(r.Truncated ? "responseTooLarge" : "responseCut"), main, "failed"); return; }
             var body = r.Body;
             var encoding = r.Header("Content-Encoding")?.Trim().ToLowerInvariant();
@@ -812,6 +908,7 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
                 await route.FulfillAsync(new() { Status = 200, Headers = fulfil, Body = $"<!doctype html><meta http-equiv=\"refresh\" content=\"0; url={WebUtility.HtmlEncode(next.ToString())}\">" });
                 return;
             }
+            if (cacheKey != null && r.Url.ToString() == cacheKey) _cache.Put(cacheKey, r, fulfil, body);
             await route.FulfillAsync(new() { Status = r.Status, Headers = fulfil, BodyBytes = body });
         }
         catch (PlaywrightException) { } // the page or the request went away meanwhile
@@ -823,6 +920,13 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
             Interlocked.Exchange(ref _activity, DateTime.UtcNow.Ticks);
         }
     }
+
+    static readonly byte[] BlankGif = Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
+
+    static string Code(WebFailure f) => f.Kind switch
+    {
+        WebError.Resolve => "namenotresolved", WebError.Timeout => "timedout", WebError.Connect => "connectionrefused", WebError.Policy => "blockedbyclient", _ => "failed",
+    };
 
     static string? FrameUrl(IRequest req)
     {
@@ -912,4 +1016,70 @@ public sealed partial class BrowserSource : IMountSource, IAsyncDisposable
     private static partial Regex Prefix();
     [GeneratedRegex(@"^[\p{L}\p{N} ,.'""<>()=_-]+$")]
     private static partial Regex Plain();
+}
+
+/// <summary>Responses to the page's GETs of scripts, style sheets, images and fonts that the site lets anyone keep (a 200 with
+/// Cache-Control max-age, not private, no-store or no-cache, no Set-Cookie, varying at most by Accept-Encoding and User-Agent,
+/// which are the same for every request of the source), each for its max-age (a day at most), by exact URL. Bounded in bytes
+/// and entries, the oldest dropped first; emptied when the source is disposed.</summary>
+internal sealed class ResponseCache(long maxBytes, int maxEntries = 1000)
+{
+    internal static readonly HashSet<string> Types = ["script", "stylesheet", "image", "font"];
+
+    internal sealed record Entry(string Url, int Status, Dictionary<string, string> Headers, byte[] Body, DateTime Until);
+
+    readonly Dictionary<string, LinkedListNode<Entry>> _byUrl = new(StringComparer.Ordinal);
+    readonly LinkedList<Entry> _order = new(); // oldest first
+    long _bytes;
+
+    public Entry? Get(string url)
+    {
+        lock (_order)
+        {
+            if (!_byUrl.TryGetValue(url, out var node)) return null;
+            if (node.Value.Until > DateTime.UtcNow) return node.Value;
+            Remove(node);
+            return null;
+        }
+    }
+
+    public void Put(string url, WebResponse r, Dictionary<string, string> headers, byte[] body)
+    {
+        if (Lifetime(r) is not { } life || body.Length > maxBytes) return;
+        lock (_order)
+        {
+            if (_byUrl.TryGetValue(url, out var old)) Remove(old);
+            while (_order.Count > 0 && (_bytes + body.Length > maxBytes || _order.Count >= maxEntries)) Remove(_order.First!);
+            _byUrl[url] = _order.AddLast(new Entry(url, r.Status, new(headers, StringComparer.OrdinalIgnoreCase), body, DateTime.UtcNow + life));
+            _bytes += body.Length;
+        }
+    }
+
+    public void Clear()
+    {
+        lock (_order) { _byUrl.Clear(); _order.Clear(); _bytes = 0; }
+    }
+
+    void Remove(LinkedListNode<Entry> node)
+    {
+        _order.Remove(node);
+        _byUrl.Remove(node.Value.Url);
+        _bytes -= node.Value.Body.Length;
+    }
+
+    /// <summary>How long a response may be kept, or null when it may not be.</summary>
+    internal static TimeSpan? Lifetime(WebResponse r)
+    {
+        if (r.Status != 200 || r.Truncated || r.Error != null) return null;
+        string Values(string name) => string.Join(",", r.Headers.Where(h => h.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(h => h.Value)).ToLowerInvariant();
+        if (r.Headers.Any(h => h.Key.Equals("set-cookie", StringComparison.OrdinalIgnoreCase))) return null;
+        if (Values("vary").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(v => v is not ("accept-encoding" or "user-agent"))) return null;
+        long maxAge = 0;
+        foreach (var d in Values("cache-control").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (d is "no-store" or "no-cache" or "private" || d.StartsWith("no-cache=", StringComparison.Ordinal) || d.StartsWith("private=", StringComparison.Ordinal)) return null;
+            if (d.StartsWith("max-age=", StringComparison.Ordinal) && long.TryParse(d.AsSpan(8).Trim('"'), NumberStyles.None, CultureInfo.InvariantCulture, out var n)) maxAge = n;
+        }
+        return maxAge > 0 ? TimeSpan.FromSeconds(Math.Min(maxAge, 86_400)) : null;
+    }
 }

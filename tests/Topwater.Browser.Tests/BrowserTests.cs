@@ -19,12 +19,14 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
         foreach (var c in _contexts) await c.CloseAsync();
     }
 
-    static BrowserSourceOptions Options(Site site, int maxElements = 300) => new()
+    static BrowserSourceOptions Options(Site site, int maxElements = 300, bool images = false, long cacheBytes = 20_000_000, Dictionary<string, Func<string>>? credentials = null) => new()
     {
-        Policy = new WebPolicy { Domains = ["app.test", "cdn.test"], Methods = ["GET", "POST"], Handler = site, MaxRequestsPerCall = 100 },
+        Policy = new WebPolicy { Domains = ["app.test", "cdn.test"], Methods = ["GET", "POST"], Handler = site, MaxRequestsPerCall = 100, Credentials = credentials ?? [] },
         ActionTimeout = TimeSpan.FromSeconds(5),
         MaxElements = maxElements,
         MaxTextBytes = 50_000,
+        SkippedResourceTypes = images ? [] : ["image", "media", "font"],
+        CacheBytes = cacheBytes,
     };
 
     async Task<(Shell Shell, BrowserSource Source)> Open(Site site, string start = "https://app.test/", BrowserSourceOptions? options = null, ShellOptions? shell = null)
@@ -236,7 +238,7 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
                 r.Headers.Location = new Uri("https://evil.test/landing");
                 return Task.FromResult(r);
             });
-        var (sh, _) = await Open(site);
+        var (sh, _) = await Open(site, options: Options(site, images: true));
         var r = await sh.RunAsync("echo https://evil.test/ > /web/url");
         Assert.Contains("mount: /web/url: Blocked by the web policy: evil.test is not an allowed host (allowed: app.test, cdn.test)", r.Stderr);
         r = await sh.RunAsync("echo https://169.254.169.254/latest/meta-data/ > /web/url");
@@ -318,7 +320,7 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
         var site = new Site().Page("https://app.test/", "<title>Start</title>").Page("https://app.test/gallery", $"<title>Gallery</title>{images}");
         for (int i = 0; i < 60; i++)
             site.On($"https://app.test/i{i}.png", _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[2_000_000]) }));
-        var (sh, _) = await Open(site);
+        var (sh, _) = await Open(site, options: Options(site, images: true, cacheBytes: 0));
         long before = GC.GetTotalMemory(forceFullCollection: true);
         Assert.Equal("Gallery\n", await Out(sh, "echo https://app.test/gallery > /web/url; cat /web/title"));
         Assert.Equal(61, site.Seen.Count(s => s.StartsWith("GET https://app.test/", StringComparison.Ordinal) && s != "GET https://app.test/"));
@@ -413,5 +415,137 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
         await sh.MountAsync("/web", source, MountMode.Live);
         Assert.Equal("Shop\n", await Out(sh, "cat /web/title"));
         Assert.Equal("browser:page on /web type browser (rw,live,no-delete,no-rename,no-mkdir)\n", (await sh.RunAsync("mount")).Stdout.Split('\n')[0] + "\n");
+    }
+
+    // ---------- speed: skipped resources, the cache, settling ----------
+
+    [ChromiumFact]
+    public async Task ImagesMediaAndFontsAreAnsweredWithoutARequest()
+    {
+        const string Page = """
+            <title>Pics</title><img src="/a.png" alt="A fish" width="40" height="30"><img src="https://evil.test/b.png" alt="B">
+            <video src="/v.mp4"></video><style>@font-face { font-family: F; src: url(/f.woff2) } p { font-family: F }</style><p>text</p>
+            <p id=out>wait</p><script>const i = new Image(); i.onload = () => out.textContent = 'loaded ' + i.naturalWidth; i.src = '/c.png'</script>
+            """;
+        var site = new Site().Page("https://app.test/", Page);
+        var (sh, _) = await Open(site);
+        Assert.Contains("loaded 1", await Out(sh, "cat /web/text.md")); // a blank image, so the page's load handlers run
+        Assert.Contains("img \"A fish\"", await Out(sh, "cat /web/tree.txt"));
+        Assert.Equal(["GET https://app.test/"], site.Seen);
+        Assert.DoesNotContain("refused", await Out(sh, "cat /web/status")); // skipped by choice: not a policy refusal
+        site = new Site().Page("https://app.test/", Page);
+        (sh, _) = await Open(site, options: Options(site, images: true));
+        Assert.Contains(site.Seen, s => s == "GET https://app.test/a.png");
+        Assert.Contains("refused: https://evil.test/b.png", await Out(sh, "cat /web/status"));
+    }
+
+    static HttpResponseMessage Script(string body, string? cacheControl = "public, max-age=600", Action<HttpResponseMessage>? more = null)
+    {
+        var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "text/javascript") };
+        if (cacheControl != null) r.Headers.TryAddWithoutValidation("Cache-Control", cacheControl);
+        more?.Invoke(r);
+        return r;
+    }
+
+    [ChromiumFact]
+    public async Task ScriptsAnyoneMayKeepAreFetchedOnce()
+    {
+        var scripts = new[] { "lib", "nostore", "private", "cookie", "vary", "moved", "cred" };
+        var tags = string.Concat(scripts.Select(n => $"<script src=\"https://{(n == "cred" ? "cdn" : "app")}.test/{n}.js\"></script>"));
+        var site = new Site()
+            .Page("https://app.test/one", $"<title>One</title>{tags}<p id=out></p>")
+            .Page("https://app.test/two", $"<title>Two</title>{tags}<p id=out></p>")
+            .On("https://app.test/lib.js", _ => Task.FromResult(Script("window.lib = 1")))
+            .On("https://app.test/nostore.js", _ => Task.FromResult(Script("1", "no-store")))
+            .On("https://app.test/private.js", _ => Task.FromResult(Script("1", "private, max-age=600")))
+            .On("https://app.test/cookie.js", _ => Task.FromResult(Script("1", more: r => r.Headers.Add("Set-Cookie", "t=1; Path=/x"))))
+            .On("https://app.test/vary.js", _ => Task.FromResult(Script("1", more: r => r.Headers.Vary.Add("Cookie"))))
+            .On("https://app.test/moved.js", _ =>
+            {
+                var r = new HttpResponseMessage(HttpStatusCode.MovedPermanently);
+                r.Headers.Location = new Uri("https://app.test/target.js");
+                return Task.FromResult(r);
+            })
+            .On("https://app.test/target.js", _ => Task.FromResult(Script("1")))
+            .On("https://cdn.test/cred.js", _ => Task.FromResult(Script("1")));
+        var (sh, source) = await Open(site, "https://app.test/one", Options(site, credentials: new() { ["cdn.test"] = () => "Bearer s3cret" }));
+        Assert.Equal("Two\n", await Out(sh, "echo https://app.test/two > /web/url; cat /web/title"));
+        int Count(string name) => site.Seen.Count(s => s.EndsWith("/" + name + ".js", StringComparison.Ordinal));
+        Assert.Equal(1, Count("lib"));
+        Assert.Equal(2, Count("moved")); // kept only under the URL that answered, never under one that redirected
+        foreach (var name in new[] { "nostore", "private", "cookie", "vary", "cred" }) Assert.True(Count(name) == 2, name);
+        await source.DisposeAsync(); // empties the cache
+    }
+
+    [ChromiumFact]
+    public async Task ARequestThatCarriesACookieIsNotKept()
+    {
+        var site = new Site()
+            .On("https://app.test/", _ => Task.FromResult(Site.Html("<title>Home</title><script src=/priv/lib.js></script>").Also(r => r.Headers.Add("Set-Cookie", "s=1; Path=/priv"))))
+            .Page("https://app.test/again", "<title>Again</title><script src=/priv/lib.js></script>")
+            .On("https://app.test/priv/lib.js", _ => Task.FromResult(Script("1")));
+        var (sh, _) = await Open(site);
+        await Out(sh, "echo https://app.test/again > /web/url");
+        Assert.Equal(2, site.Seen.Count(s => s.EndsWith("/priv/lib.js", StringComparison.Ordinal)));
+    }
+
+    [ChromiumFact]
+    public async Task ARefusedScriptIsRefusedEveryTimeAndTheCacheIsBounded()
+    {
+        var site = new Site()
+            .Page("https://app.test/a", "<title>A</title><script src=https://evil.test/x.js></script><script src=/big.js></script><script src=/a.js></script>")
+            .Page("https://app.test/b", "<title>B</title><script src=/b.js></script>")
+            .On("https://app.test/a.js", _ => Task.FromResult(Script(new string(' ', 1000))))
+            .On("https://app.test/b.js", _ => Task.FromResult(Script(new string(' ', 1000))))
+            .On("https://app.test/big.js", _ => Task.FromResult(Script(new string(' ', 5000))));
+        var (sh, _) = await Open(site, "https://app.test/a", Options(site, cacheBytes: 1500));
+        Assert.Contains("refused: https://evil.test/x.js", await Out(sh, "echo https://app.test/b > /web/url; echo https://app.test/a > /web/url; cat /web/status"));
+        Assert.DoesNotContain(site.Seen, s => s.Contains("evil.test"));
+        Assert.Equal(2, site.Seen.Count(s => s.EndsWith("/big.js", StringComparison.Ordinal))); // larger than the cache
+        Assert.Equal(2, site.Seen.Count(s => s.EndsWith("/a.js", StringComparison.Ordinal))); // b.js pushed it out
+    }
+
+    [ChromiumFact]
+    public async Task AQuietPageSettlesAtOnceAndASlowFetchIsWaitedFor()
+    {
+        var site = new Site()
+            .Page("https://app.test/", """
+                <title>App</title><p id=out>start</p>
+                <button onclick="out.textContent = 'changed here'">Local</button>
+                <button onclick="fetch('/slow').then(r => r.text()).then(t => out.textContent = t)">Remote</button>
+                """)
+            .On("https://app.test/slow", async _ => { await Task.Delay(1500); return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("from the server") }; });
+        var (sh, _) = await Open(site);
+        var clock = Stopwatch.StartNew();
+        Assert.Contains("changed here", await Out(sh, "echo 1 > /web/elements/button-local/click; cat /web/text.md"));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1.5), clock.Elapsed.ToString()); // SettleTimeout is 3 s
+        clock.Restart();
+        Assert.Contains("from the server", await Out(sh, "echo 1 > /web/elements/button-remote/click; cat /web/text.md"));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), clock.Elapsed.ToString());
+    }
+
+    [ChromiumFact]
+    public async Task TheTreeIsReadAgainWhenThePageChangesOnItsOwn()
+    {
+        var site = new Site().Page("https://app.test/", """
+            <title>Timer</title><p>tick</p><input aria-label="Box">
+            <script>setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<button>Late</button>'), 1500);
+            setTimeout(() => document.querySelector('input').value = 'set by a script', 1500)</script>
+            """);
+        var (sh, _) = await Open(site);
+        Assert.Equal("textbox-box\n", await Out(sh, "ls /web/elements"));
+        Assert.Equal("textbox-box\n", await Out(sh, "ls /web/elements")); // unchanged: the same tree
+        await Task.Delay(2000);
+        Assert.Equal("button-late\ntextbox-box\n", await Out(sh, "ls /web/elements"));
+        Assert.Contains("set by a script", await Out(sh, "cat /web/tree.txt"));
+    }
+}
+
+static class ResponseExtensions
+{
+    public static HttpResponseMessage Also(this HttpResponseMessage r, Action<HttpResponseMessage> change)
+    {
+        change(r);
+        return r;
     }
 }

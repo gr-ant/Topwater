@@ -113,7 +113,19 @@ cp ~/cv.pdf file-resume/upload/
   the options (Norway, Sweden)`, `Blocked by the web policy: ...`) and the file shows the page's value again. Writing
   a fact (`role`, `title`, ...) says which files there take writes.
 - **The tree is read again** after every write and at the start of every call, since the page can change on its
-  own. Between two commands of one call it is not: run `mount -r /web` to look again.
+  own. Between two commands of one call it is not: run `mount -r /web` to look again. At the start of a call (and
+  for `mount -r`) the last tree is kept when nothing on the page changed since: the same document, no element,
+  attribute or text added, removed or changed, and the same values in its fields. Reading the accessibility tree of
+  a long page takes most of a second, so a call that only reads `text.md` doesn't pay for it.
+- **Settling.** After an action the mount waits until a page the action loaded has fired its load event and the
+  page has made no request for 300 ms (a click that changes the page without a request returns after that), at most
+  `SettleTimeout` (or `ActionTimeout` while a page is still loading). A request the page makes later, after a timer,
+  is not waited for.
+- **Images, media and fonts are not loaded** by default (`SkippedResourceTypes`): the browser gets a blank 1x1 image
+  for an image, so the page lays out with the sizes it gives and its load handlers run, and a font or a video fails
+  as if blocked. `text.md` keeps an image's `alt` text and address, `tree.txt` its name, and `screenshot.png` shows
+  blank spaces. Nothing is sent for them, nothing is counted, and `status` doesn't list them. Pass
+  `SkippedResourceTypes = []` to load everything.
 - **Forms.** `fields.json` uses each field's label (or its `aria-label`, placeholder, `name` or `id`), made unique
   the same way; a name that matches no field, in any case, is refused before anything is filled. Checkboxes and radio
   buttons take `true` or `false`. `submit` first checks the form as the browser would and says what is missing
@@ -131,22 +143,25 @@ cp ~/cv.pdf file-resume/upload/
 
 | `BrowserSourceOptions` | Default | |
 |---|---|---|
-| `Policy` | required | the [web policy](web.md): sites, methods, limits, credentials. Add `POST` to `Methods` for forms. `MaxRequestsPerCall` counts the requests of one action and what the page fetches until the next one (a page with fifty images needs more than the default 20); `MaxRequests` counts the source's life |
+| `Policy` | required | the [web policy](web.md): sites, methods, limits, credentials. Add `POST` to `Methods` for forms. `MaxRequestsPerCall` counts the requests of one action and what the page fetches until the next one (a page with fifty scripts, or images when it loads them, needs more than the default 20); `MaxRequests` counts the source's life |
 | `Id` | `page` | your name for the mount in snapshots; never a secret |
 | `ActionTimeout` | 10 s | one browser operation: a click, a navigation, a screenshot. A navigation that hasn't answered by then is aborted |
-| `SettleTimeout` | 3 s | after an action, how long to wait for the page's requests to stop |
+| `SettleTimeout` | 3 s | after an action, the longest wait for the page's requests to stop; a quiet page returns 300 ms after its load event |
 | `MaxElements` | 300 | elements with a directory |
 | `MaxTextBytes` | 200,000 | `text.md` and `tree.txt` |
 | `MaxScreenshotBytes` | 5,000,000 | `screenshot.png` |
 | `MaxValueLength` | 100,000 | characters of a value read or written |
 | `MaxUploadBytes` | 1,000,000 | a file given to an upload field (a request body is capped at 1,000,000 bytes by the policy anyway) |
+| `SkippedResourceTypes` | `image`, `media`, `font` | Playwright's resource types answered in the browser without a request (a blank image, or blocked); `[]` loads everything |
+| `CacheBytes` | 20,000,000 | scripts, style sheets, images and fonts kept for the source's life when the site lets anyone keep them (below); `0` keeps none |
 
 ## Safety
 
 What the source enforces, whatever the agent writes and whatever the page does:
 
 - **Every request through the policy.** The source routes every request of the page's browser context (documents,
-  frames, scripts, images, `fetch` and XHR, form posts, a new window's) and fetches it itself, the way `curl` does:
+  frames, scripts, images, `fetch` and XHR, form posts, a new window's) and fetches it itself, the way `curl` does,
+  or answers it without a request (what it skips, and what it has cached after the policy's check, below):
   only the hosts, ports and methods you list, https unless `AllowHttp`, no IP literal or name that resolves to a
   private, loopback, link-local (169.254.169.254, the metadata service) or otherwise internal address, the connection
   made to the address that was checked (so DNS rebinding can't swap it), bodies and request counts capped, your
@@ -154,6 +169,14 @@ What the source enforces, whatever the agent writes and whatever the page does:
   opens on its host (`url`, `back`, `forward`, `reload`) and with what a page of that same origin asks for, never with
   a request another site's page makes, so a script elsewhere can't read what it signs in to. A refused request is aborted and listed
   in `status`. See [what the policy guarantees](web.md#what-it-guarantees).
+- **A cache that keeps nothing personal.** A GET of a script, a style sheet, an image or a font may be answered from
+  the source's own cache, and only after the policy allowed its URL: a refused URL is refused every time. The cache
+  keeps a 200 response only when the site lets anyone keep it (`Cache-Control: max-age` above 0, not `private`,
+  `no-store` or `no-cache`), it sets no cookie, varies at most by `Accept-Encoding` and `User-Agent`, the request
+  carried no cookie or `Authorization` and its host has no credential in the policy, and it came from the URL asked
+  for, not through a redirect. It keeps it for its `max-age`, a day at most, by exact URL, within `CacheBytes` and
+  1,000 entries (the oldest go first), and empties when the source is disposed. A request answered from it is not
+  sent, so it doesn't count against `MaxRequestsPerCall` or `MaxRequests`.
 - **The browser has no network of its own.** `LaunchArgs` make every host name fail to resolve inside Chromium and
   send anything that isn't routed to a proxy that isn't there, with WebRTC kept off UDP, so what Playwright can't
   route (a service worker's requests, prefetching, WebRTC) goes nowhere. All the browser gets is what the source
@@ -202,8 +225,9 @@ What the source enforces, whatever the agent writes and whatever the page does:
   the methods you allow. Keep `Methods` to what the task needs.
 - **Shortcuts:** a 307 or 308 redirect of a POST arrives as a GET; cookies set by a script's or an image's
   intermediate redirect are dropped; a response compressed other than with gzip or deflate is refused (the source
-  asks for none); an element is found again by its role, exact name and place among elements of that name, so a page
+  asks for only those two); an element is found again by its role, exact name and place among elements of that name, so a page
   that reorders same-named elements between two looks can swap them; elements inside frames are not listed (the
-  frame's requests still go through the policy).
+  frame's requests still go through the policy); a change inside a frame, or one the page's own script hides from
+  the check that keeps the last tree, shows at the next action or once something else on the page changes.
 - **Recordings** keep what the source answered (listings and file contents), not the browser's requests: a replay
   shows the same files without opening a browser, and an action not recorded fails as any unrecorded mount call does.
