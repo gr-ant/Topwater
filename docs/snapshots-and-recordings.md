@@ -201,7 +201,10 @@ var report = await recording.ReplayAsync(linux, new ReplayOptions { Normalize = 
 The container has no network unless `Network = true`, 1 GB of memory and no swap, one CPU, 512 processes, files of at
 most 1 GB, no capabilities but `CHOWN`, `DAC_OVERRIDE` and `FOWNER` (which the root setup step needs to write files
 with their owners), and `no-new-privileges`, so a setuid program gains nothing. The 1 GB limit is per file: nothing
-caps the container's total disk use, so a recording can still fill the docker host's disk. Commands run by number, uid
+caps the container's total disk use, so a recording can still fill the docker host's disk. Each docker command's
+stdout and stderr are read up to `MaxOutputBytes` each (64 MiB by default, twice what one Topwater call can print):
+past it the command is killed and the call throws `InvalidOperationException`, so replaying a recording of `yes` ends
+with that error instead of filling the host's memory. Commands run by number, uid
 and gid 1000 (the snapshot's `/etc/passwd` cannot turn that into root); only a snapshot whose user is `root` runs as
 root, and then with those three capabilities. The snapshot's symbolic links go in as links, never followed. It gets
 the snapshot's host name and user (uid 1000, in place of the image's `ubuntu`), the files a fresh Topwater machine

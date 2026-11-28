@@ -14,6 +14,12 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   sent. Signing in stays with the host (a token function); no new package dependency. `examples/GraphMount` signs in
   with Azure.Identity and lets an agent restructure a site, staged. [docs/connectors/graph.md](docs/connectors/graph.md)
 
+### Security (.NET)
+
+- **Replay on real bash reads at most a set amount of output.** `DockerTarget` reads each docker command's stdout and
+  stderr up to `DockerTargetOptions.MaxOutputBytes` (64 MiB): past it the command is killed and the call throws, so a
+  recording of `yes` ends with an error and bounded memory.
+
 ## 0.1.0-preview.5 (2026-11-27)
 
 Everything since `0.1.0-preview.4`. With this preview Topwater is parked: it stays available and is maintained

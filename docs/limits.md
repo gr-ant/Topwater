@@ -51,6 +51,7 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 | One `bc` run | 5 s, and 100000 digits per number | none | `bc: computation stopped: exceeded the 5 s limit (lower scale or use smaller operands)`, `bc: number too large` | 1 | no |
 | Brace expansion, `seq`, `diff` | 10,000 items, 1M numbers, 25M table cells | none | `bash: brace expansion: too many items`, `seq: too many numbers`, `diff: files too large to compare` | 1 (2 for diff) | no |
 | Tool output | 30,000 characters of stdout, 5,000 of stderr | `ToToolOutput(maxChars)` | `... [output truncated, N more characters]` | | |
+| Replay on real bash (`DockerTarget`) | `CallTimeout` 30 s, 64 MiB each of stdout and stderr per docker command | `DockerTargetOptions.CallTimeout`, `MaxOutputBytes` | (host side) the call is killed and returns 124; past the output cap the docker command is killed and `RunAsync` throws `InvalidOperationException` | 124 | the replay |
 | Host programs | 120 s, 1 MB of output | `HostCommandOptions.Timeout`, `MaxOutputBytes` | `prog: timed out after 120s` (the program is killed; the call goes on) | 124 | no |
 
 ## How the limits behave

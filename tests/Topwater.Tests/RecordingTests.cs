@@ -852,4 +852,38 @@ public class RecordingTests
         var r = await docker.RunAsync("ls /tmp | grep -c pwned; cat /srv/f; grep -E 'CapEff|NoNewPrivs' /proc/self/status");
         Assert.Equal("0\nxCapEff:\t0000000000000000\nNoNewPrivs:\t1\n", r.Stdout);
     }
+
+    [Fact]
+    public async Task Docker_target_stops_reading_output_at_the_cap()
+    {
+        // a stand-in docker CLI: `exec ... yes` floods stdout forever, everything else succeeds
+        if (OperatingSystem.IsWindows()) return;
+        var dir = Directory.CreateTempSubdirectory("tw-fakedocker").FullName;
+        var fake = Path.Combine(dir, "docker");
+        File.WriteAllText(fake, "#!/bin/sh\nfor a; do last=$a; done\ncase \" $* \" in *\" -i \"*) cat >/dev/null;; esac\n[ \"$last\" = yes ] && exec yes\nexit 0\n");
+        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            await using var target = await DockerTarget.StartAsync(new Shell().Snapshot(), new DockerTargetOptions { Docker = fake, Packages = [], MaxOutputBytes = 1 << 20 });
+            var e = await Assert.ThrowsAsync<InvalidOperationException>(() => target.RunAsync("yes"));
+            Assert.Contains("more than 1048576 bytes", e.Message);
+            Assert.InRange(watch.Elapsed.TotalSeconds, 0, 20);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task Replaying_yes_on_real_bash_ends_with_an_error()
+    {
+        if (!await DockerTarget.IsAvailableAsync()) return; // skipped without docker
+        var sh = new Shell();
+        var rec = sh.StartRecording();
+        await sh.RunAsync("yes | head -c 10");
+        await sh.RunAsync("yes");
+        rec.Stop();
+        await using var docker = await DockerTarget.StartAsync(rec.Recording.Start, new DockerTargetOptions { Packages = [], MaxOutputBytes = 4 << 20, CallTimeout = TimeSpan.FromSeconds(20) });
+        var e = await Assert.ThrowsAsync<InvalidOperationException>(() => rec.Recording.ReplayAsync(docker));
+        Assert.Contains("more than 4194304 bytes", e.Message);
+    }
 }

@@ -18,6 +18,12 @@ public sealed class DockerTargetOptions
     public TimeSpan CallTimeout { get; init; } = TimeSpan.FromSeconds(30);
     /// <summary>Give the container a network. Off by default, as Topwater has none.</summary>
     public bool Network { get; init; }
+    /// <summary>
+    /// Most bytes read from one docker command's stdout, and again from its stderr. Past it the command is killed and the call
+    /// throws <see cref="InvalidOperationException"/>, so a recording of <c>yes</c> cannot use up the host's memory. The default,
+    /// 64 MiB, is twice what one Topwater call can print at the default <see cref="ShellOptions.MaxStringBytes"/>.
+    /// </summary>
+    public long MaxOutputBytes { get; init; } = 64L << 20;
     public string Docker { get; init; } = "docker";
 }
 
@@ -157,8 +163,13 @@ public sealed class DockerTarget : IReplayTarget
         var psi = new ProcessStartInfo(o.Docker) { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = stdin != null, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
-        var outTask = ReadAllAsync(p.StandardOutput.BaseStream, ct);
-        var errTask = ReadAllAsync(p.StandardError.BaseStream, ct);
+        async Task<string> Read(Stream s)
+        {
+            try { return await ReadCappedAsync(s, o.MaxOutputBytes, args.Take(2), ct); }
+            catch { try { p.Kill(entireProcessTree: true); } catch (Exception) { /* already gone */ } throw; }
+        }
+        var outTask = Read(p.StandardOutput.BaseStream);
+        var errTask = Read(p.StandardError.BaseStream);
         if (stdin != null)
         {
             await p.StandardInput.BaseStream.WriteAsync(stdin, ct);
@@ -170,10 +181,16 @@ public sealed class DockerTarget : IReplayTarget
         return result;
     }
 
-    static async Task<string> ReadAllAsync(Stream s, CancellationToken ct)
+    static async Task<string> ReadCappedAsync(Stream s, long max, IEnumerable<string> what, CancellationToken ct)
     {
         var ms = new MemoryStream();
-        await s.CopyToAsync(ms, ct);
+        var buffer = new byte[81920];
+        int n;
+        while ((n = await s.ReadAsync(buffer, ct)) > 0)
+        {
+            if (ms.Length + n > max) throw new InvalidOperationException($"docker {string.Join(' ', what)}: the output is more than {max} bytes (DockerTargetOptions.MaxOutputBytes); stopped reading");
+            ms.Write(buffer, 0, n);
+        }
         return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
     }
 
