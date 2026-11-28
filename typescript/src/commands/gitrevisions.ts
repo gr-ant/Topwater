@@ -686,6 +686,7 @@ export function writeDiff(g: Git, repo: Repo, a: Files, b: Files, opts: Opts, sp
   }
   const stats: Stat[] = [];
   for (const [st, old, neu] of changes) {
+    g.ctx.checkTime(); // each file is split into lines: a commit can name one big blob at many paths
     const x = blobData(repo, old ? a.get(old) : null, old ?? '', aWorktree);
     const y = blobData(repo, neu ? b.get(neu) : null, neu ?? '', bWorktree);
     if (isBinary(x) || isBinary(y)) stats.push([st, old, neu, null, x.length, y.length]);
@@ -751,6 +752,7 @@ export function writeStat(write: Write, stats: Stat[], short = false): void {
 
 function writePatch(g: Git, repo: Repo, write: Write, st: string, old: string | null, neu: string | null, x: F | null | undefined,
   y: F | null | undefined, context: number, aWorktree: boolean, bWorktree: boolean): void {
+  g.ctx.checkTime();
   const an = (old ?? neu)!, bn = (neu ?? old)!;
   write(`diff --git ${cQuote('a/' + an)} ${cQuote('b/' + bn)}\n`);
   const xd = blobData(repo, x, old ?? '', aWorktree);

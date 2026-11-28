@@ -485,6 +485,7 @@ function readMounts(raw: unknown, o: Limits, blobBytes: (entry: string, size: nu
   };
   for (const d of list(raw, 'mounts')) {
     if (!d || typeof d !== 'object' || Array.isArray(d)) throw bad('a mount is not an object');
+    if (out.length >= 1000) throw bad('more than 1000 mounts'); // the overlap check is quadratic: 20,000 mounts in a small file took minutes to load
     const at = path(d.path, 'mount path');
     if (out.some(x => at === x.path || at.startsWith(x.path + '/') || x.path.startsWith(at + '/'))) throw bad(`${at}: mounts overlap`);
     if (!MOUNT_MODES.includes(d.mode)) throw bad(`${at}: bad mount mode ${JSON.stringify(d.mode ?? null)}`);

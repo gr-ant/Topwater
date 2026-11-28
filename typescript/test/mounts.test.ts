@@ -302,6 +302,18 @@ describe('mounts', () => {
     }
   });
 
+  it('holds at most 1000 mounts in a snapshot', async () => {
+    // the overlap check is quadratic: 20,000 mounts in a small file took minutes to load
+    const entries = readZip(await ShellSnapshot.capture(new Shell()).save());
+    const manifest = entries.find(e => e.name === 'manifest.json')!;
+    const m = JSON.parse(text(manifest.method === 8 ? inflateRaw(manifest.data, 1 << 24) : manifest.data));
+    m.version = 3;
+    m.mounts = Array.from({ length: 1001 }, (_, i) => ({ path: `/mnt/m${i}`, mode: 'read-only', type: 'memory', id: 'memory' }));
+    const data = new TextEncoder().encode(JSON.stringify(m));
+    const zip = writeZip(entries.map(e => e.name === 'manifest.json' ? { ...e, method: 0, data, usize: data.length, crc: crc(data) } : e));
+    await expect(ShellSnapshot.load(zip)).rejects.toThrow('more than 1000 mounts');
+  });
+
   it('replays a recording without the source', async () => {
     const src = new MemorySource({ 'a.txt': 'a\n', 'd/b.txt': 'b\n' });
     const sh = new Shell();

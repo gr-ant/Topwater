@@ -1,6 +1,7 @@
 // git: init, status, add, rm, mv, commit, log, show and diff. Part of the port of python/src/topwater/commands/git.py;
 // see docs/architecture.md.
 import { decodeBytes, bytesToText } from '../bytes.js';
+import { tooLarge } from '../command.js';
 import { EMPTY_TREE, MAX_WALK, SHA, Commit, DateError, Entry, GitError, cQuote, checkPath, cmpCp, cmpPath, fatal, formatDate, isBinary, isDigits, ljust, msg, myers, objectId, parseDate, parseIdent, partition, rstripChars, sortCp, sortPaths, splitLines, stripChars, type Values } from './gitcore.js';
 import { posixRegexError, posixToJs } from '../regex.js';
 import { type F, type Files, Opts, Repo, hasGlob, normalize, parse, same, subFatal, subMsg, union, usageError } from './git.js';
@@ -572,7 +573,11 @@ function commitDiff(g: Git, repo: Repo, c: Commit, o: Opts, specs: string[] | nu
   const a = c.parents.length ? treeFiles(repo, c.parents[0]) : new Map<string, F>();
   const b = repo.flatten(c.tree);
   let buf = '';
-  writeDiff(g, repo, a, b, o, specs, false, false, s => { buf += s; });
+  const max = g.ctx.shell.options.maxStringBytes;
+  // held whole before it is written: within what one output may hold, and the call's time
+  writeDiff(g, repo, a, b, o, specs, false, false, s => {
+    if ((buf += s).length > max) throw tooLarge('output', max, 'limit the diff to some paths, or write it to a file');
+  });
   return buf;
 }
 

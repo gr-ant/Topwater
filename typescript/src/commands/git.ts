@@ -110,6 +110,7 @@ export class Repo {
   private cache = new ObjectCache(); // objects, commits and pack delta bases, under one byte budget
   private packList: Pack[] | null = null;
   private cfg: Config | null = null;
+  private packedCache: [string, Map<string, string>] | null = null;
   private ignores = new Map<string, IgnoreRules | null>();
   private excludes: IgnoreRules[] | null = null;
   prefix = ''; // the cwd below the top ("sub/dir/"), for relative paths
@@ -286,9 +287,15 @@ export class Repo {
     }
     return this.packedRefs().get(name) ?? null;
   }
+  /** Parsed again only when its bytes change: readRef falls back to it for every ref (5,000 branches ran minutes). */
   packedRefs(): Map<string, string> {
+    const p = this.gpath('packed-refs');
+    if (this.fs.isFile(p, false) && this.fs.stat(p).size > this.limit) throw fatal('tooLarge', { what: p });
+    const text = this.fs.isFile(p, false) ? this.fs.readText(p) : ''; // the stored string, not a copy, when it is text
+    if (this.packedCache?.[0] === text) return this.packedCache[1];
     const out = new Map<string, string>();
-    for (const line of (this.gtext('packed-refs') ?? '').split('\n')) {
+    this.packedCache = [text, out];
+    for (const line of text.split('\n')) {
       const parts = line.split(' ');
       if (parts.length === 2 && SHA.test(parts[0]) && packedNameOk(parts[1])) out.set(parts[1], parts[0]);
     }

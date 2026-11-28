@@ -128,6 +128,7 @@ export class FileNode extends Node {
 export const DEFAULT_FILE_MODE = 0o644;
 export const DEFAULT_DIR_MODE = 0o755;
 export const NO_SPACE = ERRNO.ENOSPC;
+const MAX_PATH = 4095; // Linux's PATH_MAX
 
 /** One file, directory or symbolic link as a snapshot holds it. @internal */
 export interface VfsEntry {
@@ -145,7 +146,7 @@ export interface VfsEntry {
 }
 
 /** The state every view of one filesystem shares. */
-interface Store { root: Dir; capacity: number; usedBytes: number; clock: () => number }
+interface Store { root: Dir; capacity: number; usedBytes: number; clock: () => number; entries: number }
 
 /**
  * In-memory Unix-style filesystem with owners and permission bits. Calls from your app are unrestricted (root).
@@ -161,7 +162,7 @@ export class VirtualFileSystem {
   /** Permission bits taken away from new files and directories (the shell's `umask`). */
   umask = 0o022;
 
-  constructor() { this.store = { root: Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE }), capacity: Number.MAX_SAFE_INTEGER, usedBytes: 0, clock: Date.now }; }
+  constructor() { this.store = { root: Object.assign(new Dir(), { mode: DEFAULT_DIR_MODE }), capacity: Number.MAX_SAFE_INTEGER, usedBytes: 0, clock: Date.now, entries: 0 }; }
 
   /**
    * A view of the same files that acts as `user` (null lifts the restrictions). The shell hands its commands such a
@@ -189,6 +190,19 @@ export class VirtualFileSystem {
   private reserve(delta: number, path: string) {
     if (delta > 0 && this.runAs !== null && this.usedBytes + delta > this.capacity) throw new ShellError(`${path}: ${NO_SPACE}`);
     this.usedBytes += delta;
+  }
+
+  /** Counts a new name for the agent, refusing it past one per KB of capacity (at least 10,000): an empty file or directory
+   * holds no bytes but costs the host memory. The count is an over-estimate, recounted when it passes the limit. */
+  private reserveEntry(path: string) {
+    if (this.runAs === null) return;
+    const limit = Math.max(10_000, Math.floor(this.capacity / 1024));
+    if (++this.store.entries <= limit) return;
+    let count = 0;
+    const todo = [this.root];
+    while (todo.length) for (const child of todo.pop()!.children.values()) { count++; if (child instanceof Dir) todo.push(child); }
+    this.store.entries = count + 1;
+    if (this.store.entries > limit) { this.store.entries = count; throw new ShellError(`${path}: ${NO_SPACE}`); }
   }
 
   /** Resolves `path` against `cwd` and collapses "." and "..". */
@@ -359,6 +373,7 @@ export class VirtualFileSystem {
     const spot = this.place(path);
     if (spot.node) throw new ShellError(`${path}: ${ERRNO.EEXIST}`);
     this.require(spot.parent, 2, path);
+    this.reserveEntry(path);
     spot.parent.children.set(spot.name, Object.assign(new LinkNode(), { target, owner: this.runAs ?? spot.parent.owner, mode: 0o777, modified: this.store.clock() }));
     spot.parent.modified = this.store.clock();
   }
@@ -373,6 +388,7 @@ export class VirtualFileSystem {
     if (spot.node) throw new ShellError(`${path}: ${ERRNO.EEXIST}`);
     this.require(spot.parent, 2, path);
     if (this.restricted && node.owner !== this.runAs && !this.allowed(node, 6)) throw new ShellError(`${path}: ${ERRNO.EPERM}`);
+    this.reserveEntry(path);
     node.nlink++;
     spot.parent.children.set(spot.name, node);
     spot.parent.modified = this.store.clock();
@@ -410,6 +426,7 @@ export class VirtualFileSystem {
       existing.modified = this.store.clock();
     } else {
       this.require(dir, 2, path);
+      this.reserveEntry(path);
       const file = Object.assign(new FileNode(), { modified: this.store.clock(), owner: this.runAs ?? dir.owner, mode: 0o666 & ~this.umask });
       file.store(content, data, false, d => this.reserve(d, path));
       dir.children.set(spot.name, file);
@@ -562,6 +579,7 @@ export class VirtualFileSystem {
   /** `parents`: make missing parents too, each one also writable and searchable by its owner (mkdir -p). */
   mkdir(path: string, parents = false, intermediate = false) {
     path = VirtualFileSystem.normalize('/', path);
+    if (path.length > MAX_PATH) throw new ShellError(`${path}: ${ERRNO.ENAMETOOLONG}`); // before making parents: each one walks the whole path
     if (this.node(path, false)) { // a symbolic link counts, even a dangling one
       if (parents && this.isDirectory(path)) return;
       throw new ShellError(`cannot create directory '${path}': ${ERRNO.EEXIST}`);
@@ -570,6 +588,7 @@ export class VirtualFileSystem {
     if (parents && !this.exists(parent)) this.mkdir(parent, true, true);
     const spot = this.place(path);
     this.require(spot.parent, 2, path);
+    this.reserveEntry(path);
     spot.parent.children.set(spot.name, Object.assign(new Dir(), { modified: this.store.clock(), owner: this.runAs ?? spot.parent.owner, mode: (0o777 & ~this.umask) | (intermediate ? 0o300 : 0) }));
     spot.parent.modified = this.store.clock();
   }
@@ -650,6 +669,7 @@ export class VirtualFileSystem {
       // a directory already being copied further up, reached through a link (even one higher up), as cp -L reports it
       if (n instanceof Dir && copying.has(n)) { broken(path, 'cyclic'); return null; }
       tick?.();
+      this.reserveEntry(dest);
       if (!permits(n, user, n instanceof Dir ? 5 : 4)) { denied(path, n instanceof Dir); return null; }
       if (n instanceof FileNode) {
         n.loader?.(n, path);
