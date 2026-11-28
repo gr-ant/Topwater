@@ -893,6 +893,17 @@ internal static class Jq
     // jq runs synchronously on one thread, so the string limit can ride along with it instead of through every call
     [ThreadStatic] static long t_maxString;
     [ThreadStatic] static DateTime t_now;
+    [ThreadStatic] static CancellationToken t_ct;
+    [ThreadStatic] static long t_work;
+
+    /// <summary>For the helpers that walk or copy a whole value outside the interpreter's steps (paths, ..): n elements of
+    /// work, bounded by the same 20M steps and the call's time limit.</summary>
+    static void Work(long n)
+    {
+        long before = t_work;
+        if ((t_work += n) > 20_000_000) throw new JqError("too many steps (possible infinite loop)");
+        if ((before ^ t_work) >> 10 != 0) t_ct.ThrowIfCancellationRequested();
+    }
 
     static T Sized<T>(T value, long size)
     {
@@ -1047,6 +1058,7 @@ internal static class Jq
         };
         foreach (var (k, x) in items)
         {
+            Work(prefix.Count + 1);
             var p = new List<object?>(prefix) { k };
             if (!leafOnly || x is not (List<object?> or Dictionary<string, object?>)) yield return p;
             foreach (var q in AllPaths(x, leafOnly, p)) yield return q;
@@ -1059,7 +1071,7 @@ internal static class Jq
         yield return v;
         if (v is List<object?> or Dictionary<string, object?>)
             foreach (var x in Iterate(v).ToList())
-                foreach (var y in Recurse(x)) yield return y;
+                foreach (var y in Recurse(x)) { Work(1); yield return y; }
     }
 
     static object? GetPath(object? v, object? path)
@@ -1073,20 +1085,24 @@ internal static class Jq
         return v;
     }
 
-    static object? SetPath(object? v, object? path, object? value)
+    static object? SetPath(object? v, object? path, object? value) =>
+        path is List<object?> p ? SetPath(v, p, 0, value) : throw new JqError("Path must be specified as an array");
+
+    /// <summary>The path from <paramref name="at"/> on: by position, as copying the rest at every level is quadratic in its length.</summary>
+    static object? SetPath(object? v, List<object?> p, int at, object? value)
     {
         Shell.CheckStack();
-        if (path is not List<object?> p) throw new JqError("Path must be specified as an array");
-        if (p.Count == 0) return value;
-        var k = p[0];
-        var rest = p.GetRange(1, p.Count - 1);
+        Work(1);
+        if (at == p.Count) return value;
+        var k = p[at];
+        int rest = at + 1;
         switch (k)
         {
             case string key:
             {
                 v ??= new Dictionary<string, object?>();
                 if (v is not Dictionary<string, object?> o) throw new JqError($"Cannot index {TypeName(v)} with \"{key}\"");
-                return new Dictionary<string, object?>(o) { [key] = SetPath(o.GetValueOrDefault(key), rest, value) };
+                return new Dictionary<string, object?>(o) { [key] = SetPath(o.GetValueOrDefault(key), p, rest, value) };
             }
             case double d:
             {
@@ -1101,7 +1117,7 @@ internal static class Jq
                 if (i > 100_000_000) throw new JqError("Array index too large");
                 var r = new List<object?>(l);
                 while (r.Count <= i) r.Add(null);
-                r[(int)i] = SetPath(r[(int)i], rest, value);
+                r[(int)i] = SetPath(r[(int)i], p, rest, value);
                 return r;
             }
             case Dictionary<string, object?> slice:
@@ -1109,7 +1125,7 @@ internal static class Jq
                 v ??= new List<object?>();
                 if (v is not List<object?> l) throw new JqError($"Cannot update field at object index of {TypeName(v)}");
                 var (a, b) = SliceBounds(l.Count, slice.GetValueOrDefault("start"), slice.GetValueOrDefault("end"));
-                if (SetPath(l.GetRange(a, b - a), rest, value) is not List<object?> repl) throw new JqError("A slice of an array can only be assigned another array");
+                if (SetPath(l.GetRange(a, b - a), p, rest, value) is not List<object?> repl) throw new JqError("A slice of an array can only be assigned another array");
                 return l.Take(a).Concat(repl).Concat(l.Skip(b)).ToList();
             }
         }
@@ -1122,15 +1138,16 @@ internal static class Jq
         return v;
     }
 
-    static object? DelPath(object? v, List<object?> path)
+    static object? DelPath(object? v, List<object?> path, int at = 0)
     {
         Shell.CheckStack();
-        if (path.Count == 0 || v == null) return null;
-        var k = path[0];
-        if (path.Count > 1)
+        Work(1);
+        if (at == path.Count || v == null) return null;
+        var k = path[at];
+        if (path.Count - at > 1)
         {
             var child = Index(v, k);
-            return child == null ? v : SetPath(v, new List<object?> { k }, DelPath(child, path.GetRange(1, path.Count - 1)));
+            return child == null ? v : SetPath(v, new List<object?> { k }, DelPath(child, path, at + 1));
         }
         switch (k)
         {
@@ -2199,6 +2216,8 @@ internal static class Jq
         var unit = flags.Contains('c') ? "" : flags.Contains('t') ? "\t" : indent;
         var interp = new Interpreter(ctx.Shell.Environment, ctx.CancellationToken);
         t_maxString = ctx.Shell.Options.MaxStringBytes;
+        t_ct = ctx.CancellationToken;
+        t_work = 0;
         t_now = ctx.Shell.Now;
         object? last = null;
         bool any = false;

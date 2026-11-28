@@ -334,4 +334,17 @@ public class LimitTests
         Assert.Equal(expected, r.Stdout);
         Assert.True(took < TimeSpan.FromSeconds(10), $"took {took}");
     }
+
+    [Theory]
+    // each copied the rest of the path, or every path's prefix, per level: 26 GB for setpath with a 100,000-long path
+    [InlineData("jq -n 'null | setpath([range(30000) | 0]; 1) | length'")]
+    [InlineData("jq -n 'reduce range(10000) as $i (null; [.]) | [paths] | length'")]
+    [InlineData("jq -n 'reduce range(10000) as $i (null; [.]) | [..] | length'")]
+    public async Task JqHelpersOnLongPathsStayBounded(string cmd)
+    {
+        var (r, took) = await TestHost.Timed(() => new Shell().RunAsync(cmd));
+        Assert.True(took < TimeSpan.FromSeconds(20), $"took {took}");
+        Assert.NotEqual(0, r.ExitCode);
+        Assert.Matches("too many steps|maximum nesting level exceeded", r.Stderr);
+    }
 }
