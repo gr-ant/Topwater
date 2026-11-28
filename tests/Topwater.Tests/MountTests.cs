@@ -392,6 +392,22 @@ public class MountTests
             output.Position = 0;
             Assert.Throws<InvalidDataException>(() => ShellSnapshot.Load(output));
         }
+        // the overlap check is quadratic: 20,000 mounts in a 67 KB file took 41 s to load
+        using (var z = new ZipArchive(new MemoryStream(buf.ToArray())))
+        {
+            var m = JsonNode.Parse(new StreamReader(z.GetEntry("manifest.json")!.Open()).ReadToEnd())!;
+            m["mounts"] = new JsonArray([.. Enumerable.Range(0, 1001).Select(i => (JsonNode?)JsonNode.Parse($$"""{"path": "/mnt/m{{i}}", "mode": "read-only", "type": "memory", "id": "memory"}"""))]);
+            var output = new MemoryStream();
+            using (var w = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+                foreach (var e in z.Entries)
+                {
+                    using var s = w.CreateEntry(e.FullName).Open();
+                    if (e.FullName == "manifest.json") s.Write(Encoding.UTF8.GetBytes(m.ToJsonString()));
+                    else e.Open().CopyTo(s);
+                }
+            output.Position = 0;
+            Assert.Contains("more than 1000 mounts", Assert.Throws<InvalidDataException>(() => ShellSnapshot.Load(output)).Message);
+        }
     }
 
     [Fact]

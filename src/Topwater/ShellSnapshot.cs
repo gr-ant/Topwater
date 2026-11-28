@@ -519,6 +519,9 @@ public sealed class ShellSnapshot
 
     /// <summary>The mounts' definitions and pending changes (docs/mounts.md), checked like files: canonical paths, sizes within
     /// MaxFileSystemBytes, at most MaxExtractEntries changes, blobs present and matching.</summary>
+    /// <summary>A real session mounts a handful of sources.</summary>
+    internal const int MaxMounts = 1000;
+
     static List<SavedMount> ReadMounts(List<MountJson?>? raw, ZipArchive zip, ShellOptions o)
     {
         var output = new List<SavedMount>();
@@ -528,6 +531,8 @@ public sealed class ShellSnapshot
         foreach (var d in raw ?? [])
         {
             if (d == null) throw Bad("a mount is not an object");
+            // the overlap check is quadratic, and each mount lists its source on the next call
+            if (output.Count >= MaxMounts) throw Bad($"more than {MaxMounts} mounts");
             var path = Canonical(d.Path, "mount path");
             if (output.Any(x => path == x.Path || path.StartsWith(x.Path + "/", StringComparison.Ordinal) || x.Path.StartsWith(path + "/", StringComparison.Ordinal)))
                 throw Bad($"{path}: mounts overlap");
