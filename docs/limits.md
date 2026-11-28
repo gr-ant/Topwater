@@ -38,12 +38,14 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 | Limit | Default | Option | What the agent sees | Exit code | Ends the call |
 |---|---|---|---|---|---|
 | Time for one tool call | 120 s | `MaxCallDuration` | trailer `[stopped: this call exceeded the 120 s time limit; split the work into shorter calls. Running it again will hit the same limit. Files and variables changed before this point are kept.]` | 124 | yes |
+| Names (files, directories, links) | one per KB of `MaxFileSystemBytes`, at least 10,000 | `MaxFileSystemBytes` | `<cmd>: /path: No space left on device` | 1, for that command | no |
+| A directory's real path | 4,095 characters | none | `mkdir: cannot create directory 'x': File name too long` (also `mv` and `cp -r` of a tree that would end up deeper) | 1, for that command | no |
 | All files together | 128 MB | `MaxFileSystemBytes` | the real error: `bash: /path: No space left on device` (redirects), `cp: error writing 'x': No space left on device`, `tar: x: Cannot open: No space left on device`, `<cmd>: /path: No space left on device` | 1, for that command | no |
 | One string, and all variables together | 32 MB | `MaxStringBytes` | `bash: <what> too large (limit 32 MB); <what to do instead>` on stderr, and the same text in the trailer (see below) | 1 | yes |
 | One loop | 100,000 iterations | `MaxLoopIterations` | `bash: loop aborted after 100000 iterations (the limit for one loop); process the whole input with one command (awk, sed, xargs) instead of a shell loop`, and trailer | 1 | yes |
 | All loops in one call | 10 × `MaxLoopIterations` | `MaxLoopIterations` | `bash: loop aborted after 1000000 iterations in this call (the limit for all loops in one call); ...`, and trailer | 1 | yes |
 | One archive extraction or decompression | 64 MB, 100,000 entries | `MaxExtractBytes`, `MaxExtractEntries` | `tar: output exceeds the 67108864-byte extraction limit; stopping` (and the entry-count form) | 2 or 1, as the real program | no |
-| Nesting | scripts 100, functions 200, arithmetic 100, and the .NET stack | none | `bash: maximum script nesting level exceeded (100)`, `bash: f: maximum function nesting level exceeded (200)`, `bash: arithmetic is nested too deeply`, `bash: maximum nesting level exceeded`, and trailer | 1 | yes |
+| Nesting | scripts 100, functions 200, arithmetic 100, `[[ ( ... ) ]]` 1,000, and the .NET stack (`test`, `find`, `awk`, `bc`, `jq`) | none | `bash: maximum script nesting level exceeded (100)`, `bash: f: maximum function nesting level exceeded (200)`, `bash: arithmetic is nested too deeply`, `bash: maximum nesting level exceeded`, and trailer | 1 | yes |
 | One regular-expression match | 5 s | none | `bash: pattern matching took too long`, and trailer | 1 | yes |
 | One `awk`, `sed`, `jq` run | 10M loop iterations, 10M steps, 20M steps | none | `awk: loop iteration limit exceeded`, `sed: too many steps (a branch loops forever?)`, `jq: error (at <unknown>): too many steps (possible infinite loop)` | 2, 1, 5 | no |
 | One `bc` run | 5 s, and 100000 digits per number | none | `bc: computation stopped: exceeded the 5 s limit (lower scale or use smaller operands)`, `bc: number too large` | 1 | no |
@@ -63,6 +65,9 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
   `timeout 5 awk '...'` interrupts awk. A single regular-expression match is not interruptible and may run up to
   5 s past the limit, and one synchronous step of another built-in on a capped input (a big `sort` or `diff`)
   may take a few seconds. When the time limit ends a call, an `EXIT` trap does not get to run.
+- **Other per-command caps.** `git diff`, `show` and `apply` refuse a file of more than 1,000,000 lines, `git fsck`
+  keeps at most 1,000,000 links, `to-markdown` refuses XML nested more than 256 deep, and a snapshot holds at most
+  1,000 mounts.
 - **Disk.** `df` shows the cap as the disk's size and what the files really hold as used. Sizes are UTF-8
   bytes, the same as `ls -l`. A write that would go past the cap fails whole (nothing is written) and the call
   goes on; `rm` frees the space again. Your app's own writes (`WriteAllText`, `AddDocument`, ... outside a call)
