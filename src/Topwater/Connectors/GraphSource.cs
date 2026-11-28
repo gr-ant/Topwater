@@ -16,6 +16,7 @@ namespace Topwater.Connectors;
 
 /// <summary>What <see cref="GraphSource"/> mounts and how it reaches Microsoft Graph. Give exactly one of <see cref="Site"/> and
 /// <see cref="Drive"/>.</summary>
+[System.Diagnostics.CodeAnalysis.Experimental("TW001")]
 public sealed class GraphOptions
 {
     /// <summary>A SharePoint site: its web URL (https://contoso.sharepoint.com/sites/Team), "host:/sites/Team", or its Graph id.</summary>
@@ -43,6 +44,7 @@ public sealed class GraphOptions
 /// await shell.MountAsync("/mnt/sp", new GraphSource(GetTokenAsync, new() { Site = "https://contoso.sharepoint.com/sites/Team" }), MountMode.Staged);
 /// </code>
 /// </summary>
+[System.Diagnostics.CodeAnalysis.Experimental("TW001")]
 public sealed partial class GraphSource : IMountSource
 {
     public const string Graph = "https://graph.microsoft.com/v1.0";

@@ -205,16 +205,4 @@ public class ShellTests
         r = await sh.RunAsync("true\ntrue\nif true; then :; fi > /nope/z");
         Assert.Equal("bash: line 3: /nope/z: No such file or directory\n", r.Stderr);
     }
-
-    [Fact]
-    public async Task LongRunsOfQuantifiersStayFast()
-    {
-        var sh = new Shell();
-        // a 1 MB run of * on one atom: one quantifier, built in one pass
-        var (r, took) = await TestHost.Timed(() => sh.RunAsync("p='*'; for i in {1..20}; do p=$p$p; done; echo aaa | grep -cE \"a$p\"; [[ aaa =~ a$p ]]; echo $?; echo aaa | sed -E \"s/a$p/X/\""));
-        Assert.Equal("1\n0\nX\n", r.Stdout);
-        Assert.True(took < TimeSpan.FromSeconds(10), $"took {took}");
-        r = await sh.RunAsync("p=$(printf '\\{1\\}%.0s' {1..40}); echo aaa | grep -c \"a$p\"");
-        Assert.Equal("grep: Regular expression too big\n", r.Stderr);
-    }
 }

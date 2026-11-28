@@ -13,6 +13,8 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 - **The CLI, the standalone binaries and the container image are on .NET 10.** The `Topwater.Cli` tool now needs
   .NET 10 or later; the binaries and the image need no .NET. The image is based on `runtime-deps:10.0-noble-chiseled`.
   The examples target `net10.0`.
+- **Package validation.** Each package is checked against the last release when it is packed; the one intended break
+  in this release (a `CancellationToken` on the Shell's mount methods) is recorded in `CompatibilitySuppressions.xml`.
 
 ### Connectors (.NET)
 
@@ -20,7 +22,8 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   SharePoint site (its libraries, lists and subsites) through Microsoft Graph. Files are their real bytes; a list item
   is a `Title.md` file of front matter, one column a line. Moves, renames, new folders, deletes and column edits become
   Graph requests checked with `If-Match`; names and values SharePoint would refuse are refused before anything is
-  sent. Signing in stays with the host (a token function); no new package dependency. `examples/GraphMount` signs in
+  sent. Signing in stays with the host (a token function); no new package dependency. `GraphSource` and `GraphOptions` are
+  marked `[Experimental("TW001")]` while the previews last: suppress TW001 to use them. `examples/GraphMount` signs in
   with Azure.Identity and lets an agent restructure a site, staged. [docs/connectors/graph.md](docs/connectors/graph.md)
 - **Live write tests for Graph.** Files in a scratch folder and items in a scratch list run against a real SharePoint
   site when `TOPWATER_LIVE_GRAPH=1`, `TOPWATER_GRAPH_TOKEN` and `TOPWATER_GRAPH_SITE` are set, and clean up after
