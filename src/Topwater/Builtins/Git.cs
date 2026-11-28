@@ -399,13 +399,22 @@ internal static partial class Git
                 if (text.StartsWith("ref:")) return ReadRef(text[4..].Trim(), depth + 1);
                 return Sha.IsMatch(text) ? text : null;
             }
-            return PackedRefs().GetValueOrDefault(name);
+            return Packed().GetValueOrDefault(name);
         }
 
-        public Dictionary<string, string> PackedRefs()
+        public Dictionary<string, string> PackedRefs() => new(Packed(), StringComparer.Ordinal);
+
+        (byte[]? Raw, Dictionary<string, string> Refs) _packed = (null, []);
+
+        /// <summary>packed-refs, parsed again only when its bytes changed: ReadRef falls back to it for every ref, so a command
+        /// over many branches parsed the whole file once per branch.</summary>
+        Dictionary<string, string> Packed()
         {
+            var raw = GRead("packed-refs") ?? [];
+            if (_packed.Raw is { } seen && seen.AsSpan().SequenceEqual(raw)) return _packed.Refs;
             var output = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var line in (GText("packed-refs") ?? "").Split('\n'))
+            _packed = (raw, output);
+            foreach (var line in Encoding.UTF8.GetString(raw).Split('\n'))
             {
                 var parts = line.Split(' ');
                 if (parts.Length == 2 && Sha.IsMatch(parts[0]) && PackedNameOk(parts[1])) output[parts[1]] = parts[0];

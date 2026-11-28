@@ -66,6 +66,24 @@ public class GitTests
     }
 
     [Fact]
+    public async Task ConfigContinuationsAndManyPackedBranchesHonourTheTimeLimit()
+    {
+        // joining continued lines was quadratic (59 s from a 350 KB config), and branch -vv parsed packed-refs once per
+        // branch (98 s for 5,000): neither checked the call's time limit
+        var sh = await Repo(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(20) });
+        sh.Fs.AppendAllText("/tmp/w/.git/config", "[core]\n" + string.Concat(Enumerable.Repeat("a = b\\\n", 50_000)) + "a = c\n");
+        var (r, took) = await TestHost.Timed(() => sh.RunAsync("git config core.a"));
+        Assert.True(took < TimeSpan.FromSeconds(5), $"took {took}");
+        Assert.StartsWith("fatal: bad config line", r.Stderr);
+        sh.Fs.WriteAllText("/tmp/w/.git/config", "[core]\n\tbare = false\n");
+        var head = (await sh.RunAsync("git rev-parse HEAD")).Stdout.Trim();
+        sh.Fs.WriteAllText("/tmp/w/.git/packed-refs", string.Concat(Enumerable.Range(0, 5000).Select(i => $"{head} refs/heads/b{i:D4}\n")));
+        (r, took) = await TestHost.Timed(() => sh.RunAsync("git branch -vv | wc -l"));
+        Assert.Equal("5001\n", r.Stdout);
+        Assert.True(took < TimeSpan.FromSeconds(10), $"took {took}");
+    }
+
+    [Fact]
     public async Task FsckBoundsTheLinksItKeeps()
     {
         // fsck kept every tree entry as a new string until the end: 8 trees of 800,000 entries (a 15 MB repo) took 2.1 GB

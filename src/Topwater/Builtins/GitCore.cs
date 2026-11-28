@@ -296,7 +296,14 @@ internal static class GitCore
         }
 
         /// <summary>(name, value, line index) in file order; name is section[.sub].key with section and key lowercased.</summary>
-        public List<(string Name, string Value, int At)> Items()
+        List<(string Name, string Value, int At)>? _items; // read once: Get is called per branch, ref and remote
+
+        /// <summary>A logical line (continued with \\) longer than this is refused: joining is quadratic in its pieces.</summary>
+        const int MaxLogicalLine = 16 * 1024;
+
+        public List<(string Name, string Value, int At)> Items() => _items ??= ReadItems();
+
+        List<(string Name, string Value, int At)> ReadItems()
         {
             var output = new List<(string, string, int)>();
             string? section = null;
@@ -309,6 +316,7 @@ internal static class GitCore
                 {
                     i++;
                     line = line.TrimEnd()[..^1] + Lines[i];
+                    if (line.Length > MaxLogicalLine) throw new GitException(Msg("badConfig", ("line", (at + 1).ToString(Inv))));
                 }
                 i++;
                 var s = line.Trim();
@@ -345,6 +353,13 @@ internal static class GitCore
 
         /// <summary>Sets (or with null removes) name; true when something changed.</summary>
         public bool Set(string name, string? value)
+        {
+            _items = null;
+            try { return SetLine(name, value); }
+            finally { _items = null; }
+        }
+
+        bool SetLine(string name, string? value)
         {
             int dot = name.LastIndexOf('.');
             string section = dot >= 0 ? name[..dot] : "", key = name[(dot + 1)..];
