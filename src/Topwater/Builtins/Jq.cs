@@ -194,7 +194,16 @@ internal static class Jq
             return new ShellException($"error (at <stdin>:{line}): Cannot parse input: {what} at line {line}", 2);
         }
 
+        int _depth;
+
+        // a fixed cap, so deep input fails the same way whatever stack the host gives the call
         public object? Value()
+        {
+            if (++_depth > 10_000) throw new LimitExceeded("maximum nesting level exceeded");
+            try { return ValueAt(); } finally { _depth--; }
+        }
+
+        object? ValueAt()
         {
             Shell.CheckStack();
             SkipSpace();
