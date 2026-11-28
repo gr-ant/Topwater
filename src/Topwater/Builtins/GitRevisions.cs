@@ -879,6 +879,7 @@ internal static partial class Git
     static void WritePatch(Cmd g, Repo repo, Action<string> write, string st, string? old, string? @new, (string Mode, string Sha)? x, (string Mode, string Sha)? y,
         int context, bool aWorktree, bool bWorktree)
     {
+        g.Check();
         string an = (old ?? @new)!, bn = (@new ?? old)!;
         write($"diff --git {CQuote("a/" + an)} {CQuote("b/" + bn)}\n");
         var xd = BlobData(repo, x, old ?? "", aWorktree);

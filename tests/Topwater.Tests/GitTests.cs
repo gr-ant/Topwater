@@ -48,6 +48,24 @@ public class GitTests
     }
 
     [Fact]
+    public async Task DiffsOfHugeFilesAndCommitsStayBounded()
+    {
+        // a line was three strings: git show of a 30 MB file of short lines took 2.75 GB, and a commit naming that blob at 200
+        // paths grew without end
+        var sh = await Repo();
+        sh.Fs.WriteAllText("/tmp/w/big", string.Concat(Enumerable.Repeat("a\n", 1_100_000)));
+        var r = await sh.RunAsync("git add big; git commit -qm big; git show > /dev/null; echo $?");
+        Assert.Equal("128\n", r.Stdout);
+        Assert.Contains("fatal: a file of more than 1000000 lines is too large for this machine's limits", r.Stderr);
+        var sha = Put(sh, "blob", B(string.Concat(Enumerable.Repeat("x\n", 900_000))));
+        var tree = new MemoryStream();
+        for (int i = 0; i < 200; i++) { tree.Write(B($"100644 p{i:D3}\0")); tree.Write(Convert.FromHexString(sha)); }
+        var commit = CommitWithTree(sh, tree.ToArray());
+        r = await sh.RunAsync($"git show {commit} | wc -l");
+        Assert.Contains("output too large", r.Stderr);
+    }
+
+    [Fact]
     public async Task FsckBoundsTheLinksItKeeps()
     {
         // fsck kept every tree entry as a new string until the end: 8 trees of 800,000 entries (a 15 MB repo) took 2.1 GB

@@ -571,17 +571,18 @@ internal static class GitCore
     // ---------- line diff ----------
     // Lines are Latin-1 strings: one char per byte, so comparing and hashing them is exact.
 
+    /// <summary>Lines diff, merge and apply hold as one string each: a 32 MB file of short lines costs some 40 times its size.</summary>
+    public const int MaxLines = 1_000_000;
+
     public static List<string> SplitLines(byte[] data)
     {
-        var parts = Encoding.Latin1.GetString(data).Split('\n');
-        var output = new List<string>(parts.Length);
-        if (parts[^1] == "")
-        {
-            for (int k = 0; k < parts.Length - 1; k++) output.Add(parts[k] + "\n");
-            return output;
-        }
-        for (int k = 0; k < parts.Length - 1; k++) output.Add(parts[k] + "\n");
-        output.Add(parts[^1]);
+        var text = Encoding.Latin1.GetString(data);
+        int count = text.AsSpan().Count('\n');
+        if (count > MaxLines) throw new GitException(Msg("tooLarge", ("what", $"a file of more than {MaxLines} lines")));
+        var output = new List<string>(count + 1);
+        int start = 0;
+        for (int nl; (nl = text.IndexOf('\n', start)) >= 0; start = nl + 1) output.Add(text.Substring(start, nl + 1 - start));
+        if (start < text.Length) output.Add(text[start..]);
         return output;
     }
 

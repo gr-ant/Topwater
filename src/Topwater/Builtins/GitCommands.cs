@@ -671,7 +671,12 @@ internal static partial class Git
         var a = c.Parents.Count > 0 ? TreeFiles(repo, c.Parents[0]) : new FileMap(StringComparer.Ordinal);
         var b = repo.Flatten(c.Tree);
         var buf = new StringBuilder();
-        WriteDiff(g, repo, a, b, o, specs, output: x => buf.Append(x));
+        // held whole before it is written: within what one output may hold, and the call's time
+        WriteDiff(g, repo, a, b, o, specs, output: x =>
+        {
+            if (buf.Append(x).Length > g.Ctx.Shell.Options.MaxStringBytes) throw g.Ctx.Shell.TooLarge("output", "limit the diff to some paths, or write it to a file");
+            g.Check();
+        });
         return buf.ToString();
     }
 
