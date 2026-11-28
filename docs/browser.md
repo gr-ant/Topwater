@@ -193,6 +193,7 @@ What the source enforces, whatever the agent writes and whatever the page does:
 - **Shortcuts:** a 307 or 308 redirect of a POST arrives as a GET; cookies set by a script's or an image's
   intermediate redirect are dropped; a response compressed other than with gzip or deflate is refused (the source
   asks for none); an element is found again by its role, exact name and place among elements of that name, so a page
-  that reorders same-named elements between two looks can swap them.
+  that reorders same-named elements between two looks can swap them; elements inside frames are not listed (the
+  frame's requests still go through the policy).
 - **Recordings** keep what the source answered (listings and file contents), not the browser's requests: a replay
   shows the same files without opening a browser, and an action not recorded fails as any unrecorded mount call does.

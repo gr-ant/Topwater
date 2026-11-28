@@ -98,10 +98,14 @@ public sealed class BrowserTests(BrowserFixture fixture) : IAsyncLifetime
     [ChromiumFact]
     public async Task AClickNavigatesAndTheNextCommandSeesTheNewPage()
     {
-        var (sh, _) = await Open(Shop());
+        var site = Shop();
+        var (sh, _) = await Open(site);
         Assert.Equal("https://app.test/next\nNext\nlink-home\n", await Out(sh, "echo 1 > /web/elements/link-next-page/click && cat /web/url /web/title && ls /web/elements"));
         Assert.Equal("https://app.test/\n", await Out(sh, "echo > /web/back; cat /web/url"));
         Assert.Equal("https://app.test/next\n", await Out(sh, "echo > /web/forward; cat /web/url"));
+        int loads = site.Seen.Count(s => s == "GET https://app.test/next");
+        Assert.Equal("https://app.test/next\n", await Out(sh, "echo > /web/reload; cat /web/url"));
+        Assert.Equal(loads + 1, site.Seen.Count(s => s == "GET https://app.test/next"));
         Assert.Equal("https://app.test/\n", await Out(sh, "echo https://app.test/ > /web/url; cat /web/url"));
     }
 
