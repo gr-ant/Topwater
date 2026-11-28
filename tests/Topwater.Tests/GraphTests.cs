@@ -5,7 +5,7 @@ using Topwater.Connectors;
 namespace Topwater.Tests;
 
 /// <summary>The Microsoft Graph connector (docs/connectors/graph.md): tests/connectors/graph/cases.json against the fake Graph,
-/// then hostile answers and limits, then (opt-in, TOPWATER_LIVE_GRAPH=1) a read-only look at a real site.</summary>
+/// then hostile answers and limits, then (opt-in, TOPWATER_LIVE_GRAPH=1) a real site: listed, and written in a scratch folder and scratch list items.</summary>
 public class GraphTests
 {
     static readonly string Root = FindRoot();
@@ -28,7 +28,8 @@ public class GraphTests
     static string ChangeLine(GraphSource src, MountChange c)
     {
         var line = $"{c.Kind.ToString().ToLowerInvariant()} {c.Path}" + (c.To != null ? $" -> {c.To}" : "");
-        return src.Note(c) is { } note ? $"{line} # {note}" : line;
+        Assert.Equal(src.Note(c), c.Note); // the source's note comes with PendingChanges (the agent's `mount -c` never shows it)
+        return c.Note is { } note ? $"{line} # {note}" : line;
     }
 
     static async Task<List<JsonNode?>> RunCase(JsonObject c)
@@ -503,19 +504,155 @@ public class GraphTests
         Assert.True(Encoding.UTF8.GetByteCount(ConnectorCommon.SafeName(new string('é', 300), "x")) <= ConnectorCommon.NameBytes);
     }
 
-    // ----- the real service (opt-in, read-only) -----
+    // ----- the real service (opt-in: TOPWATER_LIVE_GRAPH=1, TOPWATER_GRAPH_TOKEN, TOPWATER_GRAPH_SITE) -----
+    // The writes stay in a scratch folder (Documents/zz-topwater-test-N) and scratch items in Project Tracker (titles starting
+    // "zz topwater"), deleted afterwards whatever happens.
+
+    const string GraphApi = "https://graph.microsoft.com/v1.0";
+
+    static (string Token, string Site)? Live()
+    {
+        if (Environment.GetEnvironmentVariable("TOPWATER_LIVE_GRAPH") != "1") return null;
+        var token = Environment.GetEnvironmentVariable("TOPWATER_GRAPH_TOKEN");
+        var site = Environment.GetEnvironmentVariable("TOPWATER_GRAPH_SITE");
+        Assert.False(string.IsNullOrEmpty(token) || string.IsNullOrEmpty(site), "TOPWATER_LIVE_GRAPH=1 needs TOPWATER_GRAPH_TOKEN and TOPWATER_GRAPH_SITE");
+        return (token!, site!);
+    }
+
+    static GraphSource LiveSource((string Token, string Site) live) => new(Token(live.Token), new GraphOptions { Site = live.Site });
+
+    static Task<JsonObject> Raw(GraphSource src, string method, string url, JsonObject? body = null) => src.Api.JsonAsync(method, GraphApi + url, body, null, None);
+
+    /// <summary>The site's id and its Documents library's drive id, asked directly (the same requests on the fake and the real service).</summary>
+    static async Task<(string Site, string Drive)> Ids(GraphSource src, string site)
+    {
+        var id = (string)(await Raw(src, "GET", GraphSource.SiteUrl(site) + "?$select=id"))["id"]!;
+        var drives = (JsonArray)(await Raw(src, "GET", $"/sites/{id}/drives?$select=id,name"))["value"]!;
+        return (id, (string)drives.First(d => (string?)d!["name"] == "Documents")!["id"]!);
+    }
+
+    static async Task InScratchFolder((string Token, string Site) live, Func<GraphSource, string, Task> body)
+    {
+        var src = LiveSource(live);
+        var name = $"zz-topwater-test-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+        await src.MkdirAsync($"/Documents/{name}", None);
+        try { await body(src, name); }
+        finally
+        {
+            var (_, drive) = await Ids(src, live.Site);
+            var url = $"/drives/{drive}/root:/{Uri.EscapeDataString(name)}:";
+            try { await Raw(src, "POST", url + "/permanentDelete"); }
+            catch (Exception) { await Raw(src, "DELETE", url); } // the recycle bin, if permanent deletion is not allowed
+        }
+    }
 
     [Fact]
     public async Task LiveSiteListsReadOnly()
     {
-        if (Environment.GetEnvironmentVariable("TOPWATER_LIVE_GRAPH") != "1") return;
-        var token = Environment.GetEnvironmentVariable("TOPWATER_GRAPH_TOKEN");
-        var site = Environment.GetEnvironmentVariable("TOPWATER_GRAPH_SITE");
-        Assert.False(string.IsNullOrEmpty(token) || string.IsNullOrEmpty(site), "TOPWATER_LIVE_GRAPH=1 needs TOPWATER_GRAPH_TOKEN and TOPWATER_GRAPH_SITE");
+        if (Live() is not { } live) return;
         var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(120) });
-        await sh.MountAsync("/mnt/sp", new GraphSource(Token(token), new GraphOptions { Site = site }), MountMode.ReadOnly);
+        await sh.MountAsync("/mnt/sp", LiveSource(live), MountMode.ReadOnly);
         var r = await sh.RunAsync("ls /mnt/sp && ls /mnt/sp/Documents | head");
         Assert.Equal(0, r.ExitCode);
         Assert.Contains("Documents", r.Stdout);
+    }
+
+    [Fact]
+    public async Task LiveFilesRoundTrip()
+    {
+        if (Live() is not { } live) return;
+        await InScratchFolder(live, async (src, name) =>
+        {
+            var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(300) });
+            await sh.MountAsync("/mnt/sp", src, MountMode.Staged);
+            var r = await sh.RunAsync($"cd '/mnt/sp/Documents/{name}' && echo hello > a.txt && mkdir sub && head -c 5000000 /dev/zero | tr '\\0' x > sub/big.txt && mount -c");
+            Assert.True(r.ExitCode == 0, r.Stderr);
+            var res = await sh.ApplyChangesAsync("/mnt/sp");
+            Assert.True(res.Failed == null, res.Error);
+            await sh.RunAsync($"cd '/mnt/sp/Documents/{name}' && mv a.txt sub/b.txt && echo again >> sub/b.txt && rm sub/big.txt");
+            res = await sh.ApplyChangesAsync("/mnt/sp");
+            Assert.True(res.Failed == null, res.Error);
+            await sh.RefreshMountAsync("/mnt/sp");
+            r = await sh.RunAsync($"cd '/mnt/sp/Documents/{name}' && find . | sort && cat sub/b.txt");
+            Assert.True(r.Stdout == ".\n./sub\n./sub/b.txt\nhello\nagain\n", r.Stdout + r.Stderr);
+            var st = await src.StatAsync($"/Documents/{name}/sub/b.txt", None);
+            Assert.StartsWith("\"c:", st!.Version);
+            await Assert.ThrowsAsync<MountConflictException>(() => src.WriteAsync($"/Documents/{name}/sub/b.txt", "x"u8.ToArray(), "\"c:{00000000-0000-0000-0000-000000000000},1\"", None));
+            Assert.Contains("doesn't allow", (await Assert.ThrowsAsync<MountSourceException>(() => src.WriteAsync($"/Documents/{name}/CON", "x"u8.ToArray(), null, None))).Message);
+        });
+    }
+
+    [Fact]
+    public async Task LiveListItems()
+    {
+        if (Live() is not { } live) return;
+        var src = LiveSource(live);
+        var (site, _) = await Ids(src, live.Site);
+        var lists = (JsonArray)(await Raw(src, "GET", $"/sites/{site}/lists?$select=id,displayName"))["value"]!;
+        var list = (string)lists.First(l => (string?)l!["displayName"] == "Project Tracker")!["id"]!;
+        var stamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        try
+        {
+            foreach (var t in new[] { $"zz topwater {stamp} a", $"zz topwater {stamp} b" })
+                await Raw(src, "POST", $"/sites/{site}/lists/{list}/items", new JsonObject { ["fields"] = new JsonObject { ["Title"] = t, ["Status"] = "Not started", ["Budget"] = 10 } });
+            var sh = new Shell(new ShellOptions { MaxCallDuration = TimeSpan.FromSeconds(120) });
+            await sh.MountAsync("/mnt/sp", src, MountMode.Staged);
+            string a = $"zz topwater {stamp} a.md", b = $"zz topwater {stamp} b.md", c = $"zz topwater {stamp} c.md";
+            var r = await sh.RunAsync($"cd '/mnt/sp/Project Tracker' && ls && cat '{a}'");
+            Assert.True(r.Stdout.Contains("Status page.md") && r.Stdout.Contains("Status: \"Not started\"") && r.Stdout.Contains("# read-only: "), r.Stdout + r.Stderr);
+            await sh.RunAsync($"cd '/mnt/sp/Project Tracker' && sed -i 's/^Status: .*/Status: \"In progress\"/; s/^Budget: .*/Budget: 25.5/' '{a}' "
+                + $"&& rm '{b}' && printf -- '---\\nStatus: \"Done\"\\nDueDate: \"2027-02-01\"\\n---\\n' > '{c}'");
+            var res = await sh.ApplyChangesAsync("/mnt/sp");
+            Assert.True(res.Failed == null, res.Error);
+            await sh.RefreshMountAsync("/mnt/sp");
+            r = await sh.RunAsync($"cd '/mnt/sp/Project Tracker' && ls | grep 'zz topwater' && cat '{a}' '{c}'");
+            Assert.DoesNotContain(b, r.Stdout);
+            foreach (var want in new[] { "Status: \"In progress\"", "Budget: 25.5", "Status: \"Done\"", "DueDate: \"2027-02-01" }) Assert.True(r.Stdout.Contains(want), want + "\n" + r.Stdout);
+            var st = (await src.StatAsync($"/Project Tracker/{a}", None))!;
+            var text = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(await src.ReadAsync($"/Project Tracker/{a}", 100_000, None)).Replace("\"In progress\"", "\"Blocked\""));
+            var stale = st.Version[..st.Version.LastIndexOf(',')] + ",1\"";
+            Assert.NotEqual(st.Version, stale);
+            await Assert.ThrowsAsync<MountConflictException>(() => src.WriteAsync($"/Project Tracker/{a}", text, stale, None)); // SharePoint checks If-Match on an item's fields
+            await sh.RunAsync($"cd '/mnt/sp/Project Tracker' && sed -i 's/^ID: .*/ID: 999/' '{a}'");
+            Assert.Contains("ID can't be changed (set by SharePoint)", (await sh.ApplyChangesAsync("/mnt/sp")).Error);
+        }
+        finally
+        {
+            var items = (JsonArray)(await Raw(src, "GET", $"/sites/{site}/lists/{list}/items?expand=fields(select=Title)&$top=500"))["value"]!;
+            foreach (var it in items)
+                if (((string?)it!["fields"]?["Title"] ?? "").StartsWith("zz topwater", StringComparison.Ordinal))
+                    await Raw(src, "DELETE", $"/sites/{site}/lists/{list}/items/{(string)it["id"]!}");
+        }
+    }
+
+    /// <summary>The fields the connector reads from an item, a listing, a site and its drives are where the fake puts them.</summary>
+    [Fact]
+    public async Task LiveAnswersHaveTheShapeTheFakeGives()
+    {
+        if (Live() is not { } live) return;
+        await InScratchFolder(live, async (src, name) =>
+        {
+            var fake = Tree();
+            var fsrc = Source(fake);
+            await fsrc.MkdirAsync("/Documents/f", None);
+            var real = await Shapes(src, live.Site, name);
+            var faked = await Shapes(fsrc, fake.SiteUrl, "f");
+            foreach (var (r0, f0) in real.Zip(faked))
+            {
+                var r = r0["value"] is JsonArray rv ? (JsonObject)rv[0]! : r0;
+                var f = f0["value"] is JsonArray fv ? (JsonObject)fv[0]! : f0;
+                foreach (var key in new[] { "id", "name", "eTag", "cTag", "size", "file", "folder" })
+                    Assert.True(r.ContainsKey(key) == f.ContainsKey(key), $"{key}: real [{string.Join(",", r.Select(kv => kv.Key))}], fake [{string.Join(",", f.Select(kv => kv.Key))}]");
+            }
+        });
+
+        static async Task<JsonObject[]> Shapes(GraphSource s, string siteRef, string folder)
+        {
+            var (site, drive) = await Ids(s, siteRef);
+            await s.WriteAsync($"/Documents/{folder}/shape.txt", "x"u8.ToArray(), null, None);
+            var f = Uri.EscapeDataString(folder);
+            return [await Raw(s, "GET", $"/drives/{drive}/root:/{f}/shape.txt"), await Raw(s, "GET", $"/drives/{drive}/root:/{f}:/children"),
+                await Raw(s, "GET", $"/sites/{site}"), await Raw(s, "GET", $"/sites/{site}/drives")];
+        }
     }
 }

@@ -58,6 +58,9 @@ public interface IMountSource
     Task<string?> RenameAsync(string path, string to, string? expectedVersion, CancellationToken cancellationToken) => throw new NotSupportedException("the source cannot rename");
     /// <summary>Returns the new directory's version (null: none).</summary>
     Task<string?> MkdirAsync(string path, CancellationToken cancellationToken) => throw new NotSupportedException("the source cannot mkdir");
+    /// <summary>What the host should know about a pending change before applying it ("this move is a copy and a delete"), or
+    /// null. It comes with <see cref="Shell.PendingChanges"/> (<see cref="MountChange.Note"/>), never to the agent.</summary>
+    string? Note(MountChange change) => null;
 }
 
 /// <summary>
@@ -437,9 +440,13 @@ public enum MountChangeKind { Write, Delete, Rename, Mkdir }
 
 /// <summary>One operation that makes the source match the mount: <see cref="Path"/> (and <see cref="To"/> for a rename) within
 /// the source; <see cref="Version"/>: what the entry was when read (null: it must not exist); <see cref="Content"/> for a write.
-/// ApplyChangesAsync matches changes by value, content included.</summary>
+/// ApplyChangesAsync matches changes by value, content included; <see cref="Note"/> is not compared.</summary>
 public sealed record MountChange(MountChangeKind Kind, string Path, string? To = null, string? Version = null, byte[]? Content = null)
 {
+    /// <summary>The source's note for the host (<see cref="IMountSource.Note"/>), set by <see cref="Shell.PendingChanges"/>.
+    /// Never shown to the agent, never saved.</summary>
+    public string? Note { get; init; }
+
     public bool Equals(MountChange? other) => other is not null && Kind == other.Kind && Path == other.Path && To == other.To && Version == other.Version
         && (Content == null ? other.Content == null : other.Content != null && Content.AsSpan().SequenceEqual(other.Content));
 
@@ -535,13 +542,17 @@ sealed class MountPoint(MountManager mounts, string path, IMountSource? source, 
         var x = new MountExchange(Path, op, path, to);
         var left = shell.CallDeadline - DateTime.UtcNow;
         bool bounded = shell.CallDeadline != DateTime.MaxValue && left < TimeSpan.FromDays(40);
-        using var cts = bounded ? new CancellationTokenSource(left > TimeSpan.Zero ? left : TimeSpan.Zero) : new CancellationTokenSource();
+        var host = Mounts.HostToken;
+        host.ThrowIfCancellationRequested();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(host);
+        if (bounded) cts.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
         T r;
         try
         {
             var task = run(Source ?? throw new SourceFailure(Shown ?? "unavailable", Error ?? "unavailable"), cts.Token);
-            r = bounded ? await task.WaitAsync(cts.Token) : await task;
+            r = bounded || host.CanBeCanceled ? await task.WaitAsync(cts.Token) : await task;
         }
+        catch (OperationCanceledException) when (host.IsCancellationRequested) { throw new OperationCanceledException(host); }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             Mounts.Log(x with { Error = Msg("timedOut") });
@@ -1026,6 +1037,7 @@ sealed class MountPoint(MountManager mounts, string path, IMountSource? source, 
         {
             for (int i = 0; i < todo.Count; i++)
             {
+                Mounts.HostToken.ThrowIfCancellationRequested();
                 var c = todo[i];
                 string? version = null;
                 try
@@ -1124,7 +1136,11 @@ sealed class MountManager(Shell shell)
 
     public readonly Shell Shell = shell;
     public readonly List<MountPoint> Items = [];
-    public Dictionary<(string Type, string Id), (IMountSource Source, MountMode Mode)> Sources = []; // the host's sources and the modes it chose
+    public Dictionary<(string Type, string Id), (IMountSource Source, MountMode Mode, HashSet<string> Paths)> Sources = []; // the host's sources, the modes and mount points it chose
+    readonly AsyncLocal<CancellationToken> _hostToken = new();
+
+    /// <summary>The token of the host's call in progress (MountAsync and the others), which every source call also honours.</summary>
+    public CancellationToken HostToken => _hostToken.Value;
     public List<MountExchange>? ReplayAnswers; // a replay's recorded exchanges: answered instead of any source
     List<MountExchange> _log = [];
 
@@ -1156,8 +1172,9 @@ sealed class MountManager(Shell shell)
 
     // ----- the host's API -----
 
-    public async Task MountAsync(string path, IMountSource source, MountMode mode)
+    public async Task MountAsync(string path, IMountSource source, MountMode mode, CancellationToken cancellationToken = default)
     {
+        _hostToken.Value = cancellationToken; // set in this async method: its callees see it, its caller doesn't
         if (!Enum.IsDefined(mode)) throw new ArgumentException($"{mode}: the mode is one of read-only, staged, live");
         if (path is null || !path.StartsWith('/')) throw new ArgumentException($"{path}: a mount point is an absolute path other than /");
         path = VirtualFileSystem.Normalize("/", path);
@@ -1193,7 +1210,8 @@ sealed class MountManager(Shell shell)
             throw;
         }
         if (old != null) Items[Items.IndexOf(old)] = mount; else Items.Add(mount);
-        Sources[(mount.Type, mount.Id)] = (source, mode);
+        var key = (mount.Type, mount.Id);
+        Sources[key] = (source, mode, [.. Sources.TryGetValue(key, out var had) ? had.Paths : [], path]);
     }
 
     void Cleanup(MountPoint m, MountPoint? old)
@@ -1208,20 +1226,43 @@ sealed class MountManager(Shell shell)
         var m = Get(path);
         Items.Remove(m);
         if (!Items.Any(o => (o.Type, o.Id) == (m.Type, m.Id))) Sources.Remove((m.Type, m.Id));
+        else if (Sources.TryGetValue((m.Type, m.Id), out var s)) s.Paths.Remove(m.Path);
         using var _ = Shell.Fs.AsRoot();
         DropChildren(Shell.Fs, m.Path);
         Shell.Fs.Chmod(m.Path, Shell.Oct("755"));
     }
 
-    public async Task RefreshAsync(string path)
+    public async Task RefreshAsync(string path, CancellationToken cancellationToken = default)
     {
+        _hostToken.Value = cancellationToken;
         var m = Get(path);
         if (m.Source == null) throw new SourceFailure(m.Shown ?? "unavailable", m.Error ?? "unavailable");
         var changes = m.Changes();
+        var listing = m.Available ? m.Listing() : null;
         var root = m.Build();
-        await m.GrowAsync([("/", root, 0)], ListBudget);
+        try { await m.GrowAsync([("/", root, 0)], ListBudget); }
+        catch when (listing != null)
+        {
+            // failed or cancelled: the files as they were, so the agent's changes are not lost
+            m.Build(listing);
+            m.Replay(changes);
+            throw;
+        }
         await m.RevealForAsync(changes);
         m.Replay(changes);
+    }
+
+    public async Task<MountApplyResult> ApplyAsync(string path, IEnumerable<MountChange>? changes, CancellationToken cancellationToken = default)
+    {
+        _hostToken.Value = cancellationToken;
+        return await Get(path).ApplyAsync(changes);
+    }
+
+    /// <summary>The pending changes, each with the source's note for the host.</summary>
+    public IReadOnlyList<MountChange> Pending(string path)
+    {
+        var m = Get(path);
+        return [.. m.Changes().Select(c => m.Source?.Note(c) is { } note ? c with { Note = note } : c)];
     }
 
     /// <summary>Drops the agent's changes (and, with <paramref name="held"/>, a loaded snapshot's): the files are the source's again.</summary>
@@ -1233,8 +1274,9 @@ sealed class MountManager(Shell shell)
     }
 
     /// <summary>Makes a loaded snapshot's changes the agent's: in the files, and in PendingChanges.</summary>
-    public async Task AcceptAsync(string path)
+    public async Task AcceptAsync(string path, CancellationToken cancellationToken = default)
     {
+        _hostToken.Value = cancellationToken;
         var m = Get(path);
         if (!m.Available) throw new ArgumentException($"{path}: {m.Error ?? "not listed yet"}; mount it, or run a call first");
         var changes = m.Held;
@@ -1369,11 +1411,23 @@ sealed class MountManager(Shell shell)
     /// this process needs no source call and keeps the agent's changes.</summary>
     public List<SavedMount> Capture() => [.. Items.Select(m => new SavedMount(m.Path, m.Mode, m.Type, m.Id, m.Changes(), [.. m.Held], m.Available ? m.Listing() : null))];
 
+    /// <summary>A snapshot may attach a source the host mounted only where the host mounted it (snapshot paths never repeat or
+    /// overlap, so at most once there): a file naming another path is refused before anything changes.</summary>
+    public void Check(IReadOnlyList<SavedMount> saved)
+    {
+        if (ReplayAnswers != null) return; // a replay's sources are its recorded answers
+        foreach (var d in saved)
+            if (Sources.TryGetValue((d.Type, d.Id), out var s) && !s.Paths.Contains(d.Path))
+                throw new InvalidDataException($"{d.Path}: the snapshot attaches {d.Type}:{d.Id} here, but the host mounted {d.Type}:{d.Id} at "
+                    + string.Join(", ", s.Paths.Order(StringComparer.Ordinal)) + "; a snapshot can't attach a host's source anywhere else");
+    }
+
     /// <summary>After the files were replaced: the snapshot's mounts with the host's sources and modes. A snapshot taken in this
     /// process brings its listing and changes back as they were; one loaded from a file is listed at the next call, and its
     /// changes wait for the host (AcceptSnapshotChangesAsync), never applied or shown as the agent's on their own.</summary>
     public void Restore(IReadOnlyList<SavedMount> saved)
     {
+        Check(saved);
         Items.Clear();
         foreach (var d in saved)
         {

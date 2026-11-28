@@ -876,6 +876,83 @@ public class MountTests
         Assert.Equal("# Plan\nFinal\n", Encoding.UTF8.GetString(await wiki.ReadAsync("/plan.md", 100, default)));
         Assert.Equal("# Notes\n", Encoding.UTF8.GetString(await wiki.ReadAsync("/notes.md", 100, default)));
     }
+
+    /// <summary>A snapshot with its manifest's mounts replaced by <paramref name="mounts"/>.</summary>
+    static MemoryStream WithMounts(byte[] raw, JsonArray mounts)
+    {
+        using var z = new ZipArchive(new MemoryStream(raw));
+        var m = JsonNode.Parse(new StreamReader(z.GetEntry("manifest.json")!.Open()).ReadToEnd())!;
+        m["mounts"] = mounts;
+        var output = new MemoryStream();
+        using (var w = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+            foreach (var e in z.Entries)
+            {
+                using var s = w.CreateEntry(e.FullName).Open();
+                if (e.FullName == "manifest.json") s.Write(Encoding.UTF8.GetBytes(m.ToJsonString()));
+                else e.Open().CopyTo(s);
+            }
+        output.Position = 0;
+        return output;
+    }
+
+    [Theory]
+    [InlineData("/mnt/other")] // the host's source at a path the host never chose
+    [InlineData("/mnt/s", "/mnt/t")] // at its own path and a second one
+    public async Task AHostileSnapshotCantAttachAHostSourceElsewhere(params string[] paths)
+    {
+        var src = Memory(("a.txt", "a\n"));
+        var sh = new Shell();
+        await sh.MountAsync("/mnt/s", src, MountMode.Staged);
+        await sh.RunAsync("echo mine > /mnt/s/a.txt");
+        var buf = new MemoryStream();
+        sh.Save(buf);
+        var crafted = WithMounts(buf.ToArray(), [.. paths.Select(p => (JsonNode?)new JsonObject { ["path"] = p, ["mode"] = "live", ["type"] = "memory", ["id"] = "memory" })]);
+        var snap = ShellSnapshot.Load(crafted);
+        var e = Assert.Throws<InvalidDataException>(() => sh.Restore(snap));
+        Assert.Contains("the host mounted memory:memory at /mnt/s", e.Message);
+        // refused before anything changed: the host's mount and the agent's change are as they were
+        Assert.Equal("/mnt/s", Assert.Single(sh.Mounts).Path);
+        Assert.Equal("mine\n", (await sh.RunAsync("cat /mnt/s/a.txt")).Stdout);
+        // the same source at the path the host chose still restores, and a fork keeps it
+        sh.Restore(ShellSnapshot.Load(new MemoryStream(buf.ToArray())));
+        Assert.Equal(1, sh.Mounts[0].Held);
+        Assert.Equal("a\n", (await sh.Fork().RunAsync("cat /mnt/s/a.txt")).Stdout);
+    }
+
+    [Fact]
+    public async Task TheHostsTokenCancelsSourceCalls()
+    {
+        var src = Memory(("a.txt", "a\n"));
+        var sh = new Shell();
+        await sh.MountAsync("/mnt/s", src, MountMode.Staged);
+        await sh.RunAsync("echo b > /mnt/s/a.txt");
+        src.Hook = (_, _) => Task.Delay(TimeSpan.FromSeconds(30));
+        var sw = Stopwatch.StartNew();
+        foreach (var call in new Func<CancellationToken, Task>[]
+        {
+            ct => sh.RefreshMountAsync("/mnt/s", ct),
+            ct => sh.ApplyChangesAsync("/mnt/s", null, ct),
+            ct => sh.MountAsync("/mnt/t", src, MountMode.ReadOnly, ct),
+        })
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call(cts.Token));
+        }
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), sw.Elapsed.ToString());
+        // a token cancelled before the call: nothing reaches the source
+        src.Hook = null;
+        int before = src.Calls.Count;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sh.ApplyChangesAsync("/mnt/s", null, new CancellationToken(true)));
+        Assert.Equal(before, src.Calls.Count);
+        // a refresh that fails keeps the agent's changes too
+        await sh.RunAsync("echo c > /mnt/s/a.txt");
+        src.Hook = (_, _) => throw new MountSourceException("down");
+        Assert.Contains("down", (await sh.RunAsync("mount -r /mnt/s")).Stderr);
+        src.Hook = null;
+        Assert.Equal("c\n", (await sh.RunAsync("cat /mnt/s/a.txt")).Stdout);
+        Assert.Null((await sh.ApplyChangesAsync("/mnt/s")).Failed);
+        Assert.Equal("c\n", Encoding.UTF8.GetString(src.Tree()["/a.txt"]!));
+    }
 }
 
 sealed class WikiSource(string space, Dictionary<string, string> pages) : IMountSource

@@ -22,7 +22,7 @@ var shell = new Shell();
 await shell.MountAsync("/mnt/sp", source, MountMode.Staged);
 await shell.RunAsync("cd /mnt/sp/Documents && mkdir -p Archive && mv Inbox/*2024* Archive/");
 foreach (var change in shell.PendingChanges("/mnt/sp"))
-    Console.WriteLine($"{change.Kind} {change.Path} {change.To} {source.Note(change)}");
+    Console.WriteLine($"{change.Kind} {change.Path} {change.To} {change.Note}");
 var result = await shell.ApplyChangesAsync("/mnt/sp");
 ```
 
@@ -106,7 +106,7 @@ tokens its own way.
 | writes a file in a library | upload (one request up to 4 MB, an upload session in 3.2 MB chunks above that) |
 | `mkdir` in a library | a new folder |
 | `mv` inside a library | a rename or move of the same item: id, version history and sharing are kept |
-| `mv` to another library, list or site | a copy and a delete (`source.Note(change)` says so; the copy is a new item) |
+| `mv` to another library, list or site | a copy and a delete (the change's `Note` says so; the copy is a new item) |
 | `rm` | the item goes to the site's recycle bin |
 | edits a list item's front matter | the changed columns are updated |
 | writes a new `Name.md` in a list | a new item titled `Name` |
@@ -183,5 +183,14 @@ dotnet run --project examples/GraphMount -- --prompt "File the Inbox into Projec
 ## Tests
 
 `tests/Topwater.Tests/GraphTests.cs` runs `tests/connectors/graph/cases.json` against a fake Graph
-(`GraphFake.cs`) and the hostile cases. With `TOPWATER_LIVE_GRAPH=1`, `TOPWATER_GRAPH_SITE` and `TOPWATER_GRAPH_TOKEN`
-it also lists a real site, read-only.
+(`GraphFake.cs`) and the hostile cases. With `TOPWATER_LIVE_GRAPH=1`, `TOPWATER_GRAPH_SITE` (a site URL) and
+`TOPWATER_GRAPH_TOKEN` (an access token with `Files.ReadWrite.All` and `Sites.ReadWrite.All`) it also runs against
+that real site; without them these tests do nothing. One lists the site read-only. The others write, only inside
+things they create and delete afterwards, even when they fail: a scratch folder `Documents/zz-topwater-test-N` (files,
+a 5 MB upload session, a move, a rename, conflicts and refused names) and scratch items in `Project Tracker` whose
+titles start with `zz topwater` (column edits, a new item, a delete, an `If-Match` conflict). One more compares the
+fields a real answer has with what the fake gives. They expect a site laid out like the sandbox the fake copies (a
+`Documents` library and a `Project Tracker` list with `Status` and `Budget` columns).
+
+The live tests last ran on 2026-11-27, against a sandbox tenant: all four passed, and the site's Documents library,
+lists and subsites were the same afterwards as before.
