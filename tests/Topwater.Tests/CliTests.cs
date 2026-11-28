@@ -242,6 +242,22 @@ public sealed class CliTests : IDisposable
         var bad = await Cli("snapshot", "info", P("bad.zip"));
         Assert.Equal(2, bad.Code);
         Assert.Contains("not a valid Topwater snapshot", bad.Err);
+
+        // a manifest Load accepts but the summary reads more of: an error, not a crash with a stack trace
+        File.Copy(P("base.zip"), P("nofiles.zip"), overwrite: true);
+        using (var zip = new System.IO.Compression.ZipArchive(File.Open(P("nofiles.zip"), FileMode.Open), System.IO.Compression.ZipArchiveMode.Update))
+        {
+            var entry = zip.GetEntry("manifest.json")!;
+            System.Text.Json.Nodes.JsonObject m;
+            using (var s = entry.Open()) m = System.Text.Json.Nodes.JsonNode.Parse(s)!.AsObject();
+            m.Remove("files");
+            entry.Delete();
+            using var w = new StreamWriter(zip.CreateEntry("manifest.json").Open());
+            w.Write(m.ToJsonString());
+        }
+        var nofiles = await Cli("snapshot", "info", P("nofiles.zip"));
+        Assert.Equal(2, nofiles.Code);
+        Assert.StartsWith("topwater: ", nofiles.Err);
     }
 
     [Fact]

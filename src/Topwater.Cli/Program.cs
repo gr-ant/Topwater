@@ -354,9 +354,11 @@ static class Cli
 
                 """ + (history == null ? "" : $"  history   {history.Calls.Count} calls, {1 + history.Calls.Count(c => c.SnapshotAfter != null)} checkpoints\n");
         }
-        catch (Exception e) when (e is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException)
+        // the summary reads fields Load does not require (a snapshot without "files" loads as an empty machine)
+        catch (Exception e) when (e is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException
+            or JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
         {
-            throw new CliException(e is FileNotFoundException ? $"{file}: no such file" : e.Message);
+            throw new CliException(e is FileNotFoundException ? $"{file}: no such file" : e is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException ? e.Message : $"{file}: {e.Message}");
         }
     }
 }

@@ -245,6 +245,7 @@ internal sealed class WebSession
         Policy = policy;
         foreach (var d in policy.Domains)
         {
+            if (d is null) throw new ArgumentException("Domains holds a null", nameof(policy));
             var (name, port) = HostPort(d) ?? throw new ArgumentException($"{d}: a domain is a host name or *.name for its subdomains, with an optional :port", nameof(policy));
             bool wild = name.StartsWith("*.");
             var bare = wild ? name[2..] : name;
@@ -254,6 +255,7 @@ internal sealed class WebSession
         }
         foreach (var m in policy.Methods)
         {
+            if (m is null) throw new ArgumentException("Methods holds a null", nameof(policy));
             if (m.Length == 0 || !m.All(char.IsAsciiLetter)) throw new ArgumentException($"{m}: not an HTTP method", nameof(policy));
             _methods.Add(m.ToUpperInvariant());
         }

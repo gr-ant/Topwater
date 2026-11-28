@@ -306,7 +306,7 @@ public sealed class Recording
         long at = stream.Position;
         bool zip = stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
         stream.Position = at;
-        return zip ? ShellSnapshot.Checked(() => LoadTopwater(stream, limits, maxFile), Invalid) : LoadJsonLines(stream, openSnapshot, limits);
+        return ShellSnapshot.Checked(() => zip ? LoadTopwater(stream, limits, maxFile) : LoadJsonLines(stream, openSnapshot, limits), Invalid);
     }
 
     static Recording LoadTopwater(Stream stream, ShellOptions limits, long maxFile)
@@ -511,7 +511,7 @@ public sealed class Recording
             Created = h.Created is { } c ? Time(c, "created") : default,
             TopwaterVersion = h.Topwater,
             Metadata = h.Metadata ?? new(StringComparer.Ordinal),
-            AppCommands = h.AppCommands ?? [],
+            AppCommands = h.AppCommands is { } names ? (names.Any(n => n is null) ? throw Bad("appCommands holds a null") : names) : [],
             Web = h.Web?.ToPolicy(),
         };
     }

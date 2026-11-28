@@ -178,6 +178,20 @@ public class RecordingTests
         Assert.Equal("/tmp 1\n", (await (await r.ShellAtAsync(-1)).RunAsync("echo $PWD $x")).Stdout);
     }
 
+    [Theory]
+    // anything but InvalidDataException escaped the old format's reader, and the CLI crashed with a stack trace
+    [InlineData("web", "{\"domains\":[null]}")]
+    [InlineData("web", "{\"domains\":[\"a.example\"],\"methods\":[null]}")]
+    [InlineData("appCommands", "[null]")]
+    public void Old_json_lines_recordings_with_nulls_are_invalid(string key, string json)
+    {
+        var lines = File.ReadAllLines(Fixture("basics.jsonl"));
+        var header = JsonNode.Parse(lines[0])!;
+        header[key] = JsonNode.Parse(json);
+        lines[0] = header.ToJsonString();
+        Assert.Throws<InvalidDataException>(() => Recording.Load(new MemoryStream(Encoding.UTF8.GetBytes(string.Join('\n', lines)))));
+    }
+
     [Fact]
     public async Task Loads_old_json_lines_recordings_embedded_and_side_car()
     {
