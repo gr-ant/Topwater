@@ -507,7 +507,7 @@ public sealed partial class GraphSource : IMountSource
                 if (c.MaxLength is > 0 && s.Length > c.MaxLength) throw Bad(Fill(Expected["maxLength"], ("max", c.MaxLength)));
                 return s;
             case "choice":
-                foreach (var x in v is JsonArray arr ? [.. arr] : v is null ? [] : new[] { v })
+                foreach (var x in v is JsonArray arr ? [.. arr] : v is null ? [] : new JsonNode?[] { v })
                 {
                     if (Str(x) is not { } name) throw Bad(Expected["choiceName"]);
                     if (!c.FreeChoice && !c.Choices.Contains(name)) throw Bad(Fill(Expected["choice"], ("choices", string.Join(", ", c.Choices))));

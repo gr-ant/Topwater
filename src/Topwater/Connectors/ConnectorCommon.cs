@@ -79,7 +79,7 @@ internal static partial class ConnectorCommon
         {
             case JsonValueKind.Null or JsonValueKind.True or JsonValueKind.False: return true;
             case JsonValueKind.String: return Str(a) == Str(b);
-            case JsonValueKind.Number: return Num(a) == Num(b);
+            case JsonValueKind.Number: return Num(a!) == Num(b!);
             case JsonValueKind.Array:
                 var (x, y) = ((JsonArray)a!, (JsonArray)b!);
                 return x.Count == y.Count && x.Zip(y).All(p => Same(p.First, p.Second));
