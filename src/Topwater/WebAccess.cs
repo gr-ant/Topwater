@@ -222,7 +222,29 @@ internal sealed class WebSession
         AllowAutoRedirect = false, UseCookies = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None,
         MaxResponseHeadersLength = MaxHeaderBytes / 1024, PooledConnectionLifetime = TimeSpan.FromMinutes(1),
         ConnectCallback = (context, ct) => ConnectPinnedAsync(context, resolve, allowLoopback, ct),
+        ResponseHeaderEncodingSelector = (_, _) => NulMarkedLatin1.Instance,
     };
+
+    /// <summary>Latin-1 with NUL read as U+2400: .NET 10 turns a NUL in a response header into a space, and curl refuses the
+    /// response (U+2400 cannot come from Latin-1, so the mark is unambiguous).</summary>
+    sealed class NulMarkedLatin1 : Encoding
+    {
+        public static readonly NulMarkedLatin1 Instance = new();
+        public override int GetByteCount(char[] chars, int index, int count) => count;
+        public override int GetBytes(char[] chars, int charIndex, int charCount, byte[] bytes, int byteIndex)
+        {
+            for (int i = 0; i < charCount; i++) bytes[byteIndex + i] = chars[charIndex + i] == '\u2400' ? (byte)0 : (byte)chars[charIndex + i];
+            return charCount;
+        }
+        public override int GetCharCount(byte[] bytes, int index, int count) => count;
+        public override int GetChars(byte[] bytes, int byteIndex, int byteCount, char[] chars, int charIndex)
+        {
+            for (int i = 0; i < byteCount; i++) chars[charIndex + i] = bytes[byteIndex + i] == 0 ? '\u2400' : (char)bytes[byteIndex + i];
+            return byteCount;
+        }
+        public override int GetMaxByteCount(int charCount) => charCount;
+        public override int GetMaxCharCount(int byteCount) => byteCount;
+    }
     static readonly HttpClient DefaultClient = new(DefaultHandler) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
     /// <summary>A shell with no policy: no host is allowed, and each fails like a name that does not resolve.</summary>
@@ -404,7 +426,7 @@ internal sealed class WebSession
             foreach (var h in response.Headers.NonValidated.Concat(response.Content.Headers.NonValidated))
                 foreach (var v in h.Value) list.Add(new(h.Key, v));
             if (list.Sum(h => h.Key.Length + h.Value.Length + 4) > MaxHeaderBytes) return Failed("recv");
-            if (list.Any(h => h.Value.Contains('\0'))) return Failed("weird"); // as curl, and as Node's parser
+            if (list.Any(h => h.Value.AsSpan().IndexOfAny('\0', '\u2400') >= 0)) return Failed("weird"); // as curl, and as Node's parser
             var buffer = new MemoryStream();
             string? cut = null;
             if (method != "HEAD")
