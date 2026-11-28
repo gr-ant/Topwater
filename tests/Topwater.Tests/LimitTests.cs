@@ -159,7 +159,22 @@ public class LimitTests
     [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f 2>/dev/null", "output too large (limit 1 MB)")]
     [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; cat f | wc -c", "output too large (limit 1 MB)")]
     [InlineData("awk 'BEGIN { for (i = 0; i < 2100; i++) printf \"%01000d\", 0 }' > f; x=$(cat f)", "output too large (limit 1 MB)")]
+    // aliases and traps live as long as the session, as variables do, and were not counted at all
+    [InlineData("v=$(printf '%010000d' 0); v=$v$v$v$v$v$v$v$v$v$v; v=$v$v$v; for i in 1 2 3 4; do alias a$i=$v; done", "variables in total too large (limit 1 MB)")]
+    [InlineData("v=$(printf '%010000d' 0); v=$v$v$v$v$v$v$v$v$v$v; v=$v$v$v; trap \"$v\" USR1 USR2 HUP INT", "variables in total too large (limit 1 MB)")]
     public async Task StringRecipesStopAtTheConfiguredLimit(string cmd, string message) => await HitsStringLimit(SmallStrings(), cmd, message);
+
+    [Fact]
+    public async Task HistoryKeepsTheNewestLinesWithinTheStringLimit()
+    {
+        // every call's line was kept for good: calls of 300 KB each grew it without bound
+        var sh = SmallStrings();
+        var line = "#" + new string('x', 300_000);
+        for (int i = 0; i < 10; i++) await sh.RunAsync(line + i);
+        Assert.InRange(sh.History.Sum(h => (long)h.Length), 1, 1L << 20);
+        Assert.Equal(line + 9, sh.History[^1]);
+        Assert.Equal("ok\n", (await sh.RunAsync("echo ok")).Stdout);
+    }
 
     [Fact]
     public async Task HugePrintfWidthIsBounded() =>

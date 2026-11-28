@@ -41,7 +41,7 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
 | Names (files, directories, links) | one per KB of `MaxFileSystemBytes`, at least 10,000 | `MaxFileSystemBytes` | `<cmd>: /path: No space left on device` | 1, for that command | no |
 | A directory's real path | 4,095 characters | none | `mkdir: cannot create directory 'x': File name too long` (also `mv` and `cp -r` of a tree that would end up deeper) | 1, for that command | no |
 | All files together | 128 MB | `MaxFileSystemBytes` | the real error: `bash: /path: No space left on device` (redirects), `cp: error writing 'x': No space left on device`, `tar: x: Cannot open: No space left on device`, `<cmd>: /path: No space left on device` | 1, for that command | no |
-| One string, and all variables together | 32 MB | `MaxStringBytes` | `bash: <what> too large (limit 32 MB); <what to do instead>` on stderr, and the same text in the trailer (see below) | 1 | yes |
+| One string; all variables, aliases and traps together; the history | 32 MB | `MaxStringBytes` | `bash: <what> too large (limit 32 MB); <what to do instead>` on stderr, and the same text in the trailer (see below) | 1 | yes |
 | One loop | 100,000 iterations | `MaxLoopIterations` | `bash: loop aborted after 100000 iterations (the limit for one loop); process the whole input with one command (awk, sed, xargs) instead of a shell loop`, and trailer | 1 | yes |
 | All loops in one call | 10 × `MaxLoopIterations` | `MaxLoopIterations` | `bash: loop aborted after 1000000 iterations in this call (the limit for all loops in one call); ...`, and trailer | 1 | yes |
 | One archive extraction or decompression | 64 MB, 100,000 entries | `MaxExtractBytes`, `MaxExtractEntries` | `tar: output exceeds the 67108864-byte extraction limit; stopping` (and the entry-count form) | 2 or 1, as the real program | no |
@@ -75,12 +75,13 @@ arguments to `Shell(...)` in snake_case; TypeScript: the `Shell` constructor's o
   shells takes its cap from the last `Shell` created on it.
 - **Strings.** Counted in characters (one per byte for ASCII text; in memory .NET uses two bytes per
   character). `<what>` names what grew: `output` (a command's buffered output: the call's stdout or stderr, a
-  pipeline stage, `$(...)`, `<(...)`), `x: value` (one variable or element), `variables in total`, `expansion`
+  pipeline stage, `$(...)`, `<(...)`), `x: value` (one variable or element), `variables in total` (variables, arrays, aliases and traps together), `expansion`
   (one word, all the words of one command together, or `${x//pat/rep}`), `awk: string`, `sed: pattern space`,
   `jq: value` (strings, and arrays at 8 bytes per element). Each message names what to do instead, such as
   `write the data to a file instead`. A redirect (`> file`) is not limited by it: the shell writes through to
   the file every megabyte, so files are bounded by the disk cap. A pipeline whose stage outputs more than
-  32 MB fails even though the file fits on the disk; filter earlier or raise the option.
+  32 MB fails even though the file fits on the disk; filter earlier or raise the option. The history keeps the
+  newest command lines that fit in the limit and drops the oldest, as `HISTSIZE` does, so it never ends a call.
 - **Memory.** Measured on .NET 8 (Release, workstation GC, Linux x64), one `Shell` at the defaults running every
   exhaustion recipe in turn as separate calls (string doubling in bash, awk, sed and jq; `printf '%0999999999d'`;
   `${x//?/$x}`; `{1..10000}$big`; a million `a[i]=$big`; filling the disk with appends, `cp -r` and `tar x`;

@@ -20,6 +20,10 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   nested deeper than the stack allows now stop with `maximum nesting level exceeded`, as the other jq helpers do,
   instead of `Failed to compare two elements in the array`. A test runs every recursive jq helper on a deep value from
   a host thread with a 256 KB stack.
+- **Aliases, traps and history are bounded.** Aliases and traps now count in `variables in total` against
+  `MaxStringBytes`; filling them ends the call with the string-limit message and the next call runs. The history
+  keeps the newest lines that fit in `MaxStringBytes` and drops the oldest. Before, all three grew without bound for
+  the life of the session.
 
 ## 0.1.0-preview.5 (2026-11-27)
 

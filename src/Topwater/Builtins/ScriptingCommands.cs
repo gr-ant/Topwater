@@ -240,7 +240,12 @@ internal static partial class Builtins
             if (args[0] == "-l") { ctx.Stdout.WriteLine(" 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 9) SIGKILL\t15) SIGTERM"); return 0; }
             var (act, signals) = args.Count == 1 ? (null, args) : (args[0], args.Skip(1).ToList());
             foreach (var sig in signals)
-                if (act is null or "-") traps.Remove(Name(sig)); else traps[Name(sig)] = act;
+            {
+                var name = Name(sig);
+                if (act is null or "-") { traps.Remove(name); continue; }
+                ctx.Shell.ChargeVariable($"trap {name}", name.Length + act.Length, traps.TryGetValue(name, out var old) ? name.Length + old.Length : 0);
+                traps[name] = act;
+            }
             return 0;
         });
 
