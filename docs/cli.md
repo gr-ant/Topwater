@@ -12,7 +12,7 @@ client (Claude Desktop, Claude Code, Cursor, VS Code) a sandboxed `bash` tool wi
 
 ## Install
 
-As a .NET tool (needs .NET 8 or later):
+As a .NET tool (needs .NET 10 or later):
 
 ```bash
 dotnet tool install -g Topwater.Cli --prerelease

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -39,8 +39,15 @@
     <ProjectReference Include="..\..\src\Topwater.Mcp\Topwater.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Topwater.AI\Topwater.AI.csproj" />
     <ProjectReference Include="..\..\src\Topwater.Containers\Topwater.Containers.csproj" />
-    <ProjectReference Include="..\..\src\Topwater.Cli\Topwater.Cli.csproj" />
     <ProjectReference Include="..\..\src\Topwater.Replay\Topwater.Replay.csproj" />
+  </ItemGroup>
+
+  <!-- the CLI is net10.0 only, so its tests run on net10.0 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <ProjectReference Include="..\..\src\Topwater.Cli\Topwater.Cli.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0'">
+    <Compile Remove="CliTests.cs" />
   </ItemGroup>
 
 </Project>

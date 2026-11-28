@@ -75,7 +75,7 @@ Each example registers one function and runs the command a model would send. All
 
 ### .NET
 
-Requires .NET 8 or later.
+Requires .NET 8 or later (the package targets net8.0 and net10.0).
 
 ```bash
 dotnet add package Topwater --prerelease
@@ -172,7 +172,7 @@ TypeScript describes tools with a JSON Schema, so the function appears as a subc
 any other MCP client. `topwater` alone opens a shell on the simulated machine.
 
 ```bash
-dotnet tool install -g Topwater.Cli --prerelease                      # needs .NET 8
+dotnet tool install -g Topwater.Cli --prerelease                      # needs .NET 10
 ```
 
 Each release also carries a standalone binary that needs no .NET:

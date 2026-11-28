@@ -5,8 +5,8 @@
 # Ubuntu's chiseled .NET base: no shell or package manager, a non-root user (app, uid 1654), and exactly what a
 # self-contained .NET binary loads (glibc, libstdc++, zlib, OpenSSL, CA certificates). It has no ICU, so .NET runs
 # with invariant globalization, which Topwater's test suite passes under.
-# Refresh the digest: docker buildx imagetools inspect mcr.microsoft.com/dotnet/runtime-deps:8.0-noble-chiseled
-FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-noble-chiseled@sha256:f5647b6da1c1c4b49e2867121bacb3a366e092c15afea801ba575446a48968df
+# Refresh the digest: docker buildx imagetools inspect mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled@sha256:2bb1d484500b032aaafb75e876ffbea135b969d6259cacfcbf18a793e5d6e6ec
 
 ARG TARGETARCH
 ARG VERSION=dev

@@ -2,10 +2,10 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- a global tool built for net8.0 also runs on newer runtimes -->
+    <!-- a global tool built for net10.0 also runs on newer runtimes -->
     <RollForward>Major</RollForward>
 
     <PackAsTool>true</PackAsTool>

@@ -5,6 +5,15 @@ Topwater is in preview: APIs and file formats may change between previews. The p
 
 ## Unreleased
 
+### .NET 10
+
+- **The libraries target `net8.0` and `net10.0`.** `Topwater`, `Topwater.AI`, `Topwater.Mcp`, `Topwater.Containers`
+  and `Topwater.Replay` each carry both builds, so a host on .NET 8 keeps working and one on .NET 10 gets a native
+  build. .NET 8 went out of support on 2026-11-10; it stays in the libraries through the previews.
+- **The CLI, the standalone binaries and the container image are on .NET 10.** The `Topwater.Cli` tool now needs
+  .NET 10 or later; the binaries and the image need no .NET. The image is based on `runtime-deps:10.0-noble-chiseled`.
+  The examples target `net10.0`.
+
 ### Connectors (.NET)
 
 - **OneDrive and SharePoint.** `Topwater.Connectors.GraphSource` mounts a OneDrive, a document library or a whole
