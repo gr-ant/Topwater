@@ -382,6 +382,7 @@ internal static class Bc
 
         Stmt Statement()
         {
+            Shell.CheckStack();
             if (Cur.Kind == T.Str) return new StrStmt(Eat().Text);
             if (IsOp("{"))
             {
@@ -496,6 +497,7 @@ internal static class Bc
         //   ||  ->  &&  ->  !  ->  relational  ->  + -  ->  * / %  ->  unary -  ->  ^  ->  ++/-- / primary
         Node Expr()
         {
+            Shell.CheckStack();
             var node = Or();
             if (Cur.Kind == T.Op && Cur.Text is "=" or "+=" or "-=" or "*=" or "/=" or "%=" or "^=")
             {
@@ -508,7 +510,7 @@ internal static class Bc
 
         Node Or() { var l = And(); while (IsOp("||")) { _p++; l = new BinOp("||", l, And()); } return l; }
         Node And() { var l = Not(); while (IsOp("&&")) { _p++; l = new BinOp("&&", l, Not()); } return l; }
-        Node Not() { if (IsOp("!")) { _p++; return new UnOp("!", Not()); } return Rel(); }
+        Node Not() { Shell.CheckStack(); if (IsOp("!")) { _p++; return new UnOp("!", Not()); } return Rel(); }
 
         Node Rel()
         {
@@ -541,6 +543,7 @@ internal static class Bc
 
         Node Unary()
         {
+            Shell.CheckStack();
             if (IsOp("-")) { _p++; return new UnOp("-", Unary()); }
             if (IsOp("++") || IsOp("--")) { bool inc = Eat().Text == "++"; var t = Unary(); return new IncDec(t, true, inc); }
             return Postfix();
@@ -617,6 +620,7 @@ internal static class Bc
 
         void Exec(Stmt s)
         {
+            Shell.CheckStack();
             Tick();
             switch (s)
             {
@@ -655,6 +659,7 @@ internal static class Bc
 
         Num EvalN(Node n)
         {
+            Shell.CheckStack();
             switch (n)
             {
                 case Lit l: return Convert(l.Raw, _ibase);

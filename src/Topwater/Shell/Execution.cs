@@ -495,7 +495,8 @@ public sealed partial class Shell
 internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, CancellationToken ct)
 {
     static readonly HashSet<string> Unary = ["-z", "-n", "-e", "-f", "-d", "-s", "-r", "-w", "-x", "-L", "-h", "-a", "-v", "-o", "-t", "-b", "-c", "-p", "-S", "-g", "-u", "-k", "-O", "-G", "-N"];
-    int _p;
+    int _p, _depth;
+    const int MaxDepth = 1000;
 
     bool IsOp(string s) => _p < items.Count && items[_p].Is(s);
 
@@ -523,16 +524,20 @@ internal sealed class CondEvaluator(Shell shell, List<Word> items, Shell.Io io, 
 
     async Task<bool> Not()
     {
-        if (IsOp("!")) { _p++; return !await Not(); }
-        return await Primary();
+        bool negate = false;
+        while (IsOp("!")) { _p++; negate = !negate; } // a loop: a limit thrown through 100,000 awaits takes minutes to unwind
+        return negate != await Primary();
     }
 
     async Task<bool> Primary()
     {
         if (IsOp("("))
         {
+            // a stack overflow can't be caught; a fixed depth stops long before it, and unwinds quickly
+            if (++_depth > MaxDepth) throw new LimitExceeded("maximum nesting level exceeded");
             _p++;
             var v = await Or();
+            _depth--;
             if (!IsOp(")")) throw new ShellException(CommandSpec.Diagnostics.ConditionalParen, 2);
             _p++;
             return v;

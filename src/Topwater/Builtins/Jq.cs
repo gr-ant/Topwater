@@ -94,6 +94,7 @@ internal static class Jq
 
     static void Write(StringBuilder sb, object? v, string indent, bool sortKeys, bool asciiOnly, int level)
     {
+        Shell.CheckStack(); // a deep value or program must not overflow the host's stack
         switch (v)
         {
             case null: sb.Append("null"); return;
@@ -131,6 +132,7 @@ internal static class Jq
     /// <summary>jq's total order: null &lt; false &lt; true &lt; numbers &lt; strings &lt; arrays &lt; objects.</summary>
     internal static int Compare(object? a, object? b)
     {
+        Shell.CheckStack();
         int ra = Rank(a), rb = Rank(b);
         if (ra != rb) return ra < rb ? -1 : 1;
         switch (a)
@@ -194,6 +196,7 @@ internal static class Jq
 
         public object? Value()
         {
+            Shell.CheckStack();
             SkipSpace();
             if (AtEnd) throw Fail("Expecting value");
             char c = s[_i];
@@ -512,6 +515,7 @@ internal static class Jq
 
         Pat Pattern()
         {
+            Shell.CheckStack();
             var t = Peek();
             if (t.Kind == Tk.Var) { _p++; return new VarPat(t.Text); }
             if (IsOp("["))
@@ -554,6 +558,7 @@ internal static class Jq
 
         Node Alternative()
         {
+            Shell.CheckStack();
             var left = Assignment();
             if (IsOp("//")) { _p++; return new AltN(left, Alternative()); }
             return left;
@@ -603,12 +608,14 @@ internal static class Jq
 
         Node Unary()
         {
+            Shell.CheckStack();
             if (IsOp("-")) { _p++; return new NegN(Unary()); }
             return Postfix();
         }
 
         Node Postfix()
         {
+            Shell.CheckStack();
             var node = Primary();
             while (true)
             {
@@ -756,6 +763,7 @@ internal static class Jq
 
         Node If()
         {
+            Shell.CheckStack();
             _p++;
             var cond = Pipe();
             Expect("then");
@@ -938,6 +946,7 @@ internal static class Jq
 
     static Dictionary<string, object?> DeepMerge(Dictionary<string, object?> a, Dictionary<string, object?> b)
     {
+        Shell.CheckStack();
         var r = new Dictionary<string, object?>(a);
         foreach (var (k, v) in b)
             r[k] = r.GetValueOrDefault(k) is Dictionary<string, object?> x && v is Dictionary<string, object?> y ? DeepMerge(x, y) : v;
@@ -1028,6 +1037,7 @@ internal static class Jq
 
     static IEnumerable<List<object?>> AllPaths(object? v, bool leafOnly = false, List<object?>? prefix = null)
     {
+        Shell.CheckStack();
         prefix ??= [];
         IEnumerable<(object? Key, object? Value)> items = v switch
         {
@@ -1045,6 +1055,7 @@ internal static class Jq
 
     static IEnumerable<object?> Recurse(object? v)
     {
+        Shell.CheckStack();
         yield return v;
         if (v is List<object?> or Dictionary<string, object?>)
             foreach (var x in Iterate(v).ToList())
@@ -1064,6 +1075,7 @@ internal static class Jq
 
     static object? SetPath(object? v, object? path, object? value)
     {
+        Shell.CheckStack();
         if (path is not List<object?> p) throw new JqError("Path must be specified as an array");
         if (p.Count == 0) return value;
         var k = p[0];
@@ -1112,6 +1124,7 @@ internal static class Jq
 
     static object? DelPath(object? v, List<object?> path)
     {
+        Shell.CheckStack();
         if (path.Count == 0 || v == null) return null;
         var k = path[0];
         if (path.Count > 1)
@@ -1162,6 +1175,7 @@ internal static class Jq
 
     static bool Contains(object? a, object? b)
     {
+        Shell.CheckStack();
         if (a is Dictionary<string, object?> oa && b is Dictionary<string, object?> ob) return ob.All(p => oa.TryGetValue(p.Key, out var x) && Contains(x, p.Value));
         if (a is List<object?> la && b is List<object?> lb) return lb.All(y => la.Any(x => Contains(x, y)));
         if (a is string sa && b is string sb) return sa.Contains(sb, StringComparison.Ordinal);
@@ -1196,6 +1210,7 @@ internal static class Jq
 
     static List<object?> Flatten(object? v, double depth = 1e9)
     {
+        Shell.CheckStack();
         if (v is not List<object?> l) throw new JqError($"Cannot iterate over {TypeName(v)}");
         if (depth < 0) throw new JqError("flatten depth must not be negative");
         var r = new List<object?>();
@@ -1925,6 +1940,7 @@ internal static class Jq
                 {
                     IEnumerable<object?> Walk(object? x, int depth)
                     {
+                        Shell.CheckStack();
                         if (depth > 10_000) throw new JqError("recurse: too deep");
                         Step();
                         yield return x;
@@ -1941,6 +1957,7 @@ internal static class Jq
                 {
                     object? Walk(object? x)
                     {
+                        Shell.CheckStack();
                         if (x is List<object?> wl) x = wl.Select(Walk).ToList();
                         else if (x is Dictionary<string, object?> wo) x = wo.ToDictionary(p => p.Key, p => Walk(p.Value));
                         var r = Ev(a[0], x, vs).Take(1).ToList();

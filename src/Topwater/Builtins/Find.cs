@@ -81,40 +81,37 @@ internal sealed class Find
 
     bool Is(string s) => _p < _args.Count && _args[_p] == s;
 
+    // a chain of -o or -a is one list, and !s are counted: nested closures, as deep as the chain is long, overflowed the stack
     Pred ParseOr()
     {
-        var l = ParseAnd();
+        var parts = new List<Pred> { ParseAnd() };
         while (Is("-o") || Is("-or"))
         {
             if (++_p >= _args.Count) throw new ShellException(CommandSpec.Message("find", "expectedExpression", ("token", _args[_p - 1])));
-            var left = l;
-            var right = ParseAnd();
-            l = async e => await left(e) || await right(e);
+            parts.Add(ParseAnd());
         }
-        return l;
+        if (parts.Count == 1) return parts[0];
+        return async e => { Shell.CheckStack(); foreach (var p in parts) if (await p(e)) return true; return false; };
     }
 
     Pred ParseAnd()
     {
-        var l = ParseNot();
+        var parts = new List<Pred> { ParseNot() };
         while (_p < _args.Count && !Is("-o") && !Is("-or") && !Is(")"))
         {
             if ((Is("-a") || Is("-and")) && ++_p >= _args.Count) throw new ShellException(CommandSpec.Message("find", "expectedExpression", ("token", _args[_p - 1])));
-            var left = l;
-            var right = ParseNot();
-            l = async e => await left(e) && await right(e);
+            parts.Add(ParseNot());
         }
-        return l;
+        if (parts.Count == 1) return parts[0];
+        return async e => { Shell.CheckStack(); foreach (var p in parts) if (!await p(e)) return false; return true; };
     }
 
     Pred ParseNot()
     {
-        if (Is("!") || Is("-not"))
-        {
-            _p++;
-            var inner = ParseNot();
-            return async e => !await inner(e);
-        }
+        Shell.CheckStack();
+        bool negate = false;
+        while (Is("!") || Is("-not")) { _p++; negate = !negate; }
+        if (negate) { var inner = ParseNot(); return async e => !await inner(e); }
         if (Is("("))
         {
             _p++;

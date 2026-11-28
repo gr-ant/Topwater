@@ -552,6 +552,7 @@ internal static class Test
         }
         bool Not()
         {
+            Shell.CheckStack();
             if (Peek() == "!") { pos++; return !Not(); }
             return Primary();
         }

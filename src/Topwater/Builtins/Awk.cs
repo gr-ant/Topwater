@@ -508,6 +508,7 @@ internal sealed class AwkRunner
 
     void Exec(Stmt s)
     {
+        Shell.CheckStack();
         switch (s)
         {
             case BlockS b: foreach (var x in b.Body) Exec(x); break;
@@ -596,6 +597,7 @@ internal sealed class AwkRunner
 
     AV Eval(Node n)
     {
+        Shell.CheckStack();
         switch (n)
         {
             case NumN x: return AV.Num(x.V);
@@ -980,6 +982,7 @@ internal sealed class AwkRunner
 
         Stmt Statement()
         {
+            Shell.CheckStack();
             if (IsOp("{")) return Block();
             if (IsOp(";")) { _p++; return new BlockS([]); }
             if (Peek.Kind == TK.Keyword)
@@ -1118,6 +1121,7 @@ internal sealed class AwkRunner
 
         Node Expr(bool noGt)
         {
+            Shell.CheckStack();
             var lhs = Ternary(noGt);
             if (Peek.Kind == TK.Op && AssignOps.Contains(Peek.Text) && IsLValue(lhs))
             {
@@ -1230,6 +1234,7 @@ internal sealed class AwkRunner
 
         Node Unary()
         {
+            Shell.CheckStack();
             if (IsOp("!") || IsOp("-") || IsOp("+")) { var op = Peek.Text; _p++; return new UnN(op, Unary()); }
             return Power();
         }

@@ -528,6 +528,13 @@ public sealed partial class Shell
     /// <summary>When the running call must end (DateTime.MaxValue between calls): what bounds a mounted source's answers.</summary>
     internal DateTime CallDeadline => _callDeadline;
 
+    /// <summary>For recursion on what the agent wrote ([[ ]], test, find, awk, bc): a stack overflow can't be caught in .NET and
+    /// would take the host process down, so this ends the call first.</summary>
+    internal static void CheckStack()
+    {
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) throw new LimitExceeded("maximum nesting level exceeded");
+    }
+
     internal void CheckDeadline()
     {
         if (DateTime.UtcNow >= _callDeadline) throw new OperationCanceledException();

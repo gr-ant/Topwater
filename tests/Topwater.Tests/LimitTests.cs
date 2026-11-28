@@ -296,4 +296,42 @@ public class LimitTests
         Assert.Equal("deep\nmkdir 1\nmv 1\ncp 1\nlink 1\nmkdir -p 1\nkept\n", r.Stdout);
         Assert.Equal(5, r.Stderr.Split('\n').Count(l => l.EndsWith("File name too long")));
     }
+
+    [Theory]
+    // what the agent writes, nested deeply: each recursed once per level and crashed the host with a stack overflow
+    [InlineData("( ", 50_000, "", "eval \"[[ $(cat p) a ]]\"")]
+    [InlineData("( ", 50_000, "", "test $(cat p) a")]
+    [InlineData("\\( ", 50_000, "", "eval find /tmp $(cat p) -true")]
+    [InlineData("(", 50_000, "1", "awk \"BEGIN { print $(cat p) }\"")]
+    [InlineData("1+", 50_000, "1", "awk \"BEGIN { print $(cat p) }\"")]
+    [InlineData("if(1)", 50_000, "print 1", "awk \"BEGIN { $(cat p) }\"")]
+    [InlineData("(", 50_000, "1", "bc < p")]
+    [InlineData("1+", 50_000, "1", "bc < p")]
+    [InlineData("[", 50_000, "", "jq . p")]
+    [InlineData("try ", 50_000, "1", "jq -n \"$(cat p)\"")]
+    [InlineData("{a:", 50_000, "1", "jq -n \"$(cat p)\"")]
+    [InlineData("", 0, "", "jq -n 'reduce range(50000) as $i (null; [.]) | tojson'")]
+    [InlineData("", 0, "", "jq -n 'reduce range(50000) as $i (null; [.]) | . == .'")]
+    [InlineData("", 0, "", "jq -n -c 'reduce range(50000) as $i (null; [.])'")]
+    public async Task DeepNestingEndsTheCallInsteadOfTheHost(string token, int n, string end, string cmd)
+    {
+        var sh = new Shell();
+        sh.Fs.WriteAllText("/home/agent/p", string.Concat(Enumerable.Repeat(token, n)) + end);
+        var r = await sh.RunAsync(cmd);
+        Assert.Equal(1, r.ExitCode);
+        Assert.Contains("maximum nesting level exceeded", r.Stderr);
+        Assert.Equal("ok\n", (await sh.RunAsync("echo ok")).Stdout);
+    }
+
+    [Theory]
+    // a chain, or a run of !, is not nesting: it runs, and quickly
+    [InlineData("eval \"[[ $(printf '! %.0s' $(seq 50000)) a ]]\"; echo $?", "0\n")]
+    [InlineData("find /tmp $(printf -- '-false -o %.0s' $(seq 50000)) -true -prune", "/tmp\n")]
+    [InlineData("find /tmp -maxdepth 0 $(printf -- '! %.0s' $(seq 50001)) -false", "/tmp\n")]
+    public async Task LongChainsAreNotNesting(string cmd, string expected)
+    {
+        var (r, took) = await TestHost.Timed(() => new Shell().RunAsync(cmd));
+        Assert.Equal(expected, r.Stdout);
+        Assert.True(took < TimeSpan.FromSeconds(10), $"took {took}");
+    }
 }
