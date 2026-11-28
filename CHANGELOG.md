@@ -21,6 +21,8 @@ Topwater is in preview: APIs and file formats may change between previews. The p
   recording of `yes` ends with an error and bounded memory.
 - **Old JSON Lines recordings have a size cap.** One larger than `MaxFileSystemBytes` (128 MB) is refused from its
   length before it is read; a 300 MB file used to take 3.27 GB of memory.
+- **Loading a recording has a time bound.** The checkpoints' manifests together may hold at most 4 times what one may
+  (about 900 MB at the defaults), so 1,000 padded checkpoints are refused in about 5 s instead of read for 196 s.
 
 ## 0.1.0-preview.5 (2026-11-27)
 

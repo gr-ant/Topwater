@@ -349,7 +349,11 @@ public sealed class Recording
         }
         if (!checkpoints.ContainsKey(0)) throw Bad("checkpoints/0.json (the start) is missing");
         var budget = new SnapshotBudget(limits);
-        var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files)), limits);
+        // every manifest is inflated and read on load, so all of them together are capped too: 4 x what one may hold
+        long manifestBytes = 0, maxManifests = MaxSnapshotsFileSystems * ShellSnapshot.MaxManifestBytes(limits);
+        byte[] Charge(byte[] bytes) => (manifestBytes += bytes.Length) <= maxManifests ? bytes
+            : throw Bad($"the manifests of the checkpoints hold more than {maxManifests} bytes together ({MaxSnapshotsFileSystems} x the most one manifest may hold)");
+        var rec = NewRecording(h, budget.Add(ShellSnapshot.ReadManifest(zip, checkpoints[0], limits, budget.Files, Charge)), limits);
         long webBytes = 0;
         Func<string?, long, string, byte[]> readBlob = (blob, size, where) =>
         {
@@ -371,7 +375,7 @@ public sealed class Recording
         // the machine of the file is the one after the last checkpoint: a reader of either must see the same
         var (lastN, lastName) = checkpoints.Last();
         if (lastN > rec.Calls.Count) throw Bad($"{lastName} is past the last call ({rec.Calls.Count})");
-        var last = ShellSnapshot.ReadManifestBytes(zip, lastName, limits);
+        var last = Charge(ShellSnapshot.ReadManifestBytes(zip, lastName, limits));
         if (!SameJson(ShellSnapshot.ReadManifestBytes(zip, "manifest.json", limits), last)) throw Bad($"manifest.json is not the machine of {lastName}, the last checkpoint");
 
         // the other checkpoints are checked against the limits now and built when a replay needs one; the file stays in memory
@@ -384,7 +388,7 @@ public sealed class Recording
         ZipArchive? reread = null;
         foreach (var (n, name) in checkpoints.Skip(1))
         {
-            var snap = ShellSnapshot.ReadOutline(n == lastN ? last : ShellSnapshot.ReadManifestBytes(zip, name, limits, check: false), name, limits, budget.Files, budget.Bytes, () => ShellSnapshot.Checked(() =>
+            var snap = ShellSnapshot.ReadOutline(n == lastN ? last : Charge(ShellSnapshot.ReadManifestBytes(zip, name, limits, check: false)), name, limits, budget.Files, budget.Bytes, () => ShellSnapshot.Checked(() =>
             {
                 reread ??= new ZipArchive(new MemoryStream(file.GetBuffer(), 0, (int)file.Length, writable: false), ZipArchiveMode.Read);
                 return ShellSnapshot.ReadManifest(reread, name, limits);

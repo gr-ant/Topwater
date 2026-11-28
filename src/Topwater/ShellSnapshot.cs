@@ -294,9 +294,10 @@ public sealed class ShellSnapshot
     }
 
     /// <summary>Reads the manifest <paramref name="name"/> (manifest.json or a checkpoint) and the blobs it names.</summary>
-    internal static ShellSnapshot ReadManifest(ZipArchive zip, string name, ShellOptions o, Action<int>? countFiles = null)
+    internal static ShellSnapshot ReadManifest(ZipArchive zip, string name, ShellOptions o, Action<int>? countFiles = null, Func<byte[], byte[]>? countManifest = null)
     {
-        var m = JsonSerializer.Deserialize<Manifest>(ReadManifestBytes(zip, name, o), Json)!;
+        var bytes = ReadManifestBytes(zip, name, o);
+        var m = JsonSerializer.Deserialize<Manifest>(countManifest?.Invoke(bytes) ?? bytes, Json)!;
 
         var user = Check(m.User, UserName, "user");
         var hostname = Check(m.Hostname, HostName, "hostname");

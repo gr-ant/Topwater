@@ -465,6 +465,30 @@ public class RecordingTests
     }
 
     [Fact]
+    public async Task Checkpoints_share_a_budget_of_manifest_bytes()
+    {
+        // 1,000 checkpoints that list no files but pad their manifests: each within its own cap, all of them inflated and
+        // read in turn took 196 s at the defaults. Together they may hold 4 x the cap of one manifest
+        var limits = new ShellOptions { MaxStringBytes = 1 << 20, MaxExtractEntries = 2000 }; // one manifest: 4 MB + 2 MB
+        var sh = new Shell();
+        var rec = sh.StartRecording();
+        for (int i = 0; i < Recording.MaxSnapshots; i++) await sh.RunAsync("true");
+        rec.Stop();
+        var file = Bytes(rec.Recording);
+        var padded = Entry(file, "checkpoints/0.json");
+        padded = System.Text.RegularExpressions.Regex.Replace(padded, "\"files\":\\[.*?\\](?=,\"[a-z]+\":)", "\"files\":[]");
+        padded = padded[..^1] + ",\"pad\":\"" + new string('x', 200_000) + "\"}";
+        var hostile = Tamper(file, z => { for (int i = 1; i < Recording.MaxSnapshots - 1; i++) Put(z, $"checkpoints/{i}.json", padded); });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var e = Assert.Throws<InvalidDataException>(() => LoadBytes(hostile, limits));
+        Assert.Contains("the manifests of the checkpoints hold more than 24969216 bytes together (4 x the most one manifest may hold)", e.Message);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed}");
+        // a few such checkpoints still load
+        var few = Tamper(file, z => { for (int i = 1; i < 50; i++) Put(z, $"checkpoints/{i}.json", padded); });
+        Assert.Equal(Recording.MaxSnapshots, LoadBytes(few, limits).Calls.Count);
+    }
+
+    [Fact]
     public async Task Checkpoints_are_built_only_when_a_replay_needs_one()
     {
         // 60 checkpoints of 1,500 directories: each is checked against the limits on load, none is built

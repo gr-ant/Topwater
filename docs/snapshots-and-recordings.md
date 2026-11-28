@@ -325,7 +325,10 @@ every manifest and checkpoint loads under the default limits or the `ShellOption
 file names) with every check described in [Loading untrusted files](#loading-untrusted-files). The replay shell's
 limits are the file's, clamped to the same bound: a recording can lower limits, never raise them. At most 1,000
 checkpoints load; together they may hold at most 4 x `MaxFileSystemBytes` of content and 4 x `MaxExtractEntries` files
-and directories. `history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and
+and directories, and their manifests (every one is inflated and read on load, though only checked in outline until a
+replay builds it) at most 4 x what one manifest may hold, about 900 MB at the defaults. That bounds the time a load
+takes: the worst case, checkpoints padded to that size, is refused in about 5 s (measured on .NET 8, Linux x64; it took
+196 s before the cap). `history.jsonl` is read line by line as it inflates, up to 2 x `MaxStringBytes` bytes and
 `MaxExtractEntries` calls. Checkpoint names must be `0` or a number without leading zeros no greater than the number
 of calls, and no two zip entries may share a name.
 
